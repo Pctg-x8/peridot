@@ -4,9 +4,18 @@ description = "Peridot Engine"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 
+[dependencies]
+pathfinder_partitioner = { path = "extras/pathfinder/partitioner" }
+log = "*"
+libc = "*"
+
+peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
+peridot-archiver = { path = "archiver" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
+
 [workspace]
 exclude = ["extras/"]
 members = [
-    "archiver", "engine", "serialization-utils", "vertex-processing-pack",
+    "archiver", "serialization-utils", "vertex-processing-pack",
     "cradle/android/peridot-cradle-android", "tools/shaderbuild"
 ]
