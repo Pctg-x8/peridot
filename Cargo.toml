@@ -1,0 +1,12 @@
+[package]
+name = "peridot"
+description = "Peridot Engine"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+
+[workspace]
+exclude = ["extras/"]
+members = [
+    "archiver", "engine", "serialization-utils", "vertex-processing-pack",
+    "cradle/android/peridot-cradle-android", "tools/shaderbuild"
+]
