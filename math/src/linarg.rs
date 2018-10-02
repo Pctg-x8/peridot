@@ -90,6 +90,28 @@ impl<T: Zero + One> One for Matrix3x4<T> {
         [T::ZERO, T::ONE, T::ZERO, T::ZERO], [T::ZERO, T::ZERO, T::ONE, T::ZERO]);
 }
 
+// Scaling, Rotating //
+impl<T> Matrix2<T> {
+    pub fn scale(self, v: Vector2) -> Self {
+        Matrix2([self.0[0] * v.x, self.0[1] * v.x], [self.1[0] * v.y, self.1[1] * v.y])
+    }
+}
+impl<T> Matrix3<T> {
+    pub fn scale(self, v: Vector3) -> Self {
+        Matrix3([self.0[0] * v.x, self.0[1] * v.x, self.0[2] * v.x],
+            [self.1[0] * v.y, self.1[1] * v.y, self.2[2] * v.y],
+            [self.2[0] * v.z, self.2[1] * v.z, self.2[2] * v.z])
+    }
+}
+impl<T> Matrix4<T> {
+    pub fn scale(self, v: Vector3) -> Self {
+        Matrix4([self.0[0] * v.0, self.0[1] * v.0, self.0[2] * v.0, self.0[3] * v.0],
+            [self.1[0] * v.1, self.1[1] * v.1, self.2[2] * v.1, self.1[3] * v.1],
+            [self.2[0] * v.2, self.2[1] * v.2, self.2[2] * v.2, self.2[3] * v.2],
+            [self.3[0] * v.3, self.3[1] * v.3, self.3[2] * v.3, self.3[3] * v.3])
+    }
+}
+
 fn dotproduct2<T: Mul>(a: &[T; 2], b: &[T; 2]) -> <T as Mul>::Output
         where <T as Mul>::Output: Add<<T as Mul>::Output, Output = <T as Mul>::Output> {
     a[0] * b[0] + a[1] * b[1]
@@ -124,6 +146,20 @@ impl<T: Mul> Mul<Vector4<T>> for Matrix4<T> {
         let va = v.into();
         Vector4(dotproduct4(&va, &self.0), dotproduct4(&va, &self.1),
             dotproduct4(&va, &self.2), dotproduct4(&va, &self.3))
+    }
+}
+impl<T: Mul> Mul<Vector2<T>> for Matrix2x3<T> {
+    type Output = Vector2<<T as Mul>::Output>;
+    fn mul(self, v: Vector2) -> Self::Output {
+        let va = Vector3::from(v).into();
+        Vector2(dotproduct3(&va, &self.0), dotproduct3(&va, &self.1))
+    }
+}
+impl<T: Mul> Mul<Vector3<T>> for Matrix3x4<T> {
+    type Output = Vector3<<T as Mul>::Output>;
+    fn mul(self, v: Vector3) -> Self::Output {
+        let va = Vector4::from(v).into();
+        Vector2(dotproduct4(&va, &self.0), dotproduct4(&va, &self.1))
     }
 }
 // shortcuts //
