@@ -301,8 +301,15 @@ mod tests {
         assert_eq!(Vector4::from(Vector3(2.5, 3.0, 4.1)), Vector4(2.5, 3.0, 4.1, 1.0));
         assert_eq!(Vector3::from(Vector4(4, 6, 8, 2)), Vector3(2, 3, 4));
     }
-    #[test] fn matrix_translation() {
+    #[test] fn matrix_multiplication_identity() {
+        assert_eq!(Matrix3::ONE * Vector3(1, 2, 3), Vector3(1, 2, 3));
+        assert_eq!(Matrix2::ONE * Matrix2::ONE.scale(Vector2(2, 3)), Matrix2::ONE.scale(Vector2(2, 3)));
+        assert_eq!(Matrix3::ONE * Matrix3::ONE.scale(Vector3(2, 3, 4)), Matrix3::ONE.scale(Vector3(2, 3, 4)));
+        assert_eq!(Matrix4::ONE * Matrix4::ONE.scale(Vector4(2, 3, 4, 5)), Matrix4::ONE.scale(Vector4(2, 3, 4, 5)));
+    }
+    #[test] fn matrix_transforming() {
         assert_eq!(Matrix3([1, 0, 2], [0, 1, 3], [0, 0, 1]) * Vector2(0, 0), Vector3(2, 3, 1));
         assert_eq!(Matrix4([1, 0, 0, 2], [0, 1, 0, 3], [0, 0, 1, 4], [0, 0, 0, 1]) * Vector3(1, 2, 3), Vector4(3, 5, 7, 1));
+        assert_eq!(Matrix2::ONE.scale(Vector2(2, 3)) * Vector2(1, 1), Vector2(2, 3));
     }
 }
