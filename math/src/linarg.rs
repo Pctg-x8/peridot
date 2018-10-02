@@ -2,6 +2,7 @@
 
 use numtraits::{One, Zero};
 use std::ops::{Mul, Div, Add};
+use std::mem::transmute;
 
 /// 2-dimensional vector
 #[derive(Debug, Clone, PartialEq, Eq)] #[repr(C)] pub struct Vector2<T>(pub T, pub T);
@@ -74,6 +75,12 @@ impl<T: Div<T> + Copy> From<Vector4<T>> for Vector3<<T as Div>::Output> {
 impl<T> Into<[T; 2]> for Vector2<T> { fn into(self) -> [T; 2] { [self.0, self.1] } }
 impl<T> Into<[T; 3]> for Vector3<T> { fn into(self) -> [T; 3] { [self.0, self.1, self.2] } }
 impl<T> Into<[T; 4]> for Vector4<T> { fn into(self) -> [T; 4] { [self.0, self.1, self.2, self.3] } }
+
+// Safe Transmuting (only for f32 because safety) //
+impl AsRef<[f32; 2]> for Vector2<f32> { fn as_ref(&self) -> &[f32; 2] { unsafe { transmute(self) } } }
+impl AsRef<[f32; 3]> for Vector3<f32> { fn as_ref(&self) -> &[f32; 3] { unsafe { transmute(self) } } }
+impl AsRef<[f32; 4]> for Vector4<f32> { fn as_ref(&self) -> &[f32; 4] { unsafe { transmute(self) } } }
+impl AsRef<[f32; 4]> for Quaternion<f32> { fn as_ref(&self) -> &[f32; 4] { unsafe { transmute(self) } } }
 
 // Identities(for Multiplication) //
 impl<T: Zero + One> One for Matrix2<T> {
@@ -284,11 +291,35 @@ impl Vector4<f64> {
 
 // quaternion shortcuts //
 impl Quaternion<f32> {
+    /// Creates new quaternion from rotation axis and angle in radian.
     pub fn new(rad: f32, axis: Vector3<f32>) -> Self {
         let (s, c) = (rad / 2.0).sin_cos();
         let axis = axis.normalize();
 
         Quaternion(axis.0 * s, axis.1 * s, axis.2 * s, c)
+    }
+    /// Calculates a difference of angle between 2 quaternions.
+    pub fn angle(&self, other: &Self) -> f32 {
+        dotproduct4(self.as_ref(), other.as_ref()).acos()
+    }
+    /// Calculates the lerp-ed quaternion between 2 quaternions by `t`.
+    pub fn lerp(&self, other: &Self, t: f32) -> Self {
+        let omg = self.angle(other);
+        let (fa, fb) = ((omg * (1.0 - t)).sin() / omg.sin(), (omg * t).sin() / omg.sin());
+        return Quaternion(
+            fa * self.0 + fb * other.0, fa * self.1 + fb * other.1,
+            fa * self.2 + fb * other.2, fa * self.3 + fb * other.3);
+    }
+}
+impl Mul for Quaternion<f32> {
+    type Output = Quaternion<f32>;
+    fn mul(self, Quaternion(x, y, z, w): Quaternion<f32>) -> Self::Output {
+        let x0 = self.3 * x + self.0 * w + self.1 * z - self.2 * y;
+        let y0 = self.3 * y - self.0 * z + self.1 * w + self.2 * x;
+        let z0 = self.3 * z + self.0 * y - self.1 * x + self.2 * w;
+        let w0 = self.3 * w - self.0 * x - self.1 * y - self.2 * z;
+        
+        Quaternion(x0, y0, z0, w0)
     }
 }
 
