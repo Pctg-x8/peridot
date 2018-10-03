@@ -2,6 +2,8 @@ language: rust
 rust:
     - stable
 cache: cargo
+before_script:
+    - ./sync_extras.sh
 script:
     - cargo build --verbose --all
     - cargo test --verbose --all
