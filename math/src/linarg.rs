@@ -1,7 +1,7 @@
 //! PeridotExtendedMathematics: Vector/Matrix
 
 use numtraits::{One, Zero};
-use std::ops::{Mul, Div, Add};
+use std::ops::{Mul, Div, Add, Sub};
 use std::mem::transmute;
 
 /// 2-dimensional vector
@@ -100,6 +100,19 @@ impl<T: Zero + One> One for Matrix2x3<T> {
 impl<T: Zero + One> One for Matrix3x4<T> {
     const ONE: Self = Matrix3x4([T::ONE, T::ZERO, T::ZERO, T::ZERO],
         [T::ZERO, T::ONE, T::ZERO, T::ZERO], [T::ZERO, T::ZERO, T::ONE, T::ZERO]);
+}
+
+// Extending Matrix Dimensions //
+impl<T: Zero + One> From<Matrix2<T>> for Matrix3<T> {
+    fn from(Matrix2([a, b], [c, d]): Matrix2<T>) -> Self {
+        Matrix3([a, b, T::ZERO], [c, d, T::ZERO], [T::ZERO, T::ZERO, T::ONE])
+    }
+}
+impl<T: Zero + One> From<Matrix3<T>> for Matrix4<T> {
+    fn from(Matrix3([a, b, c], [d, e, f], [g, h, i]): Matrix3<T>) -> Self {
+        Matrix4([a, b, c, T::ZERO], [d, e, f, T::ZERO],
+            [g, h, i, T::ZERO], [T::ZERO, T::ZERO, T::ZERO, T::ONE])
+    }
 }
 
 // Matrix and Matrix Multiplication //
@@ -323,6 +336,24 @@ impl Mul for Quaternion<f32> {
     }
 }
 
+/// quaternion to matrix conversion
+impl<T: One + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy> From<Quaternion<T>> for Matrix3<T> {
+    fn from(Quaternion(x, y, z, w): Quaternion<T>) -> Self {
+        let two = T::ONE + T::ONE;
+        let m11 = T::ONE - two * y * y - two * z * z;
+        let m22 = T::ONE - two * x * x - two * z * z;
+        let m33 = T::ONE - two * x * x - two * y * y;
+        let m12 = two * (x * y + w * z);
+        let m13 = two * (x * z - w * y);
+        let m21 = two * (x * y - w * z);
+        let m23 = two * (y * z + w * x);
+        let m31 = two * (x * z + w * y);
+        let m32 = two * (y * z - w * x);
+
+        Matrix3([m11, m12, m13], [m21, m22, m23], [m31, m32, m33])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +373,10 @@ mod tests {
         assert_eq!(Matrix3([1, 0, 2], [0, 1, 3], [0, 0, 1]) * Vector2(0, 0), Vector3(2, 3, 1));
         assert_eq!(Matrix4([1, 0, 0, 2], [0, 1, 0, 3], [0, 0, 1, 4], [0, 0, 0, 1]) * Vector3(1, 2, 3), Vector4(3, 5, 7, 1));
         assert_eq!(Matrix2::ONE.scale(Vector2(2, 3)) * Vector2(1, 1), Vector2(2, 3));
+    }
+    #[test] fn matrix_extension() {
+        assert_eq!(Matrix3::from(Matrix2([0, 1], [1, 0])), Matrix3([0, 1, 0], [1, 0, 0], [0, 0, 1]));
+        assert_eq!(Matrix4::from(Matrix3::from(Matrix2([0, 1], [2, 3]))),
+            Matrix4([0, 1, 0, 0], [2, 3, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]));
     }
 }
