@@ -1,7 +1,7 @@
 //! PeridotExtendedMathematics: Vector/Matrix
 
 use numtraits::{One, Zero};
-use std::ops::{Mul, Div, Add, Sub};
+use std::ops::{Mul, Div, Add, Sub, Neg};
 use std::mem::transmute;
 
 /// 2-dimensional vector
@@ -58,6 +58,33 @@ impl<T> Vector4<T> {
     pub fn y(&self) -> &T { &self.1 }
     pub fn z(&self) -> &T { &self.2 }
     pub fn w(&self) -> &T { &self.3 }
+}
+
+// Identities of Vectors //
+impl<T: Zero> Zero for Vector2<T> { const ZERO: Self = Vector2(T::ZERO, T::ZERO); }
+impl<T: One> One for Vector2<T> { const ONE: Self = Vector2(T::ONE, T::ONE); }
+impl<T: Zero> Zero for Vector3<T> { const ZERO: Self = Vector3(T::ZERO, T::ZERO, T::ZERO); }
+impl<T: One> One for Vector3<T> { const ONE: Self = Vector3(T::ONE, T::ONE, T::ONE); }
+impl<T: Zero> Zero for Vector4<T> { const ZERO: Self = Vector4(T::ZERO, T::ZERO, T::ZERO, T::ZERO); }
+impl<T: One> One for Vector4<T> { const ONE: Self = Vector4(T::ONE, T::ONE, T::ONE, T::ONE); }
+// Per-Element Identities of Vectors //
+impl<T: Zero + One + Neg<Output = T>> Vector2<T> {
+    pub fn left() -> Self { Vector2(-T::ONE, T::ZERO) }
+    pub fn up() -> Self { Vector2(T::ZERO, -T::ONE) }
+}
+impl<T: Zero + One> Vector2<T> {
+    pub const RIGHT: Self = Vector2(T::ONE, T::ZERO);
+    pub const DOWN: Self = Vector2(T::ZERO, T::ONE);
+}
+impl<T: Zero + One + Neg<Output = T>> Vector3<T> {
+    pub fn left() -> Self { Vector3(-T::ONE, T::ZERO, T::ZERO) }
+    pub fn up() -> Self { Vector3(T::ZERO, -T::ONE, T::ZERO) }
+    pub fn back() -> Self { Vector3(T::ZERO, T::ZERO, -T::ONE) }
+}
+impl<T: Zero + One> Vector3<T> {
+    pub const RIGHT: Self = Vector3(T::ONE, T::ZERO, T::ZERO);
+    pub const DOWN: Self = Vector3(T::ZERO, T::ONE, T::ZERO);
+    pub const FORWARD: Self = Vector3(T::ZERO, T::ZERO, T::ONE);
 }
 
 // Extending/Shrinking Vector Types //
@@ -254,7 +281,6 @@ impl<T: Mul + One + Copy> Mul<Vector3<T>> for Matrix4<T> where <T as Mul>::Outpu
 
 // Length Function and Normalization //
 impl Vector2<f32> {
-    pub fn len2(&self) -> f32 { self.0.powf(2.0) + self.1.powf(2.0) }
     pub fn len(&self) -> f32 { self.len2().sqrt() }
     pub fn normalize(self) -> Self {
         let l0 = self.len();
@@ -262,7 +288,6 @@ impl Vector2<f32> {
     }
 }
 impl Vector2<f64> {
-    pub fn len2(&self) -> f64 { self.0.powf(2.0) + self.1.powf(2.0) }
     pub fn len(&self) -> f64 { self.len2().sqrt() }
     pub fn normalize(self) -> Self {
         let l0 = self.len();
@@ -270,7 +295,6 @@ impl Vector2<f64> {
     }
 }
 impl Vector3<f32> {
-    pub fn len2(&self) -> f32 { self.0.powf(2.0) + self.1.powf(2.0) + self.2.powf(2.0) }
     pub fn len(&self) -> f32 { self.len2().sqrt() }
     pub fn normalize(self) -> Self {
         let l0 = self.len();
@@ -278,7 +302,6 @@ impl Vector3<f32> {
     }
 }
 impl Vector3<f64> {
-    pub fn len2(&self) -> f64 { self.0.powf(2.0) + self.1.powf(2.0) + self.2.powf(2.0) }
     pub fn len(&self) -> f64 { self.len2().sqrt() }
     pub fn normalize(self) -> Self {
         let l0 = self.len();
@@ -286,7 +309,6 @@ impl Vector3<f64> {
     }
 }
 impl Vector4<f32> {
-    pub fn len2(&self) -> f32 { self.0.powf(2.0) + self.1.powf(2.0) + self.2.powf(2.0) + self.3.powf(2.0) }
     pub fn len(&self) -> f32 { self.len2().sqrt() }
     pub fn normalize(self) -> Self {
         let l0 = self.len();
@@ -294,7 +316,6 @@ impl Vector4<f32> {
     }
 }
 impl Vector4<f64> {
-    pub fn len2(&self) -> f64 { self.0.powf(2.0) + self.1.powf(2.0) + self.2.powf(2.0) + self.3.powf(2.0) }
     pub fn len(&self) -> f64 { self.len2().sqrt() }
     pub fn normalize(self) -> Self {
         let l0 = self.len();
@@ -354,6 +375,46 @@ impl<T: One + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy> From<Q
     }
 }
 
+// Per-element Operations //
+macro_rules! VariadicElementOps {
+    (for $e: ident ($($n: tt),*)) => {
+        impl<T: Add> Add for $e<T> {
+            type Output = $e<<T as Add>::Output>;
+            fn add(self, other: Self) -> Self::Output { $e($(self.$n + other.$n),*) }
+        }
+        impl<T: Sub> Sub for $e<T> {
+            type Output = $e<<T as Sub>::Output>;
+            fn sub(self, other: Self) -> Self::Output { $e($(self.$n - other.$n),*) }
+        }
+        impl<T: Mul + Copy> Mul<T> for $e<T> {
+            type Output = $e<<T as Mul>::Output>;
+            fn mul(self, other: T) -> Self::Output { $e($(self.$n * other),*) }
+        }
+        impl<T: Neg> Neg for $e<T> {
+            type Output = $e<<T as Neg>::Output>;
+            fn neg(self) -> Self::Output { $e($(-self.$n),*) }
+        }
+        impl<T: Mul<Output = T> + Add<Output = T>> $e<T> {
+            /// Calculates an inner product between 2 vectors
+            pub fn dot(self, other: Self) -> T {
+                CTSummation!($(self.$n * other.$n),*)
+            }
+        }
+        impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T> {
+            /// Calculates a squared length of a vector
+            pub fn len2(&self) -> T {
+                CTSummation!($(self.$n * self.$n),*)
+            }
+        }
+    }
+}
+macro_rules! CTSummation {
+    ($e: expr, $($e2: expr),+) => { $e $(.add($e2))* }
+}
+VariadicElementOps!(for Vector2 (0, 1));
+VariadicElementOps!(for Vector3 (0, 1, 2));
+VariadicElementOps!(for Vector4 (0, 1, 2, 3));
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +439,13 @@ mod tests {
         assert_eq!(Matrix3::from(Matrix2([0, 1], [1, 0])), Matrix3([0, 1, 0], [1, 0, 0], [0, 0, 1]));
         assert_eq!(Matrix4::from(Matrix3::from(Matrix2([0, 1], [2, 3]))),
             Matrix4([0, 1, 0, 0], [2, 3, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]));
+    }
+    #[test] fn vector_ops() {
+        assert_eq!(Vector3(0, 1, 2) + Vector3(3, 4, 5), Vector3(3, 5, 7));
+        assert_eq!(Vector3(6, 7, 8) - Vector3(3, 4, 5), Vector3(3, 3, 3));
+        assert_eq!(Vector3(0, 2, 4) * 3, Vector3(0, 6, 12));
+        assert_eq!(-Vector3(1, 2, -1), Vector3(-1, -2, 1));
+        assert_eq!(Vector3(2, 3, 4).dot(Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
+        assert_eq!(Vector3(1, 2, 3).len2(), 1 * 1 + 2 * 2 + 3 * 3);
     }
 }
