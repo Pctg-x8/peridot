@@ -324,9 +324,9 @@ impl Quaternion<f32> {
             fa * self.2 + fb * other.2, fa * self.3 + fb * other.3);
     }
 }
-impl Mul for Quaternion<f32> {
-    type Output = Quaternion<f32>;
-    fn mul(self, Quaternion(x, y, z, w): Quaternion<f32>) -> Self::Output {
+impl<T: Mul<Output = T> + Add<Output = T> + Sub<Output = T> + Copy> Mul for Quaternion<T> {
+    type Output = Quaternion<T>;
+    fn mul(self, Quaternion(x, y, z, w): Quaternion<T>) -> Self::Output {
         let x0 = self.3 * x + self.0 * w + self.1 * z - self.2 * y;
         let y0 = self.3 * y - self.0 * z + self.1 * w + self.2 * x;
         let z0 = self.3 * z + self.0 * y - self.1 * x + self.2 * w;
