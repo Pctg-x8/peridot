@@ -14,10 +14,10 @@ impl Camera {
     pub fn projection_matrix(&self) -> Matrix4F32 {
         match self.projection {
             ProjectionMethod::Perspective { fov } => {
-                
+                Matrix4::ONE
             },
             ProjectionMethod::Orthographic { size } => {
-
+                Matrix4::ONE
             }
         }
     }
