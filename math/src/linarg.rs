@@ -323,6 +323,11 @@ impl Vector4<f64> {
     }
 }
 
+/// identity
+impl<T: One + Zero> One for Quaternion<T> {
+    const ONE: Self = Quaternion(T::ZERO, T::ZERO, T::ZERO, T::ONE);
+}
+
 // quaternion shortcuts //
 impl Quaternion<f32> {
     /// Creates new quaternion from rotation axis and angle in radian.
