@@ -22,7 +22,8 @@ impl Camera {
         }
     }
     pub fn view_matrix(&self) -> Matrix4F32 {
-        Matrix4F32::ONE.translate(-self.position).rotate(self.rotation.neg().into())
+        // Matrix4F32::ONE.translate(-self.position).rotate(self.rotation.neg().into())
+        Matrix4F32::ONE
     }
 }
 

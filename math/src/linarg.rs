@@ -349,6 +349,11 @@ impl Quaternion<f32> {
             fa * self.0 + fb * other.0, fa * self.1 + fb * other.1,
             fa * self.2 + fb * other.2, fa * self.3 + fb * other.3);
     }
+    /// Calculates a normalized quaternion
+    pub fn normalize(self) -> Self {
+        let d = (self.0.powf(2.0) + self.1.powf(2.0) + self.2.powf(2.0) + self.3.powf(2.0)).sqrt();
+        Quaternion(self.0 / d, self.1 / d, self.2 / d, self.3 / d)
+    }
 }
 impl<T: Mul<Output = T> + Add<Output = T> + Sub<Output = T> + Copy> Mul for Quaternion<T> {
     type Output = Quaternion<T>;
@@ -360,6 +365,12 @@ impl<T: Mul<Output = T> + Add<Output = T> + Sub<Output = T> + Copy> Mul for Quat
         
         Quaternion(x0, y0, z0, w0)
     }
+}
+
+// q * neg q = id
+impl<T: Neg<Output = T>> Neg for Quaternion<T> {
+    type Output = Quaternion<T>;
+    fn neg(self) -> Self { Quaternion(-self.0, -self.1, -self.2, self.3) }
 }
 
 /// quaternion to matrix conversion
@@ -422,7 +433,7 @@ VariadicElementOps!(for Vector4 (0, 1, 2, 3));
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::*; use std;
 
     #[test] fn vector_dimension_transform() {
         assert_eq!(Vector3::from(Vector2(2, 3)), Vector3(2, 3, 1));
@@ -453,5 +464,14 @@ mod tests {
         assert_eq!(Vector3(2, 3, 4).dot(Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
         assert_eq!(Vector2(0, 1).dot(Vector2(1, 0)), 0);
         assert_eq!(Vector3(1, 2, 3).len2(), 1 * 1 + 2 * 2 + 3 * 3);
+    }
+    #[test] fn inv_quaternion() {
+        let q = Quaternion(0.0, 1.0, 0.0, 3.0).normalize();
+        let Quaternion(a, b, c, d) = q.clone() * -q;
+        // approximate
+        assert!(a.abs() <= std::f32::EPSILON);
+        assert!(b.abs() <= std::f32::EPSILON);
+        assert!(c.abs() <= std::f32::EPSILON);
+        assert!((1.0 - d).abs() <= std::f32::EPSILON);
     }
 }
