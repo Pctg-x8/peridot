@@ -1,9 +1,12 @@
 language: rust
 rust:
-    - stable
+- stable
 cache: cargo
 before_script:
-    - ./sync_extras.sh
+- "./sync_extras.sh"
 script:
-    - cargo test --verbose --all
-
+- cargo test --verbose --all
+notifications:
+  email: false
+  slack:
+    secure: eDgDv/rEAmRFKZ5D0pUzLj3RDLOxgj2bhMpxqMsLDlPPDwzjdbz79R9mZ1g4Z4+0/ZZ0LM4cZSW6P7eu6xIwSnFBpN4/zza7EN95uHXWO8CmZuZYRAUv7svPh5BxNM1x23hprQmSaRpGwa3jld3quV6u54S0FvvXVYTHs/aNOAE0ICE6Yx5CWTsdyioCCD1oZo4s5heb7eOocvIYd6G+uV7K39OCOPPgdWsyIoCxIx9S6LTP2Gdge0EOc/oroZ4EG7Kxx/I6nNx/KaoBqTofTs+11TulpJGD75JPkx8+1yqHxDuLfWJmpBs7AbV7gFLCJAP6qqJIDuu6WNSoY1Y41UX/jKPAZuCpPjYtZXipMt6e2taazstyvOCZ/pCjFqGFE8L9u8kq62NYunurJFjfS61Ou0S2gLlGTY7t1LuGZmz6703SbOVnC/VmnEw8JmgYjYQh8sBeiPxkBCGS2JHgIOP42uto7aIgYHSDyceYGNghCKiJOcK9sX40Gu+thV3z9lD2tNw7F66YrNqdyKDfdmB/+HtAGiQinxMDqH1zXk2FnFZCbdI2D8noYrod/HkNbsIjbY+Yl6LrryQBXd2qbeGBzIkXksq3H+30aa0z5XsDTokYDXjkRmeG9CFZ5BQl+t/NjDFI7eZ6jwueDwiy+opi/JjEIsb/KQmSkhv6Ar0=
