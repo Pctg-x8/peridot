@@ -1,7 +1,11 @@
 language: rust
+sudo: required
 rust:
 - stable
 cache: cargo
+before_install:
+- sudo apt-get -qq update
+- sudo apt-get -y install libvulkan1 libvulkan-dev
 before_script:
 - "./sync_extras.sh"
 script:
