@@ -2,7 +2,7 @@
 
 use numtraits::*;
 use linarg::*;
-use std::ops::Range;
+use std::ops::{Range, Neg};
 
 pub enum ProjectionMethod { Orthographic { size: f32 }, Perspective { fov: f32 } }
 pub struct Camera {
@@ -22,8 +22,7 @@ impl Camera {
         }
     }
     pub fn view_matrix(&self) -> Matrix4F32 {
-        // Matrix4F32::ONE.translate(-self.position).rotate(self.rotation.neg().into())
-        Matrix4F32::ONE
+        Matrix4F32::translation(-self.position.clone()) * Matrix4F32::from(self.rotation.clone().neg())
     }
 }
 

@@ -180,38 +180,36 @@ impl<T: Copy> Mul for Matrix4<T> where T: Mul<T>, <T as Mul>::Output: Add<Output
 }
 
 // Scaling, Rotating //
-impl<T: Copy> Matrix2<T> where T: Mul<Output = T> {
-    pub fn scale(self, v: Vector2<T>) -> Self {
-        Matrix2([self.0[0] * v.0, self.0[1] * v.0], [self.1[0] * v.1, self.1[1] * v.1])
-    }
+impl<T: Zero> Matrix2<T> {
+    pub fn scale(Vector2(x, y): Vector2<T>) -> Self { Matrix2([x, T::ZERO], [T::ZERO, y]) }
 }
-// Rotating //
 impl Matrix2<f32> {
-    pub fn rotate(self, rad: f32) -> Self {
+    pub fn rotate(rad: f32) -> Self {
         let (s, c) = rad.sin_cos();
-        /*
-| a b |   | c -s |   | (a, b).(c, s) (a, b).(-s, c) |
-| n d | x | s  c | = | (n, d).(c, s) (n, d).(-s, c) |
-        */
-        Matrix2(
-            [dotproduct2(&self.0, &[c, s]), dotproduct2(&self.0, &[-s, c])],
-            [dotproduct2(&self.1, &[c, s]), dotproduct2(&self.1, &[-s, c])]
-        )
+        Matrix2([c, -s], [s, c])
     }
 }
-impl<T: Copy> Matrix3<T> where T: Mul<Output = T> {
-    pub fn scale(self, v: Vector3<T>) -> Self {
-        Matrix3([self.0[0] * v.0, self.0[1] * v.0, self.0[2] * v.0],
-            [self.1[0] * v.1, self.1[1] * v.1, self.2[2] * v.1],
-            [self.2[0] * v.2, self.2[1] * v.2, self.2[2] * v.2])
+// Scaling/Translating //
+impl<T: Zero> Matrix3<T> {
+    pub fn scale(Vector3(x, y, z): Vector3<T>) -> Self {
+        Matrix3([x, T::ZERO, T::ZERO], [T::ZERO, y, T::ZERO], [T::ZERO, T::ZERO, z])
     }
 }
-impl<T: Copy> Matrix4<T> where T: Mul<Output = T> {
-    pub fn scale(self, v: Vector4<T>) -> Self {
-        Matrix4([self.0[0] * v.0, self.0[1] * v.0, self.0[2] * v.0, self.0[3] * v.0],
-            [self.1[0] * v.1, self.1[1] * v.1, self.2[2] * v.1, self.1[3] * v.1],
-            [self.2[0] * v.2, self.2[1] * v.2, self.2[2] * v.2, self.2[3] * v.2],
-            [self.3[0] * v.3, self.3[1] * v.3, self.3[2] * v.3, self.3[3] * v.3])
+impl<T: One + Zero> Matrix3<T> {
+    pub fn translation(Vector2(x, y): Vector2<T>) -> Self {
+        Matrix3([T::ONE, T::ZERO, x], [T::ZERO, T::ONE, y], [T::ZERO, T::ZERO, T::ONE])
+    }
+}
+impl<T: Zero> Matrix4<T> {
+    pub fn scale(Vector4(x, y, z, w): Vector4<T>) -> Self {
+        Matrix4([x, T::ZERO, T::ZERO, T::ZERO], [T::ZERO, y, T::ZERO, T::ZERO],
+            [T::ZERO, T::ZERO, z, T::ZERO], [T::ZERO, T::ZERO, T::ZERO, w])
+    }
+}
+impl<T: One + Zero> Matrix4<T> {
+    pub fn translation(Vector3(x, y, z): Vector3<T>) -> Self {
+        Matrix4([T::ONE, T::ZERO, T::ZERO, x], [T::ZERO, T::ONE, T::ZERO, y],
+            [T::ZERO, T::ZERO, T::ONE, z], [T::ZERO, T::ZERO, T::ZERO, T::ONE])
     }
 }
 
@@ -390,6 +388,24 @@ impl<T: One + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy> From<Q
         Matrix3([m11, m12, m13], [m21, m22, m23], [m31, m32, m33])
     }
 }
+/// quaternion to matrix conversion
+impl<T: One + Zero + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy> From<Quaternion<T>> for Matrix4<T> {
+    fn from(Quaternion(x, y, z, w): Quaternion<T>) -> Self {
+        let two = T::ONE + T::ONE;
+        let m11 = T::ONE - two * y * y - two * z * z;
+        let m22 = T::ONE - two * x * x - two * z * z;
+        let m33 = T::ONE - two * x * x - two * y * y;
+        let m12 = two * (x * y + w * z);
+        let m13 = two * (x * z - w * y);
+        let m21 = two * (x * y - w * z);
+        let m23 = two * (y * z + w * x);
+        let m31 = two * (x * z + w * y);
+        let m32 = two * (y * z - w * x);
+
+        Matrix4([m11, m12, m13, T::ZERO], [m21, m22, m23, T::ZERO],
+            [m31, m32, m33, T::ZERO], [T::ZERO, T::ZERO, T::ZERO, T::ONE])
+    }
+}
 
 // Per-element Operations //
 macro_rules! VariadicElementOps {
@@ -442,14 +458,14 @@ mod tests {
     }
     #[test] fn matrix_multiplication_identity() {
         assert_eq!(Matrix3::ONE * Vector3(1, 2, 3), Vector3(1, 2, 3));
-        assert_eq!(Matrix2::ONE * Matrix2::ONE.scale(Vector2(2, 3)), Matrix2::ONE.scale(Vector2(2, 3)));
-        assert_eq!(Matrix3::ONE * Matrix3::ONE.scale(Vector3(2, 3, 4)), Matrix3::ONE.scale(Vector3(2, 3, 4)));
-        assert_eq!(Matrix4::ONE * Matrix4::ONE.scale(Vector4(2, 3, 4, 5)), Matrix4::ONE.scale(Vector4(2, 3, 4, 5)));
+        assert_eq!(Matrix2::ONE * Matrix2::scale(Vector2(2, 3)), Matrix2::scale(Vector2(2, 3)));
+        assert_eq!(Matrix3::ONE * Matrix3::scale(Vector3(2, 3, 4)), Matrix3::scale(Vector3(2, 3, 4)));
+        assert_eq!(Matrix4::ONE * Matrix4::scale(Vector4(2, 3, 4, 5)), Matrix4::scale(Vector4(2, 3, 4, 5)));
     }
     #[test] fn matrix_transforming() {
         assert_eq!(Matrix3([1, 0, 2], [0, 1, 3], [0, 0, 1]) * Vector2(0, 0), Vector3(2, 3, 1));
         assert_eq!(Matrix4([1, 0, 0, 2], [0, 1, 0, 3], [0, 0, 1, 4], [0, 0, 0, 1]) * Vector3(1, 2, 3), Vector4(3, 5, 7, 1));
-        assert_eq!(Matrix2::ONE.scale(Vector2(2, 3)) * Vector2(1, 1), Vector2(2, 3));
+        assert_eq!(Matrix2::scale(Vector2(2, 3)) * Vector2(1, 1), Vector2(2, 3));
     }
     #[test] fn matrix_extension() {
         assert_eq!(Matrix3::from(Matrix2([0, 1], [1, 0])), Matrix3([0, 1, 0], [1, 0, 0], [0, 0, 1]));
