@@ -15,7 +15,7 @@ pub enum ProjectionMethod { Orthographic { size: f32 }, Perspective { fov: f32 }
 /// };
 /// let (mv, mp) = c.matrixes();
 /// assert_eq!(mv.clone() * Vector3(5.0, 0.0, 1.0), Vector4(5.0, 0.0, 1.0, 1.0));
-/// assert_eq!(mp * Vector3(5.0, 0.0, 1.0), Vector4(1.0, 0.0, 0.0, 1.0));
+/// assert_eq!(mp * mv * Vector3(5.0, 0.0, 1.0), Vector4(1.0, 0.0, 0.0, 1.0));
 /// ```
 pub struct Camera {
     pub projection: ProjectionMethod, pub position: Vector3F32, pub rotation: QuaternionF32,
@@ -39,7 +39,7 @@ impl Camera {
                 let t = Matrix4::translation(Vector3(0.0, 0.0, -self.depth_range.start));
                 let s = Matrix4::scale(Vector4(size.recip(), size.recip(), zdiff.recip(), 1.0));
 
-                t
+                s * t
             }
         }
     }

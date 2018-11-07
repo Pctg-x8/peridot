@@ -173,7 +173,7 @@ impl<T: Copy> Mul for Matrix4<T> where T: Mul<T>, <T as Mul>::Output: Add<Output
         };
         
         Matrix4([dp(&self.0, 0), dp(&self.0, 1), dp(&self.0, 2), dp(&self.0, 3)],
-            [dp(&self.1, 0), dp(&self.1, 1), dp(&self.1, 2), dp(&self.2, 3)],
+            [dp(&self.1, 0), dp(&self.1, 1), dp(&self.1, 2), dp(&self.1, 3)],
             [dp(&self.2, 0), dp(&self.2, 1), dp(&self.2, 2), dp(&self.2, 3)],
             [dp(&self.3, 0), dp(&self.3, 1), dp(&self.3, 2), dp(&self.3, 3)])
     }
