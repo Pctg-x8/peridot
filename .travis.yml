@@ -6,6 +6,7 @@ cache: cargo
 before_script:
 - "./sync_extras.sh"
 script:
+- ./elliminate_unwrap.sh
 - ./runtest_exclude_engine.sh
 notifications:
   email: false
