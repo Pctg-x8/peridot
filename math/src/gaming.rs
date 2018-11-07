@@ -1,7 +1,7 @@
 //! Peridot Extended Mathematics: Gaming Utils(Camera, ModelMatrix)
 
 use linarg::*;
-use std::ops::{Range, Neg};
+use std::ops::Range;
 
 pub enum ProjectionMethod { Orthographic { size: f32 }, Perspective { fov: f32 } }
 /// A camera
@@ -45,7 +45,7 @@ impl Camera {
     }
     /// calculates the camera view matrix
     pub fn view_matrix(&self) -> Matrix4F32 {
-        Matrix4F32::from(self.rotation.clone().neg()) * Matrix4F32::translation(-self.position.clone())
+        Matrix4F32::from(-self.rotation.clone()) * Matrix4F32::translation(-self.position.clone())
     }
     /// calculates the camera view matrix and the projection matrix(returns in this order)
     pub fn matrixes(&self) -> (Matrix4F32, Matrix4F32) {
