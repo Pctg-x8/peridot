@@ -6,7 +6,8 @@ cache: cargo
 before_script:
 - "./sync_extras.sh"
 script:
-- ./elliminate_unwrap.sh
+- python3 codeform_check.py
+- python3 elliminate_unwrap.py
 - ./runtest_exclude_engine.sh
 notifications:
   email: false
