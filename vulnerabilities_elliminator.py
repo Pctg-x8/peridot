@@ -14,6 +14,6 @@ if not found_unwrap_vulnerabilities:
     print("No unwraps found")
 else:
     for fpath, line, text in found_unwrap_vulnerabilities:
-        print(f"Unwrap Found! Use `expect` with message instead: \033[1m{fpath}:{line}\033[0m")
+        print("Unwrap Found! Use `expect` with message instead: \033[1m" + fpath + ":" + str(line) + "\033[0m")
         print(text.rstrip())
     exit(1)

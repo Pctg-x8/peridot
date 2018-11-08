@@ -10,5 +10,5 @@ if not exceeded_lines:
     print("No exceeded lines found")
 else:
     for fpath, num in exceeded_lines:
-        print(f"This line exceeds 120 characters: \033[1m{fpath}:{num}\033[0m")
+        print("This line exceeds 120 characters: \033[1m" + str(fpath) + ":" + str(num) + "\033[0m")
     exit(1)

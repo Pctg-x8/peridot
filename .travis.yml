@@ -7,7 +7,7 @@ before_script:
 - "./sync_extras.sh"
 script:
 - python3 codeform_check.py
-- python3 elliminate_unwrap.py
+- python3 vulnerabilities_elliminator.py
 - ./runtest_exclude_engine.sh
 notifications:
   email: false
