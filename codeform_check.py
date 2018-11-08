@@ -1,7 +1,7 @@
 from glob import iglob
 
 exceeded_lines = []
-for fpath in filter(lambda x: not x.startswith("extras/"), iglob("**/*.rs", recursive=True)):
+for fpath in filter(lambda x: not x.startswith("extras/"), iglob("**/*.rs")):
     with open(fpath) as fp:
         lines = enumerate(iter(fp.readline, ""), 1)
         exceeded_lines.extend(map(lambda x: (fpath, x[0]), filter(lambda x: len(x[1]) > 120, lines)))
