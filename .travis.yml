@@ -5,10 +5,11 @@ rust:
 cache: cargo
 before_script:
 - "./sync_extras.sh"
+before_install:
+- sudo apt-get -qq update
+- sudo apt-get install -y python
 script:
-- python3 codeform_check.py
-- python3 vulnerabilities_elliminator.py
-- ./runtest_exclude_engine.sh
+- python3 codeform_check.py && python3 vulnerabilities_elliminator.py && ./runtest_exclude_engine.sh
 notifications:
   email: false
   slack:
