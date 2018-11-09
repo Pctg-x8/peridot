@@ -53,7 +53,8 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
         let mut signature = [0u8; 4];
         reader.read_exact(&mut signature)?;
         if &signature != b"PVP\x01" {
-            return Err(IOError::new(ErrorKind::Other, "Signature mismatch: Invalid or corrupted Peridot Vertex Processing file"));
+            return Err(IOError::new(ErrorKind::Other,
+                "Signature mismatch: Invalid or corrupted Peridot Vertex Processing file"));
         }
 
         let VariableUInt(va_offset) = VariableUInt::read(&mut reader)?;

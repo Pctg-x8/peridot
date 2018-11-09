@@ -40,7 +40,9 @@ impl peridot::PlatformRenderTarget for PlatformWindowHandler {
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<peridot::SurfaceInfo> {
         let obj = br::Surface::new_android(vi, self.0)?;
-        if !pd.surface_support(renderer_queue_family, &obj)? { panic!("Vulkan Surface is not supported by this adapter"); }
+        if !pd.surface_support(renderer_queue_family, &obj)? {
+            panic!("Vulkan Surface is not supported by this adapter");
+        }
         return peridot::SurfaceInfo::gather_info(&pd, obj);
     }
     fn current_geometry_extent(&self) -> (usize, usize) {
