@@ -22,11 +22,14 @@ pub mod utils; pub use self::utils::*;
 pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
     fn init(_e: &Engine<Self, AL, PRT>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+    fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32)
+            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
 }
-impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () { fn init(_e: &Engine<Self, AL, PRT>) -> Self { () } }
+impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
+    fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
+}
 
 use std::io::{Read, Seek, Result as IOResult, BufReader};
 pub trait AssetLoader {
@@ -60,13 +63,15 @@ pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRender
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
 }
 impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
-    pub fn launch<IPP: InputProcessPlugin>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
-            -> br::Result<Self> {
+    pub fn launch<IPP>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
+            -> br::Result<Self> where IPP: InputProcessPlugin {
         let g = Graphics::new(name, version)?;
         let surface = prt.create_surface(&g.instance, &g.adapter, g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, &prt)?;
-        let mut this = Engine { g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into() };
+        let mut this = Engine {
+            g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into()
+        };
         trace!("Initializing Game...");
         let eh = E::init(&this);
         this.event_handler = Some(eh.into());
@@ -99,7 +104,8 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
 
     pub fn do_update(&mut self)
     {
-        let bb_index = self.wrt.acquire_next_backbuffer_index(None, br::CompletionHandler::Device(&self.g.acquiring_backbuffer))
+        let bb_index =
+            self.wrt.acquire_next_backbuffer_index(None, br::CompletionHandler::Device(&self.g.acquiring_backbuffer))
             .expect("Acquiring available backbuffer index");
         self.wrt.command_completion_for_backbuffer_mut(bb_index as _)
             .wait().expect("Waiting Previous command completion");
@@ -114,21 +120,25 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
                     (&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                     (&self.g.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER)]);
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                self.submit_buffered_commands(&[cs, fb_submission], self.wrt.command_completion_for_backbuffer(bb_index as _).object())
+                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                self.submit_buffered_commands(&[cs, fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
             else {
                 // render only(old logic)
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                fb_submission.wait_semaphores.to_mut().push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
-                self.submit_buffered_commands(&[fb_submission], self.wrt.command_completion_for_backbuffer(bb_index as _).object())
+                fb_submission.wait_semaphores.to_mut()
+                    .push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
+                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                self.submit_buffered_commands(&[fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
         }
         unsafe {
             self.wrt.command_completion_for_backbuffer_mut(bb_index as _).signal();
         }
-        self.wrt.present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering]).expect("Present Submission");
+        self.wrt.present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering])
+            .expect("Present Submission");
     }
 }
 impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
@@ -239,7 +249,9 @@ impl Graphics
             if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 { flags.push("CACHED"); }
             if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 { flags.push("COHERENT"); }
             if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 { flags.push("LAZILY ALLOCATED"); }
+            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 {
+                flags.push("LAZILY ALLOCATED");
+            }
             info!("  {}: [{}] in heap #{}", n, flags.join("/"), ty.heapIndex);
         }
     }
@@ -346,7 +358,9 @@ impl PvpShaderModules {
             module: &self.vertex, entry_name: CString::new("main").unwrap(), specinfo: None
         }, &self.bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment {
-            r.fragment_shader(br::PipelineShader { module: f, entry_name: CString::new("main").unwrap(), specinfo: None });
+            r.fragment_shader(br::PipelineShader {
+                module: f, entry_name: CString::new("main").unwrap(), specinfo: None
+            });
         }
         return r;
     }
@@ -429,7 +443,8 @@ impl TransferBatch {
     }
     pub fn is_empty(&self) -> bool { self.copy_buffers.is_empty() }
     
-    fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<u64>>, k: ResourceKey<Buffer>, new_range: Range<u64>) {
+    fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<u64>>,
+            k: ResourceKey<Buffer>, new_range: Range<u64>) {
         let r = map.entry(k).or_insert_with(|| new_range.clone());
         r.start = r.start.min(new_range.start);
         r.end = r.end.max(new_range.end);
@@ -467,7 +482,8 @@ impl DescriptorSetUpdateBatch {
     /// Create an Empty batch
     pub fn new() -> Self { DescriptorSetUpdateBatch(Vec::new(), Vec::new()) }
     /// Write an information to bound index and array index in destination.
-    pub fn write_index(&mut self, dest: br::vk::VkDescriptorSet, bound: u32, array: u32, info: br::DescriptorUpdateInfo) -> &mut Self {
+    pub fn write_index(&mut self, dest: br::vk::VkDescriptorSet,
+            bound: u32, array: u32, info: br::DescriptorUpdateInfo) -> &mut Self {
         self.0.push(br::DescriptorSetWriteInfo(dest, bound, array, info));
         return self;
     }

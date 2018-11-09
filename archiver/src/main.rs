@@ -36,7 +36,8 @@ fn main() {
         .arg(Arg::with_name("arc").value_name("FILE").required(true).help("Archive file"))
         .arg(Arg::with_name("check").long("check-integrity").help("Checks an archive integrity by checksum"));
     let create_matcher = App::new("new").version("0.1").author("S.Percentage <Syn.Tri.Naga@gmail.com>")
-        .arg(Arg::with_name("ofile").short("o").long("output").value_name("FILE").help("Describes where archive file will be written"))
+        .arg(Arg::with_name("ofile").short("o").long("output").value_name("FILE")
+            .help("Describes where archive file will be written"))
         .arg(Arg::with_name("ifiled").help("Input File/Directory").required(true).multiple(true))
         .arg(Arg::with_name("cmethod").short("c").long("compress").value_name("METHOD")
             .possible_values(&["lz4", "zlib", "zstd11"]).takes_value(true).help("Describes the compression method"));

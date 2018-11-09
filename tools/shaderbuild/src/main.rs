@@ -74,7 +74,8 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
 fn run_compiler_process(shader_stage: &str, stdin_bytes: &str) -> std::io::Result<std::process::Child> {
     trace!("Compiling {}: Generated Code: \n{}", shader_stage, stdin_bytes);
     let mut compiler = Command::new("glslc").arg(&format!("-fshader-stage={}", shader_stage))
-        .args(&["-o", "-", "-mfmt=num", "-"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()?;
+        .args(&["-o", "-", "-mfmt=num", "-"]).stdin(Stdio::piped())
+        .stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()?;
     compiler.stdin.as_mut().expect("Failed top open stdin of compiler process").write_all(stdin_bytes.as_bytes())?;
     return Ok(compiler);
 }

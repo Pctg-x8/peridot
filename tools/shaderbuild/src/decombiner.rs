@@ -32,7 +32,8 @@ impl<'s> Tokenizer<'s> {
         else { false }
     }
     fn strip_ignores(&mut self) -> &mut Self {
-        while self.strip_prefix(" ") || self.strip_prefix("\n") || self.strip_prefix("\r") || self.strip_prefix("\t") || self.strip_comment() { }
+        while self.strip_prefix(" ") || self.strip_prefix("\n") || self.strip_prefix("\r")
+            || self.strip_prefix("\t") || self.strip_comment() { }
         return self;
     }
 
@@ -122,7 +123,8 @@ impl<'s> Tokenizer<'s> {
     pub fn codeblock(&mut self) -> ParseResult<&'s str> {
         self.strip_ignores();
         if !self.block_start() { return Err(()); }
-        fn strip_bytes_counter<I: Iterator<Item = char>>(mut c: I, current: usize, nestlevel: usize) -> ParseResult<usize> {
+        fn strip_bytes_counter<I: Iterator<Item = char>>(mut c: I, current: usize, nestlevel: usize)
+                -> ParseResult<usize> {
             match c.next() {
                 Some(cc @ '{') => strip_bytes_counter(c, current + cc.len_utf8(), nestlevel + 1),
                 Some(cc @ '}') => if nestlevel == 0 { Ok(current) }
@@ -274,7 +276,8 @@ impl<'s> Tokenizer<'s> {
         return ToplevelBlock::SpecConstant(stg, idx, id, ty, init);
     }
     pub fn uniform(&mut self) -> ToplevelBlock<'s> {
-        let (stg, set, binding) = self.uniform_header_rest().expect("ShaderStage then pair of descriptor set and binding indices are required");
+        let (stg, set, binding) = self.uniform_header_rest()
+            .expect("ShaderStage then pair of descriptor set and binding indices are required");
         let id = self.strip_ignores().strip_ident().expect("Identifier for GLSL TypeName required");
         let code = self.codeblock().expect("GLSL CodeBlock required");
         return ToplevelBlock::Uniform(stg, set, binding, id, code);
@@ -353,16 +356,22 @@ impl<'s> CombinedShader<'s> {
                 ToplevelBlock::Varying(src, dst, vars) => cs.varyings_between_shaders.push((src, dst, vars)),
                 ToplevelBlock::SpecConstant(stg, idx, name, ty, init) => {
                     let storage = cs.spec_constants_per_stage.entry(stg).or_insert_with(BTreeMap::new);
-                    if storage.contains_key(&idx) { panic!("Multiple Definitions of SpecConstant for same id in same stage"); }
+                    if storage.contains_key(&idx) {
+                        panic!("Multiple Definitions of SpecConstant for same id in same stage");
+                    }
                     storage.insert(idx, (name, ty, init));
                 },
                 ToplevelBlock::Uniform(stg, set, binding, name, init) => {
                     let storage = cs.uniforms_per_stage.entry(stg).or_insert_with(BTreeMap::new);
-                    if storage.contains_key(&(set, binding)) { panic!("Multiple Definitions of Uniform for same (set, binding) in same stage"); }
+                    if storage.contains_key(&(set, binding)) {
+                        panic!("Multiple Definitions of Uniform for same (set, binding) in same stage");
+                    }
                     storage.insert((set, binding), (name, init));
                 },
                 ToplevelBlock::PushConstant(stg, name, members) => {
-                    if cs.push_constant_per_stage.contains_key(&stg) { panic!("Multiple Definitions of PushConstants for same shader stage"); }
+                    if cs.push_constant_per_stage.contains_key(&stg) {
+                        panic!("Multiple Definitions of PushConstants for same shader stage");
+                    }
                     cs.push_constant_per_stage.insert(stg, (name, members));
                 }
             }
@@ -428,7 +437,8 @@ impl<'s> CombinedShader<'s> {
                 usize::from_str(index.as_str()).unwrap()
             }
             else { break; };
-            fragment_code = fragment_code.replace(&format!("Target[{}]", replace_index), &format!("sv_target_{}", replace_index));
+            fragment_code = fragment_code.replace(&format!("Target[{}]", replace_index),
+                &format!("sv_target_{}", replace_index));
         }
         // 定数(uniformとspecconstant)
         if let Some(cons) = self.spec_constants_per_stage.get(&br::ShaderStage::FRAGMENT) {

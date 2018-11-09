@@ -69,7 +69,9 @@ impl ArchiveWrite {
         if self.1.contains_key(&name) { return false; }
         let relative_offset = self.2.len() as u64;
         self.2.extend(content);
-        self.1.insert(name, AssetEntryHeadingPair { relative_offset, byte_length: self.2.len() as u64 - relative_offset });
+        self.1.insert(name, AssetEntryHeadingPair {
+            relative_offset, byte_length: self.2.len() as u64 - relative_offset
+        });
         return true;
     }
     /// return -> written bytes(raw)
@@ -93,7 +95,8 @@ impl ArchiveWrite {
                 let uncompressed_bytes = self.write_asset_entries(&mut body)
                     .and_then(|wa| body.write_all(&self.2[..]).map(move |_| wa + self.2.len()))? as u64;
 
-                Self::write_common(writer, b"pard", Some(uncompressed_bytes), &body.finish().into_result()?.into_inner()[..])
+                Self::write_common(writer, b"pard", Some(uncompressed_bytes),
+                    &body.finish().into_result()?.into_inner()[..])
             }
             CompressionMethod::Lz4(_) => {
                 let mut body = lz4::EncoderBuilder::new().build(Cursor::new(Vec::new()))?;

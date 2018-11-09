@@ -62,15 +62,19 @@ impl<'g> MemoryBadget<'g> {
     }
     pub fn alloc_with_buffer(self, buffer: br::Buffer) -> br::Result<Buffer> {
         let breq = buffer.requirements();
-        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, breq.memoryTypeBits).expect("No Device-Local memory");
-        info!(target: "peridot", "Allocating Device Memory: {} bytes => 0x{:x}(?0x{:x})", breq.size, mt, breq.memoryTypeBits);
+        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, breq.memoryTypeBits)
+            .expect("No Device-Local memory");
+        info!(target: "peridot", "Allocating Device Memory: {} bytes => 0x{:x}(?0x{:x})",
+            breq.size, mt, breq.memoryTypeBits);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, breq.size as _, mt)?.into();
         return Buffer::bound(buffer, &mem, 0);
     }
     pub fn alloc_with_buffer_host_visible(self, buffer: br::Buffer) -> br::Result<Buffer> {
         let breq = buffer.requirements();
-        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE, breq.memoryTypeBits).expect("No Host-Visible memory");
-        info!(target: "peridot", "Allocating Uploading Memory: {} bytes => 0x{:x}(?0x{:x})", breq.size, mt, breq.memoryTypeBits);
+        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE, breq.memoryTypeBits)
+            .expect("No Host-Visible memory");
+        info!(target: "peridot", "Allocating Uploading Memory: {} bytes => 0x{:x}(?0x{:x})",
+            breq.size, mt, breq.memoryTypeBits);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, breq.size as _, mt)?.into();
         return Buffer::bound(buffer, &mem, 0);
     }
