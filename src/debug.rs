@@ -12,8 +12,9 @@ impl DebugReport
         return Ok(DebugReport(obj));
     }
 
-    extern "system" fn debug_output(flags: br::vk::VkDebugReportFlagsEXT, object_type: br::vk::VkDebugReportObjectTypeEXT,
-        object: u64, location: size_t, message_code: i32, layer_prefix: *const c_char,
+    extern "system" fn debug_output(flags: br::vk::VkDebugReportFlagsEXT,
+        object_type: br::vk::VkDebugReportObjectTypeEXT, object: u64,
+        location: size_t, message_code: i32, layer_prefix: *const c_char,
         message: *const c_char, _: *mut c_void) -> br::vk::VkBool32
     {
         let (layer_prefix, msg) = unsafe { (CStr::from_ptr(layer_prefix), CStr::from_ptr(message)) };
