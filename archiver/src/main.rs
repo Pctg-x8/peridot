@@ -21,7 +21,8 @@ fn extract(args: &ArgMatches) {
     }
 }
 fn list(args: &ArgMatches) {
-    let archive = par::ArchiveRead::from_file(args.value_of("arc").unwrap(), args.is_present("check")).unwrap();
+    let archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),
+        args.is_present("check")).expect("check not found");
 
     for n in archive.entry_names() {
         println!("{}", n);
@@ -51,9 +52,10 @@ fn main() {
 }
 
 fn new(args: &ArgMatches) {
-    let directory_walker = args.values_of("ifiled").unwrap()
+    let directory_walker = args.values_of("ifiled").expect("noargs: ifiled")
         .flat_map(|f| if cfg!(windows) && f.contains('*') {
-            Box::new(glob::glob(f).unwrap().flat_map(|f| extract_directory(&f.unwrap())))
+            Box::new(glob::glob(f).expect("glob match")
+                .flat_map(|f| extract_directory(&f.expect("filename decode err"))))
         }
         else { extract_directory(Path::new(f)) });
     let compression_method = args.value_of("cmethod").map(|s| match s {
@@ -65,18 +67,18 @@ fn new(args: &ArgMatches) {
     let mut archive = par::ArchiveWrite::new(compression_method);
     for f in directory_walker {
         // println!("input <<= {}", f.display());
-        let fstr = f.to_str().unwrap();
-        if !archive.add(fstr.to_owned(), read(&f).unwrap()) {
+        let fstr = f.to_str().expect("nullchar");
+        if !archive.add(fstr.to_owned(), read(&f).expect("file io error")) {
             eprintln!("Warn: {:?} has already been added", fstr);
         }
     }
     if let Some(ofpath) = args.value_of("ofile") {
-        archive.write(&mut File::create(ofpath).unwrap()).unwrap();
+        archive.write(&mut File::create(ofpath).expect("file open error"))
     }
     else {
         let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
-        archive.write(&mut NativeOfstream::from_stream_ptr(foptr).unwrap()).unwrap();
-    }
+        archive.write(&mut NativeOfstream::from_stream_ptr(foptr).expect("fstream open error"))
+    }.expect("fileio write error")
 }
 
 use std::ptr::NonNull;
@@ -104,8 +106,9 @@ impl Write for NativeOfstream {
 
 use std::path::{Path, PathBuf}; use std::borrow::ToOwned;
 fn extract_directory(p: &Path) -> Box<Iterator<Item = PathBuf>> {
-    if metadata(p).unwrap().is_dir() {
-        Box::new(read_dir(p).unwrap().flat_map(|f| extract_directory(f.unwrap().path().as_path())))
+    if metadata(p).expect("metadata fetch failed").is_dir() {
+        Box::new(read_dir(p).expect("reading dir error")
+            .flat_map(|f| extract_directory(f.expect("nopath").path().as_path())))
     }
     else {
         Box::new(Some(p.to_owned()).into_iter())

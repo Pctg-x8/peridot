@@ -90,7 +90,7 @@ impl Drop for WindowRenderTargets
 {
     fn drop(&mut self)
     {
-        for f in self.command_completions_for_backbuffer.iter_mut() { f.wait().unwrap(); }
+        for f in self.command_completions_for_backbuffer.iter_mut() { f.wait().expect("waiting completion fence"); }
     }
 }
 

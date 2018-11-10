@@ -111,7 +111,7 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
             .wait().expect("Waiting Previous command completion");
         self.ip.prepare_for_frame();
         {
-            let mut eh_mut = self.event_handler.as_ref().unwrap().borrow_mut();
+            let mut eh_mut = self.event_handler.as_ref().expect("uninitialized").borrow_mut();
             let (copy_submission, mut fb_submission) = eh_mut.update(self, bb_index);
             if let Some(mut cs) = copy_submission {
                 // copy -> render
@@ -143,7 +143,7 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
 }
 impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
     fn drop(&mut self) {
-        self.graphics().device.wait().unwrap();
+        self.graphics().device.wait().expect("device error");
     }
 }
 
@@ -153,15 +153,15 @@ impl<T> LateInit<T>
 {
     pub fn new() -> Self { LateInit(RefCell::new(None)) }
     pub fn init(&self, v: T) { *self.0.borrow_mut() = v.into(); }
-    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().unwrap()) }
+    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized")) }
 }
 pub struct Discardable<T>(RefCell<Option<T>>);
 impl<T> Discardable<T>
 {
     pub fn new() -> Self { Discardable(RefCell::new(None)) }
     pub fn set(&self, v: T) { *self.0.borrow_mut() = v.into(); }
-    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().unwrap()) }
-    pub fn get_mut(&self) -> RefMut<T> { RefMut::map(self.0.borrow_mut(), |x| x.as_mut().unwrap()) }
+    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized")) }
+    pub fn get_mut(&self) -> RefMut<T> { RefMut::map(self.0.borrow_mut(), |x| x.as_mut().expect("uninitialized")) }
     pub fn discard(&self) { *self.0.borrow_mut() = None; }
     pub fn is_available(&self) -> bool { self.0.borrow().is_some() }
 }
@@ -184,7 +184,7 @@ impl Graphics
         #[cfg(target_os = "android")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_android_surface";
 
         info!("Supported Layers: ");
-        for l in br::Instance::enumerate_layer_properties().unwrap() {
+        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
             info!("* {} :: {}/{}", name.to_string_lossy(), l.specVersion, l.implementationVersion);
         }
@@ -202,7 +202,7 @@ impl Graphics
         let instance = ib.create()?;
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
-        let adapter = instance.iter_physical_devices()?.next().unwrap();
+        let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
         Self::diag_memory_properties(&adapter.memory_properties());
         let gqf_index = adapter.queue_family_properties().find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("No graphics queue");
@@ -355,11 +355,11 @@ impl PvpShaderModules {
     pub fn generate_vps(&self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages {
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
-            module: &self.vertex, entry_name: CString::new("main").unwrap(), specinfo: None
+            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"), specinfo: None
         }, &self.bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment {
             r.fragment_shader(br::PipelineShader {
-                module: f, entry_name: CString::new("main").unwrap(), specinfo: None
+                module: f, entry_name: CString::new("main").expect("unreachable"), specinfo: None
             });
         }
         return r;
@@ -399,9 +399,17 @@ impl PartialOrd for ResourceKey<Image> {
     }
 }
 impl Eq for ResourceKey<Buffer> {}
-impl Ord for ResourceKey<Buffer> { fn cmp(&self, other: &Self) -> Ordering { self.partial_cmp(other).unwrap() } }
+impl Ord for ResourceKey<Buffer> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).expect("ord: unreachable")
+    }
+}
 impl Eq for ResourceKey<Image> {}
-impl Ord for ResourceKey<Image> { fn cmp(&self, other: &Self) -> Ordering { self.partial_cmp(other).unwrap() } }
+impl Ord for ResourceKey<Image> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).expect("ord: unreachable")
+    }
+}
 impl Hash for ResourceKey<Buffer> { fn hash<H: Hasher>(&self, hasher: &mut H) { self.0.native_ptr().hash(hasher) } }
 impl Hash for ResourceKey<Image> { fn hash<H: Hasher>(&self, hasher: &mut H) { self.0.native_ptr().hash(hasher) } }
 pub struct ReadyResourceBarriers {
