@@ -429,16 +429,15 @@ impl<'s> CombinedShader<'s> {
         }
         // 出力変数(ソースコード中/Target\[\d+\]/から)
         let mut fragment_code = String::from(*self.fragment_shader_code.as_ref().expect("No fragment shader"));
-        let rx = Regex::new(r"Target\[(\d+)\]").unwrap();
+        let rx = Regex::new(r"Target\[(\d+)\]").expect("compiling regex");
         loop {
-            let replace_index = if let Some(caps) = rx.captures(&fragment_code) {
-                let index = caps.get(1).unwrap();
-                code += &format!("layout(location = {index}) out vec4 sv_target_{index};\n", index = index.as_str());
-                usize::from_str(index.as_str()).unwrap()
+            let replaced = if let Some(caps) = rx.captures(&fragment_code) {
+                let index = caps.get(1).expect("unreachable").as_str();
+                code += &format!("layout(location = {index}) out vec4 sv_target_{index};\n", index=index);
+                fragment_code.replace(&format!("Target[{}]", index), &format!("sv_target_{}", index))
             }
             else { break; };
-            fragment_code = fragment_code.replace(&format!("Target[{}]", replace_index),
-                &format!("sv_target_{}", replace_index));
+            fragment_code = replaced;
         }
         // 定数(uniformとspecconstant)
         if let Some(cons) = self.spec_constants_per_stage.get(&br::ShaderStage::FRAGMENT) {
