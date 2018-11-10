@@ -8,12 +8,13 @@ use std::io::prelude::Write;
 use std::io::Result as IOResult;
 
 fn extract(args: &ArgMatches) {
-    let mut archive = par::ArchiveRead::from_file(args.value_of("arc").unwrap(), args.is_present("check")).unwrap();
+    let mut archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),
+        args.is_present("check")).expect("reading archive error");
 
     if let Some(apath) = args.value_of("apath") {
-        if let Some(b) = archive.read_bin(apath).unwrap() {
+        if let Some(b) = archive.read_bin(apath).expect("readbin") {
             let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
-            NativeOfstream::from_stream_ptr(foptr).unwrap().write_all(&b[..]).unwrap();
+            NativeOfstream::from_stream_ptr(foptr).expect("open stream").write_all(&b[..]).expect("writing");
         }
         else {
             panic!("Entry not found in archive: {}", apath);
