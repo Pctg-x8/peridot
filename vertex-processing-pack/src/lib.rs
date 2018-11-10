@@ -84,7 +84,7 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
     }
     pub fn is_fragment_stage_provided(&mut self) -> bool { self.fsh_offset.is_some() }
     pub fn read_fragment_shader(&mut self) -> IOResult<Vec<u8>> {
-        self.reader.seek(SeekFrom::Start(self.fsh_offset.ex@ect("no fsh") as _))?;
+        self.reader.seek(SeekFrom::Start(self.fsh_offset.expect("no fsh") as _))?;
         Vec::<u8>::binary_unserialize(&mut self.reader)
     }
 
