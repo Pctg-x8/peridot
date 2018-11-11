@@ -4,7 +4,7 @@ import re
 pat_comment_line = re.compile(r"^\s*//")
 
 found_unwrap_vulnerabilities = []
-for fpath in filter(lambda p: not p.startswith("extras/"), iglob("**/*.rs", recursive=True)):
+for fpath in filter(lambda p: not p.startswith("extras/") and not "target/" in p, iglob("**/*.rs", recursive=True)):
     with open(fpath) as fp:
         for i, line in filter(lambda x: not pat_comment_line.match(x[1]), enumerate(iter(fp.readline, ""), 1)):
             if "unwrap()" in line:
