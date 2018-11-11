@@ -464,7 +464,8 @@ mod tests {
     }
     #[test] fn matrix_transforming() {
         assert_eq!(Matrix3([1, 0, 2], [0, 1, 3], [0, 0, 1]) * Vector2(0, 0), Vector3(2, 3, 1));
-        assert_eq!(Matrix4([1, 0, 0, 2], [0, 1, 0, 3], [0, 0, 1, 4], [0, 0, 0, 1]) * Vector3(1, 2, 3), Vector4(3, 5, 7, 1));
+        assert_eq!(Matrix4([1, 0, 0, 2], [0, 1, 0, 3], [0, 0, 1, 4], [0, 0, 0, 1]) * Vector3(1, 2, 3),
+            Vector4(3, 5, 7, 1));
         assert_eq!(Matrix2::scale(Vector2(2, 3)) * Vector2(1, 1), Vector2(2, 3));
     }
     #[test] fn matrix_extension() {
