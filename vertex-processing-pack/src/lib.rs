@@ -53,7 +53,8 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
         let mut signature = [0u8; 4];
         reader.read_exact(&mut signature)?;
         if &signature != b"PVP\x01" {
-            return Err(IOError::new(ErrorKind::Other, "Signature mismatch: Invalid or corrupted Peridot Vertex Processing file"));
+            return Err(IOError::new(ErrorKind::Other,
+                "Signature mismatch: Invalid or corrupted Peridot Vertex Processing file"));
         }
 
         let VariableUInt(va_offset) = VariableUInt::read(&mut reader)?;
@@ -83,7 +84,7 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
     }
     pub fn is_fragment_stage_provided(&mut self) -> bool { self.fsh_offset.is_some() }
     pub fn read_fragment_shader(&mut self) -> IOResult<Vec<u8>> {
-        self.reader.seek(SeekFrom::Start(self.fsh_offset.unwrap() as _))?;
+        self.reader.seek(SeekFrom::Start(self.fsh_offset.expect("no fsh") as _))?;
         Vec::<u8>::binary_unserialize(&mut self.reader)
     }
 

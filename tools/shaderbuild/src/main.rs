@@ -20,7 +20,7 @@ fn main() {
         .about("Combined Shader to Combined SPIR-V Builder for Peridot Engine via Google's shaderc")
         .arg(clap::Arg::with_name("input-file").help("Input File(s)").required(true).multiple(true));
     let matches = app.get_matches();
-    for fp in matches.values_of("input-file").unwrap()
+    for fp in matches.values_of("input-file").expect("no input file")
     {
         // ifile=ofileのペアで渡ってくるはず
         let mut fp_pair = fp.split("=");
@@ -37,7 +37,7 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
     println!("Loading/Decomposing \"{}\"...", infile_path.as_ref().display());
     let content = std::fs::File::open(infile_path)
         .and_then(|mut fp| { let mut s = String::new(); fp.read_to_string(&mut s).map(|_| s) })
-        .unwrap();
+        .expect("reading source");
     let mut tok = Tokenizer::new(&content);
     let comsh = CombinedShader::from_parsed_blocks(tok.toplevel_blocks());
     let compile_vs = run_compiler_process("vertex", &comsh.emit_vertex_shader())
@@ -47,19 +47,21 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
             .expect("Failed to spawn compiler process");
         let cfs_out = compile_fs.wait_with_output().expect("Failed to waiting compiler");
         if !cfs_out.status.success() { eprintln!("There are some errors while compiling fragment shader"); }
-        trace!("Vertex shader output:\n{}", std::str::from_utf8(&cfs_out.stdout).unwrap());
+        let cout = std::str::from_utf8(&cfs_out.stdout).expect("in shaderc[f] output");
+        trace!("Vertex shader output:\n{}", cout);
         // println!("cfs output: {:?}", cfs_out.stdout);
-        parse_num_output(std::str::from_utf8(&cfs_out.stdout).unwrap()).into()
+        Some(parse_num_output(cout))
     }
     else { None };
     let cvs_out = compile_vs.wait_with_output().expect("Failed to waiting compiler");
     if !cvs_out.status.success() {
         eprintln!("There are some errors while compiling vertex shader.");
     }
-    trace!("Vertex shader output:\n{}", std::str::from_utf8(&cvs_out.stdout).unwrap());
+    let cout = std::str::from_utf8(&cvs_out.stdout).expect("in shaderc[v] output");
+    trace!("Vertex shader output:\n{}", cout);
     // let vsh_str = String::from_utf8(cvs_out.stdout).unwrap();
     // println!("cvs output: {:?}", vsh_str);
-    let vertex_shader = parse_num_output(std::str::from_utf8(&cvs_out.stdout).unwrap());
+    let vertex_shader = parse_num_output(cout);
     // println!("vsh size: {}", vertex_shader.len());
 
     println!("Packaging compiled vertex processing stages to \"{}\"...", outfile_path.as_ref().display());
@@ -74,14 +76,15 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
 fn run_compiler_process(shader_stage: &str, stdin_bytes: &str) -> std::io::Result<std::process::Child> {
     trace!("Compiling {}: Generated Code: \n{}", shader_stage, stdin_bytes);
     let mut compiler = Command::new("glslc").arg(&format!("-fshader-stage={}", shader_stage))
-        .args(&["-o", "-", "-mfmt=num", "-"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()?;
-    compiler.stdin.as_mut().expect("Failed top open stdin of compiler process").write_all(stdin_bytes.as_bytes())?;
+        .args(&["-o", "-", "-mfmt=num", "-"]).stdin(Stdio::piped())
+        .stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()?;
+    compiler.stdin.as_mut().expect("Failed to open stdin of compiler process").write_all(stdin_bytes.as_bytes())?;
     return Ok(compiler);
 }
 fn parse_num_output(cout: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for nums in cout.split("\r\n").flat_map(|line| line.split(",")).filter(|s| !s.is_empty()) {
-        let mut n = u32::from_str_radix(&nums[2..], 16).unwrap();
+        let mut n = u32::from_str_radix(&nums[2..], 16).expect("invalid hexstr output");
         if cfg!(target_endian = "big") { n = n.swap_bytes(); }
         bytes.extend_from_slice(&unsafe { std::mem::transmute::<_, [u8; 4]>(n) });
     }
