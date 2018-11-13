@@ -16,6 +16,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentatio
 [workspace]
 exclude = ["extras/"]
 members = [
-    "archiver", "serialization-utils", "vertex-processing-pack",
+    "archiver", "serialization-utils", "vertex-processing-pack", "model",
     "cradle/android/peridot-cradle-android", "tools/shaderbuild"
 ]
