@@ -22,7 +22,7 @@ impl Context {
     }
 }
 impl<'c> FigureContext<'c> {
-    pub fn end(self) -> &'c mut Context {
+    pub fn end(mut self) -> &'c mut Context {
         self.partitioner.partition(self.fill_rule);
         self.partitioner.builder_mut().build_and_reset();
         self.ctx.meshes.push(self.partitioner.into_mesh());
