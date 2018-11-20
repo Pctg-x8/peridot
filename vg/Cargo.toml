@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 
 [dependencies]
+peridot-math = { path = "../math" }
 pathfinder_partitioner = { path = "../extras/pathfinder/partitioner" }
 font-kit = { git = "https://github.com/pcwalton/font-kit" }
-lyon_path = "*"
+lyon_path = "0.12"
+euclid = "*"
