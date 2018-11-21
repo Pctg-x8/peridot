@@ -103,7 +103,8 @@ impl<'t, B: PathBuilder + 't> PathBuilder for TranslatingPathBuilder<'t, B> {
         to.x += self.0.x(); to.y += self.0.y();
         self.1.cubic_bezier_to(ctrl1, ctrl2, to)
     }
-    fn arc(&mut self, mut center: Point2D<f32>, mut radii: Vector2D<f32>, sweep_angle: Angle<f32>, x_rotation: Angle<f32>) {
+    fn arc(&mut self, mut center: Point2D<f32>, mut radii: Vector2D<f32>,
+            sweep_angle: Angle<f32>, x_rotation: Angle<f32>) {
         center.x += self.0.x(); center.y += self.0.y();
         radii.x += self.0.x(); radii.y += self.0.y();
         self.1.arc(center, radii, sweep_angle, x_rotation)
