@@ -22,11 +22,14 @@ pub mod utils; pub use self::utils::*;
 pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
     fn init(_e: &Engine<Self, AL, PRT>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+    fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32)
+            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
 }
-impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () { fn init(_e: &Engine<Self, AL, PRT>) -> Self { () } }
+impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
+    fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
+}
 
 use std::io::{Read, Seek, Result as IOResult, BufReader};
 pub trait AssetLoader {
@@ -60,13 +63,15 @@ pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRender
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
 }
 impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
-    pub fn launch<IPP: InputProcessPlugin>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
-            -> br::Result<Self> {
+    pub fn launch<IPP>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
+            -> br::Result<Self> where IPP: InputProcessPlugin {
         let g = Graphics::new(name, version)?;
         let surface = prt.create_surface(&g.instance, &g.adapter, g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, &prt)?;
-        let mut this = Engine { g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into() };
+        let mut this = Engine {
+            g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into()
+        };
         trace!("Initializing Game...");
         let eh = E::init(&this);
         this.event_handler = Some(eh.into());
@@ -99,13 +104,14 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
 
     pub fn do_update(&mut self)
     {
-        let bb_index = self.wrt.acquire_next_backbuffer_index(None, br::CompletionHandler::Device(&self.g.acquiring_backbuffer))
+        let bb_index =
+            self.wrt.acquire_next_backbuffer_index(None, br::CompletionHandler::Device(&self.g.acquiring_backbuffer))
             .expect("Acquiring available backbuffer index");
         self.wrt.command_completion_for_backbuffer_mut(bb_index as _)
             .wait().expect("Waiting Previous command completion");
         self.ip.prepare_for_frame();
         {
-            let mut eh_mut = self.event_handler.as_ref().unwrap().borrow_mut();
+            let mut eh_mut = self.event_handler.as_ref().expect("uninitialized").borrow_mut();
             let (copy_submission, mut fb_submission) = eh_mut.update(self, bb_index);
             if let Some(mut cs) = copy_submission {
                 // copy -> render
@@ -114,26 +120,30 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
                     (&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                     (&self.g.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER)]);
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                self.submit_buffered_commands(&[cs, fb_submission], self.wrt.command_completion_for_backbuffer(bb_index as _).object())
+                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                self.submit_buffered_commands(&[cs, fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
             else {
                 // render only(old logic)
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                fb_submission.wait_semaphores.to_mut().push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
-                self.submit_buffered_commands(&[fb_submission], self.wrt.command_completion_for_backbuffer(bb_index as _).object())
+                fb_submission.wait_semaphores.to_mut()
+                    .push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
+                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                self.submit_buffered_commands(&[fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
         }
         unsafe {
             self.wrt.command_completion_for_backbuffer_mut(bb_index as _).signal();
         }
-        self.wrt.present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering]).expect("Present Submission");
+        self.wrt.present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering])
+            .expect("Present Submission");
     }
 }
 impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
     fn drop(&mut self) {
-        self.graphics().device.wait().unwrap();
+        self.graphics().device.wait().expect("device error");
     }
 }
 
@@ -143,15 +153,15 @@ impl<T> LateInit<T>
 {
     pub fn new() -> Self { LateInit(RefCell::new(None)) }
     pub fn init(&self, v: T) { *self.0.borrow_mut() = v.into(); }
-    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().unwrap()) }
+    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized")) }
 }
 pub struct Discardable<T>(RefCell<Option<T>>);
 impl<T> Discardable<T>
 {
     pub fn new() -> Self { Discardable(RefCell::new(None)) }
     pub fn set(&self, v: T) { *self.0.borrow_mut() = v.into(); }
-    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().unwrap()) }
-    pub fn get_mut(&self) -> RefMut<T> { RefMut::map(self.0.borrow_mut(), |x| x.as_mut().unwrap()) }
+    pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized")) }
+    pub fn get_mut(&self) -> RefMut<T> { RefMut::map(self.0.borrow_mut(), |x| x.as_mut().expect("uninitialized")) }
     pub fn discard(&self) { *self.0.borrow_mut() = None; }
     pub fn is_available(&self) -> bool { self.0.borrow().is_some() }
 }
@@ -174,7 +184,7 @@ impl Graphics
         #[cfg(target_os = "android")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_android_surface";
 
         info!("Supported Layers: ");
-        for l in br::Instance::enumerate_layer_properties().unwrap() {
+        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
             info!("* {} :: {}/{}", name.to_string_lossy(), l.specVersion, l.implementationVersion);
         }
@@ -192,7 +202,7 @@ impl Graphics
         let instance = ib.create()?;
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
-        let adapter = instance.iter_physical_devices()?.next().unwrap();
+        let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
         Self::diag_memory_properties(&adapter.memory_properties());
         let gqf_index = adapter.queue_family_properties().find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("No graphics queue");
@@ -239,7 +249,9 @@ impl Graphics
             if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 { flags.push("CACHED"); }
             if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 { flags.push("COHERENT"); }
             if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 { flags.push("LAZILY ALLOCATED"); }
+            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 {
+                flags.push("LAZILY ALLOCATED");
+            }
             info!("  {}: [{}] in heap #{}", n, flags.join("/"), ty.heapIndex);
         }
     }
@@ -343,10 +355,12 @@ impl PvpShaderModules {
     pub fn generate_vps(&self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages {
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
-            module: &self.vertex, entry_name: CString::new("main").unwrap(), specinfo: None
+            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"), specinfo: None
         }, &self.bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment {
-            r.fragment_shader(br::PipelineShader { module: f, entry_name: CString::new("main").unwrap(), specinfo: None });
+            r.fragment_shader(br::PipelineShader {
+                module: f, entry_name: CString::new("main").expect("unreachable"), specinfo: None
+            });
         }
         return r;
     }
@@ -385,9 +399,17 @@ impl PartialOrd for ResourceKey<Image> {
     }
 }
 impl Eq for ResourceKey<Buffer> {}
-impl Ord for ResourceKey<Buffer> { fn cmp(&self, other: &Self) -> Ordering { self.partial_cmp(other).unwrap() } }
+impl Ord for ResourceKey<Buffer> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).expect("ord: unreachable")
+    }
+}
 impl Eq for ResourceKey<Image> {}
-impl Ord for ResourceKey<Image> { fn cmp(&self, other: &Self) -> Ordering { self.partial_cmp(other).unwrap() } }
+impl Ord for ResourceKey<Image> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).expect("ord: unreachable")
+    }
+}
 impl Hash for ResourceKey<Buffer> { fn hash<H: Hasher>(&self, hasher: &mut H) { self.0.native_ptr().hash(hasher) } }
 impl Hash for ResourceKey<Image> { fn hash<H: Hasher>(&self, hasher: &mut H) { self.0.native_ptr().hash(hasher) } }
 pub struct ReadyResourceBarriers {
@@ -429,7 +451,8 @@ impl TransferBatch {
     }
     pub fn is_empty(&self) -> bool { self.copy_buffers.is_empty() }
     
-    fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<u64>>, k: ResourceKey<Buffer>, new_range: Range<u64>) {
+    fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<u64>>,
+            k: ResourceKey<Buffer>, new_range: Range<u64>) {
         let r = map.entry(k).or_insert_with(|| new_range.clone());
         r.start = r.start.min(new_range.start);
         r.end = r.end.max(new_range.end);
@@ -467,7 +490,8 @@ impl DescriptorSetUpdateBatch {
     /// Create an Empty batch
     pub fn new() -> Self { DescriptorSetUpdateBatch(Vec::new(), Vec::new()) }
     /// Write an information to bound index and array index in destination.
-    pub fn write_index(&mut self, dest: br::vk::VkDescriptorSet, bound: u32, array: u32, info: br::DescriptorUpdateInfo) -> &mut Self {
+    pub fn write_index(&mut self, dest: br::vk::VkDescriptorSet,
+            bound: u32, array: u32, info: br::DescriptorUpdateInfo) -> &mut Self {
         self.0.push(br::DescriptorSetWriteInfo(dest, bound, array, info));
         return self;
     }

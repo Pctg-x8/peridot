@@ -4,7 +4,8 @@ use bedrock as br;
 use std::mem::{uninitialized, replace, forget};
 
 pub trait PlatformRenderTarget {
-    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32) -> br::Result<SurfaceInfo>;
+    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
+            -> br::Result<SurfaceInfo>;
     fn current_geometry_extent(&self) -> (usize, usize);
 }
 
@@ -15,7 +16,8 @@ pub struct SurfaceInfo {
 impl SurfaceInfo
 {
     pub fn gather_info(pd: &br::PhysicalDevice, obj: br::Surface) -> br::Result<Self> {
-        let mut fmq = br::FormatQueryPred::new(); fmq.bit(32).components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
+        let mut fmq = br::FormatQueryPred::new(); fmq.bit(32)
+            .components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
         let fmt = pd.surface_formats(&obj)?.into_iter().find(|sf| fmq.satisfy(sf.format))
             .expect("No suitable format found");
         let pres_modes = pd.surface_present_modes(&obj)?;
@@ -44,9 +46,13 @@ impl WindowRenderTargets
     pub(super) fn new<PRT: PlatformRenderTarget>(g: &Graphics, s: &SurfaceInfo, prt: &PRT) -> br::Result<Self>
     {
         let si = g.adapter.surface_capabilities(&s.obj)?;
-        let ext = br::Extent2D(
-            if si.currentExtent.width == 0xffff_ffff { prt.current_geometry_extent().0 as _ } else { si.currentExtent.width },
-            if si.currentExtent.height == 0xffff_ffff { prt.current_geometry_extent().1 as _ } else { si.currentExtent.height });
+        let ew =
+            if si.currentExtent.width == 0xffff_ffff { prt.current_geometry_extent().0 as _ }
+            else { si.currentExtent.width };
+        let eh =
+            if si.currentExtent.height == 0xffff_ffff { prt.current_geometry_extent().1 as _ }
+            else { si.currentExtent.height };
+        let ext = br::Extent2D(ew, eh);
         let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
         let chain = br::SwapchainBuilder::new(&s.obj, buffer_count, &s.fmt, &ext, br::ImageUsage::COLOR_ATTACHMENT)
             .present_mode(s.pres_mode)
@@ -55,7 +61,8 @@ impl WindowRenderTargets
         
         let isr_c0 = br::ImageSubresourceRange::color(0, 0);
         let images = chain.get_images()?;
-        let (mut bb, mut command_completions_for_backbuffer) = (Vec::with_capacity(images.len()), Vec::with_capacity(images.len()));
+        let (mut bb, mut command_completions_for_backbuffer) =
+            (Vec::with_capacity(images.len()), Vec::with_capacity(images.len()));
         for x in images {
             bb.push(x.create_view(None, None, &Default::default(), &isr_c0)?);
             command_completions_for_backbuffer.push(StateFence::new(&g.device)?);
@@ -83,7 +90,7 @@ impl Drop for WindowRenderTargets
 {
     fn drop(&mut self)
     {
-        for f in self.command_completions_for_backbuffer.iter_mut() { f.wait().unwrap(); }
+        for f in self.command_completions_for_backbuffer.iter_mut() { f.wait().expect("waiting completion fence"); }
     }
 }
 
@@ -106,6 +113,8 @@ impl StateFence {
         unsafe { self.unsignal(); } return Ok(());
     }
 
-    pub fn object(&self) -> &br::Fence { match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f } }
+    pub fn object(&self) -> &br::Fence {
+        match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }
+    }
     fn take_object(self) -> br::Fence { match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f } }
 }

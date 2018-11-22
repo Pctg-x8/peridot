@@ -22,7 +22,9 @@ impl MainWindow {
     }
     fn init(&self, app: &android::App) {
         let mut ipp = self.ipp.borrow_mut();
-        let amgr = unsafe { android::AssetManager::from_ptr((*app.activity).asset_manager).unwrap() };
+        let amgr = unsafe {
+            android::AssetManager::from_ptr((*app.activity).asset_manager).expect("null assetmanager")
+        };
         *self.e.borrow_mut() = EngineA::launch(GameA::NAME, GameA::VERSION,
             PlatformWindowHandler(app.window), PlatformAssetLoader::new(amgr), &mut *ipp)
             .expect("Failed to initialize the engine").into();
@@ -40,7 +42,9 @@ impl peridot::PlatformRenderTarget for PlatformWindowHandler {
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<peridot::SurfaceInfo> {
         let obj = br::Surface::new_android(vi, self.0)?;
-        if !pd.surface_support(renderer_queue_family, &obj)? { panic!("Vulkan Surface is not supported by this adapter"); }
+        if !pd.surface_support(renderer_queue_family, &obj)? {
+            panic!("Vulkan Surface is not supported by this adapter");
+        }
         return peridot::SurfaceInfo::gather_info(&pd, obj);
     }
     fn current_geometry_extent(&self) -> (usize, usize) {
@@ -74,12 +78,12 @@ impl peridot::AssetLoader for PlatformAssetLoader {
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Asset> {
         let mut path_str = path.replace(".", "/"); path_str.push('.'); path_str.push_str(ext);
-        let path_str = CString::new(path_str).unwrap();
+        let path_str = CString::new(path_str).expect("converting path");
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_RANDOM).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset> {
         let mut path_str = path.replace(".", "/"); path_str.push('.'); path_str.push_str(ext);
-        let path_str = CString::new(path_str).unwrap();
+        let path_str = CString::new(path_str).expect("converting path");
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_STREAMING).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
 }
@@ -88,7 +92,7 @@ type EngineA = peridot::Engine<GameA, PlatformAssetLoader, PlatformWindowHandler
 
 #[no_mangle]
 pub extern "C" fn android_main(app: *mut android::App) {
-    let app = unsafe { app.as_mut().unwrap() };
+    let app = unsafe { app.as_mut().expect("null app") };
     app.on_app_cmd = Some(appcmd_callback);
     let mw = MainWindow::new();
     app.user_data = unsafe { std::mem::transmute(&mw) };
@@ -113,8 +117,8 @@ pub extern "C" fn android_main(app: *mut android::App) {
 }
 
 pub extern "C" fn appcmd_callback(app: *mut android::App, cmd: i32) {
-    let app = unsafe { app.as_mut().unwrap() };
-    let mw = unsafe { std::mem::transmute::<_, *const MainWindow>(app.user_data).as_ref().unwrap() };
+    let app = unsafe { app.as_mut().expect("null app") };
+    let mw = unsafe { std::mem::transmute::<_, *const MainWindow>(app.user_data).as_ref().expect("null window") };
 
     match cmd {
         android::APP_CMD_INIT_WINDOW => {

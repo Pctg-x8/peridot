@@ -1,8 +1,11 @@
 #!/bin/sh
 
-if [ -e extras/pathfinder ]; then
-	cd extras/pathfinder; git pull -ff; cd ../..
-else
-	git clone https://github.com/pcwalton/pathfinder extras/pathfinder
-fi
+cloneOrUpdateGitRepository() {
+	if [ -e $2 ]
+	then (cd $2; git pull -ff)
+	else git clone $1 $2
+	fi
+}
 
+[ -d extras ] || mkdir -p extras
+cloneOrUpdateGitRepository https://github.com/pcwalton/pathfinder extras/pathfinder
