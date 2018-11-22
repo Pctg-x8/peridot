@@ -9,3 +9,6 @@ pathfinder_partitioner = { path = "../extras/pathfinder/partitioner" }
 font-kit = { git = "https://github.com/pcwalton/font-kit" }
 lyon_path = "0.12"
 euclid = "*"
+
+[target.'cfg(target_os="macos")'.dependencies]
+appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }

@@ -110,3 +110,15 @@ impl<'t, B: PathBuilder + 't> PathBuilder for TranslatingPathBuilder<'t, B> {
         self.1.arc(center, radii, sweep_angle, x_rotation)
     }
 }
+
+// TODO: あとでModelDataにする
+impl Context {
+    pub fn vertices(&self) { }
+    pub fn indices(&self) {}
+
+    pub fn prealloc(&self) {
+        let interior_positions_count = self.meshes.iter().map(|x| x.0.b_quad_vertex_positions.len()).sum();
+        let interior_indices_count = self.meshes.iter().map(|x| x.0.b_quad_vertex_interior_indices.len()).sum();
+        
+    }
+}
