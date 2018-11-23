@@ -182,6 +182,7 @@ impl Graphics
     {
         #[cfg(windows)] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_win32_surface";
         #[cfg(target_os = "android")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_android_surface";
+        #[cfg(target_os = "macos")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_MVK_macos_surface";
 
         info!("Supported Layers: ");
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {

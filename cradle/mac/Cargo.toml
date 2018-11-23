@@ -1,0 +1,9 @@
+[package]
+name = "peridot-cradle-mac"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+
+[dependencies]
+objc = "*"
+appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
+appkit-derive = { git = "https://github.com/Pctg-x8/appkit-rs" }
