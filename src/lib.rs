@@ -63,6 +63,7 @@ pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRender
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
 }
 impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
+    // TODO: 引数多くなってきたしPluginだけ構造体を分離する様なのをした方がいいかも
     pub fn launch<IPP>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
             -> br::Result<Self> where IPP: InputProcessPlugin {
         let g = Graphics::new(name, version)?;

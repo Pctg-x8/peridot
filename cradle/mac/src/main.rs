@@ -147,6 +147,7 @@ impl AppDelegate {
     }
 }
 
+// TODO: AssetLoader実装する
 struct PlatformAssetLoader {}
 impl PlatformAssetLoader {
     pub fn new() -> Self {
@@ -184,6 +185,7 @@ impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler {
         (size.width as _, size.height as _)
     }
 }
+// TODO: InputProcessPlugin実装する
 pub(crate) struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
 impl PlatformInputProcessPlugin {
     fn new() -> Self {
