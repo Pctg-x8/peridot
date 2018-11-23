@@ -3,6 +3,12 @@ extern crate objc;
 extern crate appkit; use appkit::*;
 #[macro_use] extern crate appkit_derive;
 
+extern crate peridot;
+extern crate bedrock as br;
+use std::fs::File;
+use std::io::Result as IOResult;
+use std::rc::Rc;
+
 use objc::runtime::{Object, Class, Sel};
 use objc::declare::ClassDecl;
 
@@ -62,6 +68,15 @@ macro_rules! DeclareObjcClass
 
 mod view;
 mod window; use window::WindowController;
+
+fn main() {
+    let adel = AppDelegate::new();
+    let app = appkit::NSApplication::shared().expect("No NSApplication");
+    app.set_delegate(adel.objid());
+    app.set_activation_policy(NSApplicationActivationPolicy::Regular);
+    app.run();
+    println!("Hello, world!");
+}
 
 /// Info.plistのCFBundleNameもしくはプロセス名
 fn product_name() -> &'static NSString
@@ -132,11 +147,58 @@ impl AppDelegate {
     }
 }
 
-fn main() {
-    let adel = AppDelegate::new();
-    let app = appkit::NSApplication::shared().expect("No NSApplication");
-    app.set_delegate(adel.objid());
-    app.set_activation_policy(NSApplicationActivationPolicy::Regular);
-    app.run();
-    println!("Hello, world!");
+struct PlatformAssetLoader {}
+impl PlatformAssetLoader {
+    pub fn new() -> Self {
+        PlatformAssetLoader {}
+    }
+}
+impl peridot::AssetLoader for PlatformAssetLoader {
+    type Asset = File;
+    type StreamingAsset = File;
+
+    fn get(&self, _path: &str, _ext: &str) -> IOResult<File> {
+        unimplemented!("MacOSAssetLoader::get");
+    }
+    fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<File> {
+        unimplemented!("MacOSAssetLoader::get_streaming");
+    }
+}
+struct PlatformRenderTargetHandler(*mut Object);
+impl PlatformRenderTargetHandler {
+    pub fn new(o: *mut Object) -> Self {
+        PlatformRenderTargetHandler(o)
+    }
+}
+impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler {
+    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
+            -> br::Result<peridot::SurfaceInfo> {
+        let obj = br::Surface::new_macos(vi, self.0 as *const _)?;
+        if !pd.surface_support(renderer_queue_family, &obj)? {
+            panic!("Vulkan Rendering is not supported by this adapter.");
+        }
+        return peridot::SurfaceInfo::gather_info(&pd, obj);
+    }
+    fn current_geometry_extent(&self) -> (usize, usize) {
+        let NSRect { size, .. } = unsafe { msg_send![self.0, frame] };
+        (size.width as _, size.height as _)
+    }
+}
+pub(crate) struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
+impl PlatformInputProcessPlugin {
+    fn new() -> Self {
+        PlatformInputProcessPlugin { processor: None }
+    }
+}
+impl peridot::InputProcessPlugin for PlatformInputProcessPlugin {
+    fn on_start_handle(&mut self, ip: &Rc<peridot::InputProcess>) {
+        self.processor = Some(ip.clone());
+    }
+}
+mod glib;
+type Game = glib::Game<PlatformAssetLoader, PlatformRenderTargetHandler>;
+type Engine = peridot::Engine<Game, PlatformAssetLoader, PlatformRenderTargetHandler>;
+
+fn launch_game(v: *mut Object, ipp: &mut PlatformInputProcessPlugin) -> br::Result<Engine> {
+    Engine::launch(Game::NAME, Game::VERSION, PlatformRenderTargetHandler::new(v), PlatformAssetLoader::new(), ipp)
 }
