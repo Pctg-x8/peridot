@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::mem::transmute;
 
 use view::RenderableView;
-use super::{Engine, launch_game, PlatformInputProcessPlugin};
+use super::{Engine, Game, launch_game, PlatformInputProcessPlugin};
 use std::marker::PhantomData;
 
 #[derive(ObjcObjectBase)]
@@ -17,6 +17,7 @@ impl WindowController {
         let c = Class::get("PeridotWindowController").unwrap_or_else(Self::declare);
         let o = unsafe { CocoaObject::<Self>::from_id(msg_send![c, new])? };
         unsafe { (*o.id()).set_ivar("initial_frame_rect", initial_frame_rect); }
+        o.set_title(Game::NAME);
         return Ok(o);
     }
     fn declare() -> &'static Class {
@@ -44,12 +45,17 @@ impl WindowController {
         let mut ipp = PlatformInputProcessPlugin::new();
         let e = launch_game(v, &mut ipp).expect("Failed to launch the game");
         unsafe {
-            this.set_ivar("engine_events_ptr", Box::into_raw(Box::new(e)) as usize);
+            let eptr = Box::into_raw(Box::new(e)) as usize;
+            this.set_ivar("engine_events_ptr", eptr);
             this.set_ivar("input_handler_ptr", Box::into_raw(Box::new(ipp)) as usize);
+            let vo = transmute::<*mut Object, *mut RenderableView>(v);
+            (*vo).set_engine_ptr(eptr);
         }
     }
     extern fn dealloc(this: &mut Object, _: Sel) {
         unsafe {
+            let v = unsafe { transmute::<*mut Object, *mut RenderableView>(msg_send![this, view]) };
+            unsafe { (*v).set_engine_ptr(0); }
             let ep: usize = *this.get_ivar("engine_events_ptr");
             let ihp: usize = *this.get_ivar("input_handler_ptr");
             drop(Box::from_raw(ep as *mut Engine));

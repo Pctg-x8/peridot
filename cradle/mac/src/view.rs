@@ -6,6 +6,7 @@ use appkit::*;
 use std::mem::transmute;
 use std::ops::{Deref, DerefMut};
 use super::objc_id;
+use super::Engine;
 
 #[derive(ObjcObjectBase)]
 pub struct RenderableView(Object);
@@ -19,6 +20,8 @@ impl RenderableView {
                 - displayLayer:(objc_id) = Self::display_layer;
                 - (BOOL) wantsUpdateLayer = yesman;
                 - mut setFrameSize:(NSSize) = Self::set_frame_size;
+
+                ivar engine_ptr: usize;
             }
         }
     }
@@ -27,14 +30,19 @@ impl RenderableView {
         let ptr = unsafe { msg_send![c, new] };
         unsafe { CocoaObject::from_id(ptr) }
     }
+    pub(crate) fn set_engine_ptr(&mut self, p: usize) {
+        unsafe { self.0.set_ivar("engine_ptr", p); }
+    }
 
-    extern fn make_backing_layer(this: &Object, _: Sel) -> objc_id {
+    extern fn make_backing_layer(_this: &Object, _: Sel) -> objc_id {
         // let view: &NSView = unsafe { transmute(this) };
         let layer = CAMetalLayer::layer().expect("Constructing CAMetalLayer");
         layer.into_id()
     }
     extern fn display_layer(this: &Object, _: Sel, _: objc_id) {
         println!("display layer");
+        let p = unsafe { transmute::<usize, *mut Engine>(*this.get_ivar("engine_ptr")) };
+        if let Some(e) = unsafe { p.as_mut() } { e.do_update(); }
     }
     extern fn set_frame_size(this: &mut Object, _: Sel, size: NSSize) {
         let _: () = unsafe {
