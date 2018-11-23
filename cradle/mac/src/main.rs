@@ -82,7 +82,7 @@ fn main() {
 fn product_name() -> &'static NSString
 {
     NSBundle::main().and_then(|b| b.object_for_info_dictionary_key("CFBundleName").ok_or(()))
-        .unwrap_or_else(|_| NSProcessInfo::current().unwrap().name())
+        .unwrap_or_else(|_| NSProcessInfo::current().expect("No NSProcessInfo?").name())
 }
 
 #[derive(ObjcObjectBase)]
