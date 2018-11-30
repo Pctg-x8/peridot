@@ -20,7 +20,7 @@ mod resource; pub use self::resource::*;
 pub mod utils; pub use self::utils::*;
 
 pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self;
+    fn init(_e: &Engine<Self, AL, PRT>, init_config: &mut EngineConfig) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -28,7 +28,7 @@ pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
     }
 }
 impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
+    fn init(_e: &Engine<Self, AL, PRT>, _: &mut EngineConfig) -> Self { () }
 }
 
 use std::io::{Read, Seek, Result as IOResult, BufReader};
@@ -68,6 +68,17 @@ pub trait PlatformPluginLoader {
     fn input_processor(&mut self) -> &mut Self::InputProcessor;
 }
 
+pub struct EngineConfig {
+    /// Preferred framerate, default is 60(fps).
+    /// Setting this as `None` will turn off waiting vsync.
+    pub preferred_framerate: Option<u16>
+}
+impl Default for EngineConfig {
+    fn default() -> Self {
+        EngineConfig { preferred_framerate: Some(60) }
+    }
+}
+
 pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> {
     prt: PRT, surface: SurfaceInfo, wrt: WindowRenderTargets,
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
@@ -85,7 +96,8 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
             asset_loader: plugin_loader.new_asset_loader(), prt
         };
         trace!("Initializing Game...");
-        let eh = E::init(&this);
+        let econfig = EngineConfig::default();
+        let eh = E::init(&this, &mut econfig);
         this.event_handler = Some(eh.into());
         plugins.input_processor().on_start_handle(&this.ip);
         return Ok(this);
