@@ -30,8 +30,10 @@ impl RenderableView {
         let ptr = unsafe { msg_send![c, new] };
         unsafe { CocoaObject::from_id(ptr) }
     }
-    pub(crate) fn set_engine_ptr(&mut self, p: usize) {
-        unsafe { self.0.set_ivar("engine_ptr", p); }
+    pub(self) fn set_engine_ptr(&mut self, p: usize) {
+        unsafe {
+            self.0.set_ivar("engine_ptr", p);
+        }
     }
 
     extern fn make_backing_layer(_this: &Object, _: Sel) -> objc_id {

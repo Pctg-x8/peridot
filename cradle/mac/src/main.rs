@@ -197,10 +197,25 @@ impl peridot::InputProcessPlugin for PlatformInputProcessPlugin {
         self.processor = Some(ip.clone());
     }
 }
+pub(self) struct PluginLoader { rt_view: *mut Object, input: PlatformInputProcessPlugin }
+impl PluginLoader {
+    pub(self) fn new(rt_view: *mut Object) -> Self {
+        PluginLoader { rt_view, input: PlatformInputProcessPlugin::new() }
+    }
+}
+impl peridot::PlatformPluginLoader for PluginLoader {
+    type AssetLoader = PlatformAssetLoader;
+    type RenderTargetProvider = PlatformRenderTargetHandler;
+    type InputProcess = PlatformInputProcessPlugin;
+
+    fn new_asset_loader() -> PlatformAssetLoader { PlatformAssetLoader::new() }
+    fn new_render_target_provider() -> PlatformRenderTargetHandler { PlatformRenderTargetHandler::new(self.rt_view) }
+    fn input_process(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
+}
 mod glib;
 type Game = glib::Game<PlatformAssetLoader, PlatformRenderTargetHandler>;
 type Engine = peridot::Engine<Game, PlatformAssetLoader, PlatformRenderTargetHandler>;
 
-fn launch_game(v: *mut Object, ipp: &mut PlatformInputProcessPlugin) -> br::Result<Engine> {
-    Engine::launch(Game::NAME, Game::VERSION, PlatformRenderTargetHandler::new(v), PlatformAssetLoader::new(), ipp)
+fn launch_game(pl: &mut PluginLoader) -> br::Result<Engine> {
+    Engine::launch(Game::NAME, Game::VERSION, pl)
 }

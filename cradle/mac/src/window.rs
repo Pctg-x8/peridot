@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::mem::transmute;
 
 use view::RenderableView;
-use super::{Engine, Game, launch_game, PlatformInputProcessPlugin};
+use super::{Engine, Game, launch_game, PluginLoader};
 use std::marker::PhantomData;
 
 #[derive(ObjcObjectBase)]
@@ -24,7 +24,7 @@ impl WindowController {
         DeclareObjcClass! {
             class PeridotWindowController : NSViewController {
                 ivar initial_frame_rect: NSRect;
-                ivar input_handler_ptr: usize;
+                ivar plugins_ptr: usize;
                 ivar engine_events_ptr: usize;
                 - mut loadView = Self::load_view;
                 - mut viewDidLoad = Self::did_view_load;
@@ -42,12 +42,13 @@ impl WindowController {
         let v: *mut Object = unsafe { msg_send![this, view] };
         unsafe { msg_send![v, setWantsLayer: YES] };
 
-        let mut ipp = PlatformInputProcessPlugin::new();
-        let e = launch_game(v, &mut ipp).expect("Failed to launch the game");
+        let mut ploader = PluginLoader::new(v);
+        let e = launch_game(&mut ploader).expect("Failed to launch the game");
         unsafe {
             let eptr = Box::into_raw(Box::new(e)) as usize;
+            let plptr = Box::into_raw(Box::new(ploader)) as usize;
             this.set_ivar("engine_events_ptr", eptr);
-            this.set_ivar("input_handler_ptr", Box::into_raw(Box::new(ipp)) as usize);
+            this.set_ivar("plugins_ptr", plptr);
             let vo = transmute::<*mut Object, *mut RenderableView>(v);
             (*vo).set_engine_ptr(eptr);
         }
@@ -57,9 +58,9 @@ impl WindowController {
             let v = unsafe { transmute::<*mut Object, *mut RenderableView>(msg_send![this, view]) };
             unsafe { (*v).set_engine_ptr(0); }
             let ep: usize = *this.get_ivar("engine_events_ptr");
-            let ihp: usize = *this.get_ivar("input_handler_ptr");
+            let plp: usize = *this.get_ivar("plugins_ptr");
             drop(Box::from_raw(ep as *mut Engine));
-            drop(Box::from_raw(ihp as *mut PlatformInputProcessPlugin));
+            drop(Box::from_raw(plp as *mut PluginLoader));
         
             let _: () = msg_send![super(this, Class::get("NSViewController").expect("No NSViewController?")), dealloc];
         }

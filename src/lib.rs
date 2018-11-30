@@ -58,25 +58,36 @@ impl FromAsset for PvpContainer {
 
 mod input; pub use self::input::*;
 
+pub trait PlatformPluginLoader {
+    type AssetLoader: AssetLoader;
+    type RenderTargetProvider: PlatformRenderTarget;
+    type InputProcessor: InputProcessPlugin;
+
+    fn new_asset_loader() -> Self::AssetLoader;
+    fn new_render_target_provider() -> Self::RenderTargetProvider;
+    fn input_processor(&mut self) -> &mut Self::InputProcessor;
+}
+
 pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> {
     prt: PRT, surface: SurfaceInfo, wrt: WindowRenderTargets,
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
 }
 impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
-    // TODO: 引数多くなってきたしPluginだけ構造体を分離する様なのをした方がいいかも
-    pub fn launch<IPP>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
-            -> br::Result<Self> where IPP: InputProcessPlugin {
+    pub fn launch<PL>(name: &str, version: (u32, u32, u32), plugin_loader: &mut PL) -> br::Result<Self>
+            where PL: PlatformPluginLoader<AssetLoader = AL, RenderTargetProvider = PRT> {
         let g = Graphics::new(name, version)?;
+        let prt = plugin_loader.new_render_target_provider();
         let surface = prt.create_surface(&g.instance, &g.adapter, g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, &prt)?;
         let mut this = Engine {
-            g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into()
+            g, surface, wrt, event_handler: None, ip: InputProcess::new().into(),
+            asset_loader: plugin_loader.new_asset_loader(), prt
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
         this.event_handler = Some(eh.into());
-        ipp.on_start_handle(&this.ip);
+        plugins.input_processor().on_start_handle(&this.ip);
         return Ok(this);
     }
 
