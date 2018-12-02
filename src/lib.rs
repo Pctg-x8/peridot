@@ -63,19 +63,22 @@ pub trait PlatformPluginLoader {
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
 
-    fn new_asset_loader() -> Self::AssetLoader;
-    fn new_render_target_provider() -> Self::RenderTargetProvider;
+    fn new_asset_loader(&self) -> Self::AssetLoader;
+    fn new_render_target_provider(&self) -> Self::RenderTargetProvider;
     fn input_processor(&mut self) -> &mut Self::InputProcessor;
+    /// Runs the RenderLoop using platform timer.
+    /// This operation does not have to block engine initialization sequence.
+    fn run_renderloop(&mut self, framerate: Option<f32>);
 }
 
 pub struct EngineConfig {
     /// Preferred framerate, default is 60(fps).
     /// Setting this as `None` will turn off waiting vsync.
-    pub preferred_framerate: Option<u16>
+    pub preferred_framerate: Option<f32>
 }
 impl Default for EngineConfig {
     fn default() -> Self {
-        EngineConfig { preferred_framerate: Some(60) }
+        EngineConfig { preferred_framerate: Some(60.0) }
     }
 }
 
@@ -96,10 +99,11 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
             asset_loader: plugin_loader.new_asset_loader(), prt
         };
         trace!("Initializing Game...");
-        let econfig = EngineConfig::default();
+        let mut econfig = EngineConfig::default();
         let eh = E::init(&this, &mut econfig);
         this.event_handler = Some(eh.into());
-        plugins.input_processor().on_start_handle(&this.ip);
+        plugin_loader.input_processor().on_start_handle(&this.ip);
+        plugin_loader.run_renderloop(econfig.preferred_framerate);
         return Ok(this);
     }
 

@@ -10,7 +10,7 @@ impl<AL: AssetLoader, PRT: PlatformRenderTarget> Game<AL, PRT> {
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<AL: AssetLoader, PRT: PlatformRenderTarget> peridot::EngineEvents<AL, PRT> for Game<AL, PRT> {
-    fn init(e: &peridot::Engine<Self, AL, PRT>) -> Self {
+    fn init(e: &peridot::Engine<Self, AL, PRT>, _c: &mut peridot::EngineConfig) -> Self {
         println!("Engine Initialized!!");
         Game { _p: PhantomData }
     }
