@@ -178,11 +178,8 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32)) -> br::Result<Self>
+    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str) -> br::Result<Self>
     {
-        #[cfg(windows)] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_win32_surface";
-        #[cfg(target_os = "android")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_android_surface";
-
         info!("Supported Layers: ");
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
@@ -190,7 +187,7 @@ impl Graphics
         }
 
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(vec!["VK_KHR_surface", VK_KHR_PLATFORM_SURFACE]);
+        ib.add_extensions(vec!["VK_KHR_surface", platform_surface_extension_name]);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
         #[cfg(all(debug_assertions, not(target_os = "android")))] ib.add_layer("VK_LAYER_LUNARG_standard_validation");
         #[cfg(all(debug_assertions, target_os = "android"))] ib
