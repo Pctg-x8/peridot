@@ -19,7 +19,7 @@ mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
 pub mod utils; pub use self::utils::*;
 
-pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
+pub trait EngineEvents<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> : Sized {
     fn init(_e: &Engine<Self, AL, PRT>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32)
@@ -27,12 +27,12 @@ pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
         (None, br::SubmissionBatch::default())
     }
 }
-impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
+impl<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
     fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
 }
 
 use std::io::{Read, Seek, Result as IOResult, BufReader};
-pub trait AssetLoader {
+pub trait PlatformAssetLoader {
     type Asset: Read + Seek;
     type StreamingAsset: Read;
 
@@ -58,24 +58,36 @@ impl FromAsset for PvpContainer {
 
 mod input; pub use self::input::*;
 
-pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> {
+pub trait PluginLoader {
+    type AssetLoader: PlatformAssetLoader;
+    type InputProcessor: InputProcessPlugin;
+    type RenderTargetProvider: PlatformRenderTarget;
+
+    fn new_asset_loader(&self) -> Self::AssetLoader;
+    fn new_render_target_provider(&self) -> Self::RenderTargetProvider;
+    fn input_processor(&mut self) -> &mut Self::InputProcessor;
+}
+
+pub struct Engine<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarget> {
     prt: PRT, surface: SurfaceInfo, wrt: WindowRenderTargets,
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
 }
-impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
-    pub fn launch<IPP>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
-            -> br::Result<Self> where IPP: InputProcessPlugin {
-        let g = Graphics::new(name, version)?;
+impl<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
+    pub fn launch<PL>(name: &str, version: (u32, u32, u32), plugin_loader: &mut PL) -> br::Result<Self>
+            where PL: PluginLoader<AssetLoader=AL, RenderTargetProvider=PRT> {
+        let prt = plugin_loader.new_render_target_provider();
+        let g = Graphics::new(name, version, prt.surface_extension_name())?;
         let surface = prt.create_surface(&g.instance, &g.adapter, g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, &prt)?;
         let mut this = Engine {
-            g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into()
+            g, surface, wrt, event_handler: None, prt, ip: InputProcess::new().into(),
+            asset_loader: plugin_loader.new_asset_loader()
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
         this.event_handler = Some(eh.into());
-        ipp.on_start_handle(&this.ip);
+        plugin_loader.input_processor().on_start_handle(&this.ip);
         return Ok(this);
     }
 
@@ -141,7 +153,7 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
             .expect("Present Submission");
     }
 }
-impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
+impl<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
     fn drop(&mut self) {
         self.graphics().device.wait().expect("device error");
     }
@@ -178,11 +190,9 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32)) -> br::Result<Self>
+    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &'static str)
+            -> br::Result<Self>
     {
-        #[cfg(windows)] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_win32_surface";
-        #[cfg(target_os = "android")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_android_surface";
-
         info!("Supported Layers: ");
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
@@ -190,7 +200,7 @@ impl Graphics
         }
 
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(vec!["VK_KHR_surface", VK_KHR_PLATFORM_SURFACE]);
+        ib.add_extensions(vec!["VK_KHR_surface", platform_surface_extension_name]);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
         #[cfg(all(debug_assertions, not(target_os = "android")))] ib.add_layer("VK_LAYER_LUNARG_standard_validation");
         #[cfg(all(debug_assertions, target_os = "android"))] ib

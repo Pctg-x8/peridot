@@ -4,6 +4,7 @@ use bedrock as br;
 use std::mem::{uninitialized, replace, forget};
 
 pub trait PlatformRenderTarget {
+    fn surface_extension_name(&self) -> &'static str;
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<SurfaceInfo>;
     fn current_geometry_extent(&self) -> (usize, usize);
