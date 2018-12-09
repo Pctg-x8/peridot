@@ -6,7 +6,7 @@ edition = "2018"
 
 [lib]
 crate-type = ["staticlib"]
-name = "infinitesweeper"
+name = "pegamelib"
 
 [dependencies]
 log = "0.4"
