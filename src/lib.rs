@@ -213,21 +213,30 @@ impl Graphics
         #[cfg(target_os = "macos")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_MVK_macos_surface";
 
         info!("Supported Layers: ");
+        let mut validation_layer_available = false;
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
             info!("* {} :: {}/{}", name.to_string_lossy(), l.specVersion, l.implementationVersion);
+            if !validation_layer_available && name.to_str() == Ok("VK_LAYER_LUNARG_standard_validation") {
+                validation_layer_available = true;
+            }
         }
 
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
         ib.add_extensions(vec!["VK_KHR_surface", VK_KHR_PLATFORM_SURFACE]);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
-        #[cfg(all(debug_assertions, not(target_os = "android")))] ib.add_layer("VK_LAYER_LUNARG_standard_validation");
-        #[cfg(all(debug_assertions, target_os = "android"))] ib
-            .add_layer("VK_LAYER_LUNARG_parameter_validation")
-            .add_layer("VK_LAYER_LUNARG_core_validation")
-            .add_layer("VK_LAYER_LUNARG_object_tracker")
-            .add_layer("VK_LAYER_GOOGLE_unique_objects")
-            .add_layer("VK_LAYER_GOOGLE_threading");
+        if validation_layer_available {
+            #[cfg(all(debug_assertions, not(target_os = "android")))] ib.add_layer("VK_LAYER_LUNARG_standard_validation");
+            #[cfg(all(debug_assertions, target_os = "android"))] ib
+                .add_layer("VK_LAYER_LUNARG_parameter_validation")
+                .add_layer("VK_LAYER_LUNARG_core_validation")
+                .add_layer("VK_LAYER_LUNARG_object_tracker")
+                .add_layer("VK_LAYER_GOOGLE_unique_objects")
+                .add_layer("VK_LAYER_GOOGLE_threading");
+        }
+        else {
+            warn!("Validation Layer is not found!");
+        }
         let instance = ib.create()?;
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
