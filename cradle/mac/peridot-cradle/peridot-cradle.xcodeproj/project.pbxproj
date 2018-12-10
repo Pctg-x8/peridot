@@ -22,6 +22,7 @@
 		4BC8ED2721B3F54900FB4AF9 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */; };
 		4BC8ED2921B3F5FA00FB4AF9 /* vulkan.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */; };
 		4BC8ED2C21B3F7DC00FB4AF9 /* vulkan.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -57,6 +58,7 @@
 		4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
+		4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInterface.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -107,6 +109,7 @@
 				4BAF7A2821B2A4B00006BE24 /* PeridotRenderableViewController.swift */,
 				4BAF7A3021B313B00006BE24 /* AppDelegate.swift */,
 				4BAF7A3221B3C0990006BE24 /* peridot-cradle-Bridging-Header.h */,
+				4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */,
 			);
 			path = "peridot-cradle";
 			sourceTree = "<group>";
@@ -199,6 +202,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */,
 				4BAF7A2721B29F1F0006BE24 /* PeridotRenderableView.swift in Sources */,
 				4BAF7A2921B2A4B00006BE24 /* PeridotRenderableViewController.swift in Sources */,
 				4BAF7A3121B313B00006BE24 /* AppDelegate.swift in Sources */,

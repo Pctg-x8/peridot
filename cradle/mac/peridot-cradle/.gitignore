@@ -1,4 +1,5 @@
 build/
 *.xcuserstate
 xcuserdata
-
+*.app
+out/

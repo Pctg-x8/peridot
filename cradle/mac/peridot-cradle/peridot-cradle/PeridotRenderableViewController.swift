@@ -11,11 +11,7 @@ import Cocoa
 
 final class PeridotRenderableViewController : NSViewController {
     var dplink: CVDisplayLink? = nil
-    var enginePointer: OpaquePointer? = nil
-    
-    deinit {
-        if let ep = self.enginePointer { terminate_game(ep) }
-    }
+    var enginePointer: NativeGameEngine? = nil
     
     func startDisplayLink() {
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
@@ -24,7 +20,7 @@ final class PeridotRenderableViewController : NSViewController {
     override func viewDidLoad() {
         self.view.wantsLayer = true
         self.view.layerContentsRedrawPolicy = .duringViewResize
-        self.enginePointer = launch_game(UnsafeMutableRawPointer(&self.view))
+        self.enginePointer = NativeGameEngine(forView: &self.view)
     }
     override func viewDidAppear() {
         if let d = self.dplink { CVDisplayLinkStart(d) }
