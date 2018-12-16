@@ -21,20 +21,7 @@ mod resource; pub use resource::*;
 pub mod utils; pub use utils::*;
 
 mod asset; pub use asset::*;
-
-pub trait EngineEvents<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> : Sized {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self;
-    /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32)
-            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        (None, br::SubmissionBatch::default())
-    }
-}
-impl<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
-}
-
-mod input; pub use self::input::*;
+mod input; pub use input::*;
 
 pub trait PluginLoader {
     type AssetLoader: PlatformAssetLoader;
@@ -45,22 +32,55 @@ pub trait PluginLoader {
     fn new_render_target_provider(&self) -> Self::RenderTargetProvider;
     fn input_processor(&mut self) -> &mut Self::InputProcessor;
 }
-
-pub struct Engine<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarget> {
-    prt: PRT, surface: SurfaceInfo, wrt: WindowRenderTargets,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
+pub struct NativeLink<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> {
+    prt: PRT, asset_loader: AL
 }
-impl<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
+pub trait PlatformLinker {
+    type AssetLoader: PlatformAssetLoader;
+    type RenderTargetProvider: PlatformRenderTarget;
+
+    fn new(al: Self::AssetLoader, prt: Self::RenderTargetProvider) -> Self;
+    fn asset_loader(&self) -> &Self::AssetLoader;
+    fn render_target_provider(&self) -> &Self::RenderTargetProvider;
+}
+impl<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> PlatformLinker for NativeLink<AL, PRT> {
+    type AssetLoader = AL;
+    type RenderTargetProvider = PRT;
+
+    fn new(al: AL, prt: PRT) -> Self {
+        NativeLink { asset_loader: al, prt }
+    }
+    fn asset_loader(&self) -> &AL { &self.asset_loader }
+    fn render_target_provider(&self) -> &PRT { &self.prt }
+}
+
+pub trait EngineEvents<PL: PlatformLinker> : Sized {
+    fn init(_e: &Engine<Self, PL>) -> Self;
+    /// Updates the game and passes copying(optional) and rendering command batches to the engine.
+    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
+            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+        (None, br::SubmissionBatch::default())
+    }
+}
+impl<PL: PlatformLinker> EngineEvents<PL> for () {
+    fn init(_e: &Engine<Self, PL>) -> Self { () }
+}
+
+pub struct Engine<E: EngineEvents<PL>, PL: PlatformLinker> {
+    nativelink: PL, surface: SurfaceInfo, wrt: WindowRenderTargets,
+    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
+}
+impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
     pub fn launch<PL>(name: &str, version: (u32, u32, u32), plugin_loader: &mut PL) -> br::Result<Self>
-            where PL: PluginLoader<AssetLoader=AL, RenderTargetProvider=PRT> {
-        let prt = plugin_loader.new_render_target_provider();
-        let g = Graphics::new(name, version, prt.surface_extension_name())?;
-        let surface = prt.create_surface(&g.instance, &g.adapter, g.graphics_queue.family)?;
+            where PL: PluginLoader<AssetLoader=NPL::AssetLoader, RenderTargetProvider=NPL::RenderTargetProvider> {
+        let nativelink = NPL::new(plugin_loader.new_asset_loader(), plugin_loader.new_render_target_provider());
+        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
+        let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
+            g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
-        let wrt = WindowRenderTargets::new(&g, &surface, &prt)?;
+        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?;
         let mut this = Engine {
-            g, surface, wrt, event_handler: None, prt, ip: InputProcess::new().into(),
-            asset_loader: plugin_loader.new_asset_loader()
+            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
@@ -70,10 +90,10 @@ impl<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarge
     }
 
     pub fn load<A: FromAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get(path, A::EXT).and_then(A::from_asset)
+        self.nativelink.asset_loader().get(path, A::EXT).and_then(A::from_asset)
     }
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get_streaming(path, A::EXT).and_then(A::from_asset)
+        self.nativelink.asset_loader().get_streaming(path, A::EXT).and_then(A::from_asset)
     }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
@@ -131,7 +151,7 @@ impl<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarge
             .expect("Present Submission");
     }
 }
-impl<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
+impl<E: EngineEvents<PL>, PL: PlatformLinker> Drop for Engine<E, PL> {
     fn drop(&mut self) {
         self.graphics().device.wait().expect("device error");
     }
