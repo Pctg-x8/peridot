@@ -12,12 +12,15 @@ use bedrock as br; use bedrock::traits::*;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::Result as IOResult;
 
-mod window; use self::window::WindowRenderTargets;
-pub use self::window::{PlatformRenderTarget, SurfaceInfo};
-mod resource; pub use self::resource::*;
-#[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
-pub mod utils; pub use self::utils::*;
+mod window; use window::WindowRenderTargets;
+pub use window::{PlatformRenderTarget, SurfaceInfo};
+mod resource; pub use resource::*;
+#[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use debug::DebugReport;
+pub mod utils; pub use utils::*;
+
+mod asset; pub use asset::*;
 
 pub trait EngineEvents<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> : Sized {
     fn init(_e: &Engine<Self, AL, PRT>) -> Self;
@@ -29,31 +32,6 @@ pub trait EngineEvents<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> : Siz
 }
 impl<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
     fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
-}
-
-use std::io::{Read, Seek, Result as IOResult, BufReader};
-pub trait PlatformAssetLoader {
-    type Asset: Read + Seek;
-    type StreamingAsset: Read;
-
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
-}
-pub trait LogicalAssetData: Sized {
-    fn ext() -> &'static str;
-}
-pub trait FromAsset: LogicalAssetData {
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self>;
-}
-pub trait FromStreamingAsset: LogicalAssetData {
-    fn from_asset<Asset: Read>(asset: Asset) -> IOResult<Self>;
-}
-use peridot_vertex_processing_pack::*;
-impl LogicalAssetData for PvpContainer { fn ext() -> &'static str { "pvp" } }
-impl FromAsset for PvpContainer {
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self> {
-        PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
-    }
 }
 
 mod input; pub use self::input::*;
@@ -92,10 +70,10 @@ impl<E: EngineEvents<AL, PRT>, AL: PlatformAssetLoader, PRT: PlatformRenderTarge
     }
 
     pub fn load<A: FromAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get(path, A::ext()).and_then(A::from_asset)
+        self.asset_loader.get(path, A::EXT).and_then(A::from_asset)
     }
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get_streaming(path, A::ext()).and_then(A::from_asset)
+        self.asset_loader.get_streaming(path, A::EXT).and_then(A::from_asset)
     }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
