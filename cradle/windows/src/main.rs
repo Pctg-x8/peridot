@@ -7,6 +7,8 @@ use winapi::um::libloaderapi::{GetModuleHandleA};
 use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT};
 
+mod userlib;
+
 const LPSZCLASSNAME: &str = "Peridot::Cradle::MainWindow\0";
 
 fn main() {
