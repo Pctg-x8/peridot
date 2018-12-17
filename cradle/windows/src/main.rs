@@ -36,8 +36,8 @@ fn main() {
     };
     if w.is_null() { panic!("Create Window Failed!"); }
 
-    let mut input_handler = InputHandler::new();
-    let e = EngineW::launch(GameW::NAME, GameW::VERSION, RenderTargetProvider(w), AssetProvider, &mut input_handler)
+    let mut plugin_loader = PluginLoader { hw: w, input: InputHandler::new() };
+    let e = EngineW::launch(GameW::NAME, GameW::VERSION, &mut plugin_loader)
         .expect("Unable to launch the game");
     
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
@@ -57,15 +57,15 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
     }
 }
 
+type GameW = userlib::Game<NativeLink>;
+type EngineW = peridot::Engine<GameW, NativeLink>;
+
 use std::rc::Rc;
 use bedrock as br;
 
-type GameW = userlib::Game<AssetProvider, RenderTargetProvider>;
-type EngineW = peridot::Engine<GameW, AssetProvider, RenderTargetProvider>;
-
 // TODO AssetLoaderを実装する
 struct AssetProvider;
-impl peridot::AssetLoader for AssetProvider {
+impl peridot::PlatformAssetLoader for AssetProvider {
     type Asset = std::fs::File;
     type StreamingAsset = std::fs::File;
 
@@ -78,6 +78,7 @@ impl peridot::AssetLoader for AssetProvider {
 }
 struct RenderTargetProvider(HWND);
 impl peridot::PlatformRenderTarget for RenderTargetProvider {
+    fn surface_extension_name(&self) -> &'static str { "VK_KHR_win32_surface" }
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<peridot::SurfaceInfo> {
         if !pd.win32_presentation_support(renderer_queue_family) {
@@ -101,4 +102,25 @@ impl peridot::InputProcessPlugin for InputHandler {
     fn on_start_handle(&mut self, processor: &Rc<peridot::InputProcess>) {
         self.0 = Some(processor.clone());
     }
+}
+struct PluginLoader {
+    hw: HWND, input: InputHandler
+}
+impl peridot::PluginLoader for PluginLoader {
+    type AssetLoader = AssetProvider;
+    type RenderTargetProvider = RenderTargetProvider;
+    type InputProcessor = InputHandler;
+
+    fn new_asset_loader(&self) -> AssetProvider { AssetProvider }
+    fn new_render_target_provider(&self) -> RenderTargetProvider { RenderTargetProvider(self.hw) }
+    fn input_processor(&mut self) -> &mut InputHandler { &mut self.input }
+}
+struct NativeLink { al: AssetProvider, prt: RenderTargetProvider }
+impl peridot::PlatformLinker for NativeLink {
+    type AssetLoader = AssetProvider;
+    type RenderTargetProvider = RenderTargetProvider;
+
+    fn new(al: AssetProvider, prt: RenderTargetProvider) -> Self { NativeLink { al, prt } }
+    fn asset_loader(&self) -> &AssetProvider { &self.al }
+    fn render_target_provider(&self) -> &RenderTargetProvider { &self.prt }
 }
