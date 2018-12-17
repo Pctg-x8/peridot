@@ -12,78 +12,88 @@ use bedrock as br; use bedrock::traits::*;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::Result as IOResult;
 
-mod window; use self::window::WindowRenderTargets;
-pub use self::window::{PlatformRenderTarget, SurfaceInfo};
-mod resource; pub use self::resource::*;
-#[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
-pub mod utils; pub use self::utils::*;
+mod window; use window::WindowRenderTargets;
+pub use window::{PlatformRenderTarget, SurfaceInfo};
+mod resource; pub use resource::*;
+#[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use debug::DebugReport;
+pub mod utils; pub use utils::*;
 
-pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self;
+mod asset; pub use asset::*;
+mod input; pub use input::*;
+
+pub trait PluginLoader {
+    type AssetLoader: PlatformAssetLoader;
+    type InputProcessor: InputProcessPlugin;
+    type RenderTargetProvider: PlatformRenderTarget;
+
+    fn new_asset_loader(&self) -> Self::AssetLoader;
+    fn new_render_target_provider(&self) -> Self::RenderTargetProvider;
+    fn input_processor(&mut self) -> &mut Self::InputProcessor;
+}
+pub struct NativeLink<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> {
+    prt: PRT, asset_loader: AL
+}
+pub trait PlatformLinker {
+    type AssetLoader: PlatformAssetLoader;
+    type RenderTargetProvider: PlatformRenderTarget;
+
+    fn new(al: Self::AssetLoader, prt: Self::RenderTargetProvider) -> Self;
+    fn asset_loader(&self) -> &Self::AssetLoader;
+    fn render_target_provider(&self) -> &Self::RenderTargetProvider;
+}
+impl<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> PlatformLinker for NativeLink<AL, PRT> {
+    type AssetLoader = AL;
+    type RenderTargetProvider = PRT;
+
+    fn new(al: AL, prt: PRT) -> Self {
+        NativeLink { asset_loader: al, prt }
+    }
+    fn asset_loader(&self) -> &AL { &self.asset_loader }
+    fn render_target_provider(&self) -> &PRT { &self.prt }
+}
+
+pub trait EngineEvents<PL: PlatformLinker> : Sized {
+    fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32)
+    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
 }
-impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
+impl<PL: PlatformLinker> EngineEvents<PL> for () {
+    fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
-use std::io::{Read, Seek, Result as IOResult, BufReader};
-pub trait AssetLoader {
-    type Asset: Read + Seek;
-    type StreamingAsset: Read;
-
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
+pub struct Engine<E: EngineEvents<PL>, PL: PlatformLinker> {
+    nativelink: PL, surface: SurfaceInfo, wrt: WindowRenderTargets,
+    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
 }
-pub trait LogicalAssetData: Sized {
-    fn ext() -> &'static str;
-}
-pub trait FromAsset: LogicalAssetData {
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self>;
-}
-pub trait FromStreamingAsset: LogicalAssetData {
-    fn from_asset<Asset: Read>(asset: Asset) -> IOResult<Self>;
-}
-use peridot_vertex_processing_pack::*;
-impl LogicalAssetData for PvpContainer { fn ext() -> &'static str { "pvp" } }
-impl FromAsset for PvpContainer {
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self> {
-        PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
-    }
-}
-
-mod input; pub use self::input::*;
-
-pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> {
-    prt: PRT, surface: SurfaceInfo, wrt: WindowRenderTargets,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
-}
-impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
-    pub fn launch<IPP>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
-            -> br::Result<Self> where IPP: InputProcessPlugin {
-        let g = Graphics::new(name, version)?;
-        let surface = prt.create_surface(&g.instance, &g.adapter, g.graphics_queue.family)?;
+impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
+    pub fn launch<PL>(name: &str, version: (u32, u32, u32), plugin_loader: &mut PL) -> br::Result<Self>
+            where PL: PluginLoader<AssetLoader=NPL::AssetLoader, RenderTargetProvider=NPL::RenderTargetProvider> {
+        let nativelink = NPL::new(plugin_loader.new_asset_loader(), plugin_loader.new_render_target_provider());
+        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
+        let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
+            g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
-        let wrt = WindowRenderTargets::new(&g, &surface, &prt)?;
+        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?;
         let mut this = Engine {
-            g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into()
+            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
         this.event_handler = Some(eh.into());
-        ipp.on_start_handle(&this.ip);
+        plugin_loader.input_processor().on_start_handle(&this.ip);
         return Ok(this);
     }
 
     pub fn load<A: FromAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get(path, A::ext()).and_then(A::from_asset)
+        self.nativelink.asset_loader().get(path, A::EXT).and_then(A::from_asset)
     }
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get_streaming(path, A::ext()).and_then(A::from_asset)
+        self.nativelink.asset_loader().get_streaming(path, A::EXT).and_then(A::from_asset)
     }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
@@ -141,7 +151,7 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
             .expect("Present Submission");
     }
 }
-impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
+impl<E: EngineEvents<PL>, PL: PlatformLinker> Drop for Engine<E, PL> {
     fn drop(&mut self) {
         self.graphics().device.wait().expect("device error");
     }
@@ -178,11 +188,9 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32)) -> br::Result<Self>
+    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &'static str)
+            -> br::Result<Self>
     {
-        #[cfg(windows)] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_win32_surface";
-        #[cfg(target_os = "android")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_android_surface";
-
         info!("Supported Layers: ");
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
@@ -190,7 +198,7 @@ impl Graphics
         }
 
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(vec!["VK_KHR_surface", VK_KHR_PLATFORM_SURFACE]);
+        ib.add_extensions(vec!["VK_KHR_surface", platform_surface_extension_name]);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
         #[cfg(all(debug_assertions, not(target_os = "android")))] ib.add_layer("VK_LAYER_LUNARG_standard_validation");
         #[cfg(all(debug_assertions, target_os = "android"))] ib
