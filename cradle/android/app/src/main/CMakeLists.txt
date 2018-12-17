@@ -8,4 +8,4 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -u ANativeActivity_o
 
 add_library(infinitesweeper SHARED dummy.c)
 target_link_libraries(infinitesweeper
-    android native_app_glue log ${CMAKE_SOURCE_DIR}/../../../peridot-cradle-android/target/${ANDROID_ABI}-linux-android/debug/libinfinitesweeper.a)
+    android native_app_glue log ${CMAKE_SOURCE_DIR}/../../../../../target/${ANDROID_ABI}-linux-android/debug/libpegamelib.a)
