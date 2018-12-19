@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate objc;
-extern crate log;
+#[macro_use] extern crate log;
 extern crate appkit; use appkit::{NSString, NSRect};
 extern crate libc; use libc::c_void;
 
@@ -55,6 +55,7 @@ impl PlatformRenderTargetHandler {
 impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler {
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<peridot::SurfaceInfo> {
+        info!("create_surface: {:p}", self.0);
         let obj = br::Surface::new_macos(vi, self.0 as *const _)?;
         if !pd.surface_support(renderer_queue_family, &obj)? {
             panic!("Vulkan Rendering is not supported by this adapter.");

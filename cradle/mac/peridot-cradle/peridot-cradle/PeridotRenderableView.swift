@@ -11,7 +11,12 @@ import Cocoa
 import QuartzCore
 
 final class PeridotRenderableView : NSView {
-    override func makeBackingLayer() -> CALayer { return CAMetalLayer() }
+    override func makeBackingLayer() -> CALayer {
+        let layer = CAMetalLayer()
+        let scaling = self.convertToBacking(NSSize(width: 1.0, height: 1.0))
+        layer.contentsScale = min(scaling.width, scaling.height)
+        return layer
+    }
     override var wantsUpdateLayer: Bool { get { return true } }
     
     var enginePointer: OpaquePointer? = nil
