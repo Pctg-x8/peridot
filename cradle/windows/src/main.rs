@@ -9,6 +9,7 @@ use winapi::um::libloaderapi::{GetModuleHandleA};
 use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE};
 
+#[macro_use] extern crate log;
 mod userlib;
 
 const LPSZCLASSNAME: &str = "Peridot::Cradle::MainWindow\0";
@@ -70,18 +71,35 @@ type EngineW = peridot::Engine<GameW, NativeLink>;
 
 use std::rc::Rc;
 use bedrock as br;
+use std::path::PathBuf;
 
-// TODO AssetLoaderを実装する
-struct AssetProvider;
+struct AssetProvider { base: PathBuf }
+impl AssetProvider {
+    fn new() -> Self {
+        #[cfg(feature = "UseExternalAssetPath")] let base = PathBuf::from(env!("PERIDOT_EXTERNAL_ASSET_PATH"));
+        #[cfg(not(feature = "UseExternalAssetPath"))] let base = {
+            let mut exe = std::env::current_exe().expect("Unable to determine the location of exe file");
+            exe.pop(); exe.push("/assets"); exe
+        };
+        trace!("Asset BaseDirectory={}", base.display());
+        AssetProvider { base }
+    }
+}
 impl peridot::PlatformAssetLoader for AssetProvider {
     type Asset = std::fs::File;
     type StreamingAsset = std::fs::File;
 
     fn get(&self, path: &str, ext: &str) -> std::io::Result<Self::Asset> {
-        unimplemented!("Win32 AssetLoader::get");
+        let mut p = self.base.clone();
+        p.push(path.replace('.', "/"));
+        p.set_extension(ext);
+        return std::fs::File::open(&p);
     }
     fn get_streaming(&self, path: &str, ext: &str) -> std::io::Result<Self::StreamingAsset> {
-        unimplemented!("Win32 AssetLoader::get_streaming");
+        let mut p = self.base.clone();
+        p.push(path.replace('.', "/"));
+        p.set_extension(ext);
+        return std::fs::File::open(&p);
     }
 }
 struct RenderTargetProvider(HWND);
@@ -119,7 +137,7 @@ impl peridot::PluginLoader for PluginLoader {
     type RenderTargetProvider = RenderTargetProvider;
     type InputProcessor = InputHandler;
 
-    fn new_asset_loader(&self) -> AssetProvider { AssetProvider }
+    fn new_asset_loader(&self) -> AssetProvider { AssetProvider::new() }
     fn new_render_target_provider(&self) -> RenderTargetProvider { RenderTargetProvider(self.hw) }
     fn input_processor(&mut self) -> &mut InputHandler { &mut self.input }
 }

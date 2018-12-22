@@ -1,7 +1,8 @@
 param(
     [parameter(Mandatory=$true, HelpMessage="User Game Project Directory")][String]$UserlibDirectory,
     [parameter(HelpMessage="An structure name of entry point of the game")][String]$EntryTyName = "Game",
-    [switch]$Run = $false
+    [switch]$Run = $false,
+    [parameter(HelpMessage="Asset Directory")][String]$AssetDirectory
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,9 +16,14 @@ Rename-Item $ScriptPath\src\userlib\lib.rs glib.rs
 mod glib; pub use self::glib::$EntryTyName as Game;" | Out-File $ScriptPath\src\userlib.rs -Encoding UTF8
 Write-Host "Building Win32 Exe......"
 $CargoSubcommand = if ($Run) { "run" } else { "build" }
+$Features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_win32_surface"
+if ($AssetDirectory) {
+    $Env:PERIDOT_EXTERNAL_ASSET_PATH = $(Resolve-Path $AssetDirectory).Path
+    $Features += "UseExternalAssetPath"
+}
 try {
     Push-Location
     Set-Location $ScriptPath
-    cargo $CargoSubcommand --features bedrock/VK_EXT_debug_report,bedrock/VK_KHR_win32_surface
+    cargo $CargoSubcommand --features $($Features -join ",")
 }
 finally { Pop-Location }
