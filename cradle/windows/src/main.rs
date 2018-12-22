@@ -15,6 +15,8 @@ const LPSZCLASSNAME: &str = "Peridot::Cradle::MainWindow\0";
 fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
 
 fn main() {
+    env_logger::init();
+
     let wca = WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
         lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
