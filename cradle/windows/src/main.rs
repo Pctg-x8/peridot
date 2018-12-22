@@ -1,8 +1,9 @@
 use winapi::um::winuser::{
-    DefWindowProcA, CreateWindowExA, GetMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
+    DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
     AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL,
-    PostQuitMessage, WM_DESTROY
+    PostQuitMessage, PM_REMOVE
 };
+use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 use winapi::um::libloaderapi::{GetModuleHandleA};
 use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE};
@@ -37,24 +38,27 @@ fn main() {
     if w.is_null() { panic!("Create Window Failed!"); }
 
     let mut plugin_loader = PluginLoader { hw: w, input: InputHandler::new() };
-    let e = EngineW::launch(GameW::NAME, GameW::VERSION, &mut plugin_loader)
+    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, &mut plugin_loader)
         .expect("Unable to launch the game");
     
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
 
-    let mut msg = unsafe { std::mem::uninitialized() };
-    while unsafe { GetMessageA(&mut msg, std::ptr::null_mut(), 0, 0) > 0 } {
-        unsafe {
-            TranslateMessage(&mut msg);
-            DispatchMessageA(&mut msg);
-        }
-    }
+    while process_message_all() { e.do_update(); }
 }
 extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_DESTROY => unsafe { PostQuitMessage(0); return 0; },
         _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) }
     }
+}
+
+fn process_message_all() -> bool {
+    let mut msg = unsafe { std::mem::uninitialized() };
+    while unsafe { PeekMessageA(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 } {
+        if msg.message == WM_QUIT { return false; }
+        unsafe { TranslateMessage(&mut msg); DispatchMessageA(&mut msg); }
+    }
+    return true;
 }
 
 type GameW = userlib::Game<NativeLink>;
