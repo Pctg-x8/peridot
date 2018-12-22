@@ -72,6 +72,15 @@ impl WindowRenderTargets
         return Ok(WindowRenderTargets { command_completions_for_backbuffer, bb, chain });
     }
 
+    pub(super) fn emit_initialize_backbuffers_commands(&self, recorder: &mut br::CmdRecord) {
+        let image_barriers: Vec<_> = self.bb.iter()
+            .map(|v| br::ImageSubref::color(v, 0, 0))
+            .map(|s| br::ImageMemoryBarrier::new(&s, br::ImageLayout::Undefined, br::ImageLayout::PresentSrc))
+            .collect();
+        recorder.pipeline_barrier(br::PipelineStageFlags::TOP_OF_PIPE, br::PipelineStageFlags::BOTTOM_OF_PIPE, false,
+            &[], &[], &image_barriers);
+    }
+
     pub fn backbuffers(&self) -> &[br::ImageView] { &self.bb }
     pub fn acquire_next_backbuffer_index(&self, timeout: Option<u64>, completion_handler: br::CompletionHandler)
             -> br::Result<u32> {

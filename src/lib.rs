@@ -5,10 +5,12 @@
 extern crate libc;
 
 extern crate pathfinder_partitioner;
-extern crate peridot_vertex_processing_pack;
 extern crate bedrock;
+pub extern crate peridot_math as math;
+pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 
 use bedrock as br; use bedrock::traits::*;
+use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -84,6 +86,7 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
+        this.submit_commands(|r| this.wrt.emit_initialize_backbuffers_commands(r)).expect("Initializing Backbuffers");
         this.event_handler = Some(eh.into());
         plugin_loader.input_processor().on_start_handle(&this.ip);
         return Ok(this);
@@ -114,8 +117,8 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
 
     pub fn do_update(&mut self)
     {
-        let bb_index =
-            self.wrt.acquire_next_backbuffer_index(None, br::CompletionHandler::Device(&self.g.acquiring_backbuffer))
+        let wait = br::CompletionHandler::Device(&self.g.acquiring_backbuffer);
+        let bb_index = self.wrt.acquire_next_backbuffer_index(None, wait)
             .expect("Acquiring available backbuffer index");
         self.wrt.command_completion_for_backbuffer_mut(bb_index as _)
             .wait().expect("Waiting Previous command completion");
@@ -287,6 +290,10 @@ impl Graphics
         self.graphics_queue.q.wait()
     }
 }
+impl Deref for Graphics {
+    type Target = br::Device;
+    fn deref(&self) -> &br::Device { &self.device }
+}
 
 struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
 impl<'p> ::std::ops::Deref for LocalCommandBundle<'p>
@@ -344,7 +351,7 @@ impl SubpassDependencyTemplates
 }
 
 use std::ffi::CString;
-use peridot_vertex_processing_pack::PvpContainer;
+use vertex_processing_pack::PvpContainer;
 pub struct PvpShaderModules {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
     vertex: br::ShaderModule, fragment: Option<br::ShaderModule>

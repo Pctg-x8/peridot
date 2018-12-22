@@ -12,10 +12,11 @@ libc = "*"
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archiver = { path = "archiver" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
+peridot-math = { path = "math" }
 
 [workspace]
 exclude = ["extras/"]
 members = [
     "archiver", "serialization-utils", "vertex-processing-pack", "math",
-    "cradle/android/peridot-cradle-android", "tools/shaderbuild"
+    "cradle/android/peridot-cradle-android", "tools/shaderbuild", "cradle/windows"
 ]

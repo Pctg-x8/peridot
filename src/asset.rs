@@ -18,7 +18,7 @@ pub trait FromAsset: LogicalAssetData {
 pub trait FromStreamingAsset: LogicalAssetData {
     fn from_asset<Asset: Read>(asset: Asset) -> IOResult<Self>;
 }
-use peridot_vertex_processing_pack::*;
+use vertex_processing_pack::*;
 impl LogicalAssetData for PvpContainer { const EXT: &'static str = "pvp"; }
 impl FromAsset for PvpContainer {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self> {
