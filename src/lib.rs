@@ -84,6 +84,8 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
+        this.submit_commands(|r| this.wrt.emit_initialize_backbuffers_commands(r))
+            .expect("Initializing Backbuffers");
         this.event_handler = Some(eh.into());
         plugin_loader.input_processor().on_start_handle(&this.ip);
         return Ok(this);
