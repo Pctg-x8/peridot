@@ -5,9 +5,9 @@
 extern crate libc;
 
 extern crate pathfinder_partitioner;
-extern crate peridot_vertex_processing_pack;
 extern crate bedrock;
 pub extern crate peridot_math as math;
+pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
@@ -351,7 +351,7 @@ impl SubpassDependencyTemplates
 }
 
 use std::ffi::CString;
-use peridot_vertex_processing_pack::PvpContainer;
+use vertex_processing_pack::PvpContainer;
 pub struct PvpShaderModules {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
     vertex: br::ShaderModule, fragment: Option<br::ShaderModule>
