@@ -7,8 +7,10 @@ extern crate libc;
 extern crate pathfinder_partitioner;
 extern crate peridot_vertex_processing_pack;
 extern crate bedrock;
+pub extern crate peridot_math as math;
 
 use bedrock as br; use bedrock::traits::*;
+use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -287,6 +289,10 @@ impl Graphics
         }], None)?;
         self.graphics_queue.q.wait()
     }
+}
+impl Deref for Graphics {
+    type Target = br::Device;
+    fn deref(&self) -> &br::Device { &self.device }
 }
 
 struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
