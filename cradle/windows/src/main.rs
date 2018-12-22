@@ -1,7 +1,8 @@
 use winapi::um::winuser::{
     DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
     AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL,
-    PostQuitMessage, PM_REMOVE
+    PostQuitMessage, PM_REMOVE,
+    LoadCursorA, IDC_ARROW
 };
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 use winapi::um::libloaderapi::{GetModuleHandleA};
@@ -21,6 +22,7 @@ fn main() {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
         lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
         lpfnWndProc: Some(window_callback),
+        hCursor: unsafe { LoadCursorA(std::ptr::null_mut(), IDC_ARROW as _) },
         .. unsafe { std::mem::zeroed() }
     };
     let wcatom = unsafe { RegisterClassExA(&wca) };
