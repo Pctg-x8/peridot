@@ -1,0 +1,5 @@
+# ninja log v5
+1	130	0	CMakeFiles/native_app_glue.dir/opt/android/sdk/ndk-bundle/sources/android/native_app_glue/android_native_app_glue.c.o	f2c3924cce3db5db
+131	172	0	libnative_app_glue.a	d53594e19452b9bf
+172	203	0	CMakeFiles/infinitesweeper.dir/dummy.c.o	998c78496e77d7d
+203	6498	0	/home/pctgx8/devel/peridot/cradle/android/app/build/intermediates/cmake/debug/obj/arm64-v8a/libinfinitesweeper.so	68bd9c63565e98a

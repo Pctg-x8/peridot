@@ -1,0 +1,141 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:3:1-21:12
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:3:1-21:12
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:3:1-21:12
+MERGED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:17:1-31:12
+MERGED from [com.android.support.constraint:constraint-layout:1.0.1] /root/.gradle/caches/transforms-1/files-1.1/constraint-layout-1.0.1.aar/469f0cf11cdbc108f7e5aa88ef137e76/AndroidManifest.xml:2:1-11:12
+MERGED from [com.android.support:animated-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/animated-vector-drawable-25.4.0.aar/81ee724d4950ee4cf09755ec60c27573/AndroidManifest.xml:17:1-28:12
+MERGED from [com.android.support:support-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-vector-drawable-25.4.0.aar/fa2efc372d400dc9517d0ec811f8aac0/AndroidManifest.xml:17:1-28:12
+MERGED from [com.android.support:support-v4:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-v4-25.4.0.aar/0c93bfe37d9822668dcf899e9aa26498/AndroidManifest.xml:17:1-31:12
+MERGED from [com.android.support:support-fragment:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-fragment-25.4.0.aar/44f5dc6530f1cf714b051719313c4f4f/AndroidManifest.xml:17:1-31:12
+MERGED from [com.android.support:support-media-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-media-compat-25.4.0.aar/4be5d07860ff839e1340fd7e58a326c3/AndroidManifest.xml:17:1-31:12
+MERGED from [com.android.support:support-core-utils:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-utils-25.4.0.aar/a55721cf09e335455596c80b360d580d/AndroidManifest.xml:17:1-31:12
+MERGED from [com.android.support:support-core-ui:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-ui-25.4.0.aar/e905fc5aa70598f3fd60996f4e2701a2/AndroidManifest.xml:17:1-31:12
+MERGED from [com.android.support:support-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-compat-25.4.0.aar/d4771b02f039742b97fd3bbade5d6a2a/AndroidManifest.xml:17:1-31:12
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:3:1-21:12
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:3:1-21:12
+	package
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:4:11-49
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+	android:versionName
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:6:11-40
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:3:11-69
+	android:versionCode
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:5:11-36
+application
+ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:7:3-20:17
+MERGED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support.constraint:constraint-layout:1.0.1] /root/.gradle/caches/transforms-1/files-1.1/constraint-layout-1.0.1.aar/469f0cf11cdbc108f7e5aa88ef137e76/AndroidManifest.xml:9:5-20
+MERGED from [com.android.support.constraint:constraint-layout:1.0.1] /root/.gradle/caches/transforms-1/files-1.1/constraint-layout-1.0.1.aar/469f0cf11cdbc108f7e5aa88ef137e76/AndroidManifest.xml:9:5-20
+MERGED from [com.android.support:animated-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/animated-vector-drawable-25.4.0.aar/81ee724d4950ee4cf09755ec60c27573/AndroidManifest.xml:22:5-26:19
+MERGED from [com.android.support:animated-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/animated-vector-drawable-25.4.0.aar/81ee724d4950ee4cf09755ec60c27573/AndroidManifest.xml:22:5-26:19
+MERGED from [com.android.support:support-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-vector-drawable-25.4.0.aar/fa2efc372d400dc9517d0ec811f8aac0/AndroidManifest.xml:22:5-26:19
+MERGED from [com.android.support:support-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-vector-drawable-25.4.0.aar/fa2efc372d400dc9517d0ec811f8aac0/AndroidManifest.xml:22:5-26:19
+MERGED from [com.android.support:support-v4:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-v4-25.4.0.aar/0c93bfe37d9822668dcf899e9aa26498/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-v4:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-v4-25.4.0.aar/0c93bfe37d9822668dcf899e9aa26498/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-fragment:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-fragment-25.4.0.aar/44f5dc6530f1cf714b051719313c4f4f/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-fragment:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-fragment-25.4.0.aar/44f5dc6530f1cf714b051719313c4f4f/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-media-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-media-compat-25.4.0.aar/4be5d07860ff839e1340fd7e58a326c3/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-media-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-media-compat-25.4.0.aar/4be5d07860ff839e1340fd7e58a326c3/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-core-utils:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-utils-25.4.0.aar/a55721cf09e335455596c80b360d580d/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-core-utils:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-utils-25.4.0.aar/a55721cf09e335455596c80b360d580d/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-core-ui:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-ui-25.4.0.aar/e905fc5aa70598f3fd60996f4e2701a2/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-core-ui:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-ui-25.4.0.aar/e905fc5aa70598f3fd60996f4e2701a2/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-compat-25.4.0.aar/d4771b02f039742b97fd3bbade5d6a2a/AndroidManifest.xml:25:5-29:19
+MERGED from [com.android.support:support-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-compat-25.4.0.aar/d4771b02f039742b97fd3bbade5d6a2a/AndroidManifest.xml:25:5-29:19
+	android:label
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:9:7-39
+	android:hasCode
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:10:7-30
+	android:fullBackupContent
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:8:35-68
+	android:allowBackup
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:8:7-34
+activity#android.app.NativeActivity
+ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:11:5-19:16
+	android:label
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:12:15-47
+	android:configChanges
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:13:15-65
+	android:name
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:11:15-56
+meta-data#android.app.lib_name
+ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:14:7-88
+	android:value
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:14:54-85
+	android:name
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:14:18-53
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:15:7-18:23
+action#android.intent.action.MAIN
+ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:16:9-61
+	android:name
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:16:17-58
+category#android.intent.category.LAUNCHER
+ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:17:9-69
+	android:name
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml:17:19-66
+uses-sdk
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+MERGED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:21:5-23:78
+MERGED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:21:5-23:78
+MERGED from [com.android.support.constraint:constraint-layout:1.0.1] /root/.gradle/caches/transforms-1/files-1.1/constraint-layout-1.0.1.aar/469f0cf11cdbc108f7e5aa88ef137e76/AndroidManifest.xml:5:5-7:41
+MERGED from [com.android.support.constraint:constraint-layout:1.0.1] /root/.gradle/caches/transforms-1/files-1.1/constraint-layout-1.0.1.aar/469f0cf11cdbc108f7e5aa88ef137e76/AndroidManifest.xml:5:5-7:41
+MERGED from [com.android.support:animated-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/animated-vector-drawable-25.4.0.aar/81ee724d4950ee4cf09755ec60c27573/AndroidManifest.xml:20:5-44
+MERGED from [com.android.support:animated-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/animated-vector-drawable-25.4.0.aar/81ee724d4950ee4cf09755ec60c27573/AndroidManifest.xml:20:5-44
+MERGED from [com.android.support:support-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-vector-drawable-25.4.0.aar/fa2efc372d400dc9517d0ec811f8aac0/AndroidManifest.xml:20:5-43
+MERGED from [com.android.support:support-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-vector-drawable-25.4.0.aar/fa2efc372d400dc9517d0ec811f8aac0/AndroidManifest.xml:20:5-43
+MERGED from [com.android.support:support-v4:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-v4-25.4.0.aar/0c93bfe37d9822668dcf899e9aa26498/AndroidManifest.xml:21:5-23:54
+MERGED from [com.android.support:support-v4:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-v4-25.4.0.aar/0c93bfe37d9822668dcf899e9aa26498/AndroidManifest.xml:21:5-23:54
+MERGED from [com.android.support:support-fragment:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-fragment-25.4.0.aar/44f5dc6530f1cf714b051719313c4f4f/AndroidManifest.xml:21:5-23:60
+MERGED from [com.android.support:support-fragment:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-fragment-25.4.0.aar/44f5dc6530f1cf714b051719313c4f4f/AndroidManifest.xml:21:5-23:60
+MERGED from [com.android.support:support-media-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-media-compat-25.4.0.aar/4be5d07860ff839e1340fd7e58a326c3/AndroidManifest.xml:21:5-23:63
+MERGED from [com.android.support:support-media-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-media-compat-25.4.0.aar/4be5d07860ff839e1340fd7e58a326c3/AndroidManifest.xml:21:5-23:63
+MERGED from [com.android.support:support-core-utils:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-utils-25.4.0.aar/a55721cf09e335455596c80b360d580d/AndroidManifest.xml:21:5-23:61
+MERGED from [com.android.support:support-core-utils:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-utils-25.4.0.aar/a55721cf09e335455596c80b360d580d/AndroidManifest.xml:21:5-23:61
+MERGED from [com.android.support:support-core-ui:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-ui-25.4.0.aar/e905fc5aa70598f3fd60996f4e2701a2/AndroidManifest.xml:21:5-23:58
+MERGED from [com.android.support:support-core-ui:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-ui-25.4.0.aar/e905fc5aa70598f3fd60996f4e2701a2/AndroidManifest.xml:21:5-23:58
+MERGED from [com.android.support:support-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-compat-25.4.0.aar/d4771b02f039742b97fd3bbade5d6a2a/AndroidManifest.xml:21:5-23:58
+MERGED from [com.android.support:support-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-compat-25.4.0.aar/d4771b02f039742b97fd3bbade5d6a2a/AndroidManifest.xml:21:5-23:58
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+	tools:overrideLibrary
+		ADDED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:23:9-75
+	android:targetSdkVersion
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+		ADDED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+		INJECTED from /home/pctgx8/devel/peridot/cradle/android/app/src/main/AndroidManifest.xml
+meta-data#android.support.VERSION
+ADDED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:animated-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/animated-vector-drawable-25.4.0.aar/81ee724d4950ee4cf09755ec60c27573/AndroidManifest.xml:23:9-25:38
+MERGED from [com.android.support:animated-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/animated-vector-drawable-25.4.0.aar/81ee724d4950ee4cf09755ec60c27573/AndroidManifest.xml:23:9-25:38
+MERGED from [com.android.support:support-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-vector-drawable-25.4.0.aar/fa2efc372d400dc9517d0ec811f8aac0/AndroidManifest.xml:23:9-25:38
+MERGED from [com.android.support:support-vector-drawable:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-vector-drawable-25.4.0.aar/fa2efc372d400dc9517d0ec811f8aac0/AndroidManifest.xml:23:9-25:38
+MERGED from [com.android.support:support-v4:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-v4-25.4.0.aar/0c93bfe37d9822668dcf899e9aa26498/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-v4:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-v4-25.4.0.aar/0c93bfe37d9822668dcf899e9aa26498/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-fragment:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-fragment-25.4.0.aar/44f5dc6530f1cf714b051719313c4f4f/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-fragment:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-fragment-25.4.0.aar/44f5dc6530f1cf714b051719313c4f4f/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-media-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-media-compat-25.4.0.aar/4be5d07860ff839e1340fd7e58a326c3/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-media-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-media-compat-25.4.0.aar/4be5d07860ff839e1340fd7e58a326c3/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-core-utils:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-utils-25.4.0.aar/a55721cf09e335455596c80b360d580d/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-core-utils:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-utils-25.4.0.aar/a55721cf09e335455596c80b360d580d/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-core-ui:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-ui-25.4.0.aar/e905fc5aa70598f3fd60996f4e2701a2/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-core-ui:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-core-ui-25.4.0.aar/e905fc5aa70598f3fd60996f4e2701a2/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-compat-25.4.0.aar/d4771b02f039742b97fd3bbade5d6a2a/AndroidManifest.xml:26:9-28:38
+MERGED from [com.android.support:support-compat:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/support-compat-25.4.0.aar/d4771b02f039742b97fd3bbade5d6a2a/AndroidManifest.xml:26:9-28:38
+	android:value
+		ADDED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:28:13-35
+	android:name
+		ADDED from [com.android.support:appcompat-v7:25.4.0] /root/.gradle/caches/transforms-1/files-1.1/appcompat-v7-25.4.0.aar/d5edf5be5889ce764660d3545acb1eef/AndroidManifest.xml:27:13-51

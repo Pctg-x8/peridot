@@ -18,5 +18,5 @@ peridot-math = { path = "math" }
 exclude = ["extras/"]
 members = [
     "archiver", "serialization-utils", "vertex-processing-pack", "math",
-    "cradle/android", "tools/shaderbuild", "cradle/windows"
+    "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows"
 ]
