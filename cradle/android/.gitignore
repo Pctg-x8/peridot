@@ -1,5 +1,6 @@
-.gradle/
-.idea/
-app/.externalNativeBuild/
-app/build/
-local.properties
+
+/target
+**/*.rs.bk
+**/*.lib
+src/game
+src/game.rs

@@ -1,6 +1,0 @@
-
-/target
-**/*.rs.bk
-**/*.lib
-src/game
-src/game.rs
