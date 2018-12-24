@@ -1,5 +1,7 @@
 //! peridot-cradle for android platform
 
+#![feature(uniform_paths)]
+
 #[macro_use] extern crate log;
 extern crate libc;
 extern crate android_logger;
@@ -8,8 +10,10 @@ extern crate android;
 
 use std::ptr::null_mut;
 
-mod peridot;
-mod glib;
+mod game;
+
+use peridot;
+use game::glib;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -22,11 +26,8 @@ impl MainWindow {
     }
     fn init(&self, app: &android::App) {
         let mut ipp = self.ipp.borrow_mut();
-        let amgr = unsafe {
-            android::AssetManager::from_ptr((*app.activity).asset_manager).expect("null assetmanager")
-        };
-        *self.e.borrow_mut() = EngineA::launch(GameA::NAME, GameA::VERSION,
-            PlatformWindowHandler(app.window), PlatformAssetLoader::new(amgr), &mut *ipp)
+        let mut pl = PluginLoader { amgr: unsafe { (*app.activity).asset_manager }, w: app.window, ipp: &mut ipp };
+        *self.e.borrow_mut() = EngineA::launch(GameA::NAME, GameA::VERSION, &mut pl)
             .expect("Failed to initialize the engine").into();
     }
     fn render(&self)
@@ -39,6 +40,7 @@ impl MainWindow {
 use bedrock as br;
 struct PlatformWindowHandler(*mut android::ANativeWindow);
 impl peridot::PlatformRenderTarget for PlatformWindowHandler {
+    fn surface_extension_name(&self) -> &'static str { "VK_KHR_android_surface" }
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<peridot::SurfaceInfo> {
         let obj = br::Surface::new_android(vi, self.0)?;
@@ -72,7 +74,7 @@ struct PlatformAssetLoader { amgr: AssetManager }
 impl PlatformAssetLoader {
     fn new(amgr: AssetManager) -> Self { PlatformAssetLoader { amgr } }
 }
-impl peridot::AssetLoader for PlatformAssetLoader {
+impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = Asset;
     type StreamingAsset = Asset;
 
@@ -86,6 +88,21 @@ impl peridot::AssetLoader for PlatformAssetLoader {
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_STREAMING).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
+}
+struct PluginLoader<'x> {
+    amgr: *mut android::AAssetManager, w: *mut android::ANativeWindow, ipp: &'x mut PlatformInputProcessPlugin
+}
+impl<'x> peridot::PluginLoader for PluginLoader<'x> {
+    type AssetLoader = PlatformAssetLoader;
+    type InputProcessor = PlatformInputProcessPlugin;
+    type RenderTargetProvider = PlatformWindowHandler;
+
+    fn new_asset_loader(&self) -> Self::AssetLoader {
+        let am = unsafe { android::AssetManager::from_ptr(self.amgr).expect("null assetmanager") };
+        PlatformAssetLoader::new(am)
+    }
+    fn new_render_target_provider(&self) -> Self::RenderTargetProvider { PlatformWindowHandler(self.w) }
+    fn input_processor(&mut self) -> &mut PlatformInputProcessPlugin { self.ipp }
 }
 type GameA = glib::Game<PlatformAssetLoader, PlatformWindowHandler>;
 type EngineA = peridot::Engine<GameA, PlatformAssetLoader, PlatformWindowHandler>;

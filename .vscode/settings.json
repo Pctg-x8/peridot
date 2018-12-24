@@ -1,3 +1,4 @@
 {
-	"rust.features": ["bedrock/VK_EXT_debug_report"]
+    "python.linting.pylintEnabled": false,
+    "rust.features": ["bedrock/VK_EXT_debug_report"]
 }
