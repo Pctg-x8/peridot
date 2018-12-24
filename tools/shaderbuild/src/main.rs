@@ -83,8 +83,9 @@ fn run_compiler_process(shader_stage: &str, stdin_bytes: &str) -> std::io::Resul
 }
 fn parse_num_output(cout: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
-    for nums in cout.split("\r\n").flat_map(|line| line.split(",")).filter(|s| !s.is_empty()) {
-        let mut n = u32::from_str_radix(&nums[2..], 16).expect("invalid hexstr output");
+    let elements = cout.split("\r\n").flat_map(|line| line.split(","));
+    for nums in elements.filter(|s| !s.is_empty()).map(|s| s.trim_matches(&['\n', '\r', ' ', '\t'][..])) {
+        let mut n = u32::from_str_radix(&nums[2..], 16).expect(&format!("invalid hexstr output: {:?}", &nums));
         if cfg!(target_endian = "big") { n = n.swap_bytes(); }
         bytes.extend_from_slice(&unsafe { std::mem::transmute::<_, [u8; 4]>(n) });
     }
