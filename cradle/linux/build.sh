@@ -12,7 +12,7 @@ while [ $# -gt 0 ]; do
             ENTRY_TY_NAME=$2
             shift 2
             ;;
-        "-Run" | "-r")
+        "--Run" | "-r")
             CARGO_SUBCOMMAND="run"
             shift
             ;;
