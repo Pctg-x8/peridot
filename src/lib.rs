@@ -191,8 +191,7 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &'static str)
-            -> br::Result<Self>
+    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str) -> br::Result<Self>
     {
         info!("Supported Layers: ");
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
