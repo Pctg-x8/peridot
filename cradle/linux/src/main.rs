@@ -1,7 +1,6 @@
 
 #[macro_use] extern crate log;
 
-mod x11;
 use std::fs::File;
 use std::path::PathBuf;
 use std::io::Result as IOResult;
@@ -87,6 +86,7 @@ impl peridot::PlatformLinker for NativeLink {
 type Game = userlib::Game<NativeLink>;
 type Engine = peridot::Engine<Game, NativeLink>;
 
+#[allow(dead_code)]
 struct X11 {
     con: xcb::Connection, wm_protocols: xcb::Atom, wm_delete_window: xcb::Atom, vis: xcb::Visualid,
     mainwnd_id: xcb::Window
