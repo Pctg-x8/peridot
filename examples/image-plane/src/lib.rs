@@ -10,9 +10,11 @@ use peridot::{
 };
 use std::borrow::Cow;
 use std::rc::Rc;
+use std::mem::size_of;
 
 pub struct Game<PL: peridot::PlatformLinker> {
-    ph: PhantomData<*const PL>, _buffer: peridot::Buffer, render_cb: peridot::CommandBundle,
+    ph: PhantomData<*const PL>, _buffer: peridot::Buffer, rot: f32, stg_buffer: peridot::Buffer,
+    render_cb: peridot::CommandBundle, update_cb: peridot::CommandBundle,
     _renderpass: br::RenderPass, _framebuffers: Vec<br::Framebuffer>,
     _gp_main: LayoutedPipeline, _descriptor: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>)
 }
@@ -25,7 +27,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
 
         let mut bp = BufferPrealloc::new(e.graphics());
-        let uniform_offset = bp.add(BufferContent::uniform::<Matrix4F32>());
+        let uniform_offset = bp.add(BufferContent::uniform::<Uniform>());
         let vertices_offset = bp.add(BufferContent::vertex::<[UVVert; 4]>());
         let buffer = bp.build_transferred().expect("Alloc Buffer");
         let stg_buffer = bp.build_upload().expect("Alloc StgBuffer");
@@ -43,7 +45,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             let (v, p) = cam.matrixes();
             let aspect = Matrix4::scale(Vector4(screen_size.1 as f32 / screen_size.0 as f32, 1.0, 1.0, 1.0));
             let vp = aspect * p * v;
-            *r.get_mut(uniform_offset) = vp;
+            *r.get_mut(uniform_offset) = Uniform { camera: vp, object: Matrix4::ONE };
             r.slice_mut(vertices_offset, 4).clone_from_slice(&[
                 UVVert { pos: Vector3(-1.0, -1.0, 0.0), uv: Vector2(0.0, 0.0) },
                 UVVert { pos: Vector3( 1.0, -1.0, 0.0), uv: Vector2(1.0, 0.0) },
@@ -60,6 +62,27 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             tfb.sink_transfer_commands(r);
             tfb.sink_graphics_ready_commands(r);
         }).expect("Failure in transferring initial data");
+
+        let mut bp_stg2 = BufferPrealloc::new(e.graphics());
+        bp_stg2.add(BufferContent::Uniform(size_of::<Matrix4F32>() * e.backbuffers().len()));
+        let stg_buffer2 = bp_stg2.build_upload().expect("Alloc StgBuffer2");
+        let stg_buffer2 = MemoryBadget::new(e.graphics()).alloc_with_buffer_host_visible(stg_buffer2)
+            .expect("Alloc StgMem2");
+        let update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, e.backbuffers().len())
+            .expect("Alloc UpdateCB");
+        for (n, cb) in update_cb.iter().enumerate()
+        {
+            let mut rec = cb.begin().expect("Begin UpdateCmdRec");
+            let mut tfb = TransferBatch::new();
+            let update_range = (uniform_offset + size_of::<Matrix4F32>()) as u64 ..
+                (uniform_offset + size_of::<Matrix4F32>() + size_of::<Matrix4F32>()) as u64;
+            tfb.add_copying_buffer((&stg_buffer2, (size_of::<Matrix4F32>() * n) as u64),
+                (&buffer, update_range.start), size_of::<Matrix4F32>() as _);
+            tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER, &buffer,
+                update_range, br::AccessFlags::UNIFORM_READ);
+            tfb.sink_transfer_commands(&mut rec);
+            tfb.sink_graphics_ready_commands(&mut rec);
+        }
 
         let attdesc = br::AttachmentDescription::new(e.backbuffer_format(),
             br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
@@ -80,7 +103,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         let descriptor_main = descriptor_pool.alloc(&[&descriptor_layout_ub1]).expect("Create main Descriptor");
         let mut dsub = DescriptorSetUpdateBatch::new();
         dsub.write(descriptor_main[0], 0, br::DescriptorUpdateInfo::UniformBuffer(vec![
-            (buffer.native_ptr(), 0 .. std::mem::size_of::<Matrix4F32>())
+            (buffer.native_ptr(), 0 .. std::mem::size_of::<Uniform>())
         ]));
         dsub.submit(&e.graphics());
 
@@ -118,13 +141,23 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         Game {
             _buffer: buffer, render_cb, _renderpass: renderpass, _framebuffers: framebuffers,
             _descriptor: (descriptor_layout_ub1, descriptor_pool, descriptor_main), _gp_main: gp,
+            stg_buffer: stg_buffer2, rot: 0.0, update_cb,
             ph: PhantomData
         }
     }
 
     fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        (None, br::SubmissionBatch {
+        self.rot += 1.0f32.to_radians();
+        self.stg_buffer.guard_map(size_of::<Matrix4F32>(), |m| unsafe {
+            *m.get_mut::<Matrix4F32>(size_of::<Matrix4F32>() * on_backbuffer_of as usize) =
+                Quaternion::new(self.rot, Vector3F32::up()).into();
+        }).expect("Update DynamicStgBuffer");
+
+        (Some(br::SubmissionBatch {
+            command_buffers: Cow::Borrowed(&self.update_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
+            .. Default::default()
+        }), br::SubmissionBatch {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
@@ -133,3 +166,5 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
 
 #[derive(Clone)] #[repr(C)]
 struct UVVert { pos: Vector3F32, uv: Vector2F32 }
+
+#[repr(C)] struct Uniform { camera: Matrix4F32, object: Matrix4F32 }
