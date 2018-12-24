@@ -136,7 +136,7 @@ impl RequestCreateWindowFixedFields {
         return Ok(());
     }
 }
-#[repr(C, packed)] pub struct RequestMapWindow { opcode: u8, _unused: u8, request_length: u16, pub window: u32 }
+#[repr(C, packed)] pub struct RequestMapWindow { pub opcode: u8, pub _unused: u8, pub request_length: u16, pub window: u32 }
 impl Default for RequestMapWindow {
     fn default() -> Self {
         RequestMapWindow { opcode: 8, _unused: 0, request_length: 2, window: 0 }
@@ -416,4 +416,8 @@ impl BufferedPacket {
     }
 
     pub fn send<W: Write>(self, writer: &mut W) -> IOResult<()> { writer.write_all(&self.0.into_inner()) }
+}
+impl Write for BufferedPacket {
+    fn write(&mut self, buf: &[u8]) -> IOResult<usize> { self.0.write(buf) }
+    fn flush(&mut self) -> IOResult<()> { self.0.flush() }
 }
