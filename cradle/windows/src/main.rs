@@ -12,7 +12,7 @@ use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE};
 #[macro_use] extern crate log;
 mod userlib;
 
-const LPSZCLASSNAME: &str = "Peridot::Cradle::MainWindow\0";
+const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
 fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
 

@@ -3,7 +3,7 @@ param(
     [parameter(HelpMessage="An structure name of entry point of the game")][String]$EntryTyName = "Game",
     [switch]$Run = $false,
     [parameter(Mandatory=$true, HelpMessage="Asset Directory")][String]$AssetDirectory,
-    [parameter(Mandatory=$true, HelpMessage="Package Bundle ID")][String]$ApkPackageID
+    [parameter(Mandatory=$true, HelpMessage="Package Bundle ID")][String]$AppPackageID
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,12 +20,12 @@ mod glib; pub use self::glib::$EntryTyName as Game;" | Set-Content $cradleBase\s
 }
 function RewriteAndroidFiles {
     $template = Get-Content $ScriptPath\apkbuild\app\build-template.gradle
-    $template = $template.Replace("**APKAPPID**", "'$ApkPackageID'")
+    $template = $template.Replace("**APKAPPID**", "'$AppPackageID'")
     $template = $template.Replace("**ASSETDIR**", "'$((Resolve-Path $AssetDirectory).Path.Replace("\", "\\"))'")
     $template | Set-Content $ScriptPath\apkbuild\app\build.gradle
 
     $template = Get-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest-template.xml
-    $template = $template.Replace("**APKAPPID**", "$ApkPackageID")
+    $template = $template.Replace("**APKAPPID**", "$AppPackageID")
     $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml -Encoding UTF8
 }
 
@@ -67,9 +67,9 @@ if ($Run) {
     try {
         Push-Location
         Set-Location $ScriptPath/apkbuild
-        RunADB uninstall $ApkPackageID
+        RunADB uninstall $AppPackageID
         RunADB install app/build/outputs/apk/debug/app-debug.apk
-        RunADB shell am start -n $ApkPackageID/android.app.NativeActivity
+        RunADB shell am start -n $AppPackageID/android.app.NativeActivity
     }
     finally { Pop-Location }
 }

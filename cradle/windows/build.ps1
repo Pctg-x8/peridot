@@ -2,7 +2,8 @@ param(
     [parameter(Mandatory=$true, HelpMessage="User Game Project Directory")][String]$UserlibDirectory,
     [parameter(HelpMessage="An structure name of entry point of the game")][String]$EntryTyName = "Game",
     [switch]$Run = $false,
-    [parameter(HelpMessage="Asset Directory")][String]$AssetDirectory
+    [parameter(HelpMessage="Asset Directory")][String]$AssetDirectory,
+    [parameter(HelpMessage="Package Bundle ID")][String]$AppPackageID = "com.cterm2.peridot"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +23,7 @@ if ($AssetDirectory) {
     $Env:PERIDOT_EXTERNAL_ASSET_PATH = $(Resolve-Path $AssetDirectory).Path
     $Features += "UseExternalAssetPath"
 }
+$Env:PERIDOT_WINDOWS_APPID = $AppPackageID
 try {
     Push-Location
     Set-Location $ScriptPath
