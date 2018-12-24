@@ -26,7 +26,7 @@ function RewriteAndroidFiles {
 
     $template = Get-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest-template.xml
     $template = $template.Replace("**APKAPPID**", "$ApkPackageID")
-    $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml
+    $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml -Encoding UTF8
 }
 
 Sync-Userlib $UserlibDirectory $ScriptPath
