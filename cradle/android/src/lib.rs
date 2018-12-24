@@ -1,7 +1,5 @@
 //! peridot-cradle for android platform
 
-#![feature(uniform_paths)]
-
 #[macro_use] extern crate log;
 extern crate libc;
 extern crate android_logger;
@@ -10,10 +8,10 @@ extern crate android;
 
 use std::ptr::null_mut;
 
-mod game;
+mod userlib;
 
 use peridot;
-use game::glib;
+use self::userlib::Game;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -104,8 +102,17 @@ impl<'x> peridot::PluginLoader for PluginLoader<'x> {
     fn new_render_target_provider(&self) -> Self::RenderTargetProvider { PlatformWindowHandler(self.w) }
     fn input_processor(&mut self) -> &mut PlatformInputProcessPlugin { self.ipp }
 }
-type GameA = glib::Game<PlatformAssetLoader, PlatformWindowHandler>;
-type EngineA = peridot::Engine<GameA, PlatformAssetLoader, PlatformWindowHandler>;
+struct NativeLink { al: PlatformAssetLoader, prt: PlatformWindowHandler }
+impl peridot::PlatformLinker for NativeLink {
+    type AssetLoader = PlatformAssetLoader;
+    type RenderTargetProvider = PlatformWindowHandler;
+
+    fn new(al: PlatformAssetLoader, prt: PlatformWindowHandler) -> Self { NativeLink { al, prt } }
+    fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
+    fn render_target_provider(&self) -> &PlatformWindowHandler { &self.prt }
+}
+type GameA = Game<NativeLink>;
+type EngineA = peridot::Engine<GameA, NativeLink>;
 
 #[no_mangle]
 pub extern "C" fn android_main(app: *mut android::App) {

@@ -4,7 +4,7 @@ android {
     compileSdkVersion = 25
     
     defaultConfig {
-        applicationId = 'com.cterm2.peridot.example.image_plane'
+        applicationId = **APKAPPID**
         minSdkVersion 14
         targetSdkVersion 21
         externalNativeBuild.cmake {
@@ -19,7 +19,7 @@ android {
     externalNativeBuild.cmake.path 'src/main/CMakeLists.txt'
     sourceSets.main {
         jniLibs.srcDir System.getenv("LocalAppData") + '/Android/Sdk/ndk-bundle/sources/third_party/vulkan/src/build-android/jniLibs'
-        assets.srcDir 'C:\\Users\\S.Percentage\\devel\\peridot\\examples\\image-plane\\assets'
+        assets.srcDir **ASSETDIR**
     }
 }
 dependencies {

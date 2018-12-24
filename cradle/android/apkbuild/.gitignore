@@ -3,3 +3,4 @@
 app/.externalNativeBuild/
 app/build/
 local.properties
+app/build.gradle
