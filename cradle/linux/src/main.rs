@@ -103,11 +103,12 @@ impl X11 {
         let wm_protocols = wm_protocols.get_reply().expect("No WM_PROTOCOLS").atom();
         let wm_delete_window = wm_delete_window.get_reply().expect("No WM_DELETE_WINDOW").atom();
 
+        let title = format!("{} v{}.{}.{}", Game::NAME, Game::VERSION.0, Game::VERSION.1, Game::VERSION.2);
         let mainwnd_id = con.generate_id();
         xcb::create_window(&con, s0.root_depth(), mainwnd_id, s0.root(), 0, 0, 640, 480, 0,
             xcb::WINDOW_CLASS_INPUT_OUTPUT as _, vis, &[]);
         xcb::change_property(&con, xcb::PROP_MODE_REPLACE as _, mainwnd_id, xcb::ATOM_WM_NAME, xcb::ATOM_STRING,
-            8, b"Peridot Engine");
+            8, title.as_bytes());
         xcb::change_property(&con, xcb::PROP_MODE_APPEND as _, mainwnd_id, wm_protocols, xcb::ATOM_ATOM,
             32, &[wm_delete_window]);
         con.flush();

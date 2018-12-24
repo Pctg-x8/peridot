@@ -19,12 +19,9 @@ impl SurfaceInfo
     pub fn gather_info(pd: &br::PhysicalDevice, obj: br::Surface) -> br::Result<Self> {
         let mut fmq = br::FormatQueryPred::new(); fmq.bit(32)
             .components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
-        debug!("Gathering surface info");
         let fmt = pd.surface_formats(&obj)?.into_iter().find(|sf| fmq.satisfy(sf.format))
             .expect("No suitable format found");
-        debug!("Format: {:?}", fmt);
         let pres_modes = pd.surface_present_modes(&obj)?;
-        debug!("PresModes: {:?}", pres_modes);
         let &pres_mode = pres_modes.iter().find(|&&m| m == br::PresentMode::FIFO || m == br::PresentMode::Mailbox)
             .unwrap_or(&pres_modes[0]);
         
