@@ -1,4 +1,0 @@
-/home/pctgx8/devel/peridot/cradle/android/app/.externalNativeBuild/cmake/debug/arm64-v8a/CMakeFiles/edit_cache.dir
-/home/pctgx8/devel/peridot/cradle/android/app/.externalNativeBuild/cmake/debug/arm64-v8a/CMakeFiles/rebuild_cache.dir
-/home/pctgx8/devel/peridot/cradle/android/app/.externalNativeBuild/cmake/debug/arm64-v8a/CMakeFiles/infinitesweeper.dir
-/home/pctgx8/devel/peridot/cradle/android/app/.externalNativeBuild/cmake/debug/arm64-v8a/CMakeFiles/native_app_glue.dir
