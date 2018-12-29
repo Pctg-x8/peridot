@@ -13,3 +13,4 @@ checks:
       threshold: 3
 exclude_patterns:
   - "extras/"
+  - "cradle/android/**/.idea/"
