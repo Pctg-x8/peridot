@@ -1,60 +1,62 @@
 use bedrock as br; use self::br::traits::*;
 use super::*;
 use std::ops::Deref;
-use std::mem::size_of;
+use std::mem::{size_of, transmute};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferContent { Vertex(usize), Index(usize), Uniform(usize) }
+pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64) }
 impl BufferContent {
     fn usage(&self, src: br::BufferUsage) -> br::BufferUsage {
         match *self {
             BufferContent::Vertex(_) => src.vertex_buffer(),
             BufferContent::Index(_) => src.index_buffer(),
-            BufferContent::Uniform(_) => src.uniform_buffer()
+            BufferContent::Uniform(_) => src.uniform_buffer(),
+            BufferContent::Raw(_) => src
         }
     }
-    fn alignment(&self, a: &br::PhysicalDevice) -> usize {
+    fn alignment(&self, a: &br::PhysicalDevice) -> u64 {
         match *self {
-            BufferContent::Uniform(_) => a.properties().limits.minUniformBufferOffsetAlignment as _,
+            BufferContent::Uniform(_) => a.properties().limits.minUniformBufferOffsetAlignment,
             _ => 1
         }
     }
-    fn size(&self) -> usize {
-        match *self { BufferContent::Vertex(v) | BufferContent::Index(v) | BufferContent::Uniform(v) => v }
+    fn size(&self) -> u64 {
+        match *self {
+            BufferContent::Vertex(v) | BufferContent::Index(v) | BufferContent::Uniform(v) | BufferContent::Raw(v) => v
+        }
     }
 
     /// Generic Shorthands
-    pub fn vertex<T>() -> Self { BufferContent::Vertex(size_of::<T>()) }
-    pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>()) }
-    pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>()) }
+    pub fn vertex<T>() -> Self { BufferContent::Vertex(size_of::<T>() as _) }
+    pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>() as _) }
+    pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>() as _) }
 }
 macro_rules! align2 {
     ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
 }
-pub struct BufferPrealloc<'g> { g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<usize>, total: usize }
+pub struct BufferPrealloc<'g> { g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64 }
 impl<'g> BufferPrealloc<'g> {
     pub fn new(g: &'g Graphics) -> Self {
         BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0 }
     }
     pub fn build(&self) -> br::Result<br::Buffer> {
-        let obj = br::BufferDesc::new(self.total, self.usage).create(&self.g.device)?;
-        return Ok(obj);
+        br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
     }
     pub fn build_transferred(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total, self.usage.transfer_dest()).create(&self.g.device)
+        br::BufferDesc::new(self.total as _, self.usage.transfer_dest()).create(&self.g.device)
     }
     pub fn build_upload(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total, self.usage.transfer_src()).create(&self.g.device)
+        br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(&self.g.device)
     }
 
-    pub fn add(&mut self, content: BufferContent) -> usize {
+    pub fn add(&mut self, content: BufferContent) -> u64 {
         self.usage = content.usage(self.usage);
         let offs = align2!(self.total, content.alignment(&self.g.adapter));
         self.total = offs + content.size();
         self.offsets.push(offs);
         return offs;
     }
-    pub fn total_size(&self) -> usize { self.total }
+    pub fn total_size(&self) -> u64 { self.total }
 }
 
 pub struct MemoryBadget<'g> {
@@ -134,31 +136,33 @@ impl<'m> Drop for AutocloseMappedMemoryRange<'m> {
 pub type Memory = Rc<br::DeviceMemory>;
 /// A refcounted buffer object bound with a memory object.
 #[derive(Clone)]
-pub struct Buffer(Rc<br::Buffer>, Memory, usize);
+pub struct Buffer(Rc<br::Buffer>, Memory, u64);
 /// A refcounted image object bound with a memory object.
 #[derive(Clone)]
-pub struct Image(Rc<br::Image>, Memory);
+pub struct Image(Rc<br::Image>, Memory, u64);
 impl Buffer {
-    pub fn bound(b: br::Buffer, mem: &Memory, offset: usize) -> br::Result<Self> {
-        b.bind(mem, offset).map(|_| Buffer(b.into(), mem.clone(), offset))
+    pub fn bound(b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self> {
+        b.bind(mem, offset as _).map(|_| Buffer(b.into(), mem.clone(), offset))
     }
     /// Reference to a memory object bound with this object.
     pub fn memory(&self) -> &Memory { &self.1 }
 
-    pub fn map(&self, size: usize) -> br::Result<br::MappedMemoryRange> {
-        self.1.map(self.2 .. self.2 + size)
+    pub fn map(&self, size: u64) -> br::Result<br::MappedMemoryRange> {
+        self.1.map(self.2 as _ .. (self.2 + size) as _)
     }
     pub unsafe fn unmap(&self) { self.1.unmap() }
-    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange)>(&self, size: usize, f: F) -> br::Result<()> {
+    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange)>(&self, size: u64, f: F) -> br::Result<()> {
         f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(size)?))); return Ok(());
     }
 }
 impl Image {
-    pub fn bound(r: br::Image, mem: &Memory, offset: usize) -> br::Result<Self> {
-        r.bind(mem, offset).map(|_| Image(r.into(), mem.clone()))
+    pub fn bound(r: br::Image, mem: &Memory, offset: u64) -> br::Result<Self> {
+        r.bind(mem, offset as _).map(|_| Image(r.into(), mem.clone(), offset))
     }
     /// Reference to a memory object bound with this object.
     pub fn memory(&self) -> &Memory { &self.1 }
+
+    pub fn format(&self) -> PixelFormat { unsafe { transmute(self.0.format()) } }
 }
 impl Deref for Buffer {
     type Target = br::Buffer; fn deref(&self) -> &br::Buffer { &self.0 }
@@ -171,4 +175,39 @@ impl br::VkHandle for Buffer {
 }
 impl br::VkHandle for Image {
     type Handle = <br::Image as br::VkHandle>::Handle; fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
+}
+
+#[derive(Clone, Copy)] #[repr(i32)]
+pub enum PixelFormat {
+    RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+    BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM
+}
+impl PixelFormat {
+    /// Bits per pixel for each format enums
+    pub fn bpp(&self) -> usize {
+        match *self {
+            PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32
+        }
+    }
+}
+
+pub struct Texture2D(br::ImageView, Image);
+impl Texture2D {
+    pub fn init(g: &br::Device, size: &math::Vector2<u32>, format: PixelFormat, prealloc: &mut BufferPrealloc)
+            -> br::Result<(br::Image, u64)> {
+        let idesc = br::ImageDesc::new(size, format as _, br::ImageUsage::SAMPLED.transfer_dest(),
+            br::ImageLayout::Preinitialized);
+        let pixels_stg = prealloc.add(BufferContent::Raw((size.x() * size.y()) as u64 * (format.bpp() >> 3) as u64));
+        return idesc.create(g).map(|o| (o, pixels_stg));
+    }
+    pub fn new(img: Image) -> br::Result<Self> {
+        return img.create_view(None, None, &br::ComponentMapping::default(), &br::ImageSubresourceRange::color(0, 0))
+            .map(|v| Texture2D(v, img))
+    }
+
+    pub fn image(&self) -> &Image { &self.1 }
+}
+impl Deref for Texture2D {
+    type Target = br::ImageView;
+    fn deref(&self) -> &br::ImageView { &self.0 }
 }

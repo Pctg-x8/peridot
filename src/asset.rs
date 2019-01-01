@@ -49,6 +49,13 @@ impl DecodedPixelData {
         
         Ok(DecodedPixelData { pixels, size: math::Vector2(w, h), color, stride })
     }
+
+    pub fn u8_pixels(&self) -> &[u8] {
+        match self.pixels {
+            image::DecodingResult::U8(ref v) => v,
+            _ => panic!("Not an u8 formatted pixels")
+        }
+    }
 }
 pub struct PNG(pub DecodedPixelData);
 pub struct TGA(pub DecodedPixelData);

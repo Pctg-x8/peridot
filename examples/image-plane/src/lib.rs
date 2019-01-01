@@ -19,7 +19,8 @@ pub struct Game<PL: peridot::PlatformLinker> {
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>,
     gp_main: LayoutedPipeline,
     descriptor: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
-    vertices_offset: usize
+    _res: (peridot::Texture2D, br::Sampler),
+    vertices_offset: u64
 }
 impl<PL: peridot::PlatformLinker> Game<PL> {
     pub const NAME: &'static str = "Peridot Examples - ImagePlane";
@@ -32,16 +33,27 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         let image_data: peridot::PNG = e.load("images.example").expect("No image found");
         println!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
         println!("ImageColor: {:?}", image_data.0.color);
+        println!("ImageStride: {} bytes", image_data.0.stride);
 
         let mut bp = BufferPrealloc::new(e.graphics());
         let uniform_offset = bp.add(BufferContent::uniform::<Uniform>());
         let vertices_offset = bp.add(BufferContent::vertex::<[UVVert; 4]>());
         let buffer = bp.build_transferred().expect("Alloc Buffer");
-        let stg_buffer = bp.build_upload().expect("Alloc StgBuffer");
+        let buffer_size = bp.total_size();
 
+        let (image, image_stg_offs) = peridot::Texture2D::init(&e.graphics(),
+            &image_data.0.size, peridot::PixelFormat::RGBA32, &mut bp)
+            .expect("Failed to init for texture object");
+        println!("imgofs: {}", image_stg_offs);
+
+        let stg_buffer = bp.build_upload().expect("Alloc StgBuffer");
         let mut mb = MemoryBadget::new(e.graphics());
         mb.add(buffer);
-        let buffer = mb.alloc().expect("Alloc Mem").pop().expect("missing buffer").unwrap_buffer();
+        mb.add(image);
+        let mut objects = mb.alloc().expect("Alloc Mem");
+        let image = peridot::Texture2D::new(objects.pop().expect("missing image").unwrap_image())
+            .expect("Creating Texture2D");
+        let buffer = objects.pop().expect("missing buffer").unwrap_buffer();
         let mut stg_mb = MemoryBadget::new(e.graphics());
         stg_mb.add(stg_buffer);
         let stg_buffer = stg_mb.alloc_upload().expect("Alloc StgMem").pop().expect("missing buffer").unwrap_buffer();
@@ -56,26 +68,30 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             let (v, p) = cam.matrixes();
             let aspect = Matrix4::scale(Vector4(screen_size.1 as f32 / screen_size.0 as f32, 1.0, 1.0, 1.0));
             let vp = aspect * p * v;
-            *r.get_mut(uniform_offset) = Uniform { camera: vp, object: Matrix4::ONE };
-            r.slice_mut(vertices_offset, 4).clone_from_slice(&[
+            *r.get_mut(uniform_offset as _) = Uniform { camera: vp, object: Matrix4::ONE };
+            r.slice_mut(vertices_offset as _, 4).clone_from_slice(&[
                 UVVert { pos: Vector3(-1.0, -1.0, 0.0), uv: Vector2(0.0, 0.0) },
                 UVVert { pos: Vector3( 1.0, -1.0, 0.0), uv: Vector2(1.0, 0.0) },
                 UVVert { pos: Vector3(-1.0,  1.0, 0.0), uv: Vector2(0.0, 1.0) },
                 UVVert { pos: Vector3( 1.0,  1.0, 0.0), uv: Vector2(1.0, 1.0) }
             ]);
+            r.slice_mut(image_stg_offs as _, image_data.0.u8_pixels().len()).copy_from_slice(image_data.0.u8_pixels());
         }).expect("Failure in constructing initial data");
 
         e.submit_commands(|r| {
             let mut tfb = TransferBatch::new();
-            tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, bp.total_size() as _);
+            tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, buffer_size as _);
             tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_INPUT.vertex_shader(), &buffer,
-                0 .. bp.total_size() as _, br::AccessFlags::UNIFORM_READ | br::AccessFlags::VERTEX_ATTRIBUTE_READ);
+                0 .. buffer_size as _, br::AccessFlags::UNIFORM_READ | br::AccessFlags::VERTEX_ATTRIBUTE_READ);
+            tfb.init_image_from(image.image(), (&stg_buffer, image_stg_offs));
+            tfb.add_image_graphics_ready(br::PipelineStageFlags::FRAGMENT_SHADER, image.image(),
+                br::ImageLayout::ShaderReadOnlyOpt);
             tfb.sink_transfer_commands(r);
             tfb.sink_graphics_ready_commands(r);
         }).expect("Failure in transferring initial data");
 
         let mut bp_stg2 = BufferPrealloc::new(e.graphics());
-        bp_stg2.add(BufferContent::Uniform(size_of::<Matrix4F32>() * e.backbuffers().len()));
+        bp_stg2.add(BufferContent::Uniform((size_of::<Matrix4F32>() * e.backbuffers().len()) as _));
         let stg_buffer2 = bp_stg2.build_upload().expect("Alloc StgBuffer2");
         let mut mb_stg2 = MemoryBadget::new(e.graphics());
         mb_stg2.add(stg_buffer2);
@@ -86,8 +102,8 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         {
             let mut rec = cb.begin().expect("Begin UpdateCmdRec");
             let mut tfb = TransferBatch::new();
-            let update_range = (uniform_offset + size_of::<Matrix4F32>()) as u64 ..
-                (uniform_offset + size_of::<Matrix4F32>() + size_of::<Matrix4F32>()) as u64;
+            let update_range = uniform_offset + size_of::<Matrix4F32>() as u64 ..
+                uniform_offset + size_of::<Matrix4F32>() as u64 + size_of::<Matrix4F32>() as u64;
             tfb.add_copying_buffer((&stg_buffer2, (size_of::<Matrix4F32>() * n) as u64),
                 (&buffer, update_range.start), size_of::<Matrix4F32>() as _);
             tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER, &buffer,
@@ -106,16 +122,23 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         
-        let descriptor_layout_ub1 = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
+        let smp = br::SamplerBuilder::new().create(&e.graphics()).expect("Creating Sampler");
+        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
             uniform_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
+            combined_image_sampler: Some((1, 1, br::ShaderStage::FRAGMENT, vec![smp.native_ptr()])),
             .. br::DSLBindings::empty()
         }).expect("Create DescriptorSetLayout");
-        let descriptor_pool = br::DescriptorPool::new(&e.graphics(), 1,
-            &[br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1)], false).expect("Create DescriptorPool");
-        let descriptor_main = descriptor_pool.alloc(&[&descriptor_layout_ub1]).expect("Create main Descriptor");
+        let descriptor_pool = br::DescriptorPool::new(&e.graphics(), 1, &[
+            br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1),
+            br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 1)
+        ], false).expect("Create DescriptorPool");
+        let descriptor_main = descriptor_pool.alloc(&[&descriptor_layout]).expect("Create main Descriptor");
         let mut dsub = DescriptorSetUpdateBatch::new();
         dsub.write(descriptor_main[0], 0, br::DescriptorUpdateInfo::UniformBuffer(vec![
             (buffer.native_ptr(), 0 .. std::mem::size_of::<Uniform>())
+        ]));
+        dsub.write(descriptor_main[0], 1, br::DescriptorUpdateInfo::CombinedImageSampler(vec![
+            (None, image.native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)
         ]));
         dsub.submit(&e.graphics());
 
@@ -129,7 +152,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             offset: br::vk::VkOffset2D::default(),
             extent: br::vk::VkExtent2D { width: screen_size.0, height: screen_size.1 }
         }];
-        let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&descriptor_layout_ub1], &[])
+        let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&descriptor_layout], &[])
             .expect("Create PipelineLayout").into();
         let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
             .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
@@ -145,15 +168,15 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
             gp.bind(&mut cr);
             cr.bind_graphics_descriptor_sets(0, &descriptor_main, &[]);
-            cr.bind_vertex_buffers(0, &[(&buffer, vertices_offset)]);
+            cr.bind_vertex_buffers(0, &[(&buffer, vertices_offset as _)]);
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
         }
 
         Game {
             buffer, render_cb, renderpass, framebuffers,
-            descriptor: (descriptor_layout_ub1, descriptor_pool, descriptor_main), gp_main: gp,
-            stg_buffer: stg_buffer2, rot: 0.0, update_cb, vertices_offset,
+            descriptor: (descriptor_layout, descriptor_pool, descriptor_main), gp_main: gp,
+            stg_buffer: stg_buffer2, rot: 0.0, update_cb, vertices_offset, _res: (image, smp),
             ph: PhantomData
         }
     }
@@ -161,7 +184,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         self.rot += 1.0f32.to_radians();
-        self.stg_buffer.guard_map(size_of::<Matrix4F32>(), |m| unsafe {
+        self.stg_buffer.guard_map(size_of::<Matrix4F32>() as _, |m| unsafe {
             *m.get_mut::<Matrix4F32>(size_of::<Matrix4F32>() * on_backbuffer_of as usize) =
                 Quaternion::new(self.rot, Vector3F32::up()).into();
         }).expect("Update DynamicStgBuffer");
@@ -193,7 +216,7 @@ impl<PL: peridot::PlatformLinker> Game<PL> {
                 &[br::ClearValue::Color([0.0; 4])], true);
             self.gp_main.bind(&mut cr);
             cr.bind_graphics_descriptor_sets(0, &self.descriptor.2, &[]);
-            cr.bind_vertex_buffers(0, &[(&self.buffer, self.vertices_offset)]);
+            cr.bind_vertex_buffers(0, &[(&self.buffer, self.vertices_offset as _)]);
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
         }
