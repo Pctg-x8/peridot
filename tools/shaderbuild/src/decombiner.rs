@@ -203,6 +203,10 @@ impl<'s> BindingBlock<'s> {
                 let offs = align2(total, align_of::<[f32; 4]>());
                 total = offs + size_of::<[f32; 4]>();
             }
+            else if type_str == "vec3" {
+                let offs = align2(total, align_of::<f32>());
+                total = offs + size_of::<[f32; 3]>();
+            }
             else if type_str == "vec2" {
                 let offs = align2(total, align_of::<[f32; 2]>());
                 total = offs + size_of::<[f32; 2]>();
@@ -477,6 +481,14 @@ impl<'s> CombinedShader<'s> {
                             offset: offs_in_binding as _
                         });
                         offs_in_binding = align2(offs_in_binding + size_of::<[f32; 4]>(), align_of::<[f32; 4]>());
+                    },
+                    "vec3" => {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R32G32B32_SFLOAT,
+                            offset: offs_in_binding as _
+                        });
+                        offs_in_binding = align2(offs_in_binding + size_of::<[f32; 3]>(), align_of::<[f32; 3]>());
                     },
                     "vec2" => {
                         attrs.push(br::vk::VkVertexInputAttributeDescription {

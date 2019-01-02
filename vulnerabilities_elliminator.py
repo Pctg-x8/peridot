@@ -1,14 +1,13 @@
 from glob import iglob
 import re
-
-pat_comment_line = re.compile(r"^\s*//")
+from testutil import target_sources, available_lines
 
 found_unwrap_vulnerabilities = []
-for fpath in filter(lambda p: not p.startswith("extras/") and not "target/" in p, iglob("**/*.rs", recursive=True)):
-    with open(fpath) as fp:
-        for i, line in filter(lambda x: not pat_comment_line.match(x[1]), enumerate(iter(fp.readline, ""), 1)):
-            if "unwrap()" in line:
-                found_unwrap_vulnerabilities.append((fpath, i, line.replace("unwrap()", "\033[1;31munwrap\033[0m()")))
+for fpath in target_sources():
+    with open(fpath, encoding="utf-8") as fp:
+        unwraps = ((i, line) for i, line in available_lines(fp) if "unwrap()" in line)
+        vuls = ((fpath, i, line.replace("unwrap", "\033[1;31munwrap\033[0m")) for i, line in unwraps)
+        found_unwrap_vulnerabilities.extend(vuls)
 
 if not found_unwrap_vulnerabilities:
     print("No unwraps found")

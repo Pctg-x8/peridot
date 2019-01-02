@@ -1,4 +1,6 @@
-.gradle/
-.idea/
-app/.externalNativeBuild/
-app/build/
+
+/target
+**/*.rs.bk
+**/*.lib
+src/userlib
+src/userlib.rs

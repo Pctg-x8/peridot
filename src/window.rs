@@ -4,6 +4,7 @@ use bedrock as br;
 use std::mem::{uninitialized, replace, forget};
 
 pub trait PlatformRenderTarget {
+    fn surface_extension_name(&self) -> &'static str;
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<SurfaceInfo>;
     fn current_geometry_extent(&self) -> (usize, usize);
@@ -69,6 +70,15 @@ impl WindowRenderTargets
         }
 
         return Ok(WindowRenderTargets { command_completions_for_backbuffer, bb, chain });
+    }
+
+    pub(super) fn emit_initialize_backbuffers_commands(&self, recorder: &mut br::CmdRecord) {
+        let image_barriers: Vec<_> = self.bb.iter()
+            .map(|v| br::ImageSubref::color(v, 0, 0))
+            .map(|s| br::ImageMemoryBarrier::new(&s, br::ImageLayout::Undefined, br::ImageLayout::PresentSrc))
+            .collect();
+        recorder.pipeline_barrier(br::PipelineStageFlags::TOP_OF_PIPE, br::PipelineStageFlags::BOTTOM_OF_PIPE, false,
+            &[], &[], &image_barriers);
     }
 
     pub fn backbuffers(&self) -> &[br::ImageView] { &self.bb }
