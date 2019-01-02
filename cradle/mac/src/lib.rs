@@ -6,8 +6,8 @@ extern crate libc; use libc::c_void;
 
 extern crate peridot;
 extern crate bedrock as br;
-use std::fs::File;
-use std::io::Result as IOResult;
+use std::io::{Result as IOResult, Error as IOError, ErrorKind};
+use std::io::Cursor;
 use std::rc::Rc;
 
 struct NSLogger;
@@ -37,18 +37,23 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset = File;
-    type StreamingAsset = File;
+    type Asset = Cursor<Vec<u8>>;
+    type StreamingAsset = Cursor<Vec<u8>>;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<File> {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>> {
         let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
-        let mut ext = NSString::from_str("par").expect("NSString for ext");
-        let path: CocoaObject<NSString> = unsafe {
-            CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *ext)).expect("No Return Value")
+        let mut pathext = NSString::from_str("par").expect("NSString for ext");
+        let par_path: CocoaObject<NSString> = unsafe {
+            CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext)).expect("No Return Value")
         };
-        unimplemented!("MacOSAssetLoader::get :: {}", path.to_str());
+        let mut arc = peridot::archive::ArchiveRead::from_file(par_path.to_str(), false)?;
+        let b = arc.read_bin(&format!("{}.{}", path.replace(".", "/"), ext))?;
+        match b {
+            None => Err(IOError::new(ErrorKind::NotFound, "not in primary asset package")),
+            Some(b) => Ok(Cursor::new(b))
+        }
     }
-    fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<File> {
+    fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<Cursor<Vec<u8>>> {
         unimplemented!("MacOSAssetLoader::get_streaming");
     }
 }

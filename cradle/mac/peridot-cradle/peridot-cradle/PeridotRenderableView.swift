@@ -24,6 +24,7 @@ final class PeridotRenderableView : NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         if let l = self.layer {
+            print("Resize: ", l.frame.size, "->", newSize)
             let rect = CGRect(origin: CGPoint(), size: newSize)
             l.frame = rect
             l.bounds = rect

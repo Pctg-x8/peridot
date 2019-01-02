@@ -20,6 +20,7 @@ final class PeridotRenderableViewController : NSViewController {
                              _ flagsIn: CVOptionFlags,
                              _ flagsOut: UnsafeMutablePointer<CVOptionFlags>,
                              _ context: UnsafeMutableRawPointer?) -> CVReturn {
+            NSLog("Update...")
             let self_ = unsafeBitCast(context, to: PeridotRenderableViewController.self)
             self_.enginePointer!.update()
             return kCVReturnSuccess
@@ -36,6 +37,7 @@ final class PeridotRenderableViewController : NSViewController {
         startDisplayLink()
     }
     override func viewDidAppear() {
+        NSLog("BeginTimer")
         if let d = self.dplink { CVDisplayLinkStart(d) }
     }
     override func viewWillDisappear() {
