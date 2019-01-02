@@ -1,11 +1,10 @@
 
-extern crate peridot_serialization_utils;
-extern crate clap; extern crate glob; mod par; extern crate libc;
-extern crate crc; extern crate lz4; extern crate libflate; extern crate zstd;
+extern crate clap; extern crate glob; extern crate libc;
 use clap::{App, Arg, ArgMatches};
 use std::fs::{metadata, read_dir, read, File};
 use std::io::prelude::Write;
 use std::io::Result as IOResult;
+extern crate peridot_archive as par;
 
 fn extract(args: &ArgMatches) {
     let mut archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),

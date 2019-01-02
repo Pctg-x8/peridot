@@ -14,6 +14,10 @@ pub trait LogicalAssetData: Sized {
 }
 pub trait FromAsset: LogicalAssetData {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self>;
+    
+    fn from_archive(reader: archive::ArchiveRead, path: &str) -> IOResult<Self> {
+        reader.read_bin(path).and_then(Self::from_asset)
+    }
 }
 pub trait FromStreamingAsset: LogicalAssetData {
     fn from_asset<Asset: Read>(asset: Asset) -> IOResult<Self>;

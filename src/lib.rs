@@ -8,6 +8,7 @@ extern crate pathfinder_partitioner;
 extern crate bedrock;
 pub extern crate peridot_math as math;
 pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
+pub extern crate peridot_archive as archive;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
