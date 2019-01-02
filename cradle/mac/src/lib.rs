@@ -118,3 +118,7 @@ pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameRun {
 pub extern "C" fn terminate_game(gr: *mut GameRun) {
     unsafe { drop(Box::from_raw(gr)); }
 }
+#[no_mangle]
+pub extern "C" fn update_game(gr: *mut GameRun) {
+    unsafe { (*gr).engine.do_update(); }
+}

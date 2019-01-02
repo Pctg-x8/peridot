@@ -16,4 +16,6 @@ final class NativeGameEngine {
         self.p = launch_game(unsafeBitCast(v, to: UnsafeMutablePointer.self))
     }
     deinit { terminate_game(self.p) }
+    
+    func update() { update_game(self.p) }
 }

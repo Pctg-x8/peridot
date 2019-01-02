@@ -9,9 +9,10 @@
 #ifndef peridot_cradle_Bridging_Header_h
 #define peridot_cradle_Bridging_Header_h
 
-struct GameRun;
+typedef struct GameRun_ GameRun;
 
-struct GameRun* launch_game(void* viewptr);
-void terminate_game(struct GameRun* engineptr);
+GameRun* launch_game(void* viewptr);
+void terminate_game(GameRun* engineptr);
+void update_game(GameRun* engineptr);
 
 #endif /* peridot_cradle_Bridging_Header_h */
