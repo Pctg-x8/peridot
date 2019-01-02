@@ -20,7 +20,7 @@ final class PeridotRenderableViewController : NSViewController {
     override func viewDidLoad() {
         self.view.wantsLayer = true
         self.view.layerContentsRedrawPolicy = .duringViewResize
-        self.enginePointer = NativeGameEngine(forView: UnsafeMutablePointer(&self.view))
+        self.enginePointer = NativeGameEngine(forView: &self.view)
     }
     override func viewDidAppear() {
         if let d = self.dplink { CVDisplayLinkStart(d) }

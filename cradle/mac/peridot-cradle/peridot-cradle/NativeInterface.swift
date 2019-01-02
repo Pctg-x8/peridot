@@ -12,8 +12,8 @@ import Cocoa
 final class NativeGameEngine {
     private var p: OpaquePointer
     
-    init(forView v: UnsafeMutablePointer<NSView>) {
-        self.p = launch_game(UnsafeMutablePointer(v))
+    init(forView v: inout NSView) {
+        self.p = launch_game(unsafeBitCast(v, to: UnsafeMutablePointer.self))
     }
     deinit { terminate_game(self.p) }
 }
