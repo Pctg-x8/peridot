@@ -67,16 +67,6 @@
             value = "1"
             isEnabled = "YES">
          </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "VK_ICD_FILENAMES"
-            value = "$HOME/vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "VK_LAYER_PATH"
-            value = "$HOME/vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d"
-            isEnabled = "YES">
-         </EnvironmentVariable>
       </EnvironmentVariables>
       <AdditionalOptions>
       </AdditionalOptions>
