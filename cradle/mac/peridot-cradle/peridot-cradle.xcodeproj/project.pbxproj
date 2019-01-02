@@ -14,6 +14,7 @@
 		4B40D4AD21DB5BFF00C1B31F /* VkLayer_core_validation.json in Copy Vulkan Layer Definition Files */ = {isa = PBXBuildFile; fileRef = 4B40D4A321DB5B9E00C1B31F /* VkLayer_core_validation.json */; };
 		4B40D4AE21DB5C0200C1B31F /* VkLayer_parameter_validation.json in Copy Vulkan Layer Definition Files */ = {isa = PBXBuildFile; fileRef = 4B40D4A421DB5B9E00C1B31F /* VkLayer_parameter_validation.json */; };
 		4B40D4AF21DB5C0600C1B31F /* VkLayer_object_tracker.json in Copy Vulkan Layer Definition Files */ = {isa = PBXBuildFile; fileRef = 4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */; };
+		4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */ = {isa = PBXBuildFile; fileRef = 4B40D4B621DCFB5B00C1B31F /* assets.par */; };
 		4B699CCB21DA435F0048FA7F /* vulkan.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		4B699CCE21DA43D20048FA7F /* libvulkan.1.1.92.dylib in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4B699CCD21DA43D20048FA7F /* libvulkan.1.1.92.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4BA45A0621DB564500915AC9 /* libVkLayer_threading.dylib in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4BA45A0021DB564400915AC9 /* libVkLayer_threading.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -102,6 +103,7 @@
 		4B40D4A421DB5B9E00C1B31F /* VkLayer_parameter_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_parameter_validation.json; sourceTree = "<group>"; };
 		4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_object_tracker.json; sourceTree = "<group>"; };
 		4B40D4A721DB5B9E00C1B31F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = MoltenVK_icd.json; sourceTree = "<group>"; };
+		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
 		4B699C8921DA30910048FA7F /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
 		4B699C8C21DA30B50048FA7F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = MoltenVK_icd.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"; sourceTree = "<group>"; };
 		4B699C8F21DA318C0048FA7F /* VkLayer_core_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_core_validation.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_core_validation.json"; sourceTree = "<group>"; };
@@ -217,6 +219,7 @@
 		4BAF7A0A21B2554B0006BE24 = {
 			isa = PBXGroup;
 			children = (
+				4B40D4B621DCFB5B00C1B31F /* assets.par */,
 				4B40D49E21DB5B9E00C1B31F /* vulkan */,
 				4BA45A0121DB564400915AC9 /* libMoltenVK.dylib */,
 				4BA45A0221DB564400915AC9 /* libVkLayer_core_validation.dylib */,
@@ -368,6 +371,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */,
 				4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */,
 				4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */,
 			);

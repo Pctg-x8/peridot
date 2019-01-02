@@ -19,3 +19,12 @@ final class NativeGameEngine {
     
     func update() { update_game(self.p) }
 }
+
+@_cdecl("nsbundle_path_for_resource")
+func nsbundle_path_for_resource(path: NSString, ext: NSString) -> UnsafeMutableRawPointer? {
+    let path = Bundle.main.path(forResource: path as String, ofType: ext as String)
+    if let p = path {
+        return Unmanaged.passRetained(p as NSString).toOpaque()
+    }
+    else { return nil }
+}

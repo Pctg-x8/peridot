@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate objc;
 #[macro_use] extern crate log;
-extern crate appkit; use appkit::{NSString, NSRect};
+extern crate appkit; use appkit::{NSString, NSRect, CocoaObject};
 extern crate libc; use libc::c_void;
 
 extern crate peridot;
@@ -26,6 +26,7 @@ impl log::Log for NSLogger {
 static LOGGER: NSLogger = NSLogger;
 extern "C" {
     fn NSLog(format: *mut NSString, ...);
+    fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
 }
 
 // TODO: AssetLoader実装する
@@ -39,8 +40,13 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = File;
     type StreamingAsset = File;
 
-    fn get(&self, _path: &str, _ext: &str) -> IOResult<File> {
-        unimplemented!("MacOSAssetLoader::get");
+    fn get(&self, path: &str, ext: &str) -> IOResult<File> {
+        let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
+        let mut ext = NSString::from_str("par").expect("NSString for ext");
+        let path: CocoaObject<NSString> = unsafe {
+            CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *ext)).expect("No Return Value")
+        };
+        unimplemented!("MacOSAssetLoader::get :: {}", path.to_str());
     }
     fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<File> {
         unimplemented!("MacOSAssetLoader::get_streaming");
