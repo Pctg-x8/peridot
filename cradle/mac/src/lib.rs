@@ -29,13 +29,13 @@ extern "C" {
 }
 
 // TODO: AssetLoader実装する
-struct PlatformAssetLoader {}
+pub struct PlatformAssetLoader {}
 impl PlatformAssetLoader {
-    pub fn new() -> Self {
+    fn new() -> Self {
         PlatformAssetLoader {}
     }
 }
-impl peridot::AssetLoader for PlatformAssetLoader {
+impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = File;
     type StreamingAsset = File;
 
@@ -46,13 +46,14 @@ impl peridot::AssetLoader for PlatformAssetLoader {
         unimplemented!("MacOSAssetLoader::get_streaming");
     }
 }
-struct PlatformRenderTargetHandler(*mut c_void);
+pub struct PlatformRenderTargetHandler(*mut c_void);
 impl PlatformRenderTargetHandler {
-    pub fn new(o: *mut c_void) -> Self {
+    fn new(o: *mut c_void) -> Self {
         PlatformRenderTargetHandler(o)
     }
 }
 impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler {
+    fn surface_extension_name(&self) -> &'static str { "VK_MVK_macos_surface" }
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<peridot::SurfaceInfo> {
         info!("create_surface: {:p}", self.0);
@@ -85,7 +86,7 @@ impl PluginLoader {
         PluginLoader { rt_view, input: PlatformInputProcessPlugin::new() }
     }
 }
-impl peridot::PlatformPluginLoader for PluginLoader {
+impl peridot::PluginLoader for PluginLoader {
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = PlatformRenderTargetHandler;
     type InputProcessor = PlatformInputProcessPlugin;
@@ -93,13 +94,21 @@ impl peridot::PlatformPluginLoader for PluginLoader {
     fn new_asset_loader(&self) -> PlatformAssetLoader { PlatformAssetLoader::new() }
     fn new_render_target_provider(&self) -> PlatformRenderTargetHandler { PlatformRenderTargetHandler::new(self.rt_view) }
     fn input_processor(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
-    fn run_renderloop(&mut self, framerate: Option<f32>) {
-        // TODO: CADisplayLinkで回す
-    }
 }
-mod glib;
-type Game = glib::Game<PlatformAssetLoader, PlatformRenderTargetHandler>;
-type Engine = peridot::Engine<Game, PlatformAssetLoader, PlatformRenderTargetHandler>;
+pub struct NativeLink { al: PlatformAssetLoader, prt: PlatformRenderTargetHandler }
+impl peridot::PlatformLinker for NativeLink {
+    type AssetLoader = PlatformAssetLoader;
+    type RenderTargetProvider = PlatformRenderTargetHandler;
+
+    fn new(al: PlatformAssetLoader, prt: PlatformRenderTargetHandler) -> Self {
+        NativeLink { al, prt }
+    }
+    fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
+    fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
+}
+mod userlib;
+type Game = userlib::Game<NativeLink>;
+type Engine = peridot::Engine<Game, NativeLink>;
 
 #[allow(dead_code)]
 pub struct GameRun {
