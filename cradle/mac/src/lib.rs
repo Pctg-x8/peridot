@@ -15,7 +15,8 @@ impl log::Log for NSLogger {
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
             unsafe {
-                let mut fmt = NSString::from_str(&format!("[{}] {}", record.level(), record.args())).expect("NSString");
+                let mut fmt = NSString::from_str(&format!("[{}] {}", record.level(), record.args()))
+                    .expect("NSString");
                 NSLog(&mut *fmt);
             }
         }
@@ -104,7 +105,9 @@ impl peridot::PluginLoader for PluginLoader {
     type InputProcessor = PlatformInputProcessPlugin;
 
     fn new_asset_loader(&self) -> PlatformAssetLoader { PlatformAssetLoader::new() }
-    fn new_render_target_provider(&self) -> PlatformRenderTargetHandler { PlatformRenderTargetHandler::new(self.rt_view) }
+    fn new_render_target_provider(&self) -> PlatformRenderTargetHandler {
+        PlatformRenderTargetHandler::new(self.rt_view)
+    }
     fn input_processor(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
 }
 pub struct NativeLink { al: PlatformAssetLoader, prt: PlatformRenderTargetHandler }
