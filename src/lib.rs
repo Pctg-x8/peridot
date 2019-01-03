@@ -244,7 +244,8 @@ impl Graphics
         ib.add_extensions(vec!["VK_KHR_surface", platform_surface_extension_name]);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
         if validation_layer_available {
-            #[cfg(all(debug_assertions, not(target_os = "android")))] ib.add_layer("VK_LAYER_LUNARG_standard_validation");
+            #[cfg(all(debug_assertions, not(target_os = "android")))]
+            ib.add_layer("VK_LAYER_LUNARG_standard_validation");
             #[cfg(all(debug_assertions, target_os = "android"))] ib
                 .add_layer("VK_LAYER_LUNARG_parameter_validation")
                 .add_layer("VK_LAYER_LUNARG_core_validation")
