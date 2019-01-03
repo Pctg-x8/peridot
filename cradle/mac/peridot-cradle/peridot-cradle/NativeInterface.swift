@@ -18,6 +18,9 @@ final class NativeGameEngine {
     deinit { terminate_game(self.p) }
     
     func update() { update_game(self.p) }
+    func resize(_ newSize: NSSize) {
+        resize_game(self.p, UInt32(newSize.width), UInt32(newSize.height))
+    }
 }
 
 @_cdecl("nsbundle_path_for_resource")

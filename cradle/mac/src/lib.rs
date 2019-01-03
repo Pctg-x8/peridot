@@ -29,7 +29,6 @@ extern "C" {
     fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
 }
 
-// TODO: AssetLoader実装する
 pub struct PlatformAssetLoader {}
 impl PlatformAssetLoader {
     fn new() -> Self {
@@ -53,6 +52,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             Some(b) => Ok(Cursor::new(b))
         }
     }
+    // TODO: StreamingAssetどうしよ(だいたいでかいのでメモリに展開するのは避けたい)
     fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<Cursor<Vec<u8>>> {
         unimplemented!("MacOSAssetLoader::get_streaming");
     }
@@ -76,6 +76,7 @@ impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler {
     }
     fn current_geometry_extent(&self) -> (usize, usize) {
         let NSRect { size, .. } = unsafe { msg_send![self.0 as *mut objc::runtime::Object, frame] };
+        debug!("current geometry extent: {}/{}", size.width, size.height);
         (size.width as _, size.height as _)
     }
 }
@@ -128,7 +129,7 @@ pub struct GameRun {
 #[no_mangle]
 pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameRun {
     log::set_logger(&LOGGER).expect("Failed to set logger");
-    log::set_max_level(log::LevelFilter::Debug);
+    log::set_max_level(log::LevelFilter::Trace);
 
     let mut plugin_loader = PluginLoader::new(v);
     let engine = Engine::launch(Game::NAME, Game::VERSION, &mut plugin_loader).expect("Failed to launch the game");
@@ -141,4 +142,8 @@ pub extern "C" fn terminate_game(gr: *mut GameRun) {
 #[no_mangle]
 pub extern "C" fn update_game(gr: *mut GameRun) {
     unsafe { (*gr).engine.do_update(); }
+}
+#[no_mangle]
+pub extern "C" fn resize_game(gr: *mut GameRun, w: u32, h: u32) {
+    unsafe { (*gr).engine.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); }
 }

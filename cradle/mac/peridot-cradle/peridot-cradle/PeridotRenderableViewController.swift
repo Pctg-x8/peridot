@@ -20,9 +20,8 @@ final class PeridotRenderableViewController : NSViewController {
                              _ flagsIn: CVOptionFlags,
                              _ flagsOut: UnsafeMutablePointer<CVOptionFlags>,
                              _ context: UnsafeMutableRawPointer?) -> CVReturn {
-            NSLog("Update...")
             let self_ = unsafeBitCast(context, to: PeridotRenderableViewController.self)
-            self_.enginePointer!.update()
+            DispatchQueue.main.async { self_.enginePointer!.update() }
             return kCVReturnSuccess
         }
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
@@ -35,6 +34,7 @@ final class PeridotRenderableViewController : NSViewController {
         self.view.layerContentsRedrawPolicy = .duringViewResize
         self.enginePointer = NativeGameEngine(forView: &self.view)
         startDisplayLink()
+        (self.view as! PeridotRenderableView).enginePointer = self.enginePointer
     }
     override func viewDidAppear() {
         NSLog("BeginTimer")

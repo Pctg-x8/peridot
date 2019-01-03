@@ -19,7 +19,7 @@ final class PeridotRenderableView : NSView {
     }
     override var wantsUpdateLayer: Bool { get { return true } }
     
-    var enginePointer: OpaquePointer? = nil
+    var enginePointer: NativeGameEngine? = nil
     
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -28,6 +28,9 @@ final class PeridotRenderableView : NSView {
             let rect = CGRect(origin: CGPoint(), size: newSize)
             l.frame = rect
             l.bounds = rect
+        }
+        if !self.inLiveResize {
+            if let e = self.enginePointer { e.resize(newSize) }
         }
     }
 }

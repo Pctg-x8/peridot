@@ -16,15 +16,16 @@ use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Result as IOResult;
+use std::cell::{Ref, RefMut, RefCell};
 
-mod window; use window::WindowRenderTargets;
-pub use window::{PlatformRenderTarget, SurfaceInfo};
-mod resource; pub use resource::*;
-#[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use debug::DebugReport;
-pub mod utils; pub use utils::*;
+mod window; use self::window::WindowRenderTargets;
+pub use self::window::{PlatformRenderTarget, SurfaceInfo};
+mod resource; pub use self::resource::*;
+#[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
+pub mod utils; pub use self::utils::*;
 
-mod asset; pub use asset::*;
-mod input; pub use input::*;
+mod asset; pub use self::asset::*;
+mod input; pub use self::input::*;
 
 pub trait PluginLoader {
     type AssetLoader: PlatformAssetLoader;
@@ -64,13 +65,18 @@ pub trait EngineEvents<PL: PlatformLinker> : Sized {
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
+    /// Discards backbuffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
+    fn discard_backbuffer_resources(&mut self) {}
+    /// Called when backbuffer has resized
+    /// (called after discard_backbuffer_resources so re-create discarded resources here)
+    fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
 }
 impl<PL: PlatformLinker> EngineEvents<PL> for () {
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
 pub struct Engine<E: EngineEvents<PL>, PL: PlatformLinker> {
-    nativelink: PL, surface: SurfaceInfo, wrt: WindowRenderTargets,
+    nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
 }
 impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
@@ -81,17 +87,20 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
-        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?;
+        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
         let mut this = Engine {
             nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
-        this.submit_commands(|r| this.wrt.emit_initialize_backbuffers_commands(r)).expect("Initializing Backbuffers");
+        this.submit_commands(|r| this.wrt.get().emit_initialize_backbuffers_commands(r))
+            .expect("Initializing Backbuffers");
         this.event_handler = Some(eh.into());
         plugin_loader.input_processor().on_start_handle(&this.ip);
         return Ok(this);
     }
+    fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
+    fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
     pub fn load<A: FromAsset>(&self, path: &str) -> IOResult<A> {
         self.nativelink.asset_loader().get(path, A::EXT).and_then(A::from_asset)
@@ -106,7 +115,7 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
     // 将来的に分かれるかも？
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
-    pub fn backbuffers(&self) -> &[br::ImageView] { self.wrt.backbuffers() }
+    pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
     pub fn input(&self) -> &InputProcess { &self.ip }
     
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()> {
@@ -119,12 +128,23 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
     pub fn do_update(&mut self)
     {
         let wait = br::CompletionHandler::Device(&self.g.acquiring_backbuffer);
-        let bb_index = self.wrt.acquire_next_backbuffer_index(None, wait)
-            .expect("Acquiring available backbuffer index");
-        self.wrt.command_completion_for_backbuffer_mut(bb_index as _)
+        let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
+        match bb_index {
+            Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                // Fire resize and do nothing
+                let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
+                self.do_resize_backbuffer(math::Vector2(w as _, h as _));
+                return;
+            }
+            _ => ()
+        };
+        let bb_index = bb_index.expect("Acquiring available backbuffer index");
+        self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _)
             .wait().expect("Waiting Previous command completion");
         self.ip.prepare_for_frame();
         {
+            let bound_wrt = self.wrt.get();
+
             let mut eh_mut = self.event_handler.as_ref().expect("uninitialized").borrow_mut();
             let (copy_submission, mut fb_submission) = eh_mut.update(self, bb_index);
             if let Some(mut cs) = copy_submission {
@@ -134,7 +154,7 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
                     (&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                     (&self.g.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER)]);
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
                 self.submit_buffered_commands(&[cs, fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
@@ -143,16 +163,27 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
                 fb_submission.wait_semaphores.to_mut()
                     .push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
-                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
                 self.submit_buffered_commands(&[fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
         }
         unsafe {
-            self.wrt.command_completion_for_backbuffer_mut(bb_index as _).signal();
+            self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _).signal();
         }
-        self.wrt.present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering])
+        self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering])
             .expect("Present Submission");
+    }
+    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
+        self.wrt.get_mut_lw().wait_all_command_completion_for_backbuffer().expect("Waiting queued commands");
+        self.userlib_mut_lw().discard_backbuffer_resources();
+        self.wrt.discard_lw();
+        self.wrt.set(
+            WindowRenderTargets::new(self.graphics(), &self.surface, self.nativelink.render_target_provider())
+            .expect("Recreating WindowRenderTargets"));
+        self.submit_commands(|r| self.wrt.get().emit_initialize_backbuffers_commands(r))
+            .expect("Initializing Backbuffers");
+        self.userlib_mut().on_resize(&self, new_size);
     }
 }
 impl<E: EngineEvents<PL>, PL: PlatformLinker> Drop for Engine<E, PL> {
@@ -161,7 +192,6 @@ impl<E: EngineEvents<PL>, PL: PlatformLinker> Drop for Engine<E, PL> {
     }
 }
 
-use std::cell::{Ref, RefMut, RefCell};
 pub struct LateInit<T>(RefCell<Option<T>>);
 impl<T> LateInit<T>
 {
@@ -174,10 +204,16 @@ impl<T> Discardable<T>
 {
     pub fn new() -> Self { Discardable(RefCell::new(None)) }
     pub fn set(&self, v: T) { *self.0.borrow_mut() = v.into(); }
+    pub fn set_lw(&mut self, v: T) { *self.0.get_mut() = v.into(); }
     pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized")) }
     pub fn get_mut(&self) -> RefMut<T> { RefMut::map(self.0.borrow_mut(), |x| x.as_mut().expect("uninitialized")) }
+    pub fn get_mut_lw(&mut self) -> &mut T { self.0.get_mut().as_mut().expect("uninitialized") }
     pub fn discard(&self) { *self.0.borrow_mut() = None; }
+    pub fn discard_lw(&mut self) { drop(self.0.get_mut().take()); }
     pub fn is_available(&self) -> bool { self.0.borrow().is_some() }
+}
+impl<T> From<T> for Discardable<T> {
+    fn from(v: T) -> Self { Discardable(RefCell::new(Some(v))) }
 }
 
 pub struct Queue { q: br::Queue, family: u32 }

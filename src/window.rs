@@ -95,6 +95,15 @@ impl WindowRenderTargets
     pub fn command_completion_for_backbuffer_mut(&mut self, index: usize) -> &mut StateFence {
         &mut self.command_completions_for_backbuffer[index]
     }
+    pub fn wait_all_command_completion_for_backbuffer(&mut self) -> br::Result<()> {
+        {
+            let fences = self.command_completions_for_backbuffer.iter()
+                .filter(|x| x.is_signaled()).map(|x| x.object()).collect::<Vec<_>>();
+            if !fences.is_empty() { br::Fence::wait_multiple(&fences, true, None)?; }
+        }
+        for f in &mut self.command_completions_for_backbuffer { unsafe { f.unsignal(); } }
+        return Ok(());
+    }
 }
 impl Drop for WindowRenderTargets
 {
@@ -122,6 +131,7 @@ impl StateFence {
         if let StateFence::Signaled(ref f) = *self { f.wait()?; f.reset()?; }
         unsafe { self.unsignal(); } return Ok(());
     }
+    pub fn is_signaled(&self) -> bool { match *self { StateFence::Signaled(_) => true, _ => false } }
 
     pub fn object(&self) -> &br::Fence {
         match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }

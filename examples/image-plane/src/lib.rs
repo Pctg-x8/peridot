@@ -11,12 +11,15 @@ use peridot::{
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
+use peridot::Discardable;
 
 pub struct Game<PL: peridot::PlatformLinker> {
-    ph: PhantomData<*const PL>, _buffer: peridot::Buffer, rot: f32, stg_buffer: peridot::Buffer,
+    ph: PhantomData<*const PL>, buffer: peridot::Buffer, rot: f32, stg_buffer: peridot::Buffer,
     render_cb: peridot::CommandBundle, update_cb: peridot::CommandBundle,
-    _renderpass: br::RenderPass, _framebuffers: Vec<br::Framebuffer>,
-    _gp_main: LayoutedPipeline, _descriptor: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>)
+    renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>,
+    gp_main: LayoutedPipeline,
+    descriptor: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
+    vertices_offset: usize
 }
 impl<PL: peridot::PlatformLinker> Game<PL> {
     pub const NAME: &'static str = "Peridot Examples - ImagePlane";
@@ -139,9 +142,9 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
 
         Game {
-            _buffer: buffer, render_cb, _renderpass: renderpass, _framebuffers: framebuffers,
-            _descriptor: (descriptor_layout_ub1, descriptor_pool, descriptor_main), _gp_main: gp,
-            stg_buffer: stg_buffer2, rot: 0.0, update_cb,
+            buffer, render_cb, renderpass, framebuffers,
+            descriptor: (descriptor_layout_ub1, descriptor_pool, descriptor_main), gp_main: gp,
+            stg_buffer: stg_buffer2, rot: 0.0, update_cb, vertices_offset,
             ph: PhantomData
         }
     }
@@ -161,6 +164,30 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
+    }
+
+    fn discard_backbuffer_resources(&mut self) {
+        self.framebuffers.clear();
+        self.render_cb.reset().expect("Resetting RenderCB");
+    }
+    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>) {
+        self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
+            .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
+        self.populate_render_commands();
+    }
+}
+impl<PL: peridot::PlatformLinker> Game<PL> {
+    fn populate_render_commands(&mut self) {
+        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
+            let mut cr = cb.begin().expect("Begin CmdRecord");
+            cr.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
+                &[br::ClearValue::Color([0.0; 4])], true);
+            self.gp_main.bind(&mut cr);
+            cr.bind_graphics_descriptor_sets(0, &self.descriptor.2, &[]);
+            cr.bind_vertex_buffers(0, &[(&self.buffer, self.vertices_offset)]);
+            cr.draw(4, 1, 0, 0);
+            cr.end_render_pass();
+        }
     }
 }
 
