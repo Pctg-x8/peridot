@@ -315,7 +315,7 @@ impl Graphics
     pub(self) fn memory_type_index_for(&self, mask: br::MemoryPropertyFlags, index_mask: u32) -> Option<u32> {
         if let Some(&mi) = self.memory_type_index_cache.borrow().get(&(mask.bits(), index_mask)) { return Some(mi); }
         for (n, m) in self.adapter.memory_properties().types().enumerate() {
-            if ((1 << n) & index_mask) != 0 && (m.propertyFlags & mask.bits()) != 0 &&
+            if ((1 << n) & index_mask) != 0 && (m.propertyFlags & mask.bits()) == mask.bits() &&
                     (m.propertyFlags & br::MemoryPropertyFlags::LAZILY_ALLOCATED.bits()) == 0 {
                 self.memory_type_index_cache.borrow_mut().insert((mask.bits(), index_mask), n as _);
                 return Some(n as _);

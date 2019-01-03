@@ -71,8 +71,8 @@ impl<'g> MemoryBadget<'g> {
     }
     pub fn alloc_with_buffer_host_visible(self, buffer: br::Buffer) -> br::Result<Buffer> {
         let breq = buffer.requirements();
-        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE, breq.memoryTypeBits)
-            .expect("No Host-Visible memory");
+        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE.host_coherent(),
+            breq.memoryTypeBits).expect("No Host-Visible memory");
         info!(target: "peridot", "Allocating Uploading Memory: {} bytes => 0x{:x}(?0x{:x})",
             breq.size, mt, breq.memoryTypeBits);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, breq.size as _, mt)?.into();
