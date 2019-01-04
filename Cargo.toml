@@ -16,6 +16,8 @@ peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
 peridot-image-loader = { path = "image-loader" }
 
+image = "*"
+
 [workspace]
 exclude = ["extras/"]
 members = [

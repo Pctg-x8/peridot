@@ -28,6 +28,8 @@ pub mod utils; pub use self::utils::*;
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 
+pub type GenericResult<T> = Result<T, Box<std::error::Error>>;
+
 pub trait PluginLoader {
     type AssetLoader: PlatformAssetLoader;
     type InputProcessor: InputProcessPlugin;

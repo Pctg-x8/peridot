@@ -1,7 +1,4 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+
+use std::io::prelude::Read;
+
+pub struct ImagePng<R: Read>(image::png::PNGDecoder<R>);
