@@ -1,5 +1,5 @@
 
-use std::io::{Result as IOResult, BufReader};
+use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek};
 
 pub trait PlatformAssetLoader {
@@ -14,6 +14,14 @@ pub trait LogicalAssetData: Sized {
 }
 pub trait FromAsset: LogicalAssetData {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self>;
+    
+    fn from_archive(reader: &mut archive::ArchiveRead, path: &str) -> IOResult<Self> {
+        let bin = reader.read_bin(path)?;
+        match bin {
+            None => Err(IOError::new(ErrorKind::NotFound, "No Entry in primary asset package")),
+            Some(b) => Self::from_asset(Cursor::new(b))
+        }
+    }
 }
 pub trait FromStreamingAsset: LogicalAssetData {
     fn from_asset<Asset: Read>(asset: Asset) -> IOResult<Self>;

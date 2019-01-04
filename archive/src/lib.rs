@@ -13,7 +13,7 @@ use std::path::Path;
 
 #[repr(C)] pub struct LinearPaired2u64(u64, u64);
 #[derive(Debug)]
-#[repr(C)] struct AssetEntryHeadingPair { pub byte_length: u64, pub relative_offset: u64 }
+#[repr(C)] pub struct AssetEntryHeadingPair { pub byte_length: u64, pub relative_offset: u64 }
 impl AssetEntryHeadingPair {
     fn write<W: Write>(&self, writer: &mut W) -> IOResult<usize> {
         writer.write(unsafe { &transmute::<_, &[u8; 8 * 2]>(self)[..] }).map(|_| 16)
@@ -125,7 +125,7 @@ impl ArchiveWrite {
     }
 }
 
-enum WhereArchive { OnMemory(Vec<u8>), FromIO(BufReader<File>) }
+pub enum WhereArchive { OnMemory(Vec<u8>), FromIO(BufReader<File>) }
 impl WhereArchive {
     pub fn on_memory(&mut self) -> IOResult<&[u8]> {
         let replace_buf = if let WhereArchive::FromIO(ref mut r) = self {
@@ -139,9 +139,9 @@ impl WhereArchive {
         }
     }
 }
-enum EitherArchiveReader { OnMemory(Cursor<Vec<u8>>), FromIO(BufReader<File>) }
+pub enum EitherArchiveReader { OnMemory(Cursor<Vec<u8>>), FromIO(BufReader<File>) }
 impl EitherArchiveReader {
-    pub fn new(a: WhereArchive) -> Self {
+    fn new(a: WhereArchive) -> Self {
         match a {
             WhereArchive::FromIO(r) => EitherArchiveReader::FromIO(r),
             WhereArchive::OnMemory(b) => EitherArchiveReader::OnMemory(Cursor::new(b))
@@ -214,7 +214,7 @@ impl ArchiveRead {
             },
             CompressionMethod::Zlib(ub) => {
                 let mut sink = Vec::with_capacity(ub as _);
-                let mut reader = EitherArchiveReader::new(body);
+                let reader = EitherArchiveReader::new(body);
                 let mut decoder = zlib::Decoder::new(reader);
                 decoder.read_to_end(&mut sink).expect("decoding error");
                 body = WhereArchive::OnMemory(sink);
@@ -241,8 +241,8 @@ impl ArchiveRead {
     }
 
     pub fn read_bin(&mut self, path: &str) -> IOResult<Option<Vec<u8>>> {
-        if let Some(entry_pair) = self.entries.get(path) {
-            self.content.seek(SeekFrom::Start(self.content_baseptr + entry_pair.relative_offset))?;
+        if let Some(entry_pair) = self.find(path) {
+            self.content.seek(SeekFrom::Start(entry_pair.byte_offset))?;
             let mut sink = Vec::with_capacity(entry_pair.byte_length as _);
             unsafe { sink.set_len(entry_pair.byte_length as _); }
             self.content.read_exact(&mut sink)?;
@@ -253,6 +253,13 @@ impl ArchiveRead {
     pub fn entry_names(&self) -> ArchiveEntryIterator {
         ArchiveEntryIterator(self.entries.keys())
     }
+    pub fn find<'s>(&'s self, path: &str) -> Option<AssetEntryInfo> {
+        self.entries.get(path).map(|x| AssetEntryInfo {
+            byte_length: x.byte_length, byte_offset: self.content_baseptr + x.relative_offset
+        })
+    }
+
+    pub fn into_inner_reader(self) -> EitherArchiveReader { self.content }
 }
 use std::collections::hash_map::Keys;
 pub struct ArchiveEntryIterator<'a>(Keys<'a, String, AssetEntryHeadingPair>);
@@ -260,3 +267,5 @@ impl<'a> Iterator for ArchiveEntryIterator<'a> {
     type Item = &'a str;
     fn next(&mut self) -> Option<&'a str> { self.0.next().map(|a| a.as_str()) }
 }
+#[derive(Debug)]
+pub struct AssetEntryInfo { pub byte_length: u64, pub byte_offset: u64 }

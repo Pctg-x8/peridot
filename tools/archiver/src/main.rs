@@ -1,11 +1,10 @@
 
-extern crate peridot_serialization_utils;
-extern crate clap; extern crate glob; mod par; extern crate libc;
-extern crate crc; extern crate lz4; extern crate libflate; extern crate zstd;
+extern crate clap; extern crate glob; extern crate libc;
 use clap::{App, Arg, ArgMatches};
 use std::fs::{metadata, read_dir, read, File};
 use std::io::prelude::Write;
 use std::io::Result as IOResult;
+extern crate peridot_archive as par;
 
 fn extract(args: &ArgMatches) {
     let mut archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),
@@ -40,6 +39,8 @@ fn main() {
     let create_matcher = App::new("new").version("0.1").author("S.Percentage <Syn.Tri.Naga@gmail.com>")
         .arg(Arg::with_name("ofile").short("o").long("output").value_name("FILE")
             .help("Describes where archive file will be written"))
+        .arg(Arg::with_name("basedir").short("b").long("basedir").value_name("DIR")
+            .help("Base Directory(Common Prefix) for Name of each entries"))
         .arg(Arg::with_name("ifiled").help("Input File/Directory").required(true).multiple(true))
         .arg(Arg::with_name("cmethod").short("c").long("compress").value_name("METHOD")
             .possible_values(&["lz4", "zlib", "zstd11"]).takes_value(true).help("Describes the compression method"));
@@ -65,11 +66,15 @@ fn new(args: &ArgMatches) {
         "zstd11" => par::CompressionMethod::Zstd11(0),
         _ => unreachable!()
     }).unwrap_or(par::CompressionMethod::None);
+    let basedir = args.value_of("basedir").unwrap_or_default();
+    println!("EntryName CommonPrefix={}", basedir);
     let mut archive = par::ArchiveWrite::new(compression_method);
     for f in directory_walker {
-        // println!("input <<= {}", f.display());
+        println!("Archiver input <<= {}", f.display());
         let fstr = f.to_str().expect("nullchar");
-        if !archive.add(fstr.to_owned(), read(&f).expect("file io error")) {
+        let ename = if fstr.starts_with(&basedir) { &fstr[basedir.len()..] } else { &fstr };
+        if fstr.is_empty() { eprintln!("Warn: empty entry name. wont be written"); }
+        if !archive.add(ename.to_owned(), read(&f).expect("file io error")) {
             eprintln!("Warn: {:?} has already been added", fstr);
         }
     }
