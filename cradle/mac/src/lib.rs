@@ -30,15 +30,51 @@ extern "C" {
     fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
 }
 
-pub struct PlatformAssetLoader {}
-impl PlatformAssetLoader {
-    fn new() -> Self {
-        PlatformAssetLoader {}
+use std::io::prelude::{Read, Seek};
+use std::io::SeekFrom;
+/// View of a Readable Element
+pub struct ReaderView<R: Read + Seek> { inner: R, offset: u64, length: u64 }
+impl<R: Read + Seek> ReaderView<R> {
+    pub fn new(mut reader: R, offset: u64, length: u64) -> IOResult<Self> {
+        reader.seek(SeekFrom::Start(offset))?;
+        return Ok(ReaderView { inner: reader, offset, length });
+    }
+    fn current(&mut self) -> IOResult<u64> { self.inner.seek(SeekFrom::Current(0)).map(|x| x - self.offset) }
+    fn left(&mut self) -> IOResult<u64> { self.current().map(|c| self.length - c) }
+}
+impl<R: Read + Seek> Read for ReaderView<R> {
+    fn read(&mut self, mut buf: &mut [u8]) -> IOResult<usize> {
+        let left = self.left()?;
+        if buf.len() as u64 > left { buf = &mut buf[..left as usize]; }
+        return self.inner.read(buf);
     }
 }
+impl<R: Read + Seek> Seek for ReaderView<R> {
+    fn seek(&mut self, pos: SeekFrom) -> IOResult<u64> {
+        let pos_translated = match pos {
+            SeekFrom::End(x) => SeekFrom::Start((self.offset + self.length) as u64 - x),
+            SeekFrom::Start(x) => SeekFrom::Start(self.offset + x.min(self.length)),
+            SeekFrom::Current(x) => SeekFrom::Current(x.min(self.left()? as i64))
+        };
+        return self.inner.seek(pos_translated);
+    }
+}
+pub struct PlatformAssetLoader { par_path: CocoaObject<NSString> }
+impl PlatformAssetLoader {
+    fn new() -> Self {
+        let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
+        let mut pathext = NSString::from_str("par").expect("NSString for ext");
+        let par_path = unsafe {
+            CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext)).expect("No Primary Asset")
+        };
+
+        PlatformAssetLoader { par_path }
+    }
+}
+use peridot::archive as par;
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = Cursor<Vec<u8>>;
-    type StreamingAsset = Cursor<Vec<u8>>;
+    type StreamingAsset = ReaderView<par::EitherArchiveReader>;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>> {
         let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
@@ -54,8 +90,13 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         }
     }
     // TODO: StreamingAssetどうしよ(だいたいでかいのでメモリに展開するのは避けたい)
-    fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<Cursor<Vec<u8>>> {
-        unimplemented!("MacOSAssetLoader::get_streaming");
+    fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>> {
+        let mut arc = peridot::archive::ArchiveRead::from_file(par_path.to_str(), false)?;
+        let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
+        match e {
+            None => Err(IOError::new(ErrorKind::NotFound, "not in primary asset package")),
+            Some(b) => ReaderView::new(arc.into_inner_reader(), b.byte_offset, b.byte_length)
+        }
     }
 }
 pub struct PlatformRenderTargetHandler(*mut c_void);
