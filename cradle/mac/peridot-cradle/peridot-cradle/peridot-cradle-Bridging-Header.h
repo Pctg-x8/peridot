@@ -18,4 +18,6 @@ void terminate_game(GameRun* engineptr);
 void update_game(GameRun* engineptr);
 void resize_game(GameRun* engineptr, uint32_t w, uint32_t h);
 
+void* captionbar_text();
+
 #endif /* peridot_cradle_Bridging_Header_h */

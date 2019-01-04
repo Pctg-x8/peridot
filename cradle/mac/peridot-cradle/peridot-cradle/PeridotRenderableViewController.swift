@@ -33,6 +33,7 @@ final class PeridotRenderableViewController : NSViewController {
         self.view.wantsLayer = true
         self.view.layerContentsRedrawPolicy = .duringViewResize
         self.enginePointer = NativeGameEngine(forView: &self.view)
+        self.view.window?.title = NativeGameEngine.captionbarText()! as String
         startDisplayLink()
         (self.view as! PeridotRenderableView).enginePointer = self.enginePointer
     }

@@ -21,6 +21,11 @@ final class NativeGameEngine {
     func resize(_ newSize: NSSize) {
         resize_game(self.p, UInt32(newSize.width), UInt32(newSize.height))
     }
+    
+    static func captionbarText() -> NSString? {
+        let p = captionbar_text()
+        return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
+    }
 }
 
 @_cdecl("nsbundle_path_for_resource")

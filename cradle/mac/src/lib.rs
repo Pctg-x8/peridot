@@ -27,7 +27,6 @@ impl log::Log for NSLogger {
 static LOGGER: NSLogger = NSLogger;
 extern "C" {
     fn NSLog(format: *mut NSString, ...);
-    fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
 }
 
 use std::io::prelude::{Read, Seek};
@@ -160,6 +159,12 @@ mod userlib;
 type Game = userlib::Game<NativeLink>;
 type Engine = peridot::Engine<Game, NativeLink>;
 
+// Swift Linking //
+
+extern "C" {
+    fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
+}
+
 #[allow(dead_code)]
 pub struct GameRun {
     plugin_loader: PluginLoader, engine: Engine
@@ -184,4 +189,9 @@ pub extern "C" fn update_game(gr: *mut GameRun) {
 #[no_mangle]
 pub extern "C" fn resize_game(gr: *mut GameRun, w: u32, h: u32) {
     unsafe { (*gr).engine.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); }
+}
+#[no_mangle]
+pub extern "C" fn captionbar_text() -> *mut c_void {
+    NSString::from_str(&format!("{} v{}.{}.{}", Game::NAME, Game::VERSION.0, Game::VERSION.1, Game::VERSION.2))
+        .expect("CaptionbarText NSString Allocation").into_id() as *mut _
 }
