@@ -35,12 +35,26 @@ impl FromAsset for PvpContainer {
     }
 }
 
-use image::ImageDecoder;
-pub struct PNG(image::DecodingResult);
-pub struct TGA(image::DecodingResult);
-pub struct TIFF(image::DecodingResult);
-pub struct WebP(image::DecodingResult);
-pub struct BMP(image::DecodingResult);
+use image::{ImageDecoder, ImageResult};
+pub struct DecodedPixelData {
+    pub pixels: image::DecodingResult, pub size: math::Vector2<u32>,
+    pub color: image::ColorType, pub stride: usize
+}
+impl DecodedPixelData {
+    pub fn new<D: ImageDecoder>(mut decoder: D) -> ImageResult<Self> {
+        let color = decoder.colortype()?;
+        let (w, h) = decoder.dimension()?;
+        let pixels = decoder.read_image()?;
+        let stride = decoder.row_len()?;
+        
+        Ok(DecodedPixelData { pixels, size: math::Vector2(w, h), color, stride })
+    }
+}
+pub struct PNG(DecodedPixelData);
+pub struct TGA(DecodedPixelData);
+pub struct TIFF(DecodedPixelData);
+pub struct WebP(DecodedPixelData);
+pub struct BMP(DecodedPixelData);
 impl LogicalAssetData for PNG { const EXT: &'static str = "png"; }
 impl LogicalAssetData for TGA { const EXT: &'static str = "tga"; }
 impl LogicalAssetData for TIFF { const EXT: &'static str = "tiff"; }
@@ -48,26 +62,26 @@ impl LogicalAssetData for WebP { const EXT: &'static str = "webp"; }
 impl LogicalAssetData for BMP { const EXT: &'static str = "bmp"; }
 impl FromAsset for PNG {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        image::png::PNGDecoder::new(asset).read_image().map(PNG).map_err(From::from)
+        DecodedPixelData::new(image::png::PNGDecoder::new(asset)).map(PNG).map_err(From::from)
     }
 }
 impl FromAsset for TGA {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        image::tga::TGADecoder::new(asset).read_image().map(TGA).map_err(From::from)
+        DecodedPixelData::new(image::tga::TGADecoder::new(asset)).map(PNG).map_err(From::from)
     }
 }
 impl FromAsset for TIFF {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        image::tiff::TIFFDecoder::new(asset)?.read_image().map(TIFF).map_err(From::from)
+        DecodedPixelData::new(image::tiff::TIFFDecoder::new(asset)?).and_then(TIFF).map_err(From::from)
     }
 }
 impl FromAsset for WebP {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        image::webp::WebpDecoder::new(asset).read_image().map(WebP).map_err(From::from)
+        DecodedPixelData::new(image::webp::WebpDecoder::new(asset)).map(WebP).map_err(From::from)
     }
 }
 impl FromAsset for BMP {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        image::bmp::BMPDecoder::new(asset).read_image().map(BMP).map_err(From::from)
+        DecodedPixelData::new(image::bmp::BMPDecoder::new(asset)).map(BMP).map_err(From::from)
     }
 }
