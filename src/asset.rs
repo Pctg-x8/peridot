@@ -43,7 +43,7 @@ pub struct DecodedPixelData {
 impl DecodedPixelData {
     pub fn new<D: ImageDecoder>(mut decoder: D) -> ImageResult<Self> {
         let color = decoder.colortype()?;
-        let (w, h) = decoder.dimension()?;
+        let (w, h) = decoder.dimensions()?;
         let pixels = decoder.read_image()?;
         let stride = decoder.row_len()?;
         
@@ -55,11 +55,13 @@ pub struct TGA(DecodedPixelData);
 pub struct TIFF(DecodedPixelData);
 pub struct WebP(DecodedPixelData);
 pub struct BMP(DecodedPixelData);
+pub struct HDR(DecodedPixelData);
 impl LogicalAssetData for PNG { const EXT: &'static str = "png"; }
 impl LogicalAssetData for TGA { const EXT: &'static str = "tga"; }
 impl LogicalAssetData for TIFF { const EXT: &'static str = "tiff"; }
 impl LogicalAssetData for WebP { const EXT: &'static str = "webp"; }
 impl LogicalAssetData for BMP { const EXT: &'static str = "bmp"; }
+impl LogicalAssetData for HDR { const EXT: &'static str = "hdr"; }
 impl FromAsset for PNG {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
         DecodedPixelData::new(image::png::PNGDecoder::new(asset)).map(PNG).map_err(From::from)
@@ -83,5 +85,10 @@ impl FromAsset for WebP {
 impl FromAsset for BMP {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
         DecodedPixelData::new(image::bmp::BMPDecoder::new(asset)).map(BMP).map_err(From::from)
+    }
+}
+impl FromAsset for HDR {
+    fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
+        DecodedPixelData::new(image::hdr::HDRDecoder::new(asset)).map(HDR).map_err(From::from)
     }
 }
