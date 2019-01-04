@@ -52,7 +52,7 @@ impl<R: Read + Seek> Read for ReaderView<R> {
 impl<R: Read + Seek> Seek for ReaderView<R> {
     fn seek(&mut self, pos: SeekFrom) -> IOResult<u64> {
         let pos_translated = match pos {
-            SeekFrom::End(x) => SeekFrom::Start((self.offset + self.length) as u64 - x),
+            SeekFrom::End(x) => SeekFrom::Start(((self.offset + self.length) as i64 - x) as _),
             SeekFrom::Start(x) => SeekFrom::Start(self.offset + x.min(self.length)),
             SeekFrom::Current(x) => SeekFrom::Current(x.min(self.left()? as i64))
         };
@@ -77,21 +77,15 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type StreamingAsset = ReaderView<par::EitherArchiveReader>;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>> {
-        let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
-        let mut pathext = NSString::from_str("par").expect("NSString for ext");
-        let par_path: CocoaObject<NSString> = unsafe {
-            CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext)).expect("No Return Value")
-        };
-        let mut arc = peridot::archive::ArchiveRead::from_file(par_path.to_str(), false)?;
+        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
         let b = arc.read_bin(&format!("{}.{}", path.replace(".", "/"), ext))?;
         match b {
             None => Err(IOError::new(ErrorKind::NotFound, "not in primary asset package")),
             Some(b) => Ok(Cursor::new(b))
         }
     }
-    // TODO: StreamingAssetどうしよ(だいたいでかいのでメモリに展開するのは避けたい)
-    fn get_streaming(&self, _path: &str, _ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>> {
-        let mut arc = peridot::archive::ArchiveRead::from_file(par_path.to_str(), false)?;
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>> {
+        let arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
         let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
         match e {
             None => Err(IOError::new(ErrorKind::NotFound, "not in primary asset package")),
