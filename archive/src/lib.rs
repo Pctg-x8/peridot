@@ -214,7 +214,7 @@ impl ArchiveRead {
             },
             CompressionMethod::Zlib(ub) => {
                 let mut sink = Vec::with_capacity(ub as _);
-                let mut reader = EitherArchiveReader::new(body);
+                let reader = EitherArchiveReader::new(body);
                 let mut decoder = zlib::Decoder::new(reader);
                 decoder.read_to_end(&mut sink).expect("decoding error");
                 body = WhereArchive::OnMemory(sink);
