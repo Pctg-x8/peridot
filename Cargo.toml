@@ -14,7 +14,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentatio
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
-peridot-image-loader = { path = "image-loader" }
 
 image = "*"
 
