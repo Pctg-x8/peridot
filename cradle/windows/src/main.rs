@@ -42,9 +42,11 @@ fn main() {
     };
     if w.is_null() { panic!("Create Window Failed!"); }
 
-    let mut plugin_loader = PluginLoader { hw: w, input: InputHandler::new() };
-    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, &mut plugin_loader)
-        .expect("Unable to launch the game");
+    let nl = NativeLink {
+        al: AssetProvider::new(), prt: RenderTargetProvider(w),
+        input: InputHandler::new()
+    };
+    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
     
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
 
@@ -129,24 +131,13 @@ impl peridot::InputProcessPlugin for InputHandler {
         self.0 = Some(processor.clone());
     }
 }
-struct PluginLoader {
-    hw: HWND, input: InputHandler
-}
-impl peridot::PluginLoader for PluginLoader {
+struct NativeLink { al: AssetProvider, prt: RenderTargetProvider, input: InputHandler }
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;
     type RenderTargetProvider = RenderTargetProvider;
     type InputProcessor = InputHandler;
 
-    fn new_asset_loader(&self) -> AssetProvider { AssetProvider::new() }
-    fn new_render_target_provider(&self) -> RenderTargetProvider { RenderTargetProvider(self.hw) }
-    fn input_processor(&mut self) -> &mut InputHandler { &mut self.input }
-}
-struct NativeLink { al: AssetProvider, prt: RenderTargetProvider }
-impl peridot::PlatformLinker for NativeLink {
-    type AssetLoader = AssetProvider;
-    type RenderTargetProvider = RenderTargetProvider;
-
-    fn new(al: AssetProvider, prt: RenderTargetProvider) -> Self { NativeLink { al, prt } }
     fn asset_loader(&self) -> &AssetProvider { &self.al }
     fn render_target_provider(&self) -> &RenderTargetProvider { &self.prt }
+    fn input_processor_mut(&mut self) -> &mut InputHandler { &mut self.input }
 }

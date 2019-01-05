@@ -32,7 +32,6 @@ pub trait NativeLinker {
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
 
-    fn new(al: Self::AssetLoader, prt: Self::RenderTargetProvider) -> Self;
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn render_target_provider(&self) -> &Self::RenderTargetProvider;
     fn input_processor_mut(&mut self) -> &mut Self::InputProcessor;
@@ -60,7 +59,7 @@ pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
-    pub fn launch<PL>(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
+    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
         let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
@@ -123,7 +122,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         {
             let bound_wrt = self.wrt.get();
 
-            let (copy_submission, mut fb_submission) = self.userlib_mut().update(self, bb_index);
+            let mut ulib = self.userlib_mut();
+            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index);
             if let Some(mut cs) = copy_submission {
                 // copy -> render
                 cs.signal_semaphores.to_mut().push(&self.g.buffer_ready);
