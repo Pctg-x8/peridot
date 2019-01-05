@@ -6,7 +6,8 @@ android {
     defaultConfig {
         applicationId = **APKAPPID**
         minSdkVersion 14
-        targetSdkVersion 21
+        targetSdkVersion 25
+        buildToolsVersion "28.0.3"
         externalNativeBuild.cmake {
             arguments '-DANDROID_STL=c++_static'
         }
