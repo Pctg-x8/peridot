@@ -148,8 +148,16 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         unsafe {
             self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _).signal();
         }
-        self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering])
-            .expect("Present Submission");
+        let pr = self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering]);
+        match pr {
+            Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                // Fire resize
+                let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
+                self.do_resize_backbuffer(math::Vector2(w as _, h as _));
+                return;
+            },
+            v => v.expect("Present Submission")
+        }
     }
     pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
         self.wrt.get_mut_lw().wait_all_command_completion_for_backbuffer().expect("Waiting queued commands");
