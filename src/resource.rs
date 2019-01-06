@@ -28,7 +28,9 @@ impl BufferContent {
     pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>()) }
     pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>()) }
 }
-pub fn align2(v: usize, a: usize) -> usize { (v + (a - 1)) & !(a - 1) }
+macro_rules! align2 {
+    ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
+}
 pub struct BufferPrealloc<'g> { g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<usize>, total: usize }
 impl<'g> BufferPrealloc<'g> {
     pub fn new(g: &'g Graphics) -> Self {
@@ -47,7 +49,7 @@ impl<'g> BufferPrealloc<'g> {
 
     pub fn add(&mut self, content: BufferContent) -> usize {
         self.usage = content.usage(self.usage);
-        let offs = align2(self.total, content.alignment(&self.g.adapter));
+        let offs = align2!(self.total, content.alignment(&self.g.adapter));
         self.total = offs + content.size();
         self.offsets.push(offs);
         return offs;
@@ -55,28 +57,61 @@ impl<'g> BufferPrealloc<'g> {
     pub fn total_size(&self) -> usize { self.total }
 }
 
-pub struct MemoryBadget<'g> { g: &'g Graphics }
+pub struct MemoryBadget<'g> {
+    g: &'g Graphics, entries: Vec<(MemoryBadgetEntry, u64)>, total_size: u64,
+    memory_type_bitmask: u32
+}
+pub enum MemoryBadgetEntry { Buffer(br::Buffer), Image(br::Image) }
+pub enum MemoryBoundResource { Buffer(Buffer), Image(Image) }
+impl From<br::Buffer> for MemoryBadgetEntry {
+    fn from(v: br::Buffer) -> Self { MemoryBadgetEntry::Buffer(v) }
+}
+impl From<br::Image> for MemoryBadgetEntry {
+    fn from(v: br::Image) -> Self { MemoryBadgetEntry::Image(v) }
+}
+impl MemoryBoundResource {
+    pub fn unwrap_buffer(self) -> Buffer {
+        match self { MemoryBoundResource::Buffer(b) => b, _ => panic!("Not a buffer") }
+    }
+    pub fn unwrap_image(self) -> Image {
+        match self { MemoryBoundResource::Image(b) => b, _ => panic!("Not an image") }
+    }
+}
 impl<'g> MemoryBadget<'g> {
     pub fn new(g: &'g Graphics) -> Self {
-        MemoryBadget { g }
+        MemoryBadget { g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0 }
     }
-    pub fn alloc_with_buffer(self, buffer: br::Buffer) -> br::Result<Buffer> {
-        let breq = buffer.requirements();
-        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, breq.memoryTypeBits)
-            .expect("No Device-Local memory");
-        info!(target: "peridot", "Allocating Device Memory: {} bytes => 0x{:x}(?0x{:x})",
-            breq.size, mt, breq.memoryTypeBits);
-        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, breq.size as _, mt)?.into();
-        return Buffer::bound(buffer, &mem, 0);
+    pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64 {
+        let req = v.requirements();
+        let new_offset = align2!(self.total_size, req.alignment);
+        self.entries.push((v.into(), new_offset));
+        self.total_size = new_offset + req.size;
+        self.memory_type_bitmask |= req.memoryTypeBits;
+        return new_offset;
     }
-    pub fn alloc_with_buffer_host_visible(self, buffer: br::Buffer) -> br::Result<Buffer> {
-        let breq = buffer.requirements();
+    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>> {
+        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, self.memory_type_bitmask)
+            .expect("No Device-Local Memory");
+        info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
+            self.total_size, mt, self.memory_type_bitmask);
+        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
+
+        self.entries.into_iter().map(|(x, o)| match x {
+            MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
+            MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
+        }).collect()
+    }
+    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>> {
         let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE.host_coherent(),
-            breq.memoryTypeBits).expect("No Host-Visible memory");
-        info!(target: "peridot", "Allocating Uploading Memory: {} bytes => 0x{:x}(?0x{:x})",
-            breq.size, mt, breq.memoryTypeBits);
-        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, breq.size as _, mt)?.into();
-        return Buffer::bound(buffer, &mem, 0);
+            self.memory_type_bitmask).expect("No Host-Visible memory");
+        info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
+            self.total_size, mt, self.memory_type_bitmask);
+        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
+        
+        self.entries.into_iter().map(|(x, o)| match x {
+            MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
+            MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
+        }).collect()
     }
 }
 

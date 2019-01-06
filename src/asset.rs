@@ -50,12 +50,12 @@ impl DecodedPixelData {
         Ok(DecodedPixelData { pixels, size: math::Vector2(w, h), color, stride })
     }
 }
-pub struct PNG(DecodedPixelData);
-pub struct TGA(DecodedPixelData);
-pub struct TIFF(DecodedPixelData);
-pub struct WebP(DecodedPixelData);
-pub struct BMP(DecodedPixelData);
-pub struct HDR(DecodedPixelData);
+pub struct PNG(pub DecodedPixelData);
+pub struct TGA(pub DecodedPixelData);
+pub struct TIFF(pub DecodedPixelData);
+pub struct WebP(pub DecodedPixelData);
+pub struct BMP(pub DecodedPixelData);
+pub struct HDR(pub DecodedPixelData);
 impl LogicalAssetData for PNG { const EXT: &'static str = "png"; }
 impl LogicalAssetData for TGA { const EXT: &'static str = "tga"; }
 impl LogicalAssetData for TIFF { const EXT: &'static str = "tiff"; }
@@ -69,12 +69,12 @@ impl FromAsset for PNG {
 }
 impl FromAsset for TGA {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        DecodedPixelData::new(image::tga::TGADecoder::new(asset)).map(PNG).map_err(From::from)
+        DecodedPixelData::new(image::tga::TGADecoder::new(asset)).map(TGA).map_err(From::from)
     }
 }
 impl FromAsset for TIFF {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        DecodedPixelData::new(image::tiff::TIFFDecoder::new(asset)?).and_then(TIFF).map_err(From::from)
+        DecodedPixelData::new(image::tiff::TIFFDecoder::new(asset)?).map(TIFF).map_err(From::from)
     }
 }
 impl FromAsset for WebP {
@@ -87,8 +87,9 @@ impl FromAsset for BMP {
         DecodedPixelData::new(image::bmp::BMPDecoder::new(asset)).map(BMP).map_err(From::from)
     }
 }
-impl FromAsset for HDR {
+// TODO: HDR FromAsset実装
+/*impl FromAsset for HDR {
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> GenericResult<Self> {
-        DecodedPixelData::new(image::hdr::HDRDecoder::new(asset)).map(HDR).map_err(From::from)
+        DecodedPixelData::new(image::hdr::HDRDecoder::new(BufReader::new(asset))?).map(HDR).map_err(From::from)
     }
-}
+}*/

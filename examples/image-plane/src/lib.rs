@@ -29,14 +29,22 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
 
+        let image_data: peridot::PNG = e.load("images.example").expect("No image found");
+        println!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
+        println!("ImageColor: {:?}", image_data.0.color);
+
         let mut bp = BufferPrealloc::new(e.graphics());
         let uniform_offset = bp.add(BufferContent::uniform::<Uniform>());
         let vertices_offset = bp.add(BufferContent::vertex::<[UVVert; 4]>());
         let buffer = bp.build_transferred().expect("Alloc Buffer");
         let stg_buffer = bp.build_upload().expect("Alloc StgBuffer");
-        let buffer = MemoryBadget::new(e.graphics()).alloc_with_buffer(buffer).expect("Alloc Mem");
-        let stg_buffer = MemoryBadget::new(e.graphics()).alloc_with_buffer_host_visible(stg_buffer)
-            .expect("Alloc StgMem");
+
+        let mut mb = MemoryBadget::new(e.graphics());
+        mb.add(buffer);
+        let buffer = mb.alloc().expect("Alloc Mem").pop().unwrap_buffer();
+        let mut stg_mb = MemoryBadget::new(e.graphics());
+        stg_mb.add(stg_buffer);
+        let stg_buffer = stg_mb.alloc_upload().expect("Alloc StgMem").pop().unwrap_buffer();
 
         let cam = Camera {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
@@ -69,8 +77,9 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut bp_stg2 = BufferPrealloc::new(e.graphics());
         bp_stg2.add(BufferContent::Uniform(size_of::<Matrix4F32>() * e.backbuffers().len()));
         let stg_buffer2 = bp_stg2.build_upload().expect("Alloc StgBuffer2");
-        let stg_buffer2 = MemoryBadget::new(e.graphics()).alloc_with_buffer_host_visible(stg_buffer2)
-            .expect("Alloc StgMem2");
+        let mut mb_stg2 = MemoryBadget::new(e.graphics());
+        mb_stg2.add(stg_buffer2);
+        let stg_buffer2 = mb_stg2.alloc_upload().expect("Alloc StgMem2").pop().unwrap_buffer();
         let update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, e.backbuffers().len())
             .expect("Alloc UpdateCB");
         for (n, cb) in update_cb.iter().enumerate()

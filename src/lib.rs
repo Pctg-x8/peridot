@@ -9,14 +9,12 @@ extern crate bedrock;
 pub extern crate peridot_math as math;
 pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 pub extern crate peridot_archive as archive;
-pub extern crate peridot_image_loader as image_loader;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::io::Result as IOResult;
 use std::cell::{Ref, RefMut, RefCell};
 
 mod window; use self::window::WindowRenderTargets;
@@ -105,11 +103,11 @@ impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
-    pub fn load<A: FromAsset>(&self, path: &str) -> IOResult<A> {
-        self.nativelink.asset_loader().get(path, A::EXT).and_then(A::from_asset)
+    pub fn load<A: FromAsset>(&self, path: &str) -> GenericResult<A> {
+        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
     }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
-        self.nativelink.asset_loader().get_streaming(path, A::EXT).and_then(A::from_asset)
+    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> GenericResult<A> {
+        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
     }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
