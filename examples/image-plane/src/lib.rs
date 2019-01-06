@@ -41,10 +41,10 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let mut mb = MemoryBadget::new(e.graphics());
         mb.add(buffer);
-        let buffer = mb.alloc().expect("Alloc Mem").pop().unwrap_buffer();
+        let buffer = mb.alloc().expect("Alloc Mem").pop().expect("missing buffer").unwrap_buffer();
         let mut stg_mb = MemoryBadget::new(e.graphics());
         stg_mb.add(stg_buffer);
-        let stg_buffer = stg_mb.alloc_upload().expect("Alloc StgMem").pop().unwrap_buffer();
+        let stg_buffer = stg_mb.alloc_upload().expect("Alloc StgMem").pop().expect("missing buffer").unwrap_buffer();
 
         let cam = Camera {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
@@ -79,7 +79,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         let stg_buffer2 = bp_stg2.build_upload().expect("Alloc StgBuffer2");
         let mut mb_stg2 = MemoryBadget::new(e.graphics());
         mb_stg2.add(stg_buffer2);
-        let stg_buffer2 = mb_stg2.alloc_upload().expect("Alloc StgMem2").pop().unwrap_buffer();
+        let stg_buffer2 = mb_stg2.alloc_upload().expect("Alloc StgMem2").pop().expect("missing buffer").unwrap_buffer();
         let update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, e.backbuffers().len())
             .expect("Alloc UpdateCB");
         for (n, cb) in update_cb.iter().enumerate()
