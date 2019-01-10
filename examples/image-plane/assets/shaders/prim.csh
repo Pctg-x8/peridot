@@ -4,7 +4,7 @@ VertexShader {
     uv_v = uv;
 }
 FragmentShader {
-    Target[0] = vec4(uv_v, 1.0, 1.0);
+    Target[0] = texture(tex, uv_v);
 }
 
 Varyings VertexShader -> FragmentShader {
@@ -12,3 +12,4 @@ Varyings VertexShader -> FragmentShader {
 }
 
 Uniform[VertexShader](0, 0) Camera { mat4 vp, obj; }
+Sampler2D[FragmentShader](0, 1) tex
