@@ -25,8 +25,11 @@ impl BufferContent {
 
     /// Generic Shorthands
     pub fn vertex<T>() -> Self { BufferContent::Vertex(size_of::<T>()) }
+    pub fn vertices<T>(count: usize) -> Self { BufferContent::Vertex(size_of::<T>() * count) }
     pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>()) }
+    pub fn indices<T>(count: usize) -> Self { BufferContent::Index(size_of::<T>() * count) }
     pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>()) }
+    pub fn uniform_dynarray<T>(count: usize) -> Self { BufferContent::Uniform(size_of::<T>() * count) }
 }
 pub fn align2(v: usize, a: usize) -> usize { (v + (a - 1)) & !(a - 1) }
 pub struct BufferPrealloc<'g> { g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<usize>, total: usize }

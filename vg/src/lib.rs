@@ -20,6 +20,8 @@ impl Context {
     pub fn new() -> Self {
         Context { meshes: Vec::new(), current_transform: Transform2D::identity() }
     }
+
+    pub fn meshes(&self) -> &[(Mesh, Matrix4F32)] { &self.meshes }
 }
 /// Transforming
 impl Context {
@@ -108,17 +110,5 @@ impl<'t, B: PathBuilder + 't> PathBuilder for TranslatingPathBuilder<'t, B> {
         center.x += self.0.x(); center.y += self.0.y();
         radii.x += self.0.x(); radii.y += self.0.y();
         self.1.arc(center, radii, sweep_angle, x_rotation)
-    }
-}
-
-// TODO: あとでModelDataにする
-impl Context {
-    pub fn vertices(&self) { }
-    pub fn indices(&self) {}
-
-    pub fn prealloc(&self) {
-        let interior_positions_count = self.meshes.iter().map(|x| x.0.b_quad_vertex_positions.len()).sum();
-        let interior_indices_count = self.meshes.iter().map(|x| x.0.b_quad_vertex_interior_indices.len()).sum();
-        
     }
 }

@@ -9,6 +9,7 @@ extern crate bedrock;
 pub extern crate peridot_math as math;
 pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 pub extern crate peridot_archive as archive;
+pub extern crate peridot_vg as vg;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
@@ -26,6 +27,7 @@ pub mod utils; pub use self::utils::*;
 
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
+mod model; pub use self::model::*;
 
 pub trait PluginLoader {
     type AssetLoader: PlatformAssetLoader;

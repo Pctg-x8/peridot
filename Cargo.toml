@@ -14,6 +14,7 @@ peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 peridot-math = { path = "math" }
+peridot-vg = { path = "vg" }
 
 [workspace]
 exclude = ["extras/"]
