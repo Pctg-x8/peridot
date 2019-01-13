@@ -4,6 +4,7 @@ use bedrock as br;
 use std::mem::{uninitialized, replace, forget};
 
 pub trait PlatformRenderTarget {
+    fn surface_extension_name(&self) -> &'static str;
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<SurfaceInfo>;
     fn current_geometry_extent(&self) -> (usize, usize);
@@ -71,6 +72,15 @@ impl WindowRenderTargets
         return Ok(WindowRenderTargets { command_completions_for_backbuffer, bb, chain });
     }
 
+    pub(super) fn emit_initialize_backbuffers_commands(&self, recorder: &mut br::CmdRecord) {
+        let image_barriers: Vec<_> = self.bb.iter()
+            .map(|v| br::ImageSubref::color(v, 0, 0))
+            .map(|s| br::ImageMemoryBarrier::new(&s, br::ImageLayout::Undefined, br::ImageLayout::PresentSrc))
+            .collect();
+        recorder.pipeline_barrier(br::PipelineStageFlags::TOP_OF_PIPE, br::PipelineStageFlags::BOTTOM_OF_PIPE, false,
+            &[], &[], &image_barriers);
+    }
+
     pub fn backbuffers(&self) -> &[br::ImageView] { &self.bb }
     pub fn acquire_next_backbuffer_index(&self, timeout: Option<u64>, completion_handler: br::CompletionHandler)
             -> br::Result<u32> {
@@ -84,6 +94,15 @@ impl WindowRenderTargets
     }
     pub fn command_completion_for_backbuffer_mut(&mut self, index: usize) -> &mut StateFence {
         &mut self.command_completions_for_backbuffer[index]
+    }
+    pub fn wait_all_command_completion_for_backbuffer(&mut self) -> br::Result<()> {
+        {
+            let fences = self.command_completions_for_backbuffer.iter()
+                .filter(|x| x.is_signaled()).map(|x| x.object()).collect::<Vec<_>>();
+            if !fences.is_empty() { br::Fence::wait_multiple(&fences, true, None)?; }
+        }
+        for f in &mut self.command_completions_for_backbuffer { unsafe { f.unsignal(); } }
+        return Ok(());
     }
 }
 impl Drop for WindowRenderTargets
@@ -112,6 +131,7 @@ impl StateFence {
         if let StateFence::Signaled(ref f) = *self { f.wait()?; f.reset()?; }
         unsafe { self.unsignal(); } return Ok(());
     }
+    pub fn is_signaled(&self) -> bool { match *self { StateFence::Signaled(_) => true, _ => false } }
 
     pub fn object(&self) -> &br::Fence {
         match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }

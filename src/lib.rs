@@ -5,13 +5,18 @@
 extern crate libc;
 
 extern crate pathfinder_partitioner;
-extern crate peridot_vertex_processing_pack;
 extern crate bedrock;
+pub extern crate peridot_math as math;
+pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
+pub extern crate peridot_archive as archive;
 
 use bedrock as br; use bedrock::traits::*;
+use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::Result as IOResult;
+use std::cell::{Ref, RefMut, RefCell};
 
 mod window; use self::window::WindowRenderTargets;
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
@@ -19,71 +24,89 @@ mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
 pub mod utils; pub use self::utils::*;
 
-pub trait EngineEvents<AL: AssetLoader, PRT: PlatformRenderTarget> : Sized {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self;
+mod asset; pub use self::asset::*;
+mod input; pub use self::input::*;
+
+pub trait PluginLoader {
+    type AssetLoader: PlatformAssetLoader;
+    type InputProcessor: InputProcessPlugin;
+    type RenderTargetProvider: PlatformRenderTarget;
+
+    fn new_asset_loader(&self) -> Self::AssetLoader;
+    fn new_render_target_provider(&self) -> Self::RenderTargetProvider;
+    fn input_processor(&mut self) -> &mut Self::InputProcessor;
+}
+pub struct NativeLink<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> {
+    prt: PRT, asset_loader: AL
+}
+pub trait PlatformLinker {
+    type AssetLoader: PlatformAssetLoader;
+    type RenderTargetProvider: PlatformRenderTarget;
+
+    fn new(al: Self::AssetLoader, prt: Self::RenderTargetProvider) -> Self;
+    fn asset_loader(&self) -> &Self::AssetLoader;
+    fn render_target_provider(&self) -> &Self::RenderTargetProvider;
+}
+impl<AL: PlatformAssetLoader, PRT: PlatformRenderTarget> PlatformLinker for NativeLink<AL, PRT> {
+    type AssetLoader = AL;
+    type RenderTargetProvider = PRT;
+
+    fn new(al: AL, prt: PRT) -> Self {
+        NativeLink { asset_loader: al, prt }
+    }
+    fn asset_loader(&self) -> &AL { &self.asset_loader }
+    fn render_target_provider(&self) -> &PRT { &self.prt }
+}
+
+pub trait EngineEvents<PL: PlatformLinker> : Sized {
+    fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, AL, PRT>, _on_backbuffer_of: u32)
+    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
+    /// Discards backbuffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
+    fn discard_backbuffer_resources(&mut self) {}
+    /// Called when backbuffer has resized
+    /// (called after discard_backbuffer_resources so re-create discarded resources here)
+    fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
 }
-impl<AL: AssetLoader, PRT: PlatformRenderTarget> EngineEvents<AL, PRT> for () {
-    fn init(_e: &Engine<Self, AL, PRT>) -> Self { () }
-}
-
-use std::io::{Read, Seek, Result as IOResult, BufReader};
-pub trait AssetLoader {
-    type Asset: Read + Seek;
-    type StreamingAsset: Read;
-
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
-}
-pub trait LogicalAssetData: Sized {
-    fn ext() -> &'static str;
-}
-pub trait FromAsset: LogicalAssetData {
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self>;
-}
-pub trait FromStreamingAsset: LogicalAssetData {
-    fn from_asset<Asset: Read>(asset: Asset) -> IOResult<Self>;
-}
-use peridot_vertex_processing_pack::*;
-impl LogicalAssetData for PvpContainer { fn ext() -> &'static str { "pvp" } }
-impl FromAsset for PvpContainer {
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self> {
-        PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
-    }
+impl<PL: PlatformLinker> EngineEvents<PL> for () {
+    fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
-mod input; pub use self::input::*;
-
-pub struct Engine<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> {
-    prt: PRT, surface: SurfaceInfo, wrt: WindowRenderTargets,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, asset_loader: AL, ip: Rc<InputProcess>
+pub struct Engine<E: EngineEvents<PL>, PL: PlatformLinker> {
+    nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
+    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
 }
-impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engine<E, AL, PRT> {
-    pub fn launch<IPP>(name: &str, version: (u32, u32, u32), prt: PRT, asset_loader: AL, ipp: &mut IPP)
-            -> br::Result<Self> where IPP: InputProcessPlugin {
-        let g = Graphics::new(name, version)?;
-        let surface = prt.create_surface(&g.instance, &g.adapter, g.graphics_queue.family)?;
+impl<E: EngineEvents<NPL>, NPL: PlatformLinker> Engine<E, NPL> {
+    pub fn launch<PL>(name: &str, version: (u32, u32, u32), plugin_loader: &mut PL) -> br::Result<Self>
+            where PL: PluginLoader<AssetLoader=NPL::AssetLoader, RenderTargetProvider=NPL::RenderTargetProvider> {
+        let nativelink = NPL::new(plugin_loader.new_asset_loader(), plugin_loader.new_render_target_provider());
+        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
+        let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
+            g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
-        let wrt = WindowRenderTargets::new(&g, &surface, &prt)?;
+        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
         let mut this = Engine {
-            g, surface, wrt, event_handler: None, asset_loader, prt, ip: InputProcess::new().into()
+            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
+        this.submit_commands(|r| this.wrt.get().emit_initialize_backbuffers_commands(r))
+            .expect("Initializing Backbuffers");
         this.event_handler = Some(eh.into());
-        ipp.on_start_handle(&this.ip);
+        plugin_loader.input_processor().on_start_handle(&this.ip);
         return Ok(this);
     }
+    fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
+    fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
     pub fn load<A: FromAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get(path, A::ext()).and_then(A::from_asset)
+        self.nativelink.asset_loader().get(path, A::EXT).and_then(A::from_asset)
     }
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
-        self.asset_loader.get_streaming(path, A::ext()).and_then(A::from_asset)
+        self.nativelink.asset_loader().get_streaming(path, A::EXT).and_then(A::from_asset)
     }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
@@ -92,7 +115,7 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
     // 将来的に分かれるかも？
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
-    pub fn backbuffers(&self) -> &[br::ImageView] { self.wrt.backbuffers() }
+    pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
     pub fn input(&self) -> &InputProcess { &self.ip }
     
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()> {
@@ -104,13 +127,24 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
 
     pub fn do_update(&mut self)
     {
-        let bb_index =
-            self.wrt.acquire_next_backbuffer_index(None, br::CompletionHandler::Device(&self.g.acquiring_backbuffer))
-            .expect("Acquiring available backbuffer index");
-        self.wrt.command_completion_for_backbuffer_mut(bb_index as _)
+        let wait = br::CompletionHandler::Device(&self.g.acquiring_backbuffer);
+        let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
+        match bb_index {
+            Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                // Fire resize and do nothing
+                let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
+                self.do_resize_backbuffer(math::Vector2(w as _, h as _));
+                return;
+            }
+            _ => ()
+        };
+        let bb_index = bb_index.expect("Acquiring available backbuffer index");
+        self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _)
             .wait().expect("Waiting Previous command completion");
         self.ip.prepare_for_frame();
         {
+            let bound_wrt = self.wrt.get();
+
             let mut eh_mut = self.event_handler.as_ref().expect("uninitialized").borrow_mut();
             let (copy_submission, mut fb_submission) = eh_mut.update(self, bb_index);
             if let Some(mut cs) = copy_submission {
@@ -120,7 +154,7 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
                     (&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                     (&self.g.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER)]);
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
                 self.submit_buffered_commands(&[cs, fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
@@ -129,25 +163,35 @@ impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Engin
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
                 fb_submission.wait_semaphores.to_mut()
                     .push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
-                let completion_fence = self.wrt.command_completion_for_backbuffer(bb_index as _);
+                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
                 self.submit_buffered_commands(&[fb_submission], completion_fence.object())
                     .expect("CommandBuffer Submission");
             }
         }
         unsafe {
-            self.wrt.command_completion_for_backbuffer_mut(bb_index as _).signal();
+            self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _).signal();
         }
-        self.wrt.present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering])
+        self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering])
             .expect("Present Submission");
     }
+    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
+        self.wrt.get_mut_lw().wait_all_command_completion_for_backbuffer().expect("Waiting queued commands");
+        self.userlib_mut_lw().discard_backbuffer_resources();
+        self.wrt.discard_lw();
+        self.wrt.set(
+            WindowRenderTargets::new(self.graphics(), &self.surface, self.nativelink.render_target_provider())
+            .expect("Recreating WindowRenderTargets"));
+        self.submit_commands(|r| self.wrt.get().emit_initialize_backbuffers_commands(r))
+            .expect("Initializing Backbuffers");
+        self.userlib_mut().on_resize(&self, new_size);
+    }
 }
-impl<E: EngineEvents<AL, PRT>, AL: AssetLoader, PRT: PlatformRenderTarget> Drop for Engine<E, AL, PRT> {
+impl<E: EngineEvents<PL>, PL: PlatformLinker> Drop for Engine<E, PL> {
     fn drop(&mut self) {
         self.graphics().device.wait().expect("device error");
     }
 }
 
-use std::cell::{Ref, RefMut, RefCell};
 pub struct LateInit<T>(RefCell<Option<T>>);
 impl<T> LateInit<T>
 {
@@ -160,10 +204,16 @@ impl<T> Discardable<T>
 {
     pub fn new() -> Self { Discardable(RefCell::new(None)) }
     pub fn set(&self, v: T) { *self.0.borrow_mut() = v.into(); }
+    pub fn set_lw(&mut self, v: T) { *self.0.get_mut() = v.into(); }
     pub fn get(&self) -> Ref<T> { Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized")) }
     pub fn get_mut(&self) -> RefMut<T> { RefMut::map(self.0.borrow_mut(), |x| x.as_mut().expect("uninitialized")) }
+    pub fn get_mut_lw(&mut self) -> &mut T { self.0.get_mut().as_mut().expect("uninitialized") }
     pub fn discard(&self) { *self.0.borrow_mut() = None; }
+    pub fn discard_lw(&mut self) { drop(self.0.get_mut().take()); }
     pub fn is_available(&self) -> bool { self.0.borrow().is_some() }
+}
+impl<T> From<T> for Discardable<T> {
+    fn from(v: T) -> Self { Discardable(RefCell::new(Some(v))) }
 }
 
 pub struct Queue { q: br::Queue, family: u32 }
@@ -178,27 +228,34 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32)) -> br::Result<Self>
+    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str) -> br::Result<Self>
     {
-        #[cfg(windows)] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_win32_surface";
-        #[cfg(target_os = "android")] const VK_KHR_PLATFORM_SURFACE: &'static str = "VK_KHR_android_surface";
-
         info!("Supported Layers: ");
+        let mut validation_layer_available = false;
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
             info!("* {} :: {}/{}", name.to_string_lossy(), l.specVersion, l.implementationVersion);
+            if !validation_layer_available && name.to_str() == Ok("VK_LAYER_LUNARG_standard_validation") {
+                validation_layer_available = true;
+            }
         }
 
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(vec!["VK_KHR_surface", VK_KHR_PLATFORM_SURFACE]);
+        ib.add_extensions(vec!["VK_KHR_surface", platform_surface_extension_name]);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
-        #[cfg(all(debug_assertions, not(target_os = "android")))] ib.add_layer("VK_LAYER_LUNARG_standard_validation");
-        #[cfg(all(debug_assertions, target_os = "android"))] ib
-            .add_layer("VK_LAYER_LUNARG_parameter_validation")
-            .add_layer("VK_LAYER_LUNARG_core_validation")
-            .add_layer("VK_LAYER_LUNARG_object_tracker")
-            .add_layer("VK_LAYER_GOOGLE_unique_objects")
-            .add_layer("VK_LAYER_GOOGLE_threading");
+        if validation_layer_available {
+            #[cfg(all(debug_assertions, not(target_os = "android")))]
+            ib.add_layer("VK_LAYER_LUNARG_standard_validation");
+            #[cfg(all(debug_assertions, target_os = "android"))] ib
+                .add_layer("VK_LAYER_LUNARG_parameter_validation")
+                .add_layer("VK_LAYER_LUNARG_core_validation")
+                .add_layer("VK_LAYER_LUNARG_object_tracker")
+                .add_layer("VK_LAYER_GOOGLE_unique_objects")
+                .add_layer("VK_LAYER_GOOGLE_threading");
+        }
+        else {
+            warn!("Validation Layer is not found!");
+        }
         let instance = ib.create()?;
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
@@ -259,7 +316,7 @@ impl Graphics
     pub(self) fn memory_type_index_for(&self, mask: br::MemoryPropertyFlags, index_mask: u32) -> Option<u32> {
         if let Some(&mi) = self.memory_type_index_cache.borrow().get(&(mask.bits(), index_mask)) { return Some(mi); }
         for (n, m) in self.adapter.memory_properties().types().enumerate() {
-            if ((1 << n) & index_mask) != 0 && (m.propertyFlags & mask.bits()) != 0 &&
+            if ((1 << n) & index_mask) != 0 && (m.propertyFlags & mask.bits()) == mask.bits() &&
                     (m.propertyFlags & br::MemoryPropertyFlags::LAZILY_ALLOCATED.bits()) == 0 {
                 self.memory_type_index_cache.borrow_mut().insert((mask.bits(), index_mask), n as _);
                 return Some(n as _);
@@ -278,6 +335,10 @@ impl Graphics
         }], None)?;
         self.graphics_queue.q.wait()
     }
+}
+impl Deref for Graphics {
+    type Target = br::Device;
+    fn deref(&self) -> &br::Device { &self.device }
 }
 
 struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
@@ -336,7 +397,7 @@ impl SubpassDependencyTemplates
 }
 
 use std::ffi::CString;
-use peridot_vertex_processing_pack::PvpContainer;
+use vertex_processing_pack::PvpContainer;
 pub struct PvpShaderModules {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
     vertex: br::ShaderModule, fragment: Option<br::ShaderModule>
