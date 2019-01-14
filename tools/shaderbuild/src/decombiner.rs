@@ -7,7 +7,24 @@ use regex::Regex;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeclarationOps { VertexInput, VertexShader, FragmentShader, Varyings, SpecConstant, Uniform, PushConstant }
+pub enum DeclarationOps {
+    VertexInput, VertexShader, FragmentShader, Varyings, SpecConstant, Uniform, PushConstant, Header
+}
+impl DeclarationOps {
+    fn parse(tok: &mut Tokenizer) -> ParseResult<Self> {
+        tok.strip_ignores();
+
+        if tok.strip_prefix("FragmentShader") { return Ok(DeclarationOps::FragmentShader); }
+        if tok.strip_prefix("SpecConstant") { return Ok(DeclarationOps::SpecConstant); }
+        if tok.strip_prefix("VertexShader") { return Ok(DeclarationOps::VertexShader); }
+        if tok.strip_prefix("PushConstant") { return Ok(DeclarationOps::PushConstant); }
+        if tok.strip_prefix("VertexInput") { return Ok(DeclarationOps::VertexInput); }
+        if tok.strip_prefix("Varyings") { return Ok(DeclarationOps::Varyings); }
+        if tok.strip_prefix("Uniform") { return Ok(DeclarationOps::Uniform); }
+        if tok.strip_prefix("Header") { return Ok(DeclarationOps::Header); }
+        return Err(());
+    }
+}
 
 pub type ParseResult<T> = Result<T, ()>;
 
@@ -96,17 +113,6 @@ impl<'s> Tokenizer<'s> {
         else { Err(()) }
     }
 
-    pub fn declaration_op(&mut self) -> ParseResult<DeclarationOps> {
-        self.strip_ignores();
-        if self.strip_prefix("FragmentShader") { return Ok(DeclarationOps::FragmentShader); }
-        if self.strip_prefix("SpecConstant") { return Ok(DeclarationOps::SpecConstant); }
-        if self.strip_prefix("VertexShader") { return Ok(DeclarationOps::VertexShader); }
-        if self.strip_prefix("PushConstant") { return Ok(DeclarationOps::PushConstant); }
-        if self.strip_prefix("VertexInput") { return Ok(DeclarationOps::VertexInput); }
-        if self.strip_prefix("Varyings") { return Ok(DeclarationOps::Varyings); }
-        if self.strip_prefix("Uniform") { return Ok(DeclarationOps::Uniform); }
-        return Err(());
-    }
     pub fn shader_stage(&mut self) -> ParseResult<br::ShaderStage> {
         self.strip_ignores();
         if self.strip_prefix("FragmentShader") { return Ok(br::ShaderStage::FRAGMENT); }
@@ -173,8 +179,13 @@ impl<'s> Tokenizer<'s> {
         if !self.strip_ignores().strip_prefix(")") { return Err(()); }
         return Ok((stg, set, binding));
     }
-    /// `PushConstant` v <BracketStage> `(` <IndexNumber> `)`
+    /// `PushConstant` v <BracketStage>
     pub fn push_constant_header_rest(&mut self) -> ParseResult<br::ShaderStage> {
+        self.strip_ignores();
+        return self.bracketed_stage();
+    }
+    /// `Header` v <BracketStage>
+    pub fn rawcode_header_rest(&mut self) -> ParseResult<br::ShaderStage> {
         self.strip_ignores();
         return self.bracketed_stage();
     }
@@ -230,7 +241,8 @@ pub enum ToplevelBlock<'s> {
     Varying(br::ShaderStage, br::ShaderStage, Vec<Variable<'s>>),
     SpecConstant(br::ShaderStage, usize, &'s str, &'s str, &'s str),
     Uniform(br::ShaderStage, usize, usize, &'s str, &'s str),
-    PushConstant(br::ShaderStage, &'s str, &'s str)
+    PushConstant(br::ShaderStage, &'s str, &'s str),
+    Header(br::ShaderStage, &'s str)
 }
 impl<'s> Tokenizer<'s> {
     pub fn binding_block(&mut self) -> ParseResult<(usize, BindingBlock<'s>)> {
@@ -292,9 +304,15 @@ impl<'s> Tokenizer<'s> {
         let code = self.codeblock().expect("GLSL CodeBlock required");
         return ToplevelBlock::PushConstant(stg, id, code);
     }
+    pub fn rawcode_header(&mut self) -> ToplevelBlock<'s> {
+        // Header <BracketedStage> v <Codeblock>
+        let stg = self.rawcode_header_rest().expect("ShaderStage required");
+        let code = self.codeblock().expect("GLSL CodeBlock required");
+        return ToplevelBlock::Header(stg, code);
+    }
 
     pub fn toplevel_block(&mut self) -> ParseResult<ToplevelBlock<'s>> {
-        match self.declaration_op() {
+        match DeclarationOps::parse(self) {
             Ok(DeclarationOps::VertexInput) => {
                 let vi = self.vertex_input_block();
                 if vi.is_empty() { Err(()) } else { Ok(ToplevelBlock::VertexInput(vi)) }
@@ -310,7 +328,8 @@ impl<'s> Tokenizer<'s> {
             Ok(DeclarationOps::SpecConstant) => Ok(self.spec_constant()),
             Ok(DeclarationOps::Uniform) => Ok(self.uniform()),
             Ok(DeclarationOps::PushConstant) => Ok(self.push_constant()),
-            _ => Err(())
+            Ok(DeclarationOps::Header) => Ok(self.rawcode_header()),
+            Err(_) => Err(())
         }
     }
 
@@ -328,6 +347,7 @@ pub type GlslType<'s> = &'s str;
 #[derive(Debug, Clone)]
 pub struct CombinedShader<'s> {
     vertex_input: Vec<(usize, BindingBlock<'s>)>,
+    header_codes: BTreeMap<br::ShaderStage, Vec<&'s str>>,
     vertex_shader_code: &'s str, fragment_shader_code: Option<&'s str>,
     varyings_between_shaders: Vec<(br::ShaderStage, br::ShaderStage, Vec<Variable<'s>>)>,
     spec_constants_per_stage: BTreeMap<br::ShaderStage, BTreeMap<usize, (&'s str, GlslType<'s>, &'s str)>>,
@@ -337,7 +357,7 @@ pub struct CombinedShader<'s> {
 impl<'s> CombinedShader<'s> {
     pub fn from_parsed_blocks(blocks: Vec<ToplevelBlock<'s>>) -> Self {
         let mut cs = CombinedShader {
-            vertex_input: Vec::new(),
+            vertex_input: Vec::new(), header_codes: BTreeMap::new(),
             vertex_shader_code: "", fragment_shader_code: None,
             varyings_between_shaders: Vec::new(),
             spec_constants_per_stage: BTreeMap::new(),
@@ -377,6 +397,9 @@ impl<'s> CombinedShader<'s> {
                         panic!("Multiple Definitions of PushConstants for same shader stage");
                     }
                     cs.push_constant_per_stage.insert(stg, (name, members));
+                },
+                ToplevelBlock::Header(stg, code) => {
+                    cs.header_codes.entry(stg).or_insert_with(Vec::new).push(code);
                 }
             }
         }
@@ -418,6 +441,11 @@ impl<'s> CombinedShader<'s> {
             code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
         }
         code += "\n";
+        // header
+        if let Some(cs) = self.header_codes.get(&br::ShaderStage::VERTEX) {
+            for c in cs { code += c; }
+            code += "\n";
+        }
         // main
         code += &format!("void main() {{{}}}", self.vertex_shader_code.replace("RasterPosition", "gl_Position"));
         return code;
@@ -458,6 +486,11 @@ impl<'s> CombinedShader<'s> {
             code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
         }
         code += "\n";
+        // header
+        if let Some(cs) = self.header_codes.get(&br::ShaderStage::FRAGMENT) {
+            for c in cs { code += c; }
+            code += "\n";
+        }
         // main
         code += &format!("void main() {{{}}}", fragment_code);
         return code;
