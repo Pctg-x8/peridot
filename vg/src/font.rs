@@ -1,9 +1,9 @@
 
 use font_kit::{
-    source::SystemSource, font::Font as UnderlyingHandle, family_name::FamilyName, properties::Properties,
-    hinting::HintingOptions,
+    source::SystemSource, font::Font as UnderlyingHandle,
     error::{FontLoadingError, SelectionError, GlyphLoadingError}
 };
+pub use font_kit::{family_name::FamilyName, properties::Properties as FontProperties, hinting::HintingOptions};
 use euclid::Rect;
 use peridot_math::{Vector2, Vector2F32};
 use lyon_path::builder::PathBuilder;
@@ -18,6 +18,7 @@ impl<T: Copy> GlyphBound<T> {
 #[repr(C)] #[derive(Clone, Debug)]
 pub(crate) struct GlyphTransform { pub st: [f32; 4], pub ext: [f32; 2], pub pad: [f32; 2] }
 
+#[derive(Debug)]
 pub enum FontConstructionError { Selection(SelectionError), Loading(FontLoadingError) }
 impl From<SelectionError> for FontConstructionError {
     fn from(v: SelectionError) -> Self { FontConstructionError::Selection(v) }
@@ -27,7 +28,7 @@ impl From<FontLoadingError> for FontConstructionError {
 }
 pub struct Font(UnderlyingHandle);
 impl Font {
-    pub fn best_match(family_names: &[FamilyName], properties: &Properties) -> Result<Self, FontConstructionError> {
+    pub fn best_match(family_names: &[FamilyName], properties: &FontProperties) -> Result<Self, FontConstructionError> {
         SystemSource::new().select_best_match(family_names, properties)?
             .load().map(Font).map_err(From::from)
     }

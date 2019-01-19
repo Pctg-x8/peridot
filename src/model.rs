@@ -3,6 +3,7 @@
 use super::*;
 use bedrock as br;
 use pathfinder_partitioner::BQuadVertexPositions;
+use std::ops::Range;
 
 // 仮定義
 pub trait ModelData {
@@ -20,6 +21,9 @@ pub trait ModelData {
 pub struct VgContextPreallocOffsets {
     transforms: usize, interior_positions: usize, interior_indices: usize
 }
+impl VgContextPreallocOffsets {
+    pub fn transforms_byterange(&self) -> Range<u64> { self.transforms as u64 .. self.interior_positions as u64 }
+}
 pub struct VgContextRenderInfo {
     interior_index_range_per_mesh: Vec<Range<u64>>
 }
@@ -31,7 +35,7 @@ impl ModelData for vg::Context {
         let interior_positions_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_positions.len()).sum();
         let interior_indices_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_interior_indices.len()).sum();
         
-        let transforms = alloc.add(BufferContent::uniform_dynarray::<math::Matrix4F32>(self.meshes().len()));
+        let transforms = alloc.add(BufferContent::uniform_texel_dynarray::<math::Matrix4F32>(self.meshes().len()));
         let interior_positions = alloc.add(BufferContent::vertices::<BQuadVertexPositions>(interior_positions_count));
         let interior_indices = alloc.add(BufferContent::indices::<u32>(interior_indices_count));
         VgContextPreallocOffsets { transforms, interior_positions, interior_indices }
