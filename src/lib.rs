@@ -398,6 +398,21 @@ impl SubpassDependencyTemplates
     }
 }
 
+pub enum RenderPassTemplates {}
+impl RenderPassTemplates {
+    pub fn single_render(format: br::vk::VkFormat) -> br::RenderPassBuilder {
+        let mut b = br::RenderPassBuilder::new();
+        let adesc =
+            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        b.add_attachment(adesc);
+        b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
+        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
+
+        return b;
+    }
+}
+
 use std::ffi::CString;
 use vertex_processing_pack::PvpContainer;
 pub struct PvpShaderModules {

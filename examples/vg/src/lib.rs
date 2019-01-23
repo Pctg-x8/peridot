@@ -2,7 +2,7 @@
 use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
-    TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, SubpassDependencyTemplates,
+    TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates,
     PvpShaderModules};
 use std::rc::Rc;
 use std::borrow::Cow;
@@ -46,18 +46,13 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, bp.total_size() as _);
             tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER.vertex_input(), &buffer,
                 0 .. bp.total_size() as _,
-                br::AccessFlags::UNIFORM_READ | br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::INDEX_READ);
+                br::AccessFlags::SHADER.read | br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::INDEX_READ);
             tfb.sink_transfer_commands(rec);
             tfb.sink_graphics_ready_commands(rec);
         }).expect("ImmResource Initialization");
 
         let screen_size = e.backbuffers()[0].size().clone();
-        let renderpass = br::RenderPassBuilder::new()
-            .add_attachment(br::AttachmentDescription::new(e.backbuffer_format(),
-                br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
-                .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store))
-            .add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None))
-            .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true))
+        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
             .create(&e.graphics()).expect("RenderPass Creation");
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
