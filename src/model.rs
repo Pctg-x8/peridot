@@ -66,6 +66,9 @@ impl ModelData for vg::Context {
         cmd.bind_vertex_buffers(0, &[(buffer, buffer_offsets.interior_positions)]);
         cmd.bind_index_buffer(buffer, buffer_offsets.interior_indices, br::IndexType::U32);
         for (n, ir) in rinfo.interior_index_range_per_mesh.iter().enumerate() {
+            // skip if there is no indices
+            if ir.end == ir.start { continue; }
+            
             cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(n as u32));
             cmd.draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
         }
