@@ -84,7 +84,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&dsl], &[(br::ShaderStage::VERTEX, 0 .. 4)])
             .expect("Create PipelineLayout").into();
         let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
-            .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
+            .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
             .create(&e.graphics(), None).expect("Create GraphicsPipeline");
