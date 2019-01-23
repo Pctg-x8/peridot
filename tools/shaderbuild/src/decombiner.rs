@@ -12,19 +12,19 @@ pub enum DeclarationOps {
     SamplerBuffer
 }
 impl DeclarationOps {
-    fn parse(tok: &mut Tokenizer) -> ParseResult<Self> {
-        tok.strip_ignores();
-
-        if tok.strip_prefix("FragmentShader") { return Ok(DeclarationOps::FragmentShader); }
-        if tok.strip_prefix("SamplerBuffer") { return Ok(DeclarationOps::SamplerBuffer); }
-        if tok.strip_prefix("SpecConstant") { return Ok(DeclarationOps::SpecConstant); }
-        if tok.strip_prefix("VertexShader") { return Ok(DeclarationOps::VertexShader); }
-        if tok.strip_prefix("PushConstant") { return Ok(DeclarationOps::PushConstant); }
-        if tok.strip_prefix("VertexInput") { return Ok(DeclarationOps::VertexInput); }
-        if tok.strip_prefix("Varyings") { return Ok(DeclarationOps::Varyings); }
-        if tok.strip_prefix("Uniform") { return Ok(DeclarationOps::Uniform); }
-        if tok.strip_prefix("Header") { return Ok(DeclarationOps::Header); }
-        return Err(());
+    fn parse(tok: &mut Tokenizer) -> Option<Self> {
+        match tok.strip_ignores().strip_ident() {
+            Some("FragmentShader") => Some(DeclarationOps::FragmentShader),
+            Some("SamplerBuffer") => Some(DeclarationOps::SamplerBuffer),
+            Some("SpecConstant") => Some(DeclarationOps::SpecConstant),
+            Some("VertexShader") => Some(DeclarationOps::VertexShader),
+            Some("PushConstant") => Some(DeclarationOps::PushConstant),
+            Some("VertexInput") => Some(DeclarationOps::VertexInput),
+            Some("Varyings") => Some(DeclarationOps::Varyings),
+            Some("Uniform") => Some(DeclarationOps::Uniform),
+            Some("Header") => Some(DeclarationOps::Header),
+            _ => None
+        }
     }
 }
 
@@ -60,18 +60,18 @@ impl<'s> Tokenizer<'s> {
         if self.0.starts_with(p) { self.0 = &self.0[p.len()..]; return true; }
         else { false }
     }
-    fn strip_ident(&mut self) -> ParseResult<&'s str> {
-        if self.0.starts_with(|c: char| c.is_digit(10)) { return Err(()); }
+    fn strip_ident(&mut self) -> Option<&'s str> {
+        if self.0.starts_with(|c: char| c.is_digit(10)) { return None; }
         let (_, bytes) = self.0.chars().count_with_bytes_while(|c| c.is_alphanumeric() || c == '_');
-        if bytes == 0 { return Err(()); }
+        if bytes == 0 { return None; }
         let slice = &self.0[..bytes]; self.0 = &self.0[bytes..];
-        return Ok(slice);
+        return Some(slice);
     }
     pub fn ident_list(&mut self) -> Vec<&'s str> {
         self.strip_ignores();
-        let mut v = if let Ok(id) = self.strip_ident() { vec![id] } else { return Vec::new(); };
+        let mut v = if let Some(id) = self.strip_ident() { vec![id] } else { return Vec::new(); };
         while self.strip_ignores().strip_prefix(",") {
-            if let Ok(id) = self.strip_ignores().strip_ident() { v.push(id); } else { break; }
+            if let Some(id) = self.strip_ignores().strip_ident() { v.push(id); } else { break; }
         }
         return v;
     }
@@ -131,6 +131,7 @@ impl<'s> Tokenizer<'s> {
     pub fn codeblock(&mut self) -> ParseResult<&'s str> {
         self.strip_ignores();
         if !self.block_start() { return Err(()); }
+        // 上位に押し上げてエラー処理した方がスタックトレースが見やすいのでResultで返す
         fn strip_bytes_counter<I: Iterator<Item = char>>(mut c: I, current: usize, nestlevel: usize)
                 -> ParseResult<usize> {
             match c.next() {
@@ -146,19 +147,23 @@ impl<'s> Tokenizer<'s> {
         self.0 = &self.0[cb_slice_bytes + 1..];
         return Ok(cb_slice);
     }
+    fn bindrate(&mut self) -> br::vk::VkVertexInputRate {
+        if self.bracket_start() {
+            let irate = match self.strip_ignores().strip_ident().expect("Expect either PerInstance or PerVertex") {
+                "PerInstance" => br::vk::VK_VERTEX_INPUT_RATE_INSTANCE,
+                "PerVertex"   => br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
+                x => panic!("Expect either PerInstance or PerVertex. Found {:?}", x)
+            };
+            if !self.bracket_end() { panic!("Missing ]"); }
+            return irate;
+        }
+        else { br::vk::VK_VERTEX_INPUT_RATE_VERTEX }
+    }
     pub fn binding(&mut self) -> ParseResult<(usize, br::vk::VkVertexInputRate)> {
         self.strip_ignores();
         if !self.strip_prefix("Binding") { return Err(()); }
         let index = self.index_number()?;
-        let irate;
-        if self.bracket_start() {
-            self.strip_ignores();
-            if self.strip_prefix("PerInstance") { irate = br::vk::VK_VERTEX_INPUT_RATE_INSTANCE; }
-            else if self.strip_prefix("PerVertex") { irate = br::vk::VK_VERTEX_INPUT_RATE_VERTEX; }
-            else { return Err(()); }
-            if !self.bracket_end() { return Err(()); }
-        }
-        else { irate = br::vk::VK_VERTEX_INPUT_RATE_VERTEX; }
+        let irate = self.bindrate();
         return Ok((index, irate));
     }
     /// `SpecConstant` v <BracketedStage> `(` <IndexNumber> `)`
@@ -320,34 +325,34 @@ impl<'s> Tokenizer<'s> {
         return ToplevelBlock::Header(stg, code);
     }
 
-    pub fn toplevel_block(&mut self) -> ParseResult<ToplevelBlock<'s>> {
-        match DeclarationOps::parse(self) {
-            Ok(DeclarationOps::VertexInput) => {
+    pub fn toplevel_block(&mut self) -> ToplevelBlock<'s> {
+        match DeclarationOps::parse(self).expect("Requires Toplevel Declaration") {
+            DeclarationOps::VertexInput => {
                 let vi = self.vertex_input_block();
-                if vi.is_empty() { Err(()) } else { Ok(ToplevelBlock::VertexInput(vi)) }
+                if vi.is_empty() { panic!("Empty VertexInput is not allowed"); }
+                else {
+                    ToplevelBlock::VertexInput(vi)
+                }
             },
-            Ok(DeclarationOps::VertexShader) =>
-                self.codeblock().map(|c| ToplevelBlock::ShaderCode(br::ShaderStage::VERTEX, c)),
-            Ok(DeclarationOps::FragmentShader) =>
-                self.codeblock().map(|c| ToplevelBlock::ShaderCode(br::ShaderStage::FRAGMENT, c)),
-            Ok(DeclarationOps::Varyings) => {
+            DeclarationOps::VertexShader => ToplevelBlock::ShaderCode(br::ShaderStage::VERTEX,
+                self.codeblock().expect("GLSL CodeBlock required")),
+            DeclarationOps::FragmentShader => ToplevelBlock::ShaderCode(br::ShaderStage::FRAGMENT,
+                self.codeblock().expect("GLSL CodeBlock required")),
+            DeclarationOps::Varyings => {
                 let (src, dst, vars) = self.varying();
-                return Ok(ToplevelBlock::Varying(src, dst, vars));
+                ToplevelBlock::Varying(src, dst, vars)
             },
-            Ok(DeclarationOps::SpecConstant) => Ok(self.spec_constant()),
-            Ok(DeclarationOps::Uniform) => Ok(self.uniform()),
-            Ok(DeclarationOps::PushConstant) => Ok(self.push_constant()),
-            Ok(DeclarationOps::Header) => Ok(self.rawcode_header()),
-            Ok(DeclarationOps::SamplerBuffer) => Ok(self.sampler_buffer()),
-            Err(_) => Err(())
+            DeclarationOps::SpecConstant => self.spec_constant(),
+            DeclarationOps::Uniform => self.uniform(),
+            DeclarationOps::PushConstant => self.push_constant(),
+            DeclarationOps::Header => self.rawcode_header(),
+            DeclarationOps::SamplerBuffer => self.sampler_buffer()
         }
     }
 
     pub fn toplevel_blocks(&mut self) -> Vec<ToplevelBlock<'s>> {
         let mut blocks = Vec::new();
-        while !self.strip_ignores().no_chars() {
-            blocks.push(self.toplevel_block().expect("Toplevel-Block required"));
-        }
+        while !self.strip_ignores().no_chars() { blocks.push(self.toplevel_block()); }
         return blocks;
     }
 }
