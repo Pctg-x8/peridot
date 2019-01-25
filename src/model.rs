@@ -4,6 +4,7 @@ use super::*;
 use bedrock as br;
 use pathfinder_partitioner::BQuadVertexPositions;
 use std::ops::Range;
+use std::mem::size_of;
 
 // 仮定義
 pub trait ModelData {
@@ -51,12 +52,14 @@ impl ModelData for vg::Context {
             interior_index_current += v.b_quad_vertex_interior_indices.len() as u64;
             interior_index_range_per_mesh.push(ii_start .. interior_index_current);
             unsafe {
+                // debug!("VertexEmission onto {} -> {} elms: {:?}", vofs, v.b_quad_vertex_positions.len(), v.b_quad_vertex_positions);
                 mem.slice_mut(vofs, v.b_quad_vertex_positions.len()).clone_from_slice(&v.b_quad_vertex_positions);
+                // debug!("IndexEmission onto {} -> {} elms: {:?}", iofs, v.b_quad_vertex_interior_indices.len(), v.b_quad_vertex_interior_indices);
                 mem.slice_mut(iofs, v.b_quad_vertex_interior_indices.len())
                     .clone_from_slice(&v.b_quad_vertex_interior_indices);
             }
-            vofs += v.b_quad_vertex_positions.len();
-            iofs = v.b_quad_vertex_interior_indices.len();
+            vofs += v.b_quad_vertex_positions.len() * size_of::<BQuadVertexPositions>();
+            iofs += v.b_quad_vertex_interior_indices.len() * 4;
         }
 
         return VgContextRenderInfo { interior_index_range_per_mesh }
@@ -68,7 +71,7 @@ impl ModelData for vg::Context {
         for (n, ir) in rinfo.interior_index_range_per_mesh.iter().enumerate() {
             // skip if there is no indices
             if ir.end == ir.start { continue; }
-            
+
             cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(n as u32));
             cmd.draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
         }

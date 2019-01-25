@@ -13,13 +13,13 @@ use std::rc::Rc;
 struct NSLogger;
 impl log::Log for NSLogger {
     fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
+        // if self.enabled(record.metadata()) {
             unsafe {
                 let mut fmt = NSString::from_str(&format!("[{}] {}", record.level(), record.args()))
                     .expect("NSString");
                 NSLog(&mut *fmt);
             }
-        }
+        // }
     }
     fn enabled(&self, metadata: &log::Metadata) -> bool { metadata.level() <= log::Level::Info }
     fn flush(&self) {}
