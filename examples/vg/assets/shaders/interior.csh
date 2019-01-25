@@ -7,7 +7,7 @@ Header[VertexShader] {
         st  = texelFetch(glyphTransformSTExt, id * 2 + 0);
         ext = texelFetch(glyphTransformSTExt, id * 2 + 1).xy;
     }
-    vec2 transformAffine(vec2 vin, vec4 st, vec2 ext) { return vin/* * st.xy + vin.yx * ext + st.zw*/; }
+    vec2 transformAffine(vec2 vin, vec4 st, vec2 ext) { return vin * st.xy + vin.yx * ext + st.zw; }
     vec2 applyHints(vec2 pos) {
         return pos;
     }
