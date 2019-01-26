@@ -37,11 +37,11 @@ RewriteAndroidFiles
 Rename-Item $ScriptPath/../../target/arm64-v8a-linux-android aarch64-linux-android -ErrorAction SilentlyContinue
 
 # Build Userlib
-$Env:RUSTFLAGS="-C link-arg=--sysroot=$Env:SYSROOT"
-. $ScriptPath/env.ps1
 $features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
 try {
     Push-Location; Set-Location $ScriptPath
+    . $ScriptPath/env.ps1
+    $Env:RUSTFLAGS="-C link-arg=--sysroot=$(Get-Location)/android-build/sysroot"
     cargo build --features $($features -join ",")
     if ($LASTEXITCODE -ne 0) { throw """cargo build"" failed with code $LASTEXITCODE" }
 }

@@ -116,7 +116,7 @@ impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler {
     }
 }
 // TODO: InputProcessPlugin実装する
-pub(crate) struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
+pub struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
 impl PlatformInputProcessPlugin {
     fn new() -> Self {
         PlatformInputProcessPlugin { processor: None }
@@ -127,33 +127,26 @@ impl peridot::InputProcessPlugin for PlatformInputProcessPlugin {
         self.processor = Some(ip.clone());
     }
 }
-pub(self) struct PluginLoader { rt_view: *mut c_void, input: PlatformInputProcessPlugin }
-impl PluginLoader {
-    pub(self) fn new(rt_view: *mut c_void) -> Self {
-        PluginLoader { rt_view, input: PlatformInputProcessPlugin::new() }
+pub struct NativeLink {
+    al: PlatformAssetLoader, prt: PlatformRenderTargetHandler,
+    input: PlatformInputProcessPlugin
+}
+impl NativeLink {
+    pub fn new(rt_view: *mut c_void) -> Self {
+        NativeLink {
+            al: PlatformAssetLoader::new(), prt: PlatformRenderTargetHandler::new(rt_view),
+            input: PlatformInputProcessPlugin::new()
+        }
     }
 }
-impl peridot::PluginLoader for PluginLoader {
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = PlatformRenderTargetHandler;
     type InputProcessor = PlatformInputProcessPlugin;
 
-    fn new_asset_loader(&self) -> PlatformAssetLoader { PlatformAssetLoader::new() }
-    fn new_render_target_provider(&self) -> PlatformRenderTargetHandler {
-        PlatformRenderTargetHandler::new(self.rt_view)
-    }
-    fn input_processor(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
-}
-pub struct NativeLink { al: PlatformAssetLoader, prt: PlatformRenderTargetHandler }
-impl peridot::PlatformLinker for NativeLink {
-    type AssetLoader = PlatformAssetLoader;
-    type RenderTargetProvider = PlatformRenderTargetHandler;
-
-    fn new(al: PlatformAssetLoader, prt: PlatformRenderTargetHandler) -> Self {
-        NativeLink { al, prt }
-    }
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
+    fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
 }
 mod userlib;
 type Game = userlib::Game<NativeLink>;
@@ -166,17 +159,15 @@ extern "C" {
 }
 
 #[allow(dead_code)]
-pub struct GameRun {
-    plugin_loader: PluginLoader, engine: Engine
-}
+pub struct GameRun(Engine);
 #[no_mangle]
 pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameRun {
     log::set_logger(&LOGGER).expect("Failed to set logger");
     log::set_max_level(log::LevelFilter::Trace);
 
-    let mut plugin_loader = PluginLoader::new(v);
-    let engine = Engine::launch(Game::NAME, Game::VERSION, &mut plugin_loader).expect("Failed to launch the game");
-    Box::into_raw(Box::new(GameRun { plugin_loader, engine }))
+    let nlink = NativeLink::new(v);
+    let engine = Engine::launch(Game::NAME, Game::VERSION, nlink).expect("Failed to launch the game");
+    Box::into_raw(Box::new(GameRun(engine)))
 }
 #[no_mangle]
 pub extern "C" fn terminate_game(gr: *mut GameRun) {
@@ -184,11 +175,11 @@ pub extern "C" fn terminate_game(gr: *mut GameRun) {
 }
 #[no_mangle]
 pub extern "C" fn update_game(gr: *mut GameRun) {
-    unsafe { (*gr).engine.do_update(); }
+    unsafe { (*gr).0.do_update(); }
 }
 #[no_mangle]
 pub extern "C" fn resize_game(gr: *mut GameRun, w: u32, h: u32) {
-    unsafe { (*gr).engine.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); }
+    unsafe { (*gr).0.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); }
 }
 #[no_mangle]
 pub extern "C" fn captionbar_text() -> *mut c_void {
