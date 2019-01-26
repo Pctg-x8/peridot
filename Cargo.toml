@@ -16,6 +16,9 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentatio
 peridot-math = { path = "math" }
 peridot-vg = { path = "vg" }
 
+[patch.crates-io]
+servo-freetype-sys = { path = "../foreign/libfreetype2" }
+
 [workspace]
 exclude = ["extras/"]
 members = [

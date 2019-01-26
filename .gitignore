@@ -2,3 +2,4 @@ extras/
 target/
 **/*.rs.bk
 *.lock
+android-build

@@ -37,7 +37,7 @@ RewriteAndroidFiles
 Rename-Item $ScriptPath/../../target/arm64-v8a-linux-android aarch64-linux-android -ErrorAction SilentlyContinue
 
 # Build Userlib
-$Env:RUSTFLAGS="-C link-arg=--sysroot=$Env:ANDROID_HOME\ndk-bundle\platforms\android-$Env:ANDROID_NDK_PLATFORM_TARGET\arch-arm64"
+$Env:RUSTFLAGS="-C link-arg=--sysroot=$Env:SYSROOT"
 . $ScriptPath/env.ps1
 $features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
 try {
