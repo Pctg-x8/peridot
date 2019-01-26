@@ -598,7 +598,7 @@ impl<'s> CombinedShader<'s> {
                             binding: binding as _, format: br::vk::VK_FORMAT_R32G32B32A32_SINT,
                             offset: offs_in_binding as _
                         });
-                        off_in_binding = align2(offs_in_binding + size_of::<[i32; 4]>(), align_of::<[i32; 4]>());
+                        offs_in_binding = align2(offs_in_binding + size_of::<[i32; 4]>(), align_of::<[i32; 4]>());
                     },
                     _ => println!("Warning: Cannot estimate appropriate attribute info")
                 }
