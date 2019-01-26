@@ -26,12 +26,15 @@ impl From<SelectionError> for FontConstructionError {
 impl From<FontLoadingError> for FontConstructionError {
     fn from(v: FontLoadingError) -> Self { FontConstructionError::Loading(v) }
 }
-pub struct Font(UnderlyingHandle);
+pub struct Font(UnderlyingHandle, f32);
 impl Font {
-    pub fn best_match(family_names: &[FamilyName], properties: &FontProperties) -> Result<Self, FontConstructionError> {
+    pub fn best_match(family_names: &[FamilyName], properties: &FontProperties, units_per_em: f32)
+            -> Result<Self, FontConstructionError> {
         SystemSource::new().select_best_match(family_names, properties)?
-            .load().map(Font).map_err(From::from)
+            .load().map(|x| Font(x, units_per_em)).map_err(From::from)
     }
+    pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
 
     pub(crate) fn glyph_id(&self, c: char) -> Option<u32> { self.0.glyph_for_char(c) }
     pub(crate) fn advance(&self, glyph: u32) -> Result<Vector2F32, GlyphLoadingError> {
@@ -45,6 +48,7 @@ impl Font {
             -> Result<(), GlyphLoadingError> {
         self.0.outline(glyph, hint_opts, builder)
     }
+    pub fn units_per_em(&self) -> u32 { self.0.metrics().units_per_em }
 
     pub(crate) fn calc_text_render_offsets(&self, px_size: f32) -> GlyphTransform {
         let pixels_per_unit = px_size / self.0.metrics().units_per_em as f32;

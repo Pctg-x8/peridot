@@ -18,7 +18,7 @@ PushConstant[VertexShader] ScreenInfo {
 }
 VertexShader {
     vec4 gst; vec2 gext; fetchGlyphTransformFor(glyph_index, gst, gext);
-    RasterPosition = vec4((2.0 * transformAffine(applyHints(ipos), gst, gext) / (64.0 * 96.0)) * vec2(1.0, -1.0) * vec2(3.0 / 4.0, 1.0), 0.0, 1.0);
+    RasterPosition = vec4((2.0 * transformAffine(applyHints(ipos), gst, gext) / vec2(640.0, 480.0)) * vec2(1.0, -1.0), 0.0, 1.0);
     helper_coord = vec2(curve_data.xy * 0.5);
     lb_dir = curve_data.z;
 }

@@ -20,7 +20,7 @@ impl<PL: peridot::PlatformLinker> Game<PL> {
 impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let font = peridot::vg::Font::best_match(&[peridot::vg::FamilyName::SansSerif],
-            &peridot::vg::FontProperties::new()).expect("No Fonts");
+            &peridot::vg::FontProperties::new(), 12.0).expect("No Fonts");
         let mut ctx = peridot::vg::Context::new();
         ctx.text(&font, "Hello, World!");
 
@@ -83,6 +83,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             offset: br::vk::VkOffset2D::default(),
             extent: br::vk::VkExtent2D { width: screen_size.0, height: screen_size.1 }
         }];
+        debug!("ScreenSize: {:?}", screen_size);
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&dsl], &[(br::ShaderStage::VERTEX, 0 .. 4)])
             .expect("Create PipelineLayout").into();
         let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))

@@ -69,8 +69,8 @@ impl ModelData for vg::Context {
         let mut curve_index_range_per_mesh = Vec::new();
         let (mut vindex_offset, mut curve_vindex_offset) = (0, 0);
         let (mut interior_index_offset, mut curve_index_offset) = (0u32, 0u32);
-        for (n, (v, t)) in self.meshes().iter().enumerate() {
-            transforms_stg[n] = GlyphTransform { st: [1.0, 1.0, 0.0, 0.0], ext: [0.0; 2], pad: [0.0; 2] };
+        for (n, (v, st, ext)) in self.meshes().iter().enumerate() {
+            transforms_stg[n] = GlyphTransform { st: st.clone(), ext: ext.clone(), pad: [0.0; 2] };
             let ii_start = interior_index_offset;
             interior_index_offset += v.b_quad_vertex_interior_indices.len() as u32;
             interior_index_range_per_mesh.push(ii_start .. interior_index_offset);
@@ -127,7 +127,6 @@ impl ModelData for vg::Context {
             if ir.end == ir.start { continue; }
 
             cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(n as u32));
-            debug!("RenderVG IndexRange: {} -> {}", ir.start, ir.end);
             cmd.draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
         }
         ex_instances.curve_pipeline.bind(cmd);
