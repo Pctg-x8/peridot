@@ -9,8 +9,8 @@ use std::borrow::Cow;
 
 pub struct Game<PL: peridot::PlatformLinker> {
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, _buffer: Buffer,
-    _bufview: br::BufferView,
-    pso: LayoutedPipeline, _descriptors: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
+    _bufview: br::BufferView, _descriptors: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
+    _renderer_exinst: peridot::VgRendererExternalInstances,
     ph: PhantomData<*const PL>
 }
 impl<PL: peridot::PlatformLinker> Game<PL> {
@@ -73,6 +73,8 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let shader = PvpShaderModules::new(&e.graphics(), e.load("shaders.interior").expect("Loading PvpContainer"))
             .expect("Creating Shader");
+        let curve_shader = PvpShaderModules::new(&e.graphics(), e.load("shaders.curve").expect("Loading CurveShader"))
+            .expect("Creating CurveShader");
         let vp = [br::vk::VkViewport {
             width: screen_size.0 as _, height: screen_size.1 as _, x: 0.0, y: 0.0,
             minDepth: 0.0, maxDepth: 1.0
@@ -89,21 +91,28 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
             .create(&e.graphics(), None).expect("Create GraphicsPipeline");
         let gp = LayoutedPipeline::combine(gp, &pl);
+        let gp_curve = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
+            .vertex_processing(curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
+            .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
+            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
+            .create(&e.graphics(), None).expect("Create GraphicsPipeline of CurveRender");
+        let gp_curve = LayoutedPipeline::combine(gp_curve, &pl);
+        let renderer_exinst = peridot::VgRendererExternalInstances {
+            interior_pipeline: gp, curve_pipeline: gp_curve, transform_buffer_descriptor_set: descs[0]
+        };
 
         let render_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffers.len())
             .expect("Creating RenderCB");
         for (r, f) in render_cb.iter().zip(&framebuffers) {
             let mut cbr = r.begin().expect("Start Recoding CB");
             cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
-            gp.bind(&mut cbr);
-            cbr.bind_graphics_descriptor_sets(0, &descs, &[]);
-            ctx.default_render_commands(&mut cbr, &buffer, &vg_offs, &ctx_rinfo);
+            ctx.default_render_commands(&mut cbr, &buffer, &vg_offs, &ctx_rinfo, &renderer_exinst);
             cbr.end_render_pass();
         }
 
         Game {
             ph: PhantomData, _buffer: buffer, renderpass, framebuffers, _bufview: bufview,
-            _descriptors: (dsl, dp, descs), pso: gp, render_cb
+            _descriptors: (dsl, dp, descs), render_cb, _renderer_exinst: renderer_exinst
         }
     }
 

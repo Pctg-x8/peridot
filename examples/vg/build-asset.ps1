@@ -5,7 +5,9 @@ $ToolPath = "$ScriptPath/../../target/release"
 
 try {
     Push-Location; Set-Location $ScriptPath/assets
-    & $ToolPath/peridot-shaderbuild shaders/interior.csh
+    foreach ($code in (Get-ChildItem shaders/*.csh)) {
+        & $ToolPath/peridot-shaderbuild $code
+    }
 }
 finally { Pop-Location }
 
