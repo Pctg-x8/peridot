@@ -1,13 +1,13 @@
 use winapi::um::winuser::{
     DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
-    AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL,
+    AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL, WM_SIZE,
     PostQuitMessage, PM_REMOVE,
-    LoadCursorA, IDC_ARROW
+    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
 };
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 use winapi::um::libloaderapi::{GetModuleHandleA};
 use winapi::shared::windef::{RECT, HWND};
-use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE};
+use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
 
 #[macro_use] extern crate log;
 mod userlib;
@@ -42,10 +42,13 @@ fn main() {
     };
     if w.is_null() { panic!("Create Window Failed!"); }
 
-    let mut plugin_loader = PluginLoader { hw: w, input: InputHandler::new() };
-    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, &mut plugin_loader)
-        .expect("Unable to launch the game");
+    let nl = NativeLink {
+        al: AssetProvider::new(), prt: RenderTargetProvider(w),
+        input: InputHandler::new()
+    };
+    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
     
+    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, std::mem::transmute(&mut e)); }
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
 
     while process_message_all() { e.do_update(); }
@@ -53,6 +56,14 @@ fn main() {
 extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_DESTROY => unsafe { PostQuitMessage(0); return 0; },
+        WM_SIZE => unsafe {
+            let ep = std::mem::transmute::<_, *mut EngineW>(GetWindowLongPtrA(w, GWLP_USERDATA));
+            if let Some(ep) = ep.as_mut() {
+                let (w, h) = (LOWORD(lparam as _), HIWORD(lparam as _));
+                ep.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); ep.do_update();
+            }
+            return 0;
+        },
         _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) }
     }
 }
@@ -129,24 +140,13 @@ impl peridot::InputProcessPlugin for InputHandler {
         self.0 = Some(processor.clone());
     }
 }
-struct PluginLoader {
-    hw: HWND, input: InputHandler
-}
-impl peridot::PluginLoader for PluginLoader {
+struct NativeLink { al: AssetProvider, prt: RenderTargetProvider, input: InputHandler }
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;
     type RenderTargetProvider = RenderTargetProvider;
     type InputProcessor = InputHandler;
 
-    fn new_asset_loader(&self) -> AssetProvider { AssetProvider::new() }
-    fn new_render_target_provider(&self) -> RenderTargetProvider { RenderTargetProvider(self.hw) }
-    fn input_processor(&mut self) -> &mut InputHandler { &mut self.input }
-}
-struct NativeLink { al: AssetProvider, prt: RenderTargetProvider }
-impl peridot::PlatformLinker for NativeLink {
-    type AssetLoader = AssetProvider;
-    type RenderTargetProvider = RenderTargetProvider;
-
-    fn new(al: AssetProvider, prt: RenderTargetProvider) -> Self { NativeLink { al, prt } }
     fn asset_loader(&self) -> &AssetProvider { &self.al }
     fn render_target_provider(&self) -> &RenderTargetProvider { &self.prt }
+    fn input_processor_mut(&mut self) -> &mut InputHandler { &mut self.input }
 }
