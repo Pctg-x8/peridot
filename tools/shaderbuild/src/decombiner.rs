@@ -237,6 +237,14 @@ impl<'s> BindingBlock<'s> {
                 let offset = align2(total, align_of::<[i32; 4]>());
                 total = offset + size_of::<[i32; 4]>();
             }
+            else if type_str == "i8vec4" {
+                let offset = align2(total, align_of::<[i8; 4]>());
+                total = offset + size_of::<[i8; 4]>();
+            }
+            else if type_str == "u8vec4" {
+                let offset = align2(total, align_of::<[u8; 4]>());
+                total = offset + size_of::<[u8; 4]>();
+            }
             else { println!("Warning: Unable to determine exact packed size"); }
         }
         return total;
@@ -442,12 +450,20 @@ impl<'s> CombinedShader<'s> {
 
     pub fn is_provided_fsh(&self) -> bool { self.fragment_shader_code.is_some() }
 
+    pub fn translate_vtype(s: &str) -> &str {
+        match s {
+            "i8vec4" => "ivec4",
+            "u8vec4" => "uvec4",
+            v => v
+        }
+    }
     pub fn emit_vertex_shader(&self) -> String {
         let mut code = String::from("#version 450\n\n");
 
         // 入力変数(vertex_inputから)
         for (n, vi_vars) in self.vertex_input.iter().flat_map(|&(_, ref bb)| &bb.vars).enumerate() {
-            code += &format!("layout(location = {}) in {} {};\n", n, vi_vars.type_str, vi_vars.name);
+            code += &format!("layout(location = {}) in {} {};\n", n,
+                Self::translate_vtype(vi_vars.type_str), vi_vars.name);
         }
         // 出力変数
         for (n, ovar) in self.varyings_between_shaders.iter()
@@ -455,7 +471,7 @@ impl<'s> CombinedShader<'s> {
             .flat_map(|&(_, _, ref v)| v).enumerate() {
             let require_flat = ovar.type_str == "int";
             code += &format!("layout(location = {}) {}out {} {};\n", n, if require_flat { "flat " } else { "" },
-                ovar.type_str, ovar.name);
+                Self::translate_vtype(ovar.type_str), ovar.name);
         }
         // gl_Positionの宣言を追加
         if self.vertex_shader_code.contains("RasterPosition") {
@@ -502,7 +518,7 @@ impl<'s> CombinedShader<'s> {
             .flat_map(|&(_, _, ref v)| v).enumerate() {
             let require_flat = ivar.type_str == "int";
             code += &format!("layout(location = {}) {}in {} {};\n", n, if require_flat { "flat " } else { "" },
-                ivar.type_str, ivar.name);
+                Self::translate_vtype(ivar.type_str), ivar.name);
         }
         // 出力変数(ソースコード中/Target\[\d+\]/から)
         let mut fragment_code = String::from(*self.fragment_shader_code.as_ref().expect("No fragment shader"));
@@ -599,6 +615,22 @@ impl<'s> CombinedShader<'s> {
                             offset: offs_in_binding as _
                         });
                         offs_in_binding = align2(offs_in_binding + size_of::<[i32; 4]>(), align_of::<[i32; 4]>());
+                    },
+                    "i8vec4" => {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R8G8B8A8_SINT,
+                            offset: offs_in_binding as _
+                        });
+                        offs_in_binding = align2(offs_in_binding + size_of::<[i8; 4]>(), align_of::<[i8; 4]>());
+                    },
+                    "u8vec4" => {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R8G8B8A8_UINT,
+                            offset: offs_in_binding as _
+                        });
+                        offs_in_binding = align2(offs_in_binding + size_of::<[u8; 4]>(), align_of::<[u8; 4]>());
                     },
                     _ => println!("Warning: Cannot estimate appropriate attribute info")
                 }
