@@ -233,6 +233,10 @@ impl<'s> BindingBlock<'s> {
                 let offs = align2(total, align_of::<f32>());
                 total = offs + size_of::<f32>();
             }
+            else if type_str == "ivec4" {
+                let offset = align2(total, align_of::<[i32; 4]>());
+                total = offset + size_of::<[i32; 4]>();
+            }
             else { println!("Warning: Unable to determine exact packed size"); }
         }
         return total;
@@ -449,7 +453,9 @@ impl<'s> CombinedShader<'s> {
         for (n, ovar) in self.varyings_between_shaders.iter()
             .filter(|&&(src, _, _)| src == br::ShaderStage::VERTEX)
             .flat_map(|&(_, _, ref v)| v).enumerate() {
-            code += &format!("layout(location = {}) out {} {};\n", n, ovar.type_str, ovar.name);
+            let require_flat = ovar.type_str == "int";
+            code += &format!("layout(location = {}) {}out {} {};\n", n, if require_flat { "flat " } else { "" },
+                ovar.type_str, ovar.name);
         }
         // gl_Positionの宣言を追加
         if self.vertex_shader_code.contains("RasterPosition") {
@@ -494,7 +500,9 @@ impl<'s> CombinedShader<'s> {
         for (n, ivar) in self.varyings_between_shaders.iter()
             .filter(|&&(_, dst, _)| dst == br::ShaderStage::FRAGMENT)
             .flat_map(|&(_, _, ref v)| v).enumerate() {
-            code += &format!("layout(location = {}) in {} {};\n", n, ivar.type_str, ivar.name);
+            let require_flat = ivar.type_str == "int";
+            code += &format!("layout(location = {}) {}in {} {};\n", n, if require_flat { "flat " } else { "" },
+                ivar.type_str, ivar.name);
         }
         // 出力変数(ソースコード中/Target\[\d+\]/から)
         let mut fragment_code = String::from(*self.fragment_shader_code.as_ref().expect("No fragment shader"));
@@ -583,6 +591,14 @@ impl<'s> CombinedShader<'s> {
                             offset: offs_in_binding as _
                         });
                         offs_in_binding = align2(offs_in_binding + size_of::<f32>(), align_of::<f32>());
+                    },
+                    "ivec4" => {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R32G32B32A32_SINT,
+                            offset: offs_in_binding as _
+                        });
+                        off_in_binding = align2(offs_in_binding + size_of::<[i32; 4]>(), align_of::<[i32; 4]>());
                     },
                     _ => println!("Warning: Cannot estimate appropriate attribute info")
                 }
