@@ -4,6 +4,7 @@ extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates,
     PvpShaderModules};
+use peridot::math::Vector2;
 use std::rc::Rc;
 use std::borrow::Cow;
 
@@ -84,7 +85,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             extent: br::vk::VkExtent2D { width: screen_size.0, height: screen_size.1 }
         }];
         debug!("ScreenSize: {:?}", screen_size);
-        let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&dsl], &[(br::ShaderStage::VERTEX, 0 .. 4)])
+        let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&dsl], &[(br::ShaderStage::VERTEX, 0 .. 4 * 3)])
             .expect("Create PipelineLayout").into();
         let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
             .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
@@ -99,7 +100,8 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
             .create(&e.graphics(), None).expect("Create GraphicsPipeline of CurveRender");
         let gp_curve = LayoutedPipeline::combine(gp_curve, &pl);
         let renderer_exinst = peridot::VgRendererExternalInstances {
-            interior_pipeline: gp, curve_pipeline: gp_curve, transform_buffer_descriptor_set: descs[0]
+            interior_pipeline: gp, curve_pipeline: gp_curve, transform_buffer_descriptor_set: descs[0],
+            target_pixels: Vector2(screen_size.0, screen_size.1)
         };
 
         let render_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffers.len())

@@ -5,6 +5,7 @@ use bedrock as br;
 use pathfinder_partitioner::{BQuadVertexPositions, BVertexLoopBlinnData};
 use std::ops::Range;
 use std::mem::size_of;
+use self::math::Vector2;
 
 // 仮定義
 pub trait ModelData {
@@ -34,7 +35,8 @@ pub struct VgContextRenderInfo {
 }
 pub struct VgRendererExternalInstances {
     pub interior_pipeline: LayoutedPipeline, pub curve_pipeline: LayoutedPipeline,
-    pub transform_buffer_descriptor_set: br::vk::VkDescriptorSet
+    pub transform_buffer_descriptor_set: br::vk::VkDescriptorSet,
+    pub target_pixels: Vector2<u32>
 }
 impl ModelData for vg::Context {
     type PreallocOffsetType = VgContextPreallocOffsets;
@@ -118,6 +120,7 @@ impl ModelData for vg::Context {
             buffer: &Buffer, buffer_offsets: &VgContextPreallocOffsets, rinfo: &VgContextRenderInfo,
             ex_instances: &VgRendererExternalInstances) {
         ex_instances.interior_pipeline.bind(cmd);
+        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &ex_instances.target_pixels);
         cmd.bind_graphics_descriptor_sets(0, &[ex_instances.transform_buffer_descriptor_set], &[]);
 
         cmd.bind_vertex_buffers(0, &[(buffer, buffer_offsets.interior_positions)]);
@@ -126,7 +129,7 @@ impl ModelData for vg::Context {
             // skip if there is no indices
             if ir.end == ir.start { continue; }
 
-            cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(n as u32));
+            cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32));
             cmd.draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
         }
         ex_instances.curve_pipeline.bind(cmd);
@@ -135,7 +138,7 @@ impl ModelData for vg::Context {
         cmd.bind_index_buffer(buffer, buffer_offsets.curve_indices, br::IndexType::U32);
         for (n, ir) in rinfo.curve_index_range_per_mesh.iter().enumerate() {
             if ir.end == ir.start { continue; }
-            cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(n as u32));
+            cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32));
             cmd.draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
         }
     }
