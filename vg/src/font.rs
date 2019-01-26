@@ -86,4 +86,6 @@ fn stem_darkening_amount(font_size: f32, pixels_per_unit: f32) -> [f32; 2]
 }
 #[cfg(not(feature = "StemDarkening"))]
 fn stem_darkening_amount(_font_size: f32, _pixels_per_unit: f32) -> [f32; 2] { [0.0; 2] }
-fn embolden_amount(font_size: f32, pixels_per_unit: f32) -> [f32; 2] { stem_darkening_amount(font_size, pixels_per_unit) }
+fn embolden_amount(font_size: f32, pixels_per_unit: f32) -> [f32; 2] {
+    stem_darkening_amount(font_size, pixels_per_unit)
+}
