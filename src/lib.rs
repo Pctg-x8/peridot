@@ -37,6 +37,8 @@ pub trait NativeLinker {
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn render_target_provider(&self) -> &Self::RenderTargetProvider;
     fn input_processor_mut(&mut self) -> &mut Self::InputProcessor;
+
+    fn rendering_precision(&self) -> f32 { 1.0 }
 }
 
 pub trait EngineEvents<PL: NativeLinker> : Sized {
@@ -87,6 +89,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
         self.nativelink.asset_loader().get_streaming(path, A::EXT).and_then(A::from_asset)
     }
+
+    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }

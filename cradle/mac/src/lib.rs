@@ -147,6 +147,8 @@ impl peridot::NativeLinker for NativeLink {
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
     fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
+
+    fn rendering_precision(&self) -> f32 { 2.0 }
 }
 mod userlib;
 type Game = userlib::Game<NativeLink>;
