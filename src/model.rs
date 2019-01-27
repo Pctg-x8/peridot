@@ -10,19 +10,21 @@ use self::math::Vector2;
 // 仮定義
 pub trait ModelData {
     type PreallocOffsetType;
-    type AdditionalRenderingInfo;
-    type RendererExternalInstances;
+    type RendererParams;
 
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
-    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: &Self::PreallocOffsetType)
-        -> Self::AdditionalRenderingInfo;
-    fn default_render_commands(&self, _cmd: &mut br::CmdRecord,
-        _buffer: &Buffer, _buffer_offsets: &Self::PreallocOffsetType,
-        _rinfo: &Self::AdditionalRenderingInfo, _ex_instances: &Self::RendererExternalInstances) {}
+    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: Self::PreallocOffsetType)
+        -> Self::RendererParams;
+}
+pub trait DefaultRenderCommands {
+    type Extras;
+
+    fn default_render_commands(&self, cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras);
 }
 
 #[repr(C)] struct GlyphTransform { st: [f32; 4], ext: [f32; 2], pad: [f32; 2] }
 
+#[derive(Clone, Debug)]
 pub struct VgContextPreallocOffsets {
     transforms: usize, interior_positions: usize, interior_indices: usize,
     curve_positions: usize, curve_helper_coords: usize, curve_indices: usize
@@ -33,6 +35,12 @@ impl VgContextPreallocOffsets {
 pub struct VgContextRenderInfo {
     interior_index_range_per_mesh: Vec<Range<u32>>, curve_index_range_per_mesh: Vec<Range<u32>>
 }
+pub struct VgRendererParams {
+    buffer_offsets: VgContextPreallocOffsets, render_info: VgContextRenderInfo
+}
+impl VgRendererParams {
+    pub fn transforms_byterange(&self) -> Range<u64> { self.buffer_offsets.transforms_byterange() }
+}
 pub struct VgRendererExternalInstances {
     pub interior_pipeline: LayoutedPipeline, pub curve_pipeline: LayoutedPipeline,
     pub transform_buffer_descriptor_set: br::vk::VkDescriptorSet,
@@ -40,8 +48,7 @@ pub struct VgRendererExternalInstances {
 }
 impl ModelData for vg::Context {
     type PreallocOffsetType = VgContextPreallocOffsets;
-    type AdditionalRenderingInfo = VgContextRenderInfo;
-    type RendererExternalInstances = VgRendererExternalInstances;
+    type RendererParams = VgRendererParams;
 
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> VgContextPreallocOffsets {
         let interior_positions_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_positions.len()).sum();
@@ -63,7 +70,7 @@ impl ModelData for vg::Context {
             transforms, interior_positions, interior_indices, curve_positions, curve_helper_coords, curve_indices
         }
     }
-    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: &VgContextPreallocOffsets) -> VgContextRenderInfo {
+    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: VgContextPreallocOffsets) -> VgRendererParams {
         let transforms_stg = unsafe { mem.slice_mut(offsets.transforms, self.meshes().len()) };
         let mut vofs = offsets.interior_positions;
         let (mut cpofs, mut chofs) = (offsets.curve_positions, offsets.curve_helper_coords);
@@ -114,29 +121,35 @@ impl ModelData for vg::Context {
             curve_vindex_offset += v.b_vertex_positions.len() as u32;
         }
 
-        return VgContextRenderInfo { interior_index_range_per_mesh, curve_index_range_per_mesh }
+        return VgRendererParams {
+            buffer_offsets: offsets, render_info: VgContextRenderInfo {
+                interior_index_range_per_mesh, curve_index_range_per_mesh
+            }
+        };
     }
-    fn default_render_commands(&self, cmd: &mut br::CmdRecord, 
-            buffer: &Buffer, buffer_offsets: &VgContextPreallocOffsets, rinfo: &VgContextRenderInfo,
-            ex_instances: &VgRendererExternalInstances) {
-        ex_instances.interior_pipeline.bind(cmd);
-        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &ex_instances.target_pixels);
-        cmd.bind_graphics_descriptor_sets(0, &[ex_instances.transform_buffer_descriptor_set], &[]);
+}
+impl DefaultRenderCommands for VgRendererParams {
+    type Extras = VgRendererExternalInstances;
 
-        cmd.bind_vertex_buffers(0, &[(buffer, buffer_offsets.interior_positions)]);
-        cmd.bind_index_buffer(buffer, buffer_offsets.interior_indices, br::IndexType::U32);
-        for (n, ir) in rinfo.interior_index_range_per_mesh.iter().enumerate() {
+    fn default_render_commands(&self, cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras) {
+        extras.interior_pipeline.bind(cmd);
+        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &extras.target_pixels);
+        cmd.bind_graphics_descriptor_sets(0, &[extras.transform_buffer_descriptor_set], &[]);
+
+        cmd.bind_vertex_buffers(0, &[(buffer, self.buffer_offsets.interior_positions)]);
+        cmd.bind_index_buffer(buffer, self.buffer_offsets.interior_indices, br::IndexType::U32);
+        for (n, ir) in self.render_info.interior_index_range_per_mesh.iter().enumerate() {
             // skip if there is no indices
             if ir.end == ir.start { continue; }
 
             cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32));
             cmd.draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
         }
-        ex_instances.curve_pipeline.bind(cmd);
+        extras.curve_pipeline.bind(cmd);
         cmd.bind_vertex_buffers(0,
-            &[(buffer, buffer_offsets.curve_positions), (buffer, buffer_offsets.curve_helper_coords)]);
-        cmd.bind_index_buffer(buffer, buffer_offsets.curve_indices, br::IndexType::U32);
-        for (n, ir) in rinfo.curve_index_range_per_mesh.iter().enumerate() {
+            &[(buffer, self.buffer_offsets.curve_positions), (buffer, self.buffer_offsets.curve_helper_coords)]);
+        cmd.bind_index_buffer(buffer, self.buffer_offsets.curve_indices, br::IndexType::U32);
+        for (n, ir) in self.render_info.curve_index_range_per_mesh.iter().enumerate() {
             if ir.end == ir.start { continue; }
             cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32));
             cmd.draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
