@@ -69,27 +69,3 @@ impl Font {
     extern crate appkit;
     appkit::NSScreen::main().backing_scale_factor() as _
 }
-
-fn compute_stem_darkening_amount(pixels_per_em: f32, pixels_per_unit: f32) -> [f32; 2]
-{
-    const LIMIT_SIZE: f32 = 72.0;
-    let amounts: [f32; 2] = [(0.0121 * 2.0f32.sqrt()) * (2.0 / screen_multiplier()),
-        (0.0121 * 1.25 * 2.0f32.sqrt()) * (2.0 / screen_multiplier())];
-
-    if pixels_per_em <= LIMIT_SIZE
-    {
-        let scaled_amount = |a| f32::min(a * pixels_per_em, LIMIT_SIZE) / pixels_per_unit;
-        [scaled_amount(amounts[0]), scaled_amount(amounts[1])]
-    }
-    else { [0.0; 2] }
-}
-#[cfg(feature = "StemDarkening")]
-fn stem_darkening_amount(font_size: f32, pixels_per_unit: f32) -> [f32; 2]
-{
-    compute_stem_darkening_amount(font_size, pixels_per_unit)
-}
-#[cfg(not(feature = "StemDarkening"))]
-fn stem_darkening_amount(_font_size: f32, _pixels_per_unit: f32) -> [f32; 2] { [0.0; 2] }
-fn embolden_amount(font_size: f32, pixels_per_unit: f32) -> [f32; 2] {
-    stem_darkening_amount(font_size, pixels_per_unit)
-}
