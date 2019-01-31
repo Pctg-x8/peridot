@@ -637,6 +637,8 @@ impl<'s> CombinedShader<'s> {
             }
             location_offs += blk.vars.len();
         }
+
+        debug!("Generated Attributes: {:?}", attrs);
         return attrs;
     }
 }

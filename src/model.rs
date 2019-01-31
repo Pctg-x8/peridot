@@ -19,7 +19,8 @@ pub trait ModelData {
 pub trait DefaultRenderCommands {
     type Extras;
 
-    fn default_render_commands(&self, cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras);
+    fn default_render_commands<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>,
+        cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras);
 }
 
 #[repr(C)] struct GlyphTransform { st: [f32; 4], ext: [f32; 2], pad: [f32; 2] }
@@ -44,7 +45,7 @@ impl VgRendererParams {
 pub struct VgRendererExternalInstances {
     pub interior_pipeline: LayoutedPipeline, pub curve_pipeline: LayoutedPipeline,
     pub transform_buffer_descriptor_set: br::vk::VkDescriptorSet,
-    pub target_pixels: Vector2<u32>
+    pub target_pixels: Vector2<f32>
 }
 impl ModelData for vg::Context {
     type PreallocOffsetType = VgContextPreallocOffsets;
@@ -131,9 +132,12 @@ impl ModelData for vg::Context {
 impl DefaultRenderCommands for VgRendererParams {
     type Extras = VgRendererExternalInstances;
 
-    fn default_render_commands(&self, cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras) {
+    fn default_render_commands<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>,
+        cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras) {
+        let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
         extras.interior_pipeline.bind(cmd);
-        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &extras.target_pixels);
+        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &renderscale);
+        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 3, &0u32);
         cmd.bind_graphics_descriptor_sets(0, &[extras.transform_buffer_descriptor_set], &[]);
 
         cmd.bind_vertex_buffers(0, &[(buffer, self.buffer_offsets.interior_positions)]);

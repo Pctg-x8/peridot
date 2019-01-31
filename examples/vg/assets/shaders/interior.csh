@@ -13,7 +13,9 @@ Header[VertexShader] {
     }
 }
 PushConstant[VertexShader] ScreenInfo {
-    uvec2 target_pixels; int glyph_index;
+    layout(offset=0) vec2 target_pixels;
+    layout(offset=8) int glyph_index;
+    layout(offset=12) int unused;
 }
 VertexShader {
     vec4 gst; vec2 gext; fetchGlyphTransformFor(glyph_index, gst, gext);
