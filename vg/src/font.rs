@@ -35,6 +35,8 @@ impl Font {
     }
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
     pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub fn ascent(&self) -> f32 { self.0.metrics().ascent }
+    pub fn baseline_offset(&self) -> f32 { self.0.metrics().ascent * self.scale_value() }
 
     pub(crate) fn glyph_id(&self, c: char) -> Option<u32> { self.0.glyph_for_char(c) }
     pub(crate) fn advance(&self, glyph: u32) -> Result<Vector2F32, GlyphLoadingError> {

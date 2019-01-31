@@ -22,9 +22,9 @@ impl<PL: peridot::NativeLinker> Game<PL> {
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let font = peridot::vg::Font::best_match(&[peridot::vg::FamilyName::SansSerif],
-            &peridot::vg::FontProperties::new(), 12.0).expect("No Fonts");
+            &peridot::vg::FontProperties::new(), 20.0).expect("No Fonts");
         let mut ctx = peridot::vg::Context::new();
-        ctx.text(&font, "Hello, World!");
+        ctx.text(&font, "Hello, World!|Opaque");
 
         let mut bp = BufferPrealloc::new(&e.graphics());
         let vg_offs = ctx.prealloc(&mut bp);

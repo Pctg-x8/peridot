@@ -20,6 +20,7 @@ PushConstant[VertexShader] ScreenInfo {
 VertexShader {
     vec4 gst; vec2 gext; fetchGlyphTransformFor(glyph_index, gst, gext);
     RasterPosition = vec4((2.0 * transformAffine(applyHints(ipos), gst, gext) / target_pixels) * vec2(1.0, -1.0), 0.0, 1.0);
+    RasterPosition.xy += vec2(-1.0, -1.0);
 }
 FragmentShader {
     Target[0] = vec4(1.0);
