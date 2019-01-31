@@ -49,23 +49,4 @@ impl Font {
         self.0.outline(glyph, hint_opts, builder)
     }
     pub fn units_per_em(&self) -> u32 { self.0.metrics().units_per_em }
-
-    pub(crate) fn calc_text_render_offsets(&self, px_size: f32) -> GlyphTransform {
-        let pixels_per_unit = px_size / self.0.metrics().units_per_em as f32;
-        let mut stem_darkening_offset = embolden_amount(px_size, pixels_per_unit);
-        let ascent = self.0.metrics().ascent;
-        let sd_yscale = (ascent + stem_darkening_offset[1]) / (ascent * screen_multiplier());
-        stem_darkening_offset[0] *= pixels_per_unit / 2.0f32.sqrt();
-        stem_darkening_offset[1] *= sd_yscale * pixels_per_unit / 2.0f32.sqrt();
-        GlyphTransform
-        {
-            st: [1.0, sd_yscale, stem_darkening_offset[0], stem_darkening_offset[1]], ext: [0.0; 2], pad: [0.0; 2]
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))] fn screen_multiplier() -> f32 { 1.0 }
-#[cfg(target_os = "macos")] fn screen_multiplier() -> f32 {
-    extern crate appkit;
-    appkit::NSScreen::main().backing_scale_factor() as _
 }

@@ -148,7 +148,7 @@ impl peridot::NativeLinker for NativeLink {
     fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
     fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
 
-    fn rendering_precision(&self) -> f32 { 2.0 }
+    fn rendering_precision(&self) -> f32 { unsafe { nsscreen_backing_scale_factor() } }
 }
 mod userlib;
 type Game = userlib::Game<NativeLink>;
@@ -158,6 +158,7 @@ type Engine = peridot::Engine<Game, NativeLink>;
 
 extern "C" {
     fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
+    fn nsscreen_backing_scale_factor() -> f32;
 }
 
 #[allow(dead_code)]
