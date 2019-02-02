@@ -17,10 +17,12 @@ PushConstant[VertexShader] ScreenInfo {
     layout(offset=8) int glyph_index;
     layout(offset=12) int unused;
 }
+SpecConstant[VertexShader](0) RasterOffsetX: float = 0.0;
+SpecConstant[VertexShader](1) RasterOffsetY: float = 0.0;
 VertexShader {
     vec4 gst; vec2 gext; fetchGlyphTransformFor(glyph_index, gst, gext);
     RasterPosition = vec4((2.0 * transformAffine(applyHints(ipos), gst, gext) / target_pixels) * vec2(1.0, -1.0), 0.0, 1.0);
-    RasterPosition.xy += vec2(-1.0, -1.0);
+    RasterPosition.xy += vec2(RasterOffsetX, RasterOffsetY);
 }
 FragmentShader {
     Target[0] = vec4(1.0);

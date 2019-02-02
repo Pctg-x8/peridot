@@ -118,3 +118,15 @@ impl<'t, B: PathBuilder + 't> PathBuilder for TranslatingPathBuilder<'t, B> {
         self.1.arc(center * (12.0 / 2048.0), radii * (12.0 / 2048.0), sweep_angle, x_rotation)
     }
 }
+
+pub mod renderer_pivot {
+    pub const LEFT_TOP:      [f32; 2] = [-1.0, -1.0];
+    pub const MIDDLE_TOP:    [f32; 2] = [ 0.0, -1.0];
+    pub const RIGHT_TOP:     [f32; 2] = [ 1.0, -1.0];
+    pub const LEFT_MIDDLE:   [f32; 2] = [-1.0,  0.0];
+    pub const MIDDLE_MIDDLE: [f32; 2] = [ 0.0,  0.0];
+    pub const RIGHT_MIDDLE:  [f32; 2] = [ 1.0,  0.0];
+    pub const LEFT_BOTTOM:   [f32; 2] = [-1.0,  1.0];
+    pub const MIDDLE_BOTTOM: [f32; 2] = [ 0.0,  1.0];
+    pub const RIGHT_BOTTOM:  [f32; 2] = [ 1.0,  1.0];
+}

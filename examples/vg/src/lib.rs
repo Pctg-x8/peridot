@@ -22,7 +22,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let font = peridot::vg::Font::best_match(&[peridot::vg::FamilyName::SansSerif],
-            &peridot::vg::FontProperties::new(), 20.0).expect("No Fonts");
+            &peridot::vg::FontProperties::new(), 12.0).expect("No Fonts");
         let mut ctx = peridot::vg::Context::new();
         ctx.text(&font, "Hello, World!|Opaque");
 
@@ -87,14 +87,24 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         debug!("ScreenSize: {:?}", screen_size);
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&dsl], &[(br::ShaderStage::VERTEX, 0 .. 4 * 4)])
             .expect("Create PipelineLayout").into();
+        let spc_map = vec![
+            br::vk::VkSpecializationMapEntry { constantID: 0, offset: 0, size: 4 },
+            br::vk::VkSpecializationMapEntry { constantID: 1, offset: 4, size: 4 }
+        ];
+        let mut interior_vertex_processing = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        let mut curve_vertex_processing = curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        interior_vertex_processing.mod_vertex_shader().specinfo =
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
+        curve_vertex_processing.mod_vertex_shader().specinfo =
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
         let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
-            .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
+            .vertex_processing(interior_vertex_processing)
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
             .create(&e.graphics(), None).expect("Create GraphicsPipeline");
         let gp = LayoutedPipeline::combine(gp, &pl);
         let gp_curve = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
-            .vertex_processing(curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
+            .vertex_processing(curve_vertex_processing)
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
             .create(&e.graphics(), None).expect("Create GraphicsPipeline of CurveRender");
