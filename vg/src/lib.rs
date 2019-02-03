@@ -6,12 +6,11 @@ extern crate lyon_path; extern crate euclid;
 
 extern crate font_kit; mod font; pub use font::*;
 use font_kit::{error::GlyphLoadingError, hinting::HintingOptions};
-use font_kit::loader::Loader;
 
 use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, FillRule};
 use lyon_path::builder::{FlatPathBuilder, PathBuilder};
 use lyon_path::geom::euclid::{Transform2D, Vector2D, Angle};
-use peridot_math::{Vector2, Vector2F32, Matrix4F32, Matrix4};
+use peridot_math::{Vector2, Vector2F32};
 
 pub struct Context {
     meshes: Vec<(Mesh, [f32; 4], [f32; 2])>,
