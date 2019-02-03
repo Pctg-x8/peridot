@@ -3,10 +3,11 @@ use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules};
+    PvpShaderModules, vg};
 use peridot::math::Vector2;
 use std::rc::Rc;
 use std::borrow::Cow;
+use peridot::vg::{PathBuilder, FlatPathBuilder};
 
 pub struct Game<PL: peridot::NativeLinker> {
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, buffer: Buffer,
@@ -21,10 +22,19 @@ impl<PL: peridot::NativeLinker> Game<PL> {
 }
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
-        let font = peridot::vg::Font::best_match(&[peridot::vg::FamilyName::SansSerif],
-            &peridot::vg::FontProperties::new(), 12.0).expect("No Fonts");
-        let mut ctx = peridot::vg::Context::new();
+        let font = vg::Font::best_match(&[vg::FamilyName::SansSerif], &vg::FontProperties::new(), 12.0)
+            .expect("No Fonts");
+        let mut ctx = vg::Context::new();
         ctx.text(&font, "Hello, World!|Opaque");
+        {
+            let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
+            f0.move_to(Vector2(10.0, -10.0).into());
+            f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
+                Vector2(100.0, -100.0).into());
+            f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
+            // f0.close();
+            f0.end();
+        }
 
         let mut bp = BufferPrealloc::new(&e.graphics());
         let vg_offs = ctx.prealloc(&mut bp);

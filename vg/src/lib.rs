@@ -7,8 +7,9 @@ extern crate lyon_path; extern crate euclid;
 extern crate font_kit; mod font; pub use font::*;
 use font_kit::{error::GlyphLoadingError, hinting::HintingOptions};
 
-use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, FillRule};
-use lyon_path::builder::{FlatPathBuilder, PathBuilder};
+use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, builder::Builder};
+pub use pathfinder_partitioner::FillRule;
+pub use lyon_path::builder::{FlatPathBuilder, PathBuilder};
 use lyon_path::geom::euclid::{Transform2D, Vector2D, Angle};
 use peridot_math::{Vector2, Vector2F32};
 
@@ -77,6 +78,27 @@ impl<'c> FigureContext<'c> {
         self.ctx.meshes.push((self.partitioner.into_mesh(), st, ext));
 
         return self.ctx;
+    }
+}
+impl<'c> FlatPathBuilder for FigureContext<'c> {
+    type PathType = <Builder as FlatPathBuilder>::PathType;
+
+    fn move_to(&mut self, p: Point2D<f32>) { self.partitioner.builder_mut().move_to(p) }
+    fn line_to(&mut self, to: Point2D<f32>) { self.partitioner.builder_mut().line_to(to) }
+    fn close(&mut self) { self.partitioner.builder_mut().close() }
+    fn build(self) -> Self::PathType { unimplemented!("cannot operate build for FigureContext") }
+    fn build_and_reset(&mut self) -> Self::PathType { self.partitioner.builder_mut().build_and_reset() }
+    fn current_position(&self) -> Point2D<f32> { self.partitioner.builder().current_position() }
+}
+impl<'c> PathBuilder for FigureContext<'c> {
+    fn quadratic_bezier_to(&mut self, c: Point2D<f32>, to: Point2D<f32>) {
+        self.partitioner.builder_mut().quadratic_bezier_to(c, to)
+    }
+    fn cubic_bezier_to(&mut self, c1: Point2D<f32>, c2: Point2D<f32>, to: Point2D<f32>) {
+        self.partitioner.builder_mut().cubic_bezier_to(c1, c2, to)
+    }
+    fn arc(&mut self, center: Point2D<f32>, rad: Vector2D<f32>, sweeping_angle: Angle<f32>, x_rot: Angle<f32>) {
+        self.partitioner.builder_mut().arc(center, rad, sweeping_angle, x_rot)
     }
 }
 
