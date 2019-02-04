@@ -34,7 +34,7 @@ FragmentShader {
     // signed distance
     float sd = (pow(helper_coord.x, 2) - helper_coord.y) / sqrt(pow(fx, 2) + pow(fy, 2));
     // linear alpha 1..inside, 0..outside
-    float alpha = min(0.5 - sd, 1);
+    float alpha = min(0.5 - lb_dir*sd, 1);
     if(alpha < 0) discard;
     Target[0] = vec4(1.0, 1.0, 1.0, 1.0) * alpha;*/
 
