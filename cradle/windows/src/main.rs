@@ -8,6 +8,8 @@ use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 use winapi::um::libloaderapi::{GetModuleHandleA};
 use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
+use winapi::um::combaseapi::CoInitializeEx;
+use winapi::um::objbase::COINIT_MULTITHREADED;
 
 #[macro_use] extern crate log;
 mod userlib;
@@ -18,6 +20,9 @@ fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } 
 
 fn main() {
     env_logger::init();
+    unsafe {
+        hr_into_result(CoInitializeEx(std::ptr::null_mut(), COINIT_MULTITHREADED)).expect("Initializing COM");
+    }
 
     let wca = WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
@@ -41,6 +46,8 @@ fn main() {
             std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
     };
     if w.is_null() { panic!("Create Window Failed!"); }
+
+    let snd = NativeSoundEngine::new().expect("Initializing SoundEngine");
 
     let nl = NativeLink {
         al: AssetProvider::new(), prt: RenderTargetProvider(w),
@@ -79,6 +86,177 @@ fn process_message_all() -> bool {
 
 type GameW = userlib::Game<NativeLink>;
 type EngineW = peridot::Engine<GameW, NativeLink>;
+
+use winapi::Interface;
+use winapi::um::audioclient::*;
+use winapi::um::audiosessiontypes::AUDCLNT_SHAREMODE_SHARED;
+use winapi::um::combaseapi::{CoCreateInstance, CLSCTX_ALL, PropVariantClear, CoTaskMemFree};
+use winapi::um::mmdeviceapi::*;
+use winapi::um::propidl::*;
+use winapi::um::propsys::IPropertyStore;
+use winapi::um::coml2api::STGM_READ;
+use winapi::um::strmif::REFERENCE_TIME;
+use winapi::shared::devpkey::*;
+use winapi::shared::mmreg::*;
+use winapi::shared::ksmedia::KSDATAFORMAT_SUBTYPE_PCM;
+use winapi::shared::winerror::{HRESULT, SUCCEEDED};
+use std::io::{Result as IOResult, Error as IOError};
+use std::os::windows::ffi::OsStringExt;
+use std::ffi::OsString;
+fn hr_into_result(hr: HRESULT) -> IOResult<()> {
+    if SUCCEEDED(hr) { Ok(()) } else { Err(IOError::from_raw_os_error(hr)) }
+}
+pub struct MMDeviceEnumerator(*mut IMMDeviceEnumerator);
+impl MMDeviceEnumerator {
+    fn new() -> IOResult<Self> {
+        let mut enumerator: *mut IMMDeviceEnumerator = std::ptr::null_mut();
+        let hr = unsafe {
+            CoCreateInstance(&CLSID_MMDeviceEnumerator, std::ptr::null_mut(),
+                CLSCTX_ALL, &IMMDeviceEnumerator::uuidof(), std::mem::transmute(&mut enumerator))
+        };
+
+        hr_into_result(hr).map(|_| MMDeviceEnumerator(enumerator))
+    }
+}
+impl Drop for MMDeviceEnumerator { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
+struct MMDevice(*mut IMMDevice);
+impl MMDeviceEnumerator {
+    fn default_audio_endpoint(&self, dataflow: EDataFlow, role: ERole) -> IOResult<MMDevice> {
+        let mut md = std::ptr::null_mut();
+        let hr = unsafe {
+            (*self.0).GetDefaultAudioEndpoint(dataflow, role, &mut md)
+        };
+
+        hr_into_result(hr).map(|_| MMDevice(md))
+    }
+}
+impl Drop for MMDevice { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
+
+pub struct MMDeviceProperties(*mut IPropertyStore);
+impl MMDevice {
+    pub fn properties(&self) -> IOResult<MMDeviceProperties> {
+        let mut p = std::ptr::null_mut();
+        let hr = unsafe { (*self.0).OpenPropertyStore(STGM_READ, &mut p) };
+
+        hr_into_result(hr).map(|_| MMDeviceProperties(p))
+    }
+}
+impl Drop for MMDeviceProperties { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
+
+pub struct AudioClient(*mut IAudioClient);
+impl Drop for AudioClient { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
+impl MMDevice {
+    pub fn activate(&self) -> IOResult<AudioClient> {
+        let mut p = std::ptr::null_mut();
+        let hr = unsafe {
+            (*self.0).Activate(&IAudioClient::uuidof(), CLSCTX_ALL,
+                std::ptr::null_mut(), &mut p)
+        };
+
+        hr_into_result(hr).map(|_| AudioClient(p as *mut _))
+    }
+}
+impl AudioClient {
+    pub fn initialize_shared(&self, buffer_duration: REFERENCE_TIME, wfx: &WAVEFORMATEX) -> IOResult<()> {
+        let hr = unsafe {
+            (*self.0).Initialize(AUDCLNT_SHAREMODE_SHARED, 0,
+                buffer_duration, 0, wfx as *const _, std::ptr::null_mut())
+        };
+
+        hr_into_result(hr)
+    }
+    pub fn mix_format(&self) -> IOResult<WAVEFORMATEX> {
+        let mut p = std::ptr::null_mut();
+        hr_into_result(unsafe { (*self.0).GetMixFormat(&mut p as *mut _) })?;
+        let r: WAVEFORMATEX = unsafe { *p };
+        unsafe { CoTaskMemFree(p as *mut _) };
+        return Ok(r);
+    }
+
+    pub fn buffer_size(&self) -> IOResult<usize> {
+        let mut us = 0;
+        let hr = unsafe { (*self.0).GetBufferSize(&mut us) };
+
+        hr_into_result(hr).map(|_| us as usize)
+    }
+}
+
+pub struct PropVariant(PROPVARIANT);
+impl PropVariant {
+    pub fn init() -> Self { unsafe { PropVariant(std::mem::zeroed()) } }
+    pub unsafe fn as_osstr_unchecked(&self) -> OsString {
+        let ptr = std::mem::transmute::<_, &[*const u16]>(&self.0.data[..])[0];
+        let len = (0..).find(|&x| *ptr.offset(x) == 0).expect("Infinite Length");
+        let slice = std::slice::from_raw_parts(ptr, len as _);
+        
+        OsString::from_wide(slice)
+    }
+}
+impl Drop for PropVariant { fn drop(&mut self) { unsafe { PropVariantClear(&mut self.0); } } }
+winapi::DEFINE_PROPERTYKEY!(PKEY_DeviceInterface_FriendlyName,
+    0x026e516e, 0xb814, 0x414b, 0x83, 0xcd, 0x85, 0x6d, 0x6f, 0xef, 0x48, 0x22, 2);
+winapi::DEFINE_PROPERTYKEY!(PKEY_Device_DeviceDesc,
+    0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 2);
+winapi::DEFINE_PROPERTYKEY!(PKEY_Device_FriendlyName,
+    0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 14);
+impl MMDeviceProperties {
+    pub fn interface_friendly_name(&self) -> IOResult<String> {
+        let mut pv = PropVariant::init();
+        let hr = unsafe { (*self.0).GetValue(&PKEY_DeviceInterface_FriendlyName, &mut pv.0) };
+        
+        hr_into_result(hr).map(|_| unsafe {
+            pv.as_osstr_unchecked().into_string().expect("Decoding FriendlyName")
+        })
+    }
+    pub fn desc(&self) -> IOResult<String> {
+        let mut pv = PropVariant::init();
+        let hr = unsafe { (*self.0).GetValue(&PKEY_Device_DeviceDesc, &mut pv.0) };
+
+        hr_into_result(hr).map(|_| unsafe {
+            pv.as_osstr_unchecked().into_string().expect("Decoding DeviceDesc")
+        })
+    }
+    pub fn friendly_name(&self) -> IOResult<String> {
+        let mut pv = PropVariant::init();
+        let hr = unsafe { (*self.0).GetValue(&PKEY_Device_FriendlyName, &mut pv.0) };
+
+        hr_into_result(hr).map(|_| unsafe {
+            pv.as_osstr_unchecked().into_string().expect("Decoding DeviceDesc")
+        })
+    }
+}
+
+struct NativeSoundEngine {
+
+}
+impl NativeSoundEngine {
+    pub fn new() -> IOResult<Self> {
+        let enumerator = MMDeviceEnumerator::new()?;
+        let dev0 = enumerator.default_audio_endpoint(eRender, eConsole)?;
+        
+        println!("Audio Output Device: {}", dev0.properties()?.friendly_name()?);
+
+        let aclient = dev0.activate().expect("activate");
+        let (samples_per_sec, bits_per_sample) = (44100, 32);
+        let wfx = WAVEFORMATEXTENSIBLE {
+            Format: WAVEFORMATEX {
+                wFormatTag: WAVE_FORMAT_EXTENSIBLE, nChannels: 2,
+                nSamplesPerSec: samples_per_sec, wBitsPerSample: bits_per_sample,
+                nBlockAlign: (bits_per_sample >> 3) * 2,
+                nAvgBytesPerSec: samples_per_sec * 2 * (bits_per_sample >> 3) as u32,
+                cbSize: std::mem::size_of::<WAVEFORMATEXTENSIBLE>() as _
+            },
+            Samples: bits_per_sample,
+            dwChannelMask: SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
+            SubFormat: KSDATAFORMAT_SUBTYPE_PCM
+        };
+        aclient.initialize_shared(10 * 1000 * 10, unsafe { std::mem::transmute(&wfx) }).expect("initialize");
+
+        println!("Processing Buffer Size: {}", aclient.buffer_size()?);
+
+        return Ok(NativeSoundEngine {});
+    }
+}
 
 use std::rc::Rc;
 use bedrock as br;

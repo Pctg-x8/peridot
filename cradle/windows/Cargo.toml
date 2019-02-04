@@ -16,4 +16,7 @@ env_logger = "0.5"
 
 [dependencies.winapi]
 version = "0.3"
-features = ["winuser", "libloaderapi"]
+features = [
+    "winuser", "libloaderapi", "mmdeviceapi", "combaseapi", "propsys", "coml2api", "devpkey", "objbase",
+    "audioclient", "ksmedia"
+]

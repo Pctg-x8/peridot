@@ -170,6 +170,12 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
             .expect("Initializing Backbuffers");
         self.userlib_mut().on_resize(self, new_size);
     }
+
+    pub fn sound_backend_callback(&self, output_buffer: &mut [f32]) {
+        for (n, r) in output_buffer.iter_mut().enumerate() {
+            *r = (440.0 * n as f32 / 44100.0).to_radians().sin() * 0.1;
+        }
+    }
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Drop for Engine<E, PL> {
     fn drop(&mut self) {
