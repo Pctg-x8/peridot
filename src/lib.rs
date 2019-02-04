@@ -27,6 +27,8 @@ pub mod utils; pub use self::utils::*;
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 
+pub mod accel_plane;
+
 pub trait NativeLinker {
     type AssetLoader: PlatformAssetLoader;
     type RenderTargetProvider: PlatformRenderTarget;
