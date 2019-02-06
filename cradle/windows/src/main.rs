@@ -100,9 +100,11 @@ use winapi::shared::devpkey::*;
 use winapi::shared::mmreg::*;
 use winapi::shared::ksmedia::KSDATAFORMAT_SUBTYPE_PCM;
 use winapi::shared::winerror::{HRESULT, SUCCEEDED};
+use winapi::shared::guiddef::IID;
 use std::io::{Result as IOResult, Error as IOError};
 use std::os::windows::ffi::OsStringExt;
 use std::ffi::OsString;
+use std::ptr::NonNull;
 fn hr_into_result(hr: HRESULT) -> IOResult<()> {
     if SUCCEEDED(hr) { Ok(()) } else { Err(IOError::from_raw_os_error(hr)) }
 }
@@ -165,6 +167,16 @@ impl AudioClient {
 
         hr_into_result(hr)
     }
+    pub fn service<IF: InterfaceWrapper>(&self) -> IOResult<IF> {
+        let mut p = std::ptr::null_mut();
+        let hr = unsafe {
+            (*self.0).GetService(&IF::uuidof(), &mut p)
+        };
+
+        hr_into_result(hr).map(|_| IF::wrap(p as *mut _))
+    }
+    pub fn start(&self) -> IOResult<()> { hr_into_result(unsafe { (*self.0).Start() }) }
+
     pub fn mix_format(&self) -> IOResult<WAVEFORMATEX> {
         let mut p = std::ptr::null_mut();
         hr_into_result(unsafe { (*self.0).GetMixFormat(&mut p as *mut _) })?;
@@ -172,14 +184,43 @@ impl AudioClient {
         unsafe { CoTaskMemFree(p as *mut _) };
         return Ok(r);
     }
-
     pub fn buffer_size(&self) -> IOResult<usize> {
         let mut us = 0;
         let hr = unsafe { (*self.0).GetBufferSize(&mut us) };
 
         hr_into_result(hr).map(|_| us as usize)
     }
+    pub fn current_padding(&self) -> IOResult<u32> {
+        let mut v = 0;
+        hr_into_result(unsafe { (*self.0).GetCurrentPadding(&mut v) }).map(|_| v)
+    }
 }
+pub struct AudioRenderClient(NonNull<IAudioRenderClient>);
+pub trait InterfaceWrapper {
+    type Interface: Interface;
+    fn uuidof() -> IID { Self::Interface::uuidof() }
+    fn wrap(p: *mut Self::Interface) -> Self;
+}
+impl InterfaceWrapper for AudioRenderClient {
+    type Interface = IAudioRenderClient;
+    fn wrap(p: *mut IAudioRenderClient) -> Self { AudioRenderClient(NonNull::new(p).expect("null")) }
+}
+impl Drop for AudioRenderClient { fn drop(&mut self) { unsafe { self.0.as_ref().Release(); } } }
+impl AudioRenderClient {
+    pub fn get_buffer(&self, req_frames: u32) -> IOResult<&mut [u8]> {
+        let mut pp = std::ptr::null_mut();
+        let hr = unsafe { self.0.as_ref().GetBuffer(req_frames, &mut pp) };
+
+        hr_into_result(hr).map(|_| unsafe { std::slice::from_raw_parts_mut(pp, req_frames as _) })
+    }
+    fn release_buffer(&self, written_bytes: u32, silence: bool) -> IOResult<()> {
+        hr_into_result(unsafe {
+            self.0.as_ref().ReleaseBuffer(written_bytes, if silence { AUDCLNT_BUFFERFLAGS_SILENT } else { 0 })
+        })
+    }
+}
+unsafe impl Send for AudioClient {}
+unsafe impl Send for AudioRenderClient {}
 
 pub struct PropVariant(PROPVARIANT);
 impl PropVariant {
@@ -226,8 +267,11 @@ impl MMDeviceProperties {
     }
 }
 
+use std::thread::{JoinHandle, Builder as ThreadBuilder, sleep};
+use std::time::Duration;
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 struct NativeSoundEngine {
-
+    process_thread: Option<JoinHandle<()>>, exit_state: Arc<AtomicBool>
 }
 impl NativeSoundEngine {
     pub fn new() -> IOResult<Self> {
@@ -251,10 +295,32 @@ impl NativeSoundEngine {
             SubFormat: KSDATAFORMAT_SUBTYPE_PCM
         };
         aclient.initialize_shared(10 * 1000 * 10, unsafe { std::mem::transmute(&wfx) }).expect("initialize");
+        let srv: AudioRenderClient = aclient.service().expect("No Render Service");
 
-        println!("Processing Buffer Size: {}", aclient.buffer_size()?);
+        let process_buffer_size = (aclient.buffer_size()? >> 1) as u32;
+        println!("Processing Buffer Size: {}", process_buffer_size);
+        let sleep_duration = Duration::from_micros(
+            (1000_1000.0 * process_buffer_size as f64 / wfx.Format.nSamplesPerSec as f64) as _);
 
-        return Ok(NativeSoundEngine {});
+        let exit_state = Arc::new(AtomicBool::new(false));
+        let exit_state_th = exit_state.clone();
+        let process_thread = ThreadBuilder::new().name("Audio Process".to_owned()).spawn(move || {
+            while !exit_state_th.load(Ordering::Acquire) {
+                let pad = aclient.current_padding().expect("Current Padding");
+                let available_bytes = process_buffer_size - pad;
+                let buf = srv.get_buffer(available_bytes).expect("Get Buffer");
+                srv.release_buffer(available_bytes, true).expect("Release Buffer");
+                sleep(sleep_duration);
+            }
+        })?.into();
+
+        return Ok(NativeSoundEngine { process_thread, exit_state });
+    }
+}
+impl Drop for NativeSoundEngine {
+    fn drop(&mut self) {
+        self.exit_state.store(true, Ordering::Relaxed);
+        self.process_thread.take().expect("already joined").join().expect("Joining AudioProcess");
     }
 }
 
