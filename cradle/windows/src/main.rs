@@ -98,7 +98,7 @@ use winapi::um::coml2api::STGM_READ;
 use winapi::um::strmif::REFERENCE_TIME;
 use winapi::shared::devpkey::*;
 use winapi::shared::mmreg::*;
-use winapi::shared::ksmedia::KSDATAFORMAT_SUBTYPE_PCM;
+use winapi::shared::ksmedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 use winapi::shared::winerror::{HRESULT, SUCCEEDED};
 use winapi::shared::guiddef::IID;
 use std::io::{Result as IOResult, Error as IOError};
@@ -207,11 +207,11 @@ impl InterfaceWrapper for AudioRenderClient {
 }
 impl Drop for AudioRenderClient { fn drop(&mut self) { unsafe { self.0.as_ref().Release(); } } }
 impl AudioRenderClient {
-    pub fn get_buffer(&self, req_frames: u32) -> IOResult<&mut [u8]> {
+    pub fn get_buffer_ptr(&self, req_frames: u32) -> IOResult<*mut u8> {
         let mut pp = std::ptr::null_mut();
         let hr = unsafe { self.0.as_ref().GetBuffer(req_frames, &mut pp) };
 
-        hr_into_result(hr).map(|_| unsafe { std::slice::from_raw_parts_mut(pp, req_frames as _) })
+        hr_into_result(hr).map(|_| pp)
     }
     fn release_buffer(&self, written_bytes: u32, silence: bool) -> IOResult<()> {
         hr_into_result(unsafe {
@@ -267,6 +267,8 @@ impl MMDeviceProperties {
     }
 }
 
+use std::f32::consts::PI as PI_F32;
+
 use std::thread::{JoinHandle, Builder as ThreadBuilder, sleep};
 use std::time::Duration;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
@@ -281,7 +283,13 @@ impl NativeSoundEngine {
         println!("Audio Output Device: {}", dev0.properties()?.friendly_name()?);
 
         let aclient = dev0.activate().expect("activate");
-        let (samples_per_sec, bits_per_sample) = (44100, 32);
+        let bits_per_sample = 32;
+        let mf = aclient.mix_format()?;
+        let samples_per_sec = mf.nSamplesPerSec;
+        /*println!("device mixformat: bits={}", mf.wBitsPerSample);
+        println!("device mixformat: samples/s={}", mf.nSamplesPerSec);
+        println!("device mixformat: channels={}", mf.nChannels);
+        println!("device mixformat: tag={}", mf.wFormatTag);*/
         let wfx = WAVEFORMATEXTENSIBLE {
             Format: WAVEFORMATEX {
                 wFormatTag: WAVE_FORMAT_EXTENSIBLE, nChannels: 2,
@@ -292,7 +300,7 @@ impl NativeSoundEngine {
             },
             Samples: bits_per_sample,
             dwChannelMask: SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
-            SubFormat: KSDATAFORMAT_SUBTYPE_PCM
+            SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
         };
         aclient.initialize_shared(10 * 1000 * 10, unsafe { std::mem::transmute(&wfx) }).expect("initialize");
         let srv: AudioRenderClient = aclient.service().expect("No Render Service");
@@ -300,16 +308,24 @@ impl NativeSoundEngine {
         let process_buffer_size = (aclient.buffer_size()? >> 1) as u32;
         println!("Processing Buffer Size: {}", process_buffer_size);
         let sleep_duration = Duration::from_micros(
-            (1000_1000.0 * process_buffer_size as f64 / wfx.Format.nSamplesPerSec as f64) as _);
+            (500_000.0 * process_buffer_size as f64 / wfx.Format.nSamplesPerSec as f64) as _);
 
         let exit_state = Arc::new(AtomicBool::new(false));
         let exit_state_th = exit_state.clone();
         let process_thread = ThreadBuilder::new().name("Audio Process".to_owned()).spawn(move || {
+            let mut frame_accum = 0;
+            aclient.start().expect("Starting AudioRender");
             while !exit_state_th.load(Ordering::Acquire) {
                 let pad = aclient.current_padding().expect("Current Padding");
-                let available_bytes = process_buffer_size - pad;
-                let buf = srv.get_buffer(available_bytes).expect("Get Buffer");
-                srv.release_buffer(available_bytes, true).expect("Release Buffer");
+                let available_frames = process_buffer_size - pad;
+                let bufp = srv.get_buffer_ptr(available_frames).expect("Get Buffer");
+                let buf = unsafe { std::slice::from_raw_parts_mut(bufp as *mut f32, (available_frames << 1) as _) };
+                for (n, b) in buf.chunks_mut(2).enumerate() {
+                    b[0] = (2.0 * PI_F32 * (frame_accum + n) as f32 / (samples_per_sec as f32 / 440.0)).sin() * 0.5;
+                    b[1] = b[0];
+                }
+                frame_accum += available_frames as usize;
+                srv.release_buffer(available_frames, false).expect("Release Buffer");
                 sleep(sleep_duration);
             }
         })?.into();
