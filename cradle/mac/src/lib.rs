@@ -5,6 +5,7 @@ extern crate appkit; use appkit::{NSString, NSRect, CocoaObject};
 extern crate libc; use libc::c_void;
 
 extern crate peridot;
+#[macro_use] extern crate peridot_derive;
 extern crate bedrock as br;
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::Cursor;

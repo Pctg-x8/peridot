@@ -406,11 +406,13 @@ impl RenderPassTemplates {
 
 use std::ffi::CString;
 use vertex_processing_pack::PvpContainer;
-pub struct PvpShaderModules {
+pub struct PvpShaderModules<'d> {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
-    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>
+    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>,
+    vertex_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
+    fragment_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
 }
-impl PvpShaderModules {
+impl<'d> PvpShaderModules<'d> {
     pub fn new(device: &br::Device, container: PvpContainer) -> br::Result<Self> {
         Ok(PvpShaderModules {
             vertex: br::ShaderModule::from_memory(device, &container.vertex_shader)?,
@@ -418,21 +420,28 @@ impl PvpShaderModules {
                 Some(br::ShaderModule::from_memory(device, &b)?)
             }
             else { None },
-            bindings: container.vertex_bindings, attributes: container.vertex_attributes
+            bindings: container.vertex_bindings, attributes: container.vertex_attributes,
+            vertex_spec_constants: None, fragment_spec_constants: None
         })
     }
-    pub fn generate_vps(&self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages {
+    pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d> {
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
-            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"), specinfo: None
+            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"),
+            specinfo: self.vertex_spec_constants.clone()
         }, &self.bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment {
             r.fragment_shader(br::PipelineShader {
-                module: f, entry_name: CString::new("main").expect("unreachable"), specinfo: None
+                module: f, entry_name: CString::new("main").expect("unreachable"),
+                specinfo: self.fragment_spec_constants.clone()
             });
         }
         return r;
     }
+}
+
+pub trait SpecConstantStorage {
+    fn as_pair(&self) -> (Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell);
 }
 
 pub struct LayoutedPipeline(br::Pipeline, Rc<br::PipelineLayout>);

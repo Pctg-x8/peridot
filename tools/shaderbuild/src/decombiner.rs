@@ -65,6 +65,7 @@ impl<'s> Tokenizer<'s> {
         let (_, bytes) = self.0.chars().count_with_bytes_while(|c| c.is_alphanumeric() || c == '_');
         if bytes == 0 { return None; }
         let slice = &self.0[..bytes]; self.0 = &self.0[bytes..];
+        debug!("Tokenizer::strip_ident: {}", slice);
         return Some(slice);
     }
     pub fn ident_list(&mut self) -> Vec<&'s str> {
