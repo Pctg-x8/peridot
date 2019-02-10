@@ -47,7 +47,15 @@ fn main() {
     };
     if w.is_null() { panic!("Create Window Failed!"); }
 
-    let snd = NativeSoundEngine::new().expect("Initializing SoundEngine");
+    let mixer = Arc::new(RwLock::new(AudioMixer::new()));
+    let _snd = NativeSoundEngine::new(mixer.clone()).expect("Initializing SoundEngine");
+
+    let mut ap = PSGSine::new();
+    ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
+    mixer.write().expect("Adding PSGSine").processes.push(Arc::new(RwLock::new(ap)));
+    let mut ap2 = PSGSine::new();
+    ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
+    mixer.write().expect("Adding PSGSine").processes.push(Arc::new(RwLock::new(ap2)));
 
     let nl = NativeLink {
         al: AssetProvider::new(), prt: RenderTargetProvider(w),
@@ -96,7 +104,6 @@ use winapi::um::propidl::*;
 use winapi::um::propsys::IPropertyStore;
 use winapi::um::coml2api::STGM_READ;
 use winapi::um::strmif::REFERENCE_TIME;
-use winapi::shared::devpkey::*;
 use winapi::shared::mmreg::*;
 use winapi::shared::ksmedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 use winapi::shared::winerror::{HRESULT, SUCCEEDED};
@@ -315,6 +322,83 @@ impl<T> UniqueRawSliceMut<T> {
 unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
 unsafe impl<T> Send for UniqueRawSliceMut<T> {}
 
+pub struct AudioMixer {
+    processes: Vec<Arc<RwLock<AudioProcessor + Sync + Send>>>,
+    subprocess_pool: ThreadPool, parallelize: u32,
+    subprocess_buffers: Vec<f32>, subprocess_buffers_refs: Vec<UniqueRawSliceMut<f32>>
+}
+impl AudioMixer {
+    pub fn new() -> Self {
+        let parallelize = (num_cpus::get() >> 1) as u32;
+        println!("Processing Audio with {} threads.", parallelize);
+        let subprocess_pool = ThreadPoolBuilder::new().num_threads(parallelize as _).build()
+            .expect("Building ThreadPool for SubAudioProcesses");
+
+        AudioMixer {
+            parallelize, subprocess_pool, subprocess_buffers: Vec::new(), subprocess_buffers_refs: Vec::new(),
+            processes: Vec::new()
+        }
+    }
+    pub fn set_sample_rate(&mut self, samples_per_sec: f32) {
+        for p in &self.processes { p.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec); }
+    }
+    fn setup_process_frames(&mut self, frames: u32) {
+        let frames_dup = frames << 1;
+        self.subprocess_buffers = Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
+        unsafe { self.subprocess_buffers.set_len(frames_dup as usize * self.parallelize as usize); }
+        self.subprocess_buffers_refs = (0..self.parallelize).map(|i| unsafe {
+            let ofs = i * frames_dup;
+            UniqueRawSliceMut {
+                ptr: self.subprocess_buffers.as_mut_ptr().offset(ofs as isize),
+                length: frames_dup as usize
+            }
+        }).collect::<Vec<_>>();
+    }
+    /// return true if silence
+    pub fn process(&mut self, buf: &mut [f32]) -> bool {
+        if buf.len() > self.subprocess_buffers_refs.first().map(|s| s.length).unwrap_or(0) {
+            self.setup_process_frames(buf.len() as _);
+        }
+        for b in &mut self.subprocess_buffers { *b = 0.0; }
+
+        self.subprocess_pool.install(|| for ps in self.processes.chunks(self.parallelize as _) {
+            ps.par_iter().enumerate().for_each(|(i, p)| unsafe {
+                let slice = self.subprocess_buffers_refs[i].as_slice_mut();
+                p.write().expect("WriteLocking").process(&mut slice[..buf.len()]);
+            });
+        });
+        for sp in &self.subprocess_buffers_refs {
+            let buflen = buf.len();
+            for (b, sp) in buf.iter_mut().zip(unsafe { sp.as_slice()[..buflen].iter() }) {
+                *b += sp;
+            }
+        }
+
+        return self.processes.is_empty();
+    }
+}
+
+/// Applies AudioProcessors in serial. And applies amplification at output.
+pub struct AudioEffectStack {
+    pub effect_stack: Vec<Arc<RwLock<AudioProcessor>>>, pub output_amp: f32
+}
+impl AudioEffectStack {
+    pub fn new() -> Self { AudioEffectStack { effect_stack: Vec::new(), output_amp: 1.0 } }
+}
+impl AudioProcessor for AudioEffectStack {
+    fn set_sample_rate(&mut self, samples_per_sec: f32) {
+        for e in &self.effect_stack { e.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec); }
+    }
+    fn process(&mut self, flattened_buffer: &mut [f32]) {
+        for e in &self.effect_stack {
+            e.write().expect("Processing in AudioEffectStack").process(flattened_buffer);
+        }
+        if self.output_amp != 1.0 {
+            for b in flattened_buffer { *b *= self.output_amp; }
+        }
+    }
+}
+
 use std::thread::{JoinHandle, Builder as ThreadBuilder, sleep};
 use std::time::Duration;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering, RwLock};
@@ -322,20 +406,15 @@ struct NativeSoundEngine {
     process_thread: Option<JoinHandle<()>>, exit_state: Arc<AtomicBool>
 }
 impl NativeSoundEngine {
-    pub fn new() -> IOResult<Self> {
+    pub fn new(mixer: Arc<RwLock<AudioMixer>>) -> IOResult<Self> {
         let exit_state = Arc::new(AtomicBool::new(false));
         let exit_state_th = exit_state.clone();
-        let mut ap = PSGSine::new();
-        ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
-        let mut ap2 = PSGSine::new();
-        ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
-        let mut processes: Vec<Arc<RwLock<AudioProcessor + Sync + Send>>> = vec![Arc::new(RwLock::new(ap)), Arc::new(RwLock::new(ap2))];
 
         let process_thread = ThreadBuilder::new().name("Audio Process".to_owned()).spawn(move || {
             let enumerator = MMDeviceEnumerator::new().expect("Enumerating MMDevices");
             let dev0 = enumerator.default_audio_endpoint(eRender, eConsole).expect("Getting Default AudioEP");
             
-            println!("Audio Output Device: {}",
+            info!("Audio Output Device: {}",
                 dev0.properties().expect("Getting DeviceProps")
                     .friendly_name().expect("Getting FriendlyName of the Device"));
 
@@ -362,48 +441,24 @@ impl NativeSoundEngine {
             aclient.initialize_shared(10 * 1000 * 10, unsafe { std::mem::transmute(&wfx) }).expect("initialize");
 
             let process_frames = aclient.buffer_size().expect("Getting BufferSize") as u32;
-            println!("Processing Buffer Size: {}", process_frames);
+            info!("Processing Buffer Size: {}", process_frames);
             let sleep_duration = Duration::from_micros(
-            (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _);
+                (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _);
             let srv: AudioRenderClient = aclient.service().expect("No Render Service");
-            for p in &processes { p.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec as _); }
+            mixer.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec as _);
 
-            let parallelize = num_cpus::get() >> 1;
-            println!("Processing Audio with {} threads.", parallelize);
-            let process_frames_dup = process_frames << 1;
-            let subprocess_pool = ThreadPoolBuilder::new().num_threads(parallelize).build()
-                .expect("Building ThreadPool for SubAudioProcesses");
-            let mut subprocess_buffers = Vec::<f32>::with_capacity(process_frames_dup as usize * parallelize);
-            unsafe { subprocess_buffers.set_len(process_frames_dup as usize * parallelize); }
-            let subprocess_buffers_refs = (0..parallelize).map(|i| unsafe {
-                let ofs = i * process_frames_dup as usize;
-                UniqueRawSliceMut {
-                    ptr: subprocess_buffers.as_mut_ptr().offset(ofs as isize),
-                    length: process_frames_dup as usize
-                }
-            }).collect::<Vec<_>>();
-
+            info!("Starting AudioRender...");
             aclient.start().expect("Starting AudioRender");
             while !exit_state_th.load(Ordering::Acquire) {
                 let pad = aclient.current_padding().expect("Current Padding");
                 let available_frames = process_frames - pad;
                 let bufp = srv.get_buffer_ptr(available_frames).expect("Get Buffer");
                 let buf = unsafe { std::slice::from_raw_parts_mut(bufp as *mut f32, (available_frames << 1) as _) };
-                for b in buf.iter_mut().chain(subprocess_buffers.iter_mut()) { *b = 0.0; }
+                for b in buf.iter_mut() { *b = 0.0; }
+                
+                let silence = mixer.write().expect("Processing WriteLock").process(buf);
 
-                subprocess_pool.install(|| for ps in processes.chunks_mut(parallelize) {
-                    ps.par_iter_mut().enumerate().for_each(|(i, p)| unsafe {
-                        let slice = subprocess_buffers_refs[i].as_slice_mut();
-                        p.write().expect("WriteLocking").process(&mut slice[..(available_frames << 1) as usize]);
-                    });
-                });
-                for sp in &subprocess_buffers_refs {
-                    for (b, sp) in buf.iter_mut().zip(unsafe { sp.as_slice()[..(available_frames << 1) as usize].iter() }) {
-                        *b += sp;
-                    }
-                }
-
-                srv.release_buffer(available_frames, processes.is_empty()).expect("Release Buffer");
+                srv.release_buffer(available_frames, silence).expect("Release Buffer");
                 sleep(sleep_duration);
             }
         })?.into();
