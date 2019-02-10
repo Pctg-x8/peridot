@@ -7,8 +7,8 @@ use winapi::um::winuser::{
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 use winapi::um::libloaderapi::{GetModuleHandleA};
 use winapi::shared::windef::{RECT, HWND};
-use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
-use winapi::um::combaseapi::CoInitializeEx;
+use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD, DWORD};
+use winapi::um::combaseapi::{CoInitializeEx, CoUninitialize};
 use winapi::um::objbase::COINIT_MULTITHREADED;
 
 #[macro_use] extern crate log;
@@ -17,12 +17,17 @@ mod userlib;
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
 fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
+struct CoScopeGuard;
+impl CoScopeGuard {
+    fn init(apartment: DWORD) -> IOResult<Self> {
+        unsafe { hr_into_result(CoInitializeEx(std::ptr::null_mut(), apartment)).map(|_| CoScopeGuard) }
+    }
+}
+impl Drop for CoScopeGuard { fn drop(&mut self) { unsafe { CoUninitialize() } } }
 
 fn main() {
     env_logger::init();
-    unsafe {
-        hr_into_result(CoInitializeEx(std::ptr::null_mut(), COINIT_MULTITHREADED)).expect("Initializing COM");
-    }
+    let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
 
     let wca = WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
@@ -47,6 +52,12 @@ fn main() {
     };
     if w.is_null() { panic!("Create Window Failed!"); }
 
+    let nl = NativeLink {
+        al: AssetProvider::new(), prt: RenderTargetProvider(w),
+        input: InputHandler::new()
+    };
+    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
+
     let mixer = Arc::new(RwLock::new(AudioMixer::new()));
     let _snd = NativeSoundEngine::new(mixer.clone()).expect("Initializing SoundEngine");
 
@@ -56,12 +67,6 @@ fn main() {
     let mut ap2 = PSGSine::new();
     ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
     mixer.write().expect("Adding PSGSine").processes.push(Arc::new(RwLock::new(ap2)));
-
-    let nl = NativeLink {
-        al: AssetProvider::new(), prt: RenderTargetProvider(w),
-        input: InputHandler::new()
-    };
-    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
     
     unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, std::mem::transmute(&mut e)); }
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
