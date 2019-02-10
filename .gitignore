@@ -3,3 +3,4 @@ target/
 **/*.rs.bk
 *.lock
 android-build/
+.vscode/
