@@ -13,6 +13,8 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
 peridot = { path = "../.." }
 log = "0.4"
 env_logger = "0.5"
+rayon = "1.0"
+num_cpus = "1.0"
 
 [dependencies.winapi]
 version = "0.3"

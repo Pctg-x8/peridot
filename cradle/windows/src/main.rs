@@ -213,9 +213,9 @@ impl AudioRenderClient {
 
         hr_into_result(hr).map(|_| pp)
     }
-    fn release_buffer(&self, written_bytes: u32, silence: bool) -> IOResult<()> {
+    fn release_buffer(&self, written_frames: u32, silence: bool) -> IOResult<()> {
         hr_into_result(unsafe {
-            self.0.as_ref().ReleaseBuffer(written_bytes, if silence { AUDCLNT_BUFFERFLAGS_SILENT } else { 0 })
+            self.0.as_ref().ReleaseBuffer(written_frames, if silence { AUDCLNT_BUFFERFLAGS_SILENT } else { 0 })
         })
     }
 }
@@ -268,64 +268,142 @@ impl MMDeviceProperties {
 }
 
 use std::f32::consts::PI as PI_F32;
+use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
+use num_cpus;
+
+pub trait AudioProcessor {
+    fn process(&mut self, flattened_buffer: &mut [f32]);
+    fn set_sample_rate(&mut self, _samples_per_sec: f32) {}
+}
+pub struct PSGSine { waverate: f32, current_hz: f32, sample_rate: f32, amp: f32, current_frame: u64 }
+impl PSGSine {
+    pub fn new() -> Self {
+        PSGSine { waverate: 44100.0 / 441.0, current_hz: 441.0, sample_rate: 44100.0, amp: 1.0, current_frame: 0 }
+    }
+    pub fn set_osc_hz(&mut self, hz: f32) {
+        self.current_hz = hz;
+        self.waverate = self.sample_rate / self.current_hz;
+    }
+    pub fn set_amp(&mut self, amp: f32) { self.amp = amp; }
+}
+impl AudioProcessor for PSGSine {
+    fn set_sample_rate(&mut self, samples_per_sec: f32) {
+        self.sample_rate = samples_per_sec;
+        self.waverate = self.sample_rate / self.current_hz;
+    }
+    fn process(&mut self, flattened_buffer: &mut [f32]) {
+        for (n, b) in flattened_buffer.chunks_mut(2).enumerate() {
+            let v = (2.0 * PI_F32 * (self.current_frame + n as u64) as f32 / self.waverate).sin() * self.amp;
+            b[0] += v;
+            b[1] += v;
+        }
+        self.current_frame += (flattened_buffer.len() >> 1) as u64;
+    }
+}
+
+struct UniqueRawSliceMut<T> {
+    ptr: *mut T, length: usize
+}
+impl<T> UniqueRawSliceMut<T> {
+    unsafe fn as_slice_mut(&self) -> &mut [T] {
+        std::slice::from_raw_parts_mut(self.ptr, self.length)
+    }
+    unsafe fn as_slice(&self) -> &[T] {
+        std::slice::from_raw_parts(self.ptr, self.length)
+    }
+}
+unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
+unsafe impl<T> Send for UniqueRawSliceMut<T> {}
 
 use std::thread::{JoinHandle, Builder as ThreadBuilder, sleep};
 use std::time::Duration;
-use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering, RwLock};
 struct NativeSoundEngine {
     process_thread: Option<JoinHandle<()>>, exit_state: Arc<AtomicBool>
 }
 impl NativeSoundEngine {
     pub fn new() -> IOResult<Self> {
-        let enumerator = MMDeviceEnumerator::new()?;
-        let dev0 = enumerator.default_audio_endpoint(eRender, eConsole)?;
-        
-        println!("Audio Output Device: {}", dev0.properties()?.friendly_name()?);
-
-        let aclient = dev0.activate().expect("activate");
-        let bits_per_sample = 32;
-        let mf = aclient.mix_format()?;
-        let samples_per_sec = mf.nSamplesPerSec;
-        /*println!("device mixformat: bits={}", mf.wBitsPerSample);
-        println!("device mixformat: samples/s={}", mf.nSamplesPerSec);
-        println!("device mixformat: channels={}", mf.nChannels);
-        println!("device mixformat: tag={}", mf.wFormatTag);*/
-        let wfx = WAVEFORMATEXTENSIBLE {
-            Format: WAVEFORMATEX {
-                wFormatTag: WAVE_FORMAT_EXTENSIBLE, nChannels: 2,
-                nSamplesPerSec: samples_per_sec, wBitsPerSample: bits_per_sample,
-                nBlockAlign: (bits_per_sample >> 3) * 2,
-                nAvgBytesPerSec: samples_per_sec * 2 * (bits_per_sample >> 3) as u32,
-                cbSize: std::mem::size_of::<WAVEFORMATEXTENSIBLE>() as _
-            },
-            Samples: bits_per_sample,
-            dwChannelMask: SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
-            SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
-        };
-        aclient.initialize_shared(10 * 1000 * 10, unsafe { std::mem::transmute(&wfx) }).expect("initialize");
-        let srv: AudioRenderClient = aclient.service().expect("No Render Service");
-
-        let process_buffer_size = (aclient.buffer_size()? >> 1) as u32;
-        println!("Processing Buffer Size: {}", process_buffer_size);
-        let sleep_duration = Duration::from_micros(
-            (500_000.0 * process_buffer_size as f64 / wfx.Format.nSamplesPerSec as f64) as _);
-
         let exit_state = Arc::new(AtomicBool::new(false));
         let exit_state_th = exit_state.clone();
+        let mut ap = PSGSine::new();
+        ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
+        let mut ap2 = PSGSine::new();
+        ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
+        let mut processes: Vec<Arc<RwLock<AudioProcessor + Sync + Send>>> = vec![Arc::new(RwLock::new(ap)), Arc::new(RwLock::new(ap2))];
+
         let process_thread = ThreadBuilder::new().name("Audio Process".to_owned()).spawn(move || {
-            let mut frame_accum = 0;
+            let enumerator = MMDeviceEnumerator::new().expect("Enumerating MMDevices");
+            let dev0 = enumerator.default_audio_endpoint(eRender, eConsole).expect("Getting Default AudioEP");
+            
+            println!("Audio Output Device: {}",
+                dev0.properties().expect("Getting DeviceProps")
+                    .friendly_name().expect("Getting FriendlyName of the Device"));
+
+            let aclient = dev0.activate().expect("activate");
+            let bits_per_sample = 32;
+            let mf = aclient.mix_format().expect("Getting DefaultMixFormat");
+            let samples_per_sec = mf.nSamplesPerSec;
+            /*println!("device mixformat: bits={}", mf.wBitsPerSample);
+            println!("device mixformat: samples/s={}", mf.nSamplesPerSec);
+            println!("device mixformat: channels={}", mf.nChannels);
+            println!("device mixformat: tag={}", mf.wFormatTag);*/
+            let wfx = WAVEFORMATEXTENSIBLE {
+                Format: WAVEFORMATEX {
+                    wFormatTag: WAVE_FORMAT_EXTENSIBLE, nChannels: 2,
+                    nSamplesPerSec: samples_per_sec, wBitsPerSample: bits_per_sample,
+                    nBlockAlign: (bits_per_sample >> 3) * 2,
+                    nAvgBytesPerSec: samples_per_sec * 2 * (bits_per_sample >> 3) as u32,
+                    cbSize: std::mem::size_of::<WAVEFORMATEXTENSIBLE>() as _
+                },
+                Samples: bits_per_sample,
+                dwChannelMask: SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
+                SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+            };
+            aclient.initialize_shared(10 * 1000 * 10, unsafe { std::mem::transmute(&wfx) }).expect("initialize");
+
+            let process_frames = aclient.buffer_size().expect("Getting BufferSize") as u32;
+            println!("Processing Buffer Size: {}", process_frames);
+            let sleep_duration = Duration::from_micros(
+            (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _);
+            let srv: AudioRenderClient = aclient.service().expect("No Render Service");
+            for p in &processes { p.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec as _); }
+
+            let parallelize = num_cpus::get() >> 1;
+            println!("Processing Audio with {} threads.", parallelize);
+            let process_frames_dup = process_frames << 1;
+            let subprocess_pool = ThreadPoolBuilder::new().num_threads(parallelize).build()
+                .expect("Building ThreadPool for SubAudioProcesses");
+            let mut subprocess_buffers = Vec::<f32>::with_capacity(process_frames_dup as usize * parallelize);
+            unsafe { subprocess_buffers.set_len(process_frames_dup as usize * parallelize); }
+            let subprocess_buffers_refs = (0..parallelize).map(|i| unsafe {
+                let ofs = i * process_frames_dup as usize;
+                UniqueRawSliceMut {
+                    ptr: subprocess_buffers.as_mut_ptr().offset(ofs as isize),
+                    length: process_frames_dup as usize
+                }
+            }).collect::<Vec<_>>();
+
             aclient.start().expect("Starting AudioRender");
             while !exit_state_th.load(Ordering::Acquire) {
                 let pad = aclient.current_padding().expect("Current Padding");
-                let available_frames = process_buffer_size - pad;
+                let available_frames = process_frames - pad;
                 let bufp = srv.get_buffer_ptr(available_frames).expect("Get Buffer");
                 let buf = unsafe { std::slice::from_raw_parts_mut(bufp as *mut f32, (available_frames << 1) as _) };
-                for (n, b) in buf.chunks_mut(2).enumerate() {
-                    b[0] = (2.0 * PI_F32 * (frame_accum + n) as f32 / (samples_per_sec as f32 / 440.0)).sin() * 0.5;
-                    b[1] = b[0];
+                for b in buf.iter_mut().chain(subprocess_buffers.iter_mut()) { *b = 0.0; }
+
+                subprocess_pool.install(|| for ps in processes.chunks_mut(parallelize) {
+                    ps.par_iter_mut().enumerate().for_each(|(i, p)| unsafe {
+                        let slice = subprocess_buffers_refs[i].as_slice_mut();
+                        p.write().expect("WriteLocking").process(&mut slice[..(available_frames << 1) as usize]);
+                    });
+                });
+                for sp in &subprocess_buffers_refs {
+                    for (b, sp) in buf.iter_mut().zip(unsafe { sp.as_slice()[..(available_frames << 1) as usize].iter() }) {
+                        *b += sp;
+                    }
                 }
-                frame_accum += available_frames as usize;
-                srv.release_buffer(available_frames, false).expect("Release Buffer");
+
+                srv.release_buffer(available_frames, processes.is_empty()).expect("Release Buffer");
                 sleep(sleep_duration);
             }
         })?.into();
