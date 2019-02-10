@@ -152,6 +152,16 @@ impl MMDevice {
 }
 impl Drop for MMDeviceProperties { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
 
+pub struct CoBox<T>(NonNull<T>);
+impl<T> CoBox<T> {
+    pub fn new(ptr: *mut T) -> Option<Self> { NonNull::new(ptr).map(CoBox) }
+}
+impl<T> std::ops::Deref for CoBox<T> { type Target = T; fn deref(&self) -> &T { unsafe { self.0.as_ref() } } }
+impl<T> std::ops::DerefMut for CoBox<T> { fn deref_mut(&mut self) -> &mut T { unsafe { self.0.as_mut() } } }
+impl<T> Drop for CoBox<T> {
+    fn drop(&mut self) { unsafe { CoTaskMemFree(self.0.as_ptr() as *mut _); } }
+}
+
 pub struct AudioClient(*mut IAudioClient);
 impl Drop for AudioClient { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
 impl MMDevice {
@@ -176,20 +186,16 @@ impl AudioClient {
     }
     pub fn service<IF: InterfaceWrapper>(&self) -> IOResult<IF> {
         let mut p = std::ptr::null_mut();
-        let hr = unsafe {
-            (*self.0).GetService(&IF::uuidof(), &mut p)
-        };
+        let hr = unsafe { (*self.0).GetService(&IF::uuidof(), &mut p) };
 
         hr_into_result(hr).map(|_| IF::wrap(p as *mut _))
     }
     pub fn start(&self) -> IOResult<()> { hr_into_result(unsafe { (*self.0).Start() }) }
 
-    pub fn mix_format(&self) -> IOResult<WAVEFORMATEX> {
+    pub fn mix_format(&self) -> IOResult<CoBox<WAVEFORMATEX>> {
         let mut p = std::ptr::null_mut();
         hr_into_result(unsafe { (*self.0).GetMixFormat(&mut p as *mut _) })?;
-        let r: WAVEFORMATEX = unsafe { *p };
-        unsafe { CoTaskMemFree(p as *mut _) };
-        return Ok(r);
+        return Ok(CoBox::new(p).expect("NullPointer Returned"));
     }
     pub fn buffer_size(&self) -> IOResult<usize> {
         let mut us = 0;
