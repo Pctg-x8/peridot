@@ -58,16 +58,18 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
         let mut ctx2 = vg::Context::new();
         {
+            let thick = 1.0;
             let mut f = ctx2.begin_figure(vg::FillRule::Winding);
-            f.move_to(Vector2(190.0, -210.0).into());
-            f.line_to(Vector2(190.0, -290.0).into());
-            f.quadratic_bezier_to(Vector2(190.0, -310.0).into(), Vector2(210.0, -310.0).into());
-            f.line_to(Vector2(340.0, -310.0).into());
-            f.quadratic_bezier_to(Vector2(360.0, -310.0).into(), Vector2(360.0, -290.0).into());
-            f.line_to(Vector2(360.0, -210.0).into());
-            f.quadratic_bezier_to(Vector2(360.0, -190.0).into(), Vector2(340.0, -190.0).into());
-            f.line_to(Vector2(210.0, -190.0).into());
-            f.quadratic_bezier_to(Vector2(190.0, -190.0).into(), Vector2(190.0, -210.0).into());
+            f.move_to(Vector2(200.0 - thick, -210.0).into());
+            f.line_to(Vector2(200.0 - thick, -290.0).into());
+            f.quadratic_bezier_to(Vector2(200.0 - thick, -300.0 - thick).into(), Vector2(210.0, -300.0 - thick).into());
+            f.line_to(Vector2(340.0, -300.0 - thick).into());
+            f.quadratic_bezier_to(Vector2(350.0 + thick, -300.0 - thick).into(), Vector2(350.0 + thick, -290.0).into());
+            f.line_to(Vector2(350.0 + thick, -210.0).into());
+            f.quadratic_bezier_to(Vector2(350.0 + thick, -200.0 + thick).into(), Vector2(340.0, -200.0 + thick).into());
+            f.line_to(Vector2(210.0, -200.0 + thick).into());
+            f.quadratic_bezier_to(Vector2(200.0 - thick, -200.0 + thick).into(),
+                Vector2(200.0 - thick, -210.0).into());
             f.close(); f.end();
         }
 
@@ -182,7 +184,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Creating RenderCB");
         for (r, f) in render_cb.iter().zip(&framebuffers) {
             let mut cbr = r.begin().expect("Start Recoding CB");
-            cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
+            cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
             vg_renderer_params2.default_render_commands(e, &mut cbr, &buffer, &vg_renderer_exinst2);
             vg_renderer_params.default_render_commands(e, &mut cbr, &buffer, &vg_renderer_exinst);
             cbr.end_render_pass();
@@ -219,7 +221,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer) {
-        cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
+        cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
         self.vg_renderer_params2.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst2);
         self.vg_renderer_params.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst);
         cmd.end_render_pass();
