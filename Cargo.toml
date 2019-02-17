@@ -9,6 +9,8 @@ edition = "2018"
 pathfinder_partitioner = { path = "extras/pathfinder/partitioner" }
 log = "*"
 libc = "*"
+rayon = "1.0"
+num_cpus = "1.0"
 
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }

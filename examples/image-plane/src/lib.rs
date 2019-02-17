@@ -6,12 +6,14 @@ use peridot::math::{
 };
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, MemoryBadget, BufferPrealloc, BufferContent,
-    SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline
+    SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
+    audio::PreloadedPlayableWav
 };
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
 use peridot::Discardable;
+use std::sync::{RwLock, Arc};
 
 pub struct Game<PL: peridot::NativeLinker> {
     ph: PhantomData<*const PL>, buffer: peridot::Buffer, rot: f32, stg_buffer: peridot::Buffer,
@@ -28,6 +30,9 @@ impl<PL: peridot::NativeLinker> Game<PL> {
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
+
+        let bgm = Arc::new(RwLock::new(e.load::<PreloadedPlayableWav>("starlucent").expect("Loading BGM")));
+        e.audio_mixer().write().expect("Adding AudioProcess").add_process(bgm.clone());
 
         let mut bp = BufferPrealloc::new(e.graphics());
         let uniform_offset = bp.add(BufferContent::uniform::<Uniform>());
@@ -140,6 +145,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
         }
+
+        bgm.write().expect("Starting BGM").play();
 
         Game {
             buffer, render_cb, renderpass, framebuffers,

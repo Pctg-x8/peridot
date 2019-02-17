@@ -57,16 +57,14 @@ fn main() {
         input: InputHandler::new()
     };
     let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
+    let _snd = NativeSoundEngine::new(e.audio_mixer().clone()).expect("Initializing SoundEngine");
 
-    let mixer = Arc::new(RwLock::new(AudioMixer::new()));
-    let _snd = NativeSoundEngine::new(mixer.clone()).expect("Initializing SoundEngine");
-
-    let mut ap = PSGSine::new();
+    /*let mut ap = PSGSine::new();
     ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
-    mixer.write().expect("Adding PSGSine").processes.push(Arc::new(RwLock::new(ap)));
+    e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap)));
     let mut ap2 = PSGSine::new();
     ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
-    mixer.write().expect("Adding PSGSine").processes.push(Arc::new(RwLock::new(ap2)));
+    e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap2)));*/
     
     unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, std::mem::transmute(&mut e)); }
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
@@ -158,9 +156,7 @@ impl MMDevice {
 impl Drop for MMDeviceProperties { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
 
 pub struct CoBox<T>(NonNull<T>);
-impl<T> CoBox<T> {
-    pub fn new(ptr: *mut T) -> Option<Self> { NonNull::new(ptr).map(CoBox) }
-}
+impl<T> CoBox<T> { pub fn new(ptr: *mut T) -> Option<Self> { NonNull::new(ptr).map(CoBox) } }
 impl<T> std::ops::Deref for CoBox<T> { type Target = T; fn deref(&self) -> &T { unsafe { self.0.as_ref() } } }
 impl<T> std::ops::DerefMut for CoBox<T> { fn deref_mut(&mut self) -> &mut T { unsafe { self.0.as_mut() } } }
 impl<T> Drop for CoBox<T> {
@@ -237,8 +233,6 @@ impl AudioRenderClient {
         })
     }
 }
-unsafe impl Send for AudioClient {}
-unsafe impl Send for AudioRenderClient {}
 
 pub struct PropVariant(PROPVARIANT);
 impl PropVariant {
@@ -286,13 +280,6 @@ impl MMDeviceProperties {
 }
 
 use std::f32::consts::PI as PI_F32;
-use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
-use num_cpus;
-
-pub trait AudioProcessor {
-    fn process(&mut self, flattened_buffer: &mut [f32]);
-    fn set_sample_rate(&mut self, _samples_per_sec: f32) {}
-}
 pub struct PSGSine { waverate: f32, current_hz: f32, sample_rate: f32, amp: f32, current_frame: u64 }
 impl PSGSine {
     pub fn new() -> Self {
@@ -304,7 +291,7 @@ impl PSGSine {
     }
     pub fn set_amp(&mut self, amp: f32) { self.amp = amp; }
 }
-impl AudioProcessor for PSGSine {
+impl peridot::audio::Processor for PSGSine {
     fn set_sample_rate(&mut self, samples_per_sec: f32) {
         self.sample_rate = samples_per_sec;
         self.waverate = self.sample_rate / self.current_hz;
@@ -319,97 +306,6 @@ impl AudioProcessor for PSGSine {
     }
 }
 
-struct UniqueRawSliceMut<T> {
-    ptr: *mut T, length: usize
-}
-impl<T> UniqueRawSliceMut<T> {
-    unsafe fn as_slice_mut(&self) -> &mut [T] {
-        std::slice::from_raw_parts_mut(self.ptr, self.length)
-    }
-    unsafe fn as_slice(&self) -> &[T] {
-        std::slice::from_raw_parts(self.ptr, self.length)
-    }
-}
-unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
-unsafe impl<T> Send for UniqueRawSliceMut<T> {}
-
-pub struct AudioMixer {
-    processes: Vec<Arc<RwLock<AudioProcessor + Sync + Send>>>,
-    subprocess_pool: ThreadPool, parallelize: u32,
-    subprocess_buffers: Vec<f32>, subprocess_buffers_refs: Vec<UniqueRawSliceMut<f32>>
-}
-impl AudioMixer {
-    pub fn new() -> Self {
-        let parallelize = (num_cpus::get() >> 1) as u32;
-        println!("Processing Audio with {} threads.", parallelize);
-        let subprocess_pool = ThreadPoolBuilder::new().num_threads(parallelize as _).build()
-            .expect("Building ThreadPool for SubAudioProcesses");
-
-        AudioMixer {
-            parallelize, subprocess_pool, subprocess_buffers: Vec::new(), subprocess_buffers_refs: Vec::new(),
-            processes: Vec::new()
-        }
-    }
-    pub fn set_sample_rate(&mut self, samples_per_sec: f32) {
-        for p in &self.processes { p.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec); }
-    }
-    fn setup_process_frames(&mut self, frames: u32) {
-        let frames_dup = frames << 1;
-        self.subprocess_buffers = Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
-        unsafe { self.subprocess_buffers.set_len(frames_dup as usize * self.parallelize as usize); }
-        self.subprocess_buffers_refs = (0..self.parallelize).map(|i| unsafe {
-            let ofs = i * frames_dup;
-            UniqueRawSliceMut {
-                ptr: self.subprocess_buffers.as_mut_ptr().offset(ofs as isize),
-                length: frames_dup as usize
-            }
-        }).collect::<Vec<_>>();
-    }
-    /// return true if silence
-    pub fn process(&mut self, buf: &mut [f32]) -> bool {
-        if buf.len() > self.subprocess_buffers_refs.first().map(|s| s.length).unwrap_or(0) {
-            self.setup_process_frames(buf.len() as _);
-        }
-        for b in &mut self.subprocess_buffers { *b = 0.0; }
-
-        self.subprocess_pool.install(|| for ps in self.processes.chunks(self.parallelize as _) {
-            ps.par_iter().enumerate().for_each(|(i, p)| unsafe {
-                let slice = self.subprocess_buffers_refs[i].as_slice_mut();
-                p.write().expect("WriteLocking").process(&mut slice[..buf.len()]);
-            });
-        });
-        for sp in &self.subprocess_buffers_refs {
-            let buflen = buf.len();
-            for (b, sp) in buf.iter_mut().zip(unsafe { sp.as_slice()[..buflen].iter() }) {
-                *b += sp;
-            }
-        }
-
-        return self.processes.is_empty();
-    }
-}
-
-/// Applies AudioProcessors in serial. And applies amplification at output.
-pub struct AudioEffectStack {
-    pub effect_stack: Vec<Arc<RwLock<AudioProcessor>>>, pub output_amp: f32
-}
-impl AudioEffectStack {
-    pub fn new() -> Self { AudioEffectStack { effect_stack: Vec::new(), output_amp: 1.0 } }
-}
-impl AudioProcessor for AudioEffectStack {
-    fn set_sample_rate(&mut self, samples_per_sec: f32) {
-        for e in &self.effect_stack { e.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec); }
-    }
-    fn process(&mut self, flattened_buffer: &mut [f32]) {
-        for e in &self.effect_stack {
-            e.write().expect("Processing in AudioEffectStack").process(flattened_buffer);
-        }
-        if self.output_amp != 1.0 {
-            for b in flattened_buffer { *b *= self.output_amp; }
-        }
-    }
-}
-
 use std::thread::{JoinHandle, Builder as ThreadBuilder, sleep};
 use std::time::Duration;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering, RwLock};
@@ -417,7 +313,7 @@ struct NativeSoundEngine {
     process_thread: Option<JoinHandle<()>>, exit_state: Arc<AtomicBool>
 }
 impl NativeSoundEngine {
-    pub fn new(mixer: Arc<RwLock<AudioMixer>>) -> IOResult<Self> {
+    pub fn new(mixer: Arc<RwLock<peridot::audio::Mixer>>) -> IOResult<Self> {
         let exit_state = Arc::new(AtomicBool::new(false));
         let exit_state_th = exit_state.clone();
 

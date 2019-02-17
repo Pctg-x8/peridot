@@ -17,6 +17,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Result as IOResult;
 use std::cell::{Ref, RefMut, RefCell};
+use std::sync::{Arc, RwLock};
 
 mod window; use self::window::WindowRenderTargets;
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
@@ -26,6 +27,7 @@ pub mod utils; pub use self::utils::*;
 
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
+pub mod audio;
 
 pub trait NativeLinker {
     type AssetLoader: PlatformAssetLoader;
@@ -56,7 +58,8 @@ impl<PL: NativeLinker> EngineEvents<PL> for () {
 
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
     nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
+    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>,
+    amixer: Arc<RwLock<audio::Mixer>>
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
@@ -66,7 +69,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
         let mut this = Engine {
-            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
+            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into(),
+            amixer: Arc::new(RwLock::new(audio::Mixer::new()))
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
@@ -101,6 +105,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn submit_buffered_commands(&self, batches: &[br::SubmissionBatch], fence: &br::Fence) -> br::Result<()> {
         self.g.graphics_queue.q.submit(batches, Some(fence))
     }
+
+    pub fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> { &self.amixer }
 
     pub fn do_update(&mut self)
     {
