@@ -62,9 +62,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             let mut f = ctx2.begin_figure(vg::FillRule::Winding);
             f.move_to(Vector2(200.0 - thick, -210.0).into());
             f.line_to(Vector2(200.0 - thick, -290.0).into());
-            f.quadratic_bezier_to(Vector2(200.0 - thick, -300.0 - thick).into(), Vector2(210.0, -300.0 - thick).into());
+            f.quadratic_bezier_to(Vector2(200.0 - thick * 0.707, -300.0 - thick * 0.707).into(), Vector2(210.0, -300.0 - thick).into());
             f.line_to(Vector2(340.0, -300.0 - thick).into());
-            f.quadratic_bezier_to(Vector2(350.0 + thick, -300.0 - thick).into(), Vector2(350.0 + thick, -290.0).into());
+            f.quadratic_bezier_to(Vector2(350.0 + thick * 0.707, -300.0 - thick * 0.707).into(), Vector2(350.0 + thick, -290.0).into());
             f.line_to(Vector2(350.0 + thick, -210.0).into());
             f.quadratic_bezier_to(Vector2(350.0 + thick, -200.0 + thick).into(), Vector2(340.0, -200.0 + thick).into());
             f.line_to(Vector2(210.0, -200.0 + thick).into());

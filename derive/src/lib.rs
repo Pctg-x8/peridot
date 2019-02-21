@@ -5,9 +5,6 @@ use crate::proc_macro::TokenStream;
 use quote::quote;
 use syn;
 
-// あとで消すメモ
-// 1 1 2 2? <スタッフロール> 4(5?) 2 1
-
 #[proc_macro_derive(SpecConstantStorage)]
 pub fn spec_constant_storage_impl(tok: TokenStream) -> TokenStream {
     let input: syn::DeriveInput = syn::parse(tok).expect("Parsing");
