@@ -1,5 +1,0 @@
-[build]
-target = "aarch64-linux-android"
-
-[target.aarch64-linux-android]
-linker = "aarch64-linux-android-gcc"

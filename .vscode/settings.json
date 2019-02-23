@@ -7,5 +7,7 @@
         "**/.DS_Store": true,
         "**/*.lock": true,
         "**/target": true
-    }
+    },
+    "python.linting.pylintEnabled": false,
+    "rust.features": ["bedrock/VK_EXT_debug_report"]
 }
