@@ -52,7 +52,7 @@ pub mod pmx {
             $reader.read_exact(&mut bytes[..]).map(|_| bytes)
         }};
         (var $reader:expr, $n: expr) => {{
-            let mut bytes = vec![0u8; $n];
+            let mut bytes = Vec::with_capacity($n); unsafe { bytes.set_len($n); }
             $reader.read_exact(&mut bytes).map(|_| bytes)
         }}
     }
@@ -120,6 +120,9 @@ pub mod pmx {
 
     pub trait StringReader {
         fn read_string(&self, reader: &mut Read) -> IOResult<String>;
+        fn read_globalized(&self, reader: &mut Read) -> IOResult<GlobalizedStrings> {
+            Ok(GlobalizedStrings { jp: self.read_string(reader)?, univ: self.read_string(reader)? })
+        }
     }
     pub struct Utf8StringReader;
     pub struct Utf16LEStringReader;
@@ -223,8 +226,7 @@ pub mod pmx {
     impl Vertex {
         pub fn read<R: Read + ?Sized>(reader: &mut R, additional_vec4_count: usize, bone_index_size: IndexSize)
                 -> Result<Self, LoadingError> {
-            let mut head_bytes = vec![0u8; 4 * (3 + 3 + 2 + 4 * additional_vec4_count) + 1];
-            reader.read_exact(&mut head_bytes)?;
+            let head_bytes = ReadExactBytes!(var reader, 4 * (3 + 3 + 2 + 4 * additional_vec4_count) + 1)?;
             let position = Vec3::from_bytes(&head_bytes[..]);
             let normal = Vec3::from_bytes(&head_bytes[4*3..]);
             let uv = Vec2::from_bytes(&head_bytes[4 * (3 + 3)..]);
@@ -235,13 +237,11 @@ pub mod pmx {
             let deform_type = head_bytes[head_bytes.len() - 1];
             let deform = match deform_type {
                 0 => {
-                    let mut bytes = vec![0u8; bone_index_size.bytesize()];
-                    reader.read_exact(&mut bytes)?;
+                    let bytes = ReadExactBytes!(var reader, bone_index_size.bytesize())?;
                     WeightDeform::AffectSingleBone(bone_index_size.from_bytes_signed(&bytes))
                 },
                 1 => {
-                    let mut bytes = vec![0u8; bone_index_size.bytesize() * 2 + 4];
-                    reader.read_exact(&mut bytes)?;
+                    let bytes = ReadExactBytes!(var reader, bone_index_size.bytesize() * 2 + 4)?;
                     let bones = bone_index_size.from_bytes_signed2(&bytes);
                     WeightDeform::AffectDoubleBones(
                         bones[0], bones[1],
@@ -249,8 +249,7 @@ pub mod pmx {
                     )
                 },
                 2 => {
-                    let mut bytes = vec![0u8; bone_index_size.bytesize() * 4 + 4 * 4];
-                    reader.read_exact(&mut bytes)?;
+                    let bytes = ReadExactBytes!(var reader, bone_index_size.bytesize() * 4 + 4 * 4)?;
                     WeightDeform::AffectFourBones(
                         bone_index_size.from_bytes_signed4(&bytes), [
                             f32::from_bytes(&bytes[bone_index_size.bytesize()*4..]),
@@ -261,8 +260,7 @@ pub mod pmx {
                     )
                 },
                 3 => {
-                    let mut bytes = vec![0u8; bone_index_size.bytesize() * 2 + 4 + 4 * 3 * 3];
-                    reader.read_exact(&mut bytes)?;
+                    let bytes = ReadExactBytes!(var reader, bone_index_size.bytesize() * 2 + 4 + 4 * 3 * 3)?;
                     let bones = bone_index_size.from_bytes_signed2(&bytes);
                     WeightDeform::Spherical {
                         b1: bones[0], b2: bones[1],
@@ -273,8 +271,7 @@ pub mod pmx {
                     }
                 },
                 4 => {
-                    let mut bytes = vec![0u8; bone_index_size.bytesize() * 4 + 4 * 4];
-                    reader.read_exact(&mut bytes)?;
+                    let bytes = ReadExactBytes!(var reader, bone_index_size.bytesize() * 4 + 4 * 4)?;
                     WeightDeform::DualQuaternion(
                         bone_index_size.from_bytes_signed4(&bytes),
                         [
@@ -331,12 +328,9 @@ pub mod pmx {
     }
     impl Material {
         pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let name = GlobalizedStrings {
-                jp: header.string_reader.read_string(reader)?,
-                univ: header.string_reader.read_string(reader)?
-            };
-            let mut fixed_bytes = vec![0u8; 4 * (4 + 3 + 1 + 3 + 4 + 1) + 3 + header.index_sizes.texture.bytesize() * 2];
-            reader.read_exact(&mut fixed_bytes)?;
+            let name = header.string_reader.read_globalized(reader)?;
+            let fixed_bytes = ReadExactBytes!(var reader,
+                4 * (4 + 3 + 1 + 3 + 4 + 1) + 3 + header.index_sizes.texture.bytesize() * 2)?;
             let envmap_blend_mode = match fixed_bytes[4*(4+3+1+3+4+1)+1+header.index_sizes.texture.bytesize()*2] {
                 0 => EnvBlendMode::Disabled, 1 => EnvBlendMode::Multiply, 2 => EnvBlendMode::Additive,
                 3 => EnvBlendMode::AdditionalVec4, v => return Err(LoadingError::UnknownEnvBlendMode(v))
@@ -358,11 +352,16 @@ pub mod pmx {
             let surface_affects = i32::read_value1(reader)?;
             return Ok(Material {
                 name, diffuse_color: Vec4::from_bytes(&fixed_bytes[..]),
-                specular_color: Vec3::from_bytes(&fixed_bytes[4*4..]), specular_strength: f32::from_bytes(&fixed_bytes[4*(4+3)..]),
-                ambient_color: Vec3::from_bytes(&fixed_bytes[4*(4+3+1)..]), drawing_flags: fixed_bytes[4*(4+3+1+3)],
-                edge_color: Vec4::from_bytes(&fixed_bytes[4*(4+3+1+3)+1..]), edge_scale: f32::from_bytes(&fixed_bytes[4*(4+3+1+3+4)+1..]),
+                specular_color: Vec3::from_bytes(&fixed_bytes[4*4..]),
+                specular_strength: f32::from_bytes(&fixed_bytes[4*(4+3)..]),
+                ambient_color: Vec3::from_bytes(&fixed_bytes[4*(4+3+1)..]),
+                drawing_flags: fixed_bytes[4*(4+3+1+3)],
+                edge_color: Vec4::from_bytes(&fixed_bytes[4*(4+3+1+3)+1..]),
+                edge_scale: f32::from_bytes(&fixed_bytes[4*(4+3+1+3+4)+1..]),
                 texture_index: IndexValue::from_bytes(&fixed_bytes[4*(4+3+1+3+4+1)+1..], header.index_sizes.texture),
-                envmap_texture_index: IndexValue::from_bytes(&fixed_bytes[4*(4+3+1+3+4+1)+1+header.index_sizes.texture.bytesize()..], header.index_sizes.texture),
+                envmap_texture_index: IndexValue::from_bytes(
+                    &fixed_bytes[4*(4+3+1+3+4+1)+1+header.index_sizes.texture.bytesize()..],
+                    header.index_sizes.texture),
                 envmap_blend_mode, toon_reference, meta, surface_affects
             });
         }
@@ -404,17 +403,14 @@ pub mod pmx {
     }
     impl Bone {
         pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let name = GlobalizedStrings {
-                jp: header.string_reader.read_string(reader)?,
-                univ: header.string_reader.read_string(reader)?
-            };
-            let mut fixed_buf = vec![0u8; 4 * 3 + header.index_sizes.bone.bytesize() + 4 + 2];
-            reader.read_exact(&mut fixed_buf)?;
-            let bone_flags = BoneFlags(unsafe { transmute::<_, &[u16]>(&fixed_buf[fixed_buf.len() - 2..])[0] });
+            let name = header.string_reader.read_globalized(reader)?;
+            let fixed_buf = ReadExactBytes!(var reader, 4 * 3 + header.index_sizes.bone.bytesize() + 4 + 2)?;
+            let bone_flags = BoneFlags(unsafe {
+                *transmute::<_, *const _>(fixed_buf.as_ptr().offset((fixed_buf.len() - 2) as _))
+            });
             
             let tail_position = if bone_flags.indexed_tail_position() {
-                let mut buf = vec![0u8; header.index_sizes.bone.bytesize()];
-                reader.read_exact(&mut buf)?;
+                let buf = ReadExactBytes!(var reader, header.index_sizes.bone.bytesize())?;
                 TailPosition::Indexed(IndexValue::from_bytes(&buf, header.index_sizes.bone))
             }
             else { TailPosition::Raw(Vec3::read_value1(reader)?) };
@@ -520,7 +516,8 @@ pub mod pmx {
             )).map_err(From::from)
         }
         fn read_as_material<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let buf = ReadExactBytes!(var reader, header.index_sizes.material.bytesize() + 1 + 4 * (4 + 3 + 1 + 3 + 4 + 1 + 4 * 3))?;
+            let buf = ReadExactBytes!(var reader,
+                header.index_sizes.material.bytesize() + 1 + 4 * (4 + 3 + 1 + 3 + 4 + 1 + 4 * 3))?;
             Ok(MorphOffset::Material {
                 index: IndexValue::from_bytes(&buf, header.index_sizes.material),
                 diffuse: Vec4::from_bytes(&buf[header.index_sizes.material.bytesize()+1..]),
@@ -555,12 +552,9 @@ pub mod pmx {
     }
     impl Morph {
         pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let name = GlobalizedStrings {
-                jp: header.string_reader.read_string(reader)?,
-                univ: header.string_reader.read_string(reader)?
-            };
+            let name = header.string_reader.read_globalized(reader)?;
             let fixed_bytes = ReadExactBytes!(reader, 2 + 4)?;
-            let morph_type = fixed_bytes[1];
+            let morph_type = fixed_bytes[1] as _;
             let offset_count = <i32 as TypedReader>::from_bytes(&fixed_bytes[2..]);
             let mut offsets = Vec::with_capacity(offset_count as _);
             for _ in 0 .. offset_count {
@@ -576,10 +570,7 @@ pub mod pmx {
                 });
             }
 
-            return Ok(Morph {
-                name, panel_type: unsafe { transmute(fixed_bytes[0]) }, morph_type: unsafe { transmute(fixed_bytes[1]) },
-                offsets
-            });
+            return Ok(Morph { name, panel_type: unsafe { transmute(fixed_bytes[0]) }, morph_type, offsets });
         }
     }
 
@@ -600,18 +591,17 @@ pub mod pmx {
     }
     impl DisplayFrame {
         pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let name = GlobalizedStrings {
-                jp: header.string_reader.read_string(reader)?,
-                univ: header.string_reader.read_string(reader)?
-            };
+            let name = header.string_reader.read_globalized(reader)?;
             let bytes = ReadExactBytes!(reader, 1 + 4)?;
             let frame_count = <i32 as TypedReader>::from_bytes(&bytes[1..]);
             let mut frames = Vec::with_capacity(frame_count as _);
             for _ in 0 .. frame_count {
                 let variant = ReadExactBytes!(reader, 1)?[0];
                 frames.push(match variant {
-                    0 => Frame::Bone(IndexValue::from_bytes(&ReadExactBytes!(var reader, header.index_sizes.bone.bytesize())?, header.index_sizes.bone)),
-                    1 => Frame::Morph(IndexValue::from_bytes(&ReadExactBytes!(var reader, header.index_sizes.morph.bytesize())?, header.index_sizes.morph)),
+                    0 => ReadExactBytes!(var reader, header.index_sizes.bone.bytesize())
+                        .map(|b| Frame::Bone(IndexValue::from_bytes(&b, header.index_sizes.bone)))?,
+                    1 => ReadExactBytes!(var reader, header.index_sizes.morph.bytesize())
+                        .map(|b| Frame::Morph(IndexValue::from_bytes(&b, header.index_sizes.morph)))?,
                     v => return Err(LoadingError::InvalidFrameData(v))
                 });
             }
@@ -630,12 +620,9 @@ pub mod pmx {
     }
     impl RigidBody {
         pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let name = GlobalizedStrings {
-                jp: header.string_reader.read_string(reader)?,
-                univ: header.string_reader.read_string(reader)?
-            };
-            let bytes = ReadExactBytes!(var reader, header.index_sizes.bone.bytesize() +
-                1 + 2 + 1 + 4 * (3 * 3 + 1 * 5) + 1)?;
+            let name = header.string_reader.read_globalized(reader)?;
+            let bytes = ReadExactBytes!(var reader,
+                header.index_sizes.bone.bytesize() + 1 + 2 + 1 + 4 * (3 * 3 + 1 * 5) + 1)?;
             let shape = match bytes[header.index_sizes.bone.bytesize() + 1 + 2] {
                 0 => ShapeType::Sphere, 1 => ShapeType::Box, 2 => ShapeType::Capsule,
                 v => return Err(LoadingError::UnknownShapeType(v))
@@ -672,17 +659,15 @@ pub mod pmx {
     }
     impl Joint {
         pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let name = GlobalizedStrings {
-                jp: header.string_reader.read_string(reader)?,
-                univ: header.string_reader.read_string(reader)?
-            };
+            let name = header.string_reader.read_globalized(reader)?;
             let bytes = ReadExactBytes!(var reader, header.index_sizes.rigid_body.bytesize() * 2 + 1 + 4 * 3 * 8)?;
             let _type = match bytes[0] {
                 0 => JointType::Spring6, 1 => JointType::SixDof, 2 => JointType::P2P, 3 => JointType::ConeTwist,
                 4 => JointType::Slider, 5 => JointType::Hinge, v => return Err(LoadingError::UnknonwnJointType(v))
             };
             let rigid_body_indices = (IndexValue::from_bytes(&bytes[1..], header.index_sizes.rigid_body),
-                IndexValue::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize()..], header.index_sizes.rigid_body));
+                IndexValue::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize()..],
+                    header.index_sizes.rigid_body));
             return Ok(Joint {
                 name, _type, rigid_body_indices,
                 position: Vec3::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 ..]),
@@ -691,8 +676,10 @@ pub mod pmx {
                 position_max: Vec3::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 + 4 * 3 * 3 ..]),
                 rotation_min: Vec3::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 + 4 * 3 * 4 ..]),
                 rotation_max: Vec3::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 + 4 * 3 * 5 ..]),
-                position_spring: Vec3::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 + 4 * 3 * 6 ..]),
-                rotation_spring: Vec3::from_bytes(&bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 + 4 * 3 * 7 ..])
+                position_spring: Vec3::from_bytes(
+                    &bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 + 4 * 3 * 6 ..]),
+                rotation_spring: Vec3::from_bytes(
+                    &bytes[1 + header.index_sizes.rigid_body.bytesize() * 2 + 4 * 3 * 7 ..])
             });
         }
     }
@@ -724,10 +711,7 @@ pub mod pmx {
     }
     impl Softbody {
         pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
-            let name = GlobalizedStrings {
-                jp: header.string_reader.read_string(reader)?,
-                univ: header.string_reader.read_string(reader)?
-            };
+            let name = header.string_reader.read_globalized(reader)?;
             let bytes = ReadExactBytes!(var reader, header.index_sizes.material.bytesize() + 1 * 3 + 2 + 4 * 29)?;
             let shape = match bytes[0] {
                 0 => SoftbodyShapeType::TriMesh, 1 => SoftbodyShapeType::Rope,
@@ -740,22 +724,25 @@ pub mod pmx {
             };
             let mindex = IndexValue::from_bytes(&bytes[1..], header.index_sizes.material);
             let group = <i8 as TypedReader>::from_bytes(&bytes[1 + header.index_sizes.material.bytesize()..]);
-            let non_collision_mask = <i16 as TypedReader>::from_bytes(&bytes[1 + header.index_sizes.material.bytesize() + 1..]);
+            let non_collision_mask = i16::from_bytes(&bytes[1 + header.index_sizes.material.bytesize() + 1..]);
             let flags = SoftbodyFlags(bytes[1 + header.index_sizes.material.bytesize() + 1 + 2]);
             let anchor_rigid_body_count = <i32 as TypedReader>::from_bytes(&bytes[bytes.len() - 4..]);
             let mut anchor_rigid_bodies = Vec::with_capacity(anchor_rigid_body_count as _);
             println!("rigid body count: {}", anchor_rigid_body_count);
             for _ in 0 .. anchor_rigid_body_count {
-                let buf = ReadExactBytes!(var reader, (header.index_sizes.rigid_body.bytesize() + header.index_sizes.vertex.bytesize() + 1) as _)?;
+                let buf = ReadExactBytes!(var reader,
+                    (header.index_sizes.rigid_body.bytesize() + header.index_sizes.vertex.bytesize() + 1) as _)?;
                 anchor_rigid_bodies.push(AnchorRigidBody {
                     index: IndexValue::from_bytes(&buf, header.index_sizes.rigid_body),
-                    vindex: header.index_sizes.rigid_body.from_bytes_unsigned(&buf[header.index_sizes.rigid_body.bytesize()..]),
+                    vindex: header.index_sizes.rigid_body.from_bytes_unsigned(
+                        &buf[header.index_sizes.rigid_body.bytesize()..]),
                     near_mode: unsafe { transmute(buf[buf.len() - 1]) }
                 });
             }
             let vertex_pin_count = i32::read_value1(reader)?;
             let vertex_pins = match header.index_sizes.vertex {
-                IndexSize::Byte => ReadExactBytes!(var reader, vertex_pin_count as _)?.into_iter().map(|v| VertexPin(v as _)).collect(),
+                IndexSize::Byte => ReadExactBytes!(var reader, vertex_pin_count as _)?
+                    .into_iter().map(|v| VertexPin(v as _)).collect(),
                 IndexSize::Short => {
                     let mut elements = vec![0u16; vertex_pin_count as _];
                     let sink = unsafe { from_raw_parts_mut(elements.as_mut_ptr() as _, (vertex_pin_count * 2) as _) };
@@ -810,42 +797,47 @@ pub mod pmx {
     #[derive(Debug)]
     pub enum LoadingError {
         IO(IOError), SignatureMismatch, MissingGlobals(u8), UnknownStringEncoding(u8), UnknownDeformType(u8),
-        UnknownToonReference(u8), UnknownEnvBlendMode(u8), UnknownMorphType(u8), InvalidFrameData(u8),
+        UnknownToonReference(u8), UnknownEnvBlendMode(u8), UnknownMorphType(i8), InvalidFrameData(u8),
         UnknownShapeType(u8), UnknownPhysicsMode(u8), UnknonwnJointType(u8), UnknownAerodynamicsMode(u8)
     }
     impl From<IOError> for LoadingError { fn from(v: IOError) -> Self { LoadingError::IO(v) } }
 
+    #[repr(C)] struct Globals {
+        string_encoding_type: u8, additional_vec4_count: u8,
+        vertex_index_size: u8, texture_index_size: u8, material_index_size: u8,
+        bone_index_size: u8, morph_index_size: u8, rigid_body_index_size: u8
+    }
     impl Header {
         pub fn load<R: Read>(reader: &mut R) -> Result<Self, LoadingError> {
             let fixed_headers = ReadExactBytes!(reader, 9)?;
             if &fixed_headers[..4] != &[0x50, 0x4d, 0x58, 0x20] {
                 return Err(LoadingError::SignatureMismatch);
             }
-            let version = unsafe { transmute::<_, f32>(transmute::<_, &[u32]>(&fixed_headers[..])[1]) };
+            let version = unsafe { *transmute::<_, *const f32>(fixed_headers.as_ptr()).offset(1) };
             let globals_count = fixed_headers[8];
             if globals_count < 8 { return Err(LoadingError::MissingGlobals(globals_count)); }
 
             // Globals //
-            let mut globals = vec![0u8; globals_count as _];
-            reader.read_exact(&mut globals)?;
-            let string_reader: Box<StringReader> = match globals[0] {
+            let globals_b = ReadExactBytes!(var reader, globals_count as _)?;
+            let globals = unsafe { &*transmute::<_, *const Globals>(globals_b.as_ptr()) };
+            let string_reader: Box<StringReader> = match globals.string_encoding_type {
                 0 => Box::new(Utf16LEStringReader) as _, 1 => Box::new(Utf8StringReader) as _,
                 v => return Err(LoadingError::UnknownStringEncoding(v))
             };
             let index_sizes = IndexSizes {
-                vertex: IndexSize::from(globals[2]), texture: IndexSize::from(globals[3]),
-                material: IndexSize::from(globals[4]), bone: IndexSize::from(globals[5]),
-                morph: IndexSize::from(globals[6]), rigid_body: IndexSize::from(globals[7])
+                vertex: IndexSize::from(globals.vertex_index_size),
+                texture: IndexSize::from(globals.texture_index_size),
+                material: IndexSize::from(globals.material_index_size),
+                bone: IndexSize::from(globals.bone_index_size),
+                morph: IndexSize::from(globals.morph_index_size),
+                rigid_body: IndexSize::from(globals.rigid_body_index_size)
             };
 
-            let model_name = GlobalizedStrings {
-                jp: string_reader.read_string(reader)?, univ: string_reader.read_string(reader)?
-            };
-            let comment = GlobalizedStrings {
-                jp: string_reader.read_string(reader)?, univ: string_reader.read_string(reader)?
-            };
+            let model_name = string_reader.read_globalized(reader)?;
+            let comment = string_reader.read_globalized(reader)?;
             return Ok(Header {
-                version, string_reader, index_sizes, model_name, comment, additional_vec4_count: globals[1]
+                version, string_reader, index_sizes, model_name, comment,
+                additional_vec4_count: globals.additional_vec4_count
             });
         }
     }

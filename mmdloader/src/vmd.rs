@@ -7,7 +7,7 @@ use encoding::codec::japanese::Windows31JEncoding;
 use encoding::{Encoding, DecoderTrap};
 
 pub struct MotionData {
-    pub name_cell: String, pub framecount: u32
+    pub name: String, pub framecount: u32
 }
 impl MotionData {
     pub fn read<R: Read>(reader: &mut R) -> Result<Self, LoadingError> {
