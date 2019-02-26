@@ -36,12 +36,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         ctx.text(&font, "Hello, World!|Opaque");
         {
             let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
-            f0.move_to(Vector2(10.0, -10.0).into());
-            f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
-                Vector2(100.0, -100.0).into());
-            f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
-            // f0.close();
-            f0.end();
+            let mut sp = vg::StrokePathBuilder::new(2.0);
+            sp.move_to(Vector2(10.0, -10.0).into());
+            /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
+                Vector2(100.0, -100.0).into());*/
+            sp.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
+            // f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
+            sp.sink_widened(&mut f0);
         }
         {
             let mut f = ctx.begin_figure(vg::FillRule::Winding);
@@ -57,6 +58,17 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f.close(); f.end();
         }
         let mut ctx2 = vg::Context::new();
+        {
+            let mut f0 = ctx2.begin_figure(vg::FillRule::Winding);
+            f0.move_to(Vector2(10.0, -10.0).into());
+            /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
+                Vector2(100.0, -100.0).into());*/
+            f0.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
+            // f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
+            // f0.stroke_outline(20.0);
+            // f0.close();
+            f0.end();
+        }
         {
             let thick = 1.0;
             let mut f = ctx2.begin_figure(vg::FillRule::Winding);
@@ -153,9 +165,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
         
         interior_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
-            Some(VgRendererFragmentFixedColor { r: 1.0, g: 1.0, b: 0.0, a: 1.0 }.as_pair());
+            Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
         curve_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
-            Some(VgRendererFragmentFixedColor { r: 1.0, g: 1.0, b: 0.0, a: 1.0 }.as_pair());
+            Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
         let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0));
         gpb.vertex_processing(interior_vertex_processing)
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))

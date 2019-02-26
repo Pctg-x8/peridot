@@ -10,6 +10,7 @@ use font_kit::{error::GlyphLoadingError, hinting::HintingOptions};
 use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, builder::{Builder, Endpoint}};
 pub use pathfinder_partitioner::FillRule;
 pub use lyon_path::builder::{FlatPathBuilder, PathBuilder};
+use lyon_path::PathEvent;
 use lyon_path::geom::euclid::{Transform2D, Vector2D, Angle};
 use peridot_math::{Vector2, Vector2F32};
 
@@ -124,11 +125,326 @@ fn crosspoint_values(p0: P2F32, p1: P2F32, v0: V2F32, v1: V2F32) -> Option<(f32,
     }
     return Some((a, b));
 }
+pub struct StrokePathBuilder { width: f32, traces: Vec<PathEvent>, last: euclid::Point2D<f32> }
+impl StrokePathBuilder {
+    pub fn new(width: f32) -> Self {
+        StrokePathBuilder { width, traces: Vec::new(), last: euclid::Point2D::new(0.0, 0.0) }
+    }
+}
+impl FlatPathBuilder for StrokePathBuilder {
+    type PathType = Vec<PathEvent>;
+
+    fn move_to(&mut self, p: euclid::Point2D<f32>) { self.last = p; self.traces.push(PathEvent::MoveTo(p)); }
+    fn line_to(&mut self, p: euclid::Point2D<f32>) { self.last = p; self.traces.push(PathEvent::LineTo(p)); }
+    fn close(&mut self) { self.traces.push(PathEvent::Close); }
+    fn build(self) -> Vec<PathEvent> { unimplemented!("use sink_widened"); }
+    fn build_and_reset(&mut self) -> Vec<PathEvent> {
+        unimplemented!("use sink_widened");
+    }
+    fn current_position(&self) -> euclid::Point2D<f32> { self.last }
+}
+impl PathBuilder for StrokePathBuilder {
+    fn quadratic_bezier_to(&mut self, c: euclid::Point2D<f32>, to: euclid::Point2D<f32>) {
+        self.last = to; self.traces.push(PathEvent::QuadraticTo(c, to));
+    }
+    fn cubic_bezier_to(&mut self, c1: euclid::Point2D<f32>, c2: euclid::Point2D<f32>, to: euclid::Point2D<f32>) {
+        self.last = to; self.traces.push(PathEvent::CubicTo(c1, c2, to));
+    }
+    fn arc(&mut self, _center: Point2D<f32>, _rad: Vector2D<f32>, _sweeping_angle: Angle<f32>, _x_rot: Angle<f32>) {
+        unimplemented!("unsuppoted arc instruction");
+    }
+}
+fn pathevent_to_point(e: &PathEvent) -> euclid::Point2D<f32> {
+    match e {
+        &PathEvent::MoveTo(p) | &PathEvent::LineTo(p) |
+        &PathEvent::QuadraticTo(_, p) | &PathEvent::CubicTo(_, _, p) => p,
+        PathEvent::Close => panic!("The destination point cannot be taken from Close"),
+        PathEvent::Arc(_, _, _, _) => panic!("Arc not supported")
+    }
+}
+fn pathevent_to_point_mut(e: &mut PathEvent) -> &mut euclid::Point2D<f32> {
+    match e {
+        PathEvent::MoveTo(p) | PathEvent::LineTo(p) |
+        PathEvent::QuadraticTo(_, p) | PathEvent::CubicTo(_, _, p) => p,
+        PathEvent::Close => panic!("The destination point cannot be taken from Close"),
+        PathEvent::Arc(_, _, _, _) => panic!("Arc not supported")
+    }
+}
+impl StrokePathBuilder {
+    pub fn sink_widened<B: PathBuilder + ?Sized>(self, target_builder: &mut B) {
+        let (mut positive_events, mut negative_events) = (Vec::new(), Vec::new());
+        
+        let mut first_point = euclid::Point2D::new(0.0, 0.0);
+        for e in self.traces {
+            match e {
+                PathEvent::LineTo(p) => {
+                    let dv = (first_point - p).normalize();
+                    let norm = euclid::Vector2D::new(-dv.y, dv.x);
+                    let (p0_p, p0_n) = (first_point + norm * self.width, first_point - norm * self.width);
+                    let (p1_p, p1_n) = (p + norm * self.width, p - norm * self.width);
+
+                    if positive_events.is_empty() { positive_events.push(PathEvent::MoveTo(p0_p)); }
+                    else {
+                        if pathevent_to_point(positive_events.last().expect("No endpoints?")) != p0_p {
+                            // curve connection - miter
+                            let (last_ep_to, dv_pre);
+                            // for shortening lifetime
+                            match positive_events.last().expect("No endpoints?") {
+                                &PathEvent::MoveTo(p) | &PathEvent::LineTo(p) => {
+                                    let ref last_ep2 = positive_events[positive_events.len() - 2];
+                                    dv_pre = (p - pathevent_to_point(last_ep2)).normalize();
+                                    last_ep_to = p;
+                                },
+                                &PathEvent::QuadraticTo(c, p) | &PathEvent::CubicTo(_, c, p) => {
+                                    dv_pre = (p - c).normalize();
+                                    last_ep_to = p;
+                                },
+                                _ => unreachable!("unable to compute")
+                            }
+                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            let (_, b) = crosspoint_values(p0_p, last_ep_to, dv, dv_pre)
+                                .expect("Unable to compute the crosspoint");
+                            let new_last_ep_to = last_ep_to + dv_pre * b;
+                            // tweak last endpoint destination
+                            *pathevent_to_point_mut(positive_events.last_mut().expect("No endpoints?"))
+                                = new_last_ep_to;
+                        }
+                    }
+                    positive_events.push(PathEvent::LineTo(p1_p));
+
+                    if negative_events.is_empty() { negative_events.push(PathEvent::MoveTo(p0_n)); }
+                    else {
+                        if pathevent_to_point(negative_events.last().expect("No endpoints?")) != p0_n {
+                            // connect - miter
+                            let (last_ep_to, dv_pre);
+                            // for shortening lifetime
+                            match negative_events.last().expect("No endpoints?") {
+                                &PathEvent::MoveTo(p) | &PathEvent::LineTo(p) => {
+                                    let ref last_ep2 = negative_events[negative_events.len() - 2];
+                                    dv_pre = (p - pathevent_to_point(last_ep2)).normalize();
+                                    last_ep_to = p;
+                                },
+                                &PathEvent::QuadraticTo(c, p) | &PathEvent::CubicTo(_, c, p) => {
+                                    dv_pre = (p - c).normalize();
+                                    last_ep_to = p;
+                                },
+                                _ => unreachable!("unable to compute")
+                            }
+                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            let (_, b) = crosspoint_values(p0_n, last_ep_to, dv, dv_pre)
+                                .expect("Unable to compute the crosspoint");
+                            let new_last_ep_to = last_ep_to + dv_pre * b;
+                            // tweak last endpoint destination
+                            *pathevent_to_point_mut(negative_events.last_mut().expect("No endpoints?"))
+                                = new_last_ep_to;
+                        }
+                    }
+                    negative_events.push(PathEvent::LineTo(p1_n));
+                },
+                PathEvent::QuadraticTo(c, p) => {
+                    let (dv0, dv1) = ((first_point - c).normalize(), (c - p).normalize());
+                    let (norm0, norm1) = (euclid::Vector2D::new(-dv0.y, dv0.x), euclid::Vector2D::new(-dv1.y, dv1.x));
+                    let (p0_p, p0_n) = (first_point + norm0 * self.width, first_point - norm0 * self.width);
+                    let (p1_p, p1_n) = (p + norm1 * self.width, p - norm1 * self.width);
+
+                    let ctrl_p = p0_p + dv0 * crosspoint_values(p0_p, p1_p, dv0, -dv1)
+                        .expect("Unable to get crosspoint").0;
+                    let ctrl_n = p0_n + dv0 * crosspoint_values(p0_n, p1_n, dv0, -dv1)
+                        .expect("unable to get crosspoint").0;
+
+                    if positive_events.is_empty() { positive_events.push(PathEvent::MoveTo(p0_p)); }
+                    else {
+                        if pathevent_to_point(positive_events.last().expect("No endpoints?")) != p0_p {
+                            // curve connection - miter
+                            let (last_ep_to, dv_pre);
+                            // for shortening lifetime
+                            match positive_events.last().expect("No endpoints?") {
+                                &PathEvent::MoveTo(p) | &PathEvent::LineTo(p) => {
+                                    let ref last_ep2 = positive_events[positive_events.len() - 2];
+                                    dv_pre = (p - pathevent_to_point(last_ep2)).normalize();
+                                    last_ep_to = p;
+                                },
+                                &PathEvent::QuadraticTo(c, p) | &PathEvent::CubicTo(_, c, p) => {
+                                    dv_pre = (p - c).normalize();
+                                    last_ep_to = p;
+                                },
+                                _ => unreachable!("unable to compute")
+                            }
+                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            let (_, b) = crosspoint_values(p0_p, last_ep_to, dv0, dv_pre)
+                                .expect("Unable to compute the crosspoint");
+                            let new_last_ep_to = last_ep_to + dv_pre * b;
+                            // tweak last endpoint destination
+                            *pathevent_to_point_mut(positive_events.last_mut().expect("No endpoints?"))
+                                = new_last_ep_to;
+                        }
+                    }
+                    positive_events.push(PathEvent::QuadraticTo(ctrl_p, p1_p));
+
+                    if negative_events.is_empty() { negative_events.push(PathEvent::MoveTo(p0_n)); }
+                    else {
+                        if pathevent_to_point(negative_events.last().expect("No endpoints?")) != p0_n {
+                            // connect - miter
+                            let (last_ep_to, dv_pre);
+                            // for shortening lifetime
+                            match negative_events.last().expect("No endpoints?") {
+                                &PathEvent::MoveTo(p) | &PathEvent::LineTo(p) => {
+                                    let ref last_ep2 = negative_events[negative_events.len() - 2];
+                                    dv_pre = (p - pathevent_to_point(last_ep2)).normalize();
+                                    last_ep_to = p;
+                                },
+                                &PathEvent::QuadraticTo(c, p) | &PathEvent::CubicTo(_, c, p) => {
+                                    dv_pre = (p - c).normalize();
+                                    last_ep_to = p;
+                                },
+                                _ => unreachable!("unable to compute")
+                            }
+                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            let (_, b) = crosspoint_values(p0_n, last_ep_to, dv0, dv_pre)
+                                .expect("Unable to compute the crosspoint");
+                            let new_last_ep_to = last_ep_to + dv_pre * b;
+                            // tweak last endpoint destination
+                            *pathevent_to_point_mut(negative_events.last_mut().expect("No endpoints?"))
+                                = new_last_ep_to;
+                        }
+                    }
+                    negative_events.push(PathEvent::QuadraticTo(ctrl_n, p1_n));
+                },
+                PathEvent::CubicTo(c1, c2, p) => {
+                    let (dv0, dv1) = ((first_point - c1).normalize(), (c2 - p).normalize());
+                    let (norm0, norm1) = (euclid::Vector2D::new(-dv0.y, dv0.x), euclid::Vector2D::new(-dv1.y, dv1.x));
+                    let (p0_p, p0_n) = (first_point + norm0 * self.width, first_point - norm0 * self.width);
+                    let (p1_p, p1_n) = (p + norm1 * self.width, p - norm1 * self.width);
+
+                    let c1_p = p0_p - dv0 * ((first_point - c1).length() + self.width);
+                    let c1_n = p0_n - dv0 * ((first_point - c1).length() - self.width);
+                    let c2_p = p1_p + dv1 * ((c2 - p).length() + self.width);
+                    let c2_n = p1_n + dv1 * ((c2 - p).length() - self.width);
+
+                    if positive_events.is_empty() { positive_events.push(PathEvent::MoveTo(p0_p)); }
+                    else {
+                        if pathevent_to_point(positive_events.last().expect("No endpoints?")) != p0_p {
+                            // curve connection - miter
+                            let (last_ep_to, dv_pre);
+                            // for shortening lifetime
+                            match positive_events.last().expect("No endpoints?") {
+                                &PathEvent::MoveTo(p) | &PathEvent::LineTo(p) => {
+                                    let ref last_ep2 = positive_events[positive_events.len() - 2];
+                                    dv_pre = (p - pathevent_to_point(last_ep2)).normalize();
+                                    last_ep_to = p;
+                                },
+                                &PathEvent::QuadraticTo(c, p) | &PathEvent::CubicTo(_, c, p) => {
+                                    dv_pre = (p - c).normalize();
+                                    last_ep_to = p;
+                                },
+                                _ => unreachable!("unable to compute")
+                            }
+                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            let (_, b) = crosspoint_values(p0_p, last_ep_to, dv0, dv_pre)
+                                .expect("Unable to compute the crosspoint");
+                            let new_last_ep_to = last_ep_to + dv_pre * b;
+                            // tweak last endpoint destination
+                            *pathevent_to_point_mut(positive_events.last_mut().expect("No endpoints?"))
+                                = new_last_ep_to;
+                        }
+                    }
+                    positive_events.push(PathEvent::CubicTo(c1_p, c2_p, p1_p));
+
+                    if negative_events.is_empty() { negative_events.push(PathEvent::MoveTo(p0_n)); }
+                    else {
+                        if pathevent_to_point(negative_events.last().expect("No endpoints?")) != p0_n {
+                            // connect - miter
+                            let (last_ep_to, dv_pre);
+                            // for shortening lifetime
+                            match negative_events.last().expect("No endpoints?") {
+                                &PathEvent::MoveTo(p) | &PathEvent::LineTo(p) => {
+                                    let ref last_ep2 = negative_events[negative_events.len() - 2];
+                                    dv_pre = (p - pathevent_to_point(last_ep2)).normalize();
+                                    last_ep_to = p;
+                                },
+                                &PathEvent::QuadraticTo(c, p) | &PathEvent::CubicTo(_, c, p) => {
+                                    dv_pre = (p - c).normalize();
+                                    last_ep_to = p;
+                                },
+                                _ => unreachable!("unable to compute")
+                            }
+                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            let (_, b) = crosspoint_values(p0_n, last_ep_to, dv0, dv_pre)
+                                .expect("Unable to compute the crosspoint");
+                            let new_last_ep_to = last_ep_to + dv_pre * b;
+                            // tweak last endpoint destination
+                            *pathevent_to_point_mut(negative_events.last_mut().expect("No endpoints?"))
+                                = new_last_ep_to;
+                        }
+                    }
+                    negative_events.push(PathEvent::CubicTo(c1_n, c2_n, p1_n));
+                },
+                PathEvent::MoveTo(p) => {
+                    if !positive_events.is_empty() {
+                        // close existing stroke.
+                        for p in positive_events.drain(..) { target_builder.path_event(p); }
+                        target_builder.line_to(pathevent_to_point(negative_events.last().expect("No events?")));
+                        // append negative events, in reverse order
+                        let mut iter = negative_events.drain(..).rev();
+                        let mut prev_ctrl = iter.next().expect("No events?");
+                        for e in iter {
+                            let to = pathevent_to_point(&e);
+                            match std::mem::replace(&mut prev_ctrl, e) {
+                                PathEvent::LineTo(_) => target_builder.line_to(to),
+                                PathEvent::QuadraticTo(c, _) => target_builder.quadratic_bezier_to(c, to),
+                                PathEvent::CubicTo(c1, c2, _) => target_builder.cubic_bezier_to(c2, c1, to),
+                                PathEvent::MoveTo(_) => { break; }
+                                _ => unreachable!()
+                            }
+                        }
+                        target_builder.close();
+                    }
+                    first_point = p;
+                },
+                PathEvent::Close => {
+                    if !positive_events.is_empty() {
+                        // close existing stroke.
+
+                        // exterior(positive traces)
+                        for p in positive_events.drain(..) { target_builder.path_event(p); }
+                        target_builder.close();
+
+                        // interior(negative traces)
+                        for p in negative_events.drain(..) { target_builder.path_event(p); }
+                        target_builder.close();
+                    }
+                },
+                e => unreachable!("unsupported event: {:?}", e)
+            }
+        }
+
+        if !positive_events.is_empty() {
+            // close as unclosed curve.
+            for p in positive_events { target_builder.path_event(p); }
+            target_builder.line_to(pathevent_to_point(negative_events.last().expect("No events?")));
+            // append negative events, in reverse order
+            let mut iter = negative_events.into_iter().rev();
+            let mut prev_ctrl = iter.next().expect("No events?");
+            for e in iter {
+                let to = pathevent_to_point(&e);
+                match std::mem::replace(&mut prev_ctrl, e) {
+                    PathEvent::LineTo(_) => target_builder.line_to(to),
+                    PathEvent::QuadraticTo(c, _) => target_builder.quadratic_bezier_to(c, to),
+                    PathEvent::CubicTo(c1, c2, _) => target_builder.cubic_bezier_to(c2, c1, to),
+                    PathEvent::MoveTo(_) => { break; }
+                    _ => unreachable!()
+                }
+            }
+            target_builder.close();
+        }
+    }
+}
 impl<'c> FigureContext<'c> {
     /// Compute outline of this figure.
     /// NOTE: pathfinder_partitioner::Builderの内部構造を直接書き換えるので、あっちの構造が変わったらこっちも変える必要がある
     pub fn stroke_outline(&mut self, width: f32) {
         let builder_mut = self.partitioner.builder_mut();
+        builder_mut.end_subpath();
 
         let mut new_subpath_ranges = Vec::new();
         let mut new_endpoints = Vec::new();
@@ -136,11 +452,14 @@ impl<'c> FigureContext<'c> {
             let mut positive_endpoints = Vec::new();
             let mut negative_endpoints = Vec::new();
 
+            println!("Processing Endpoint: {:?}", subpath_range);
+            println!("Input Subpath: {:?}", &builder_mut.endpoints[subpath_range.start as usize .. subpath_range.end as usize]);
+
             let new_subpath_index = new_subpath_ranges.len() as u32;
             
             if subpath_range.start == subpath_range.end { continue; }
             let mut p0 = builder_mut.endpoints[subpath_range.start as usize].to;
-            for ep in &mut builder_mut.endpoints[(subpath_range.start + 1) as usize .. subpath_range.end as usize] {
+            for ep in &builder_mut.endpoints[(subpath_range.start + 1) as usize .. subpath_range.end as usize] {
                 match ep.ctrl {
                     // Line
                     None => {
@@ -183,7 +502,7 @@ impl<'c> FigureContext<'c> {
                             negative_endpoints.push(Endpoint { ctrl: None, to: p0_n, subpath_index: new_subpath_index });
                         }
                         else {
-                            if negative_endpoints.last().expect("No endpoints?").to != p0_p {
+                            if negative_endpoints.last().expect("No endpoints?").to != p0_n {
                                 // connect - miter
                                 let (last_ep_to, dv_pre);
                                 {
@@ -196,7 +515,7 @@ impl<'c> FigureContext<'c> {
                                     }.normalize();
                                 }
                                 // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
-                                let (_, b) = crosspoint_values(p0_p, last_ep_to, dv, dv_pre)
+                                let (_, b) = crosspoint_values(p0_n, last_ep_to, dv, dv_pre)
                                     .expect("Unable to compute the crosspoint");
                                 let new_last_ep_to = last_ep_to + dv_pre * b;
                                 // tweak last endpoint destination
@@ -256,7 +575,7 @@ impl<'c> FigureContext<'c> {
                             negative_endpoints.push(Endpoint { ctrl: None, to: p0_n, subpath_index: new_subpath_index });
                         }
                         else {
-                            if negative_endpoints.last().expect("No endpoints?").to != p0_p {
+                            if negative_endpoints.last().expect("No endpoints?").to != p0_n {
                                 // connect - miter
                                 let (last_ep_to, dv_pre);
                                 {
@@ -269,7 +588,7 @@ impl<'c> FigureContext<'c> {
                                     }.normalize();
                                 }
                                 // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
-                                let (_, b) = crosspoint_values(p0_p, last_ep_to, dv_0, dv_pre)
+                                let (_, b) = crosspoint_values(p0_n, last_ep_to, dv_0, dv_pre)
                                     .expect("Unable to compute the crosspoint");
                                 let new_last_ep_to = last_ep_to + dv_pre * b;
                                 // tweak last endpoint destination
@@ -287,14 +606,25 @@ impl<'c> FigureContext<'c> {
             // let negative_ep_start = negative_endpoints.first().expect("No endpoints?").to;
             let negative_ep_end = negative_endpoints.last().expect("No endpoints?").to;
 
+            println!("Positive Endpoints Start: {:?}", positive_ep_start);
+            println!("Negative Endpoints End: {:?}", negative_ep_end);
+
             let all_ep_begin = new_endpoints.len();
             new_endpoints.append(&mut positive_endpoints);
             new_endpoints.push(Endpoint { ctrl: None, to: negative_ep_end, subpath_index: new_subpath_index });
-            new_endpoints.append(&mut negative_endpoints);
+            // append negative endpoints, in reverse order
+            let mut prev_ctrl = negative_endpoints.last().expect("No endpoints?").ctrl;
+            for np in negative_endpoints.iter().rev().skip(1) {
+                new_endpoints.push(Endpoint {
+                    ctrl: std::mem::replace(&mut prev_ctrl, np.ctrl), to: np.to, subpath_index: new_subpath_index
+                });
+            }
             new_endpoints.push(Endpoint { ctrl: None, to: positive_ep_start, subpath_index: new_subpath_index });
             new_subpath_ranges.push(all_ep_begin as u32 .. new_endpoints.len() as u32);
         }
 
+        println!("Endpoints!{:?}", new_endpoints);
+        println!("SubpathRanges!{:?}", new_subpath_ranges);
         builder_mut.endpoints = new_endpoints;
         builder_mut.subpath_ranges = new_subpath_ranges;
     }
