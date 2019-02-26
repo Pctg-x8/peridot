@@ -7,7 +7,7 @@ use peridot::math::{
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, MemoryBadget, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
-    audio::PreloadedPlayableWav
+    audio::StreamingPlayableWav
 };
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -31,7 +31,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
 
-        let bgm = Arc::new(RwLock::new(e.load::<PreloadedPlayableWav>("bgm").expect("Loading BGM")));
+        let bgm = Arc::new(RwLock::new(e.streaming::<StreamingPlayableWav>("bgm").expect("Loading BGM")));
         e.audio_mixer().write().expect("Adding AudioProcess").add_process(bgm.clone());
 
         let mut bp = BufferPrealloc::new(e.graphics());
