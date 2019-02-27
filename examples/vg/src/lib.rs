@@ -36,13 +36,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         ctx.text(&font, "Hello, World!|Opaque");
         {
             let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
-            let mut sp = vg::StrokePathBuilder::new(2.0);
+            let mut sp = vg::StrokePathBuilder::new(20.0);
             sp.move_to(Vector2(10.0, -10.0).into());
-            /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
-                Vector2(100.0, -100.0).into());*/
-            sp.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
+            sp.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
+                Vector2(100.0, -100.0).into());
+            // sp.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
             // f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
             sp.sink_widened(&mut f0);
+            f0.end();
         }
         {
             let mut f = ctx.begin_figure(vg::FillRule::Winding);
@@ -58,7 +59,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f.close(); f.end();
         }
         let mut ctx2 = vg::Context::new();
-        {
+        /*{
             let mut f0 = ctx2.begin_figure(vg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
             /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
@@ -68,7 +69,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             // f0.stroke_outline(20.0);
             // f0.close();
             f0.end();
-        }
+        }*/
         {
             let thick = 1.0;
             let mut f = ctx2.begin_figure(vg::FillRule::Winding);
