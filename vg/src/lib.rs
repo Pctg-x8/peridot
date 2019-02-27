@@ -89,6 +89,7 @@ fn crosspoint_value(p0: P2F32, p1: P2F32, v0: V2F32, v1: V2F32) -> Option<f32> {
     //    v1.y * (p0 - p1).x - v1.x * (p0 - p1).y = -a * (v0.x * v1.y - v0.y * v1.x)
     //    cross(v1, p0 - p1) = a * cross(v0, v1)
 
+    println!("compute crosspoint: {:?}+a*{:?}={:?}+b*{:?}", p0, v0, p1, v1);
     let cv = v0.cross(v1);
     if cv == 0.0 { None } else { Some(v1.cross(p0 - p1) / cv) }
 }
@@ -141,14 +142,15 @@ impl StrokePathBuilder {
     pub fn sink_widened<B: PathBuilder + ?Sized>(self, target_builder: &mut B) {
         let (mut positive_events, mut negative_events) = (Vec::new(), Vec::new());
         
-        let mut first_point = euclid::Point2D::new(0.0, 0.0);
+        let mut cur_point = euclid::Point2D::new(0.0, 0.0);
         println!("Processing Traces: {:?}", self.traces);
         for e in self.traces {
+            println!("Processing: {:?}", e);
             match e {
                 PathEvent::LineTo(p) => {
-                    let dv = (first_point - p).normalize();
+                    let dv = (cur_point - p).normalize();
                     let norm = euclid::Vector2D::new(-dv.y, dv.x);
-                    let (p0_p, p0_n) = (first_point + norm * self.width * 0.5, first_point - norm * self.width * 0.5);
+                    let (p0_p, p0_n) = (cur_point + norm * self.width * 0.5, cur_point - norm * self.width * 0.5);
                     let (p1_p, p1_n) = (p + norm * self.width * 0.5, p - norm * self.width * 0.5);
 
                     if positive_events.is_empty() { positive_events.push(PathEvent::MoveTo(p0_p)); }
@@ -208,11 +210,13 @@ impl StrokePathBuilder {
                         }
                     }
                     negative_events.push(PathEvent::LineTo(p1_n));
+
+                    cur_point = p;
                 },
                 PathEvent::QuadraticTo(c, p) => {
-                    let (dv0, dv1) = ((first_point - c).normalize(), (c - p).normalize());
+                    let (dv0, dv1) = ((cur_point - c).normalize(), (c - p).normalize());
                     let (norm0, norm1) = (euclid::Vector2D::new(-dv0.y, dv0.x), euclid::Vector2D::new(-dv1.y, dv1.x));
-                    let (p0_p, p0_n) = (first_point + norm0 * self.width * 0.5, first_point - norm0 * self.width * 0.5);
+                    let (p0_p, p0_n) = (cur_point + norm0 * self.width * 0.5, cur_point - norm0 * self.width * 0.5);
                     let (p1_p, p1_n) = (p + norm1 * self.width * 0.5, p - norm1 * self.width * 0.5);
 
                     let ctrl_p = p0_p + dv0 * crosspoint_value(p0_p, p1_p, dv0, -dv1)
@@ -275,15 +279,17 @@ impl StrokePathBuilder {
                         }
                     }
                     negative_events.push(PathEvent::QuadraticTo(ctrl_n, p1_n));
+
+                    cur_point = p;
                 },
                 PathEvent::CubicTo(c1, c2, p) => {
-                    let (dv0, dv1) = ((first_point - c1).normalize(), (c2 - p).normalize());
+                    let (dv0, dv1) = ((cur_point - c1).normalize(), (c2 - p).normalize());
                     let (norm0, norm1) = (euclid::Vector2D::new(-dv0.y, dv0.x), euclid::Vector2D::new(-dv1.y, dv1.x));
-                    let (p0_p, p0_n) = (first_point + norm0 * self.width * 0.5, first_point - norm0 * self.width * 0.5);
+                    let (p0_p, p0_n) = (cur_point + norm0 * self.width * 0.5, cur_point - norm0 * self.width * 0.5);
                     let (p1_p, p1_n) = (p + norm1 * self.width * 0.5, p - norm1 * self.width * 0.5);
 
-                    let c1_p = p0_p - dv0 * ((first_point - c1).length() + self.width * 0.5);
-                    let c1_n = p0_n - dv0 * ((first_point - c1).length() - self.width * 0.5);
+                    let c1_p = p0_p - dv0 * ((cur_point - c1).length() + self.width * 0.5);
+                    let c1_n = p0_n - dv0 * ((cur_point - c1).length() - self.width * 0.5);
                     let c2_p = p1_p + dv1 * ((c2 - p).length() + self.width * 0.5);
                     let c2_n = p1_n + dv1 * ((c2 - p).length() - self.width * 0.5);
 
@@ -342,6 +348,8 @@ impl StrokePathBuilder {
                         }
                     }
                     negative_events.push(PathEvent::CubicTo(c1_n, c2_n, p1_n));
+
+                    cur_point = p;
                 },
                 PathEvent::MoveTo(p) => {
                     if !positive_events.is_empty() {
@@ -363,7 +371,7 @@ impl StrokePathBuilder {
                         }
                         target_builder.close();
                     }
-                    first_point = p;
+                    cur_point = p;
                 },
                 PathEvent::Close => {
                     if !positive_events.is_empty() {
