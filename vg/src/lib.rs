@@ -284,14 +284,24 @@ impl StrokePathBuilder {
                 },
                 PathEvent::CubicTo(c1, c2, p) => {
                     let (dv0, dv1) = ((cur_point - c1).normalize(), (c2 - p).normalize());
-                    let (norm0, norm1) = (euclid::Vector2D::new(-dv0.y, dv0.x), euclid::Vector2D::new(-dv1.y, dv1.x));
+                    let (norm0, norm1) = (euclid::Vector2D::new(dv0.y, -dv0.x), euclid::Vector2D::new(dv1.y, -dv1.x));
                     let (p0_p, p0_n) = (cur_point + norm0 * self.width * 0.5, cur_point - norm0 * self.width * 0.5);
                     let (p1_p, p1_n) = (p + norm1 * self.width * 0.5, p - norm1 * self.width * 0.5);
 
+                    // NOTE: S字カーブの時は伸縮が逆転する必要がある 多分この説明ではわからないので図があると嬉しいかも
+                    let is_sform = (cur_point - c1).dot(p - c2) < 0.0;
+
                     let c1_p = p0_p - dv0 * ((cur_point - c1).length() + self.width * 0.5);
                     let c1_n = p0_n - dv0 * ((cur_point - c1).length() - self.width * 0.5);
-                    let c2_p = p1_p + dv1 * ((c2 - p).length() + self.width * 0.5);
-                    let c2_n = p1_n + dv1 * ((c2 - p).length() - self.width * 0.5);
+                    let cv2_long = dv1 * ((c2 - p).length() + self.width * 0.5);
+                    let cv2_short = dv1 * ((c2 - p).length() - self.width * 0.5);
+                    let (c2_p, c2_n);
+                    if is_sform {
+                        c2_p = p1_p + cv2_short; c2_n = p1_n + cv2_long;
+                    }
+                    else {
+                        c2_p = p1_p + cv2_long; c2_n = p1_n + cv2_short;
+                    }
 
                     if positive_events.is_empty() { positive_events.push(PathEvent::MoveTo(p0_p)); }
                     else {

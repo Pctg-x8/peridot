@@ -35,13 +35,15 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut ctx = vg::Context::new();
         ctx.text(&font, "Hello, World!|Opaque");
         {
-            let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
-            let mut sp = vg::StrokePathBuilder::new(20.0);
+            let mut f0 = ctx.begin_figure(vg::FillRule::EvenOdd);
+            let mut sp = vg::StrokePathBuilder::new(2.0);
             sp.move_to(Vector2(10.0, -10.0).into());
             sp.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
                 Vector2(100.0, -100.0).into());
-            // sp.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
+            // sp.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -80.0).into(), Vector2(35.0, -100.0).into());
+            sp.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
             // f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
+            // sp.close();
             sp.sink_widened(&mut f0);
             f0.end();
         }
