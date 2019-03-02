@@ -37,8 +37,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         {
             let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
-            f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
-                Vector2(100.0, -100.0).into());
+            f0.quadratic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -100.0).into());
             f0.end();
         }
         /*{
