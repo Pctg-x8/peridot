@@ -171,7 +171,7 @@ impl StrokePathBuilder {
                                 },
                                 _ => unreachable!("unable to compute")
                             }
-                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            // memo: 計算できなかったら単純に直線でつなぐ(擬似bevel)
                             let a = crosspoint_value(p0_p, last_ep_to, dv, dv_pre)
                                 .expect("Unable to compute the crosspoint");
                             let new_last_ep_to = p0_p + dv * a;
@@ -200,7 +200,7 @@ impl StrokePathBuilder {
                                 },
                                 _ => unreachable!("unable to compute")
                             }
-                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            // memo: 計算できなかったら単純に直線でつなぐ(擬似bevel)
                             let a = crosspoint_value(p0_n, last_ep_to, dv, dv_pre)
                                 .expect("Unable to compute the crosspoint");
                             let new_last_ep_to = p0_n + dv * a;
@@ -242,7 +242,7 @@ impl StrokePathBuilder {
                                 },
                                 _ => unreachable!("unable to compute")
                             }
-                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            // memo: 計算できなかったら単純に直線でつなぐ(擬似bevel)
                             let new_last_ep_to = p0_p + dv0 * crosspoint_value(p0_p, last_ep_to, dv0, dv_pre)
                                 .expect("Unable to compute the crosspoint");
                             // tweak last endpoint destination
@@ -270,7 +270,7 @@ impl StrokePathBuilder {
                                 },
                                 _ => unreachable!("unable to compute")
                             }
-                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            // memo: 計算できなかったら単純に直線でつなぐ(擬似bevel)
                             let new_last_ep_to = p0_n + dv0 * crosspoint_value(p0_n, last_ep_to, dv0, dv_pre)
                                 .expect("Unable to compute the crosspoint");
                             // tweak last endpoint destination
@@ -321,7 +321,7 @@ impl StrokePathBuilder {
                                 },
                                 _ => unreachable!("unable to compute")
                             }
-                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            // memo: 計算できなかったら単純に直線でつなぐ(擬似bevel)
                             let new_last_ep_to = p0_p + dv0 * crosspoint_value(p0_p, last_ep_to, dv0, dv_pre)
                                 .expect("Unable to compute the crosspoint");
                             // tweak last endpoint destination
@@ -349,7 +349,7 @@ impl StrokePathBuilder {
                                 },
                                 _ => unreachable!("unable to compute")
                             }
-                            // TODO: 計算できなかったら単純に直線でつなぐ(擬似bevel)
+                            // memo: 計算できなかったら単純に直線でつなぐ(擬似bevel)
                             let new_last_ep_to = p0_n + dv0 * crosspoint_value(p0_n, last_ep_to, dv0, dv_pre)
                                 .expect("Unable to compute the crosspoint");
                             // tweak last endpoint destination
