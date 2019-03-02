@@ -36,15 +36,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         ctx.text(&font, "Hello, World!|Opaque");
         {
             let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
-            let mut sp = vg::StrokePathBuilder::new(2.0);
-            sp.move_to(Vector2(10.0, -10.0).into());
-            sp.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
+            f0.move_to(Vector2(10.0, -10.0).into());
+            f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
                 Vector2(100.0, -100.0).into());
-            // sp.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -80.0).into(), Vector2(35.0, -100.0).into());
-            // sp.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
-            // f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
-            // sp.close();
-            sp.sink_widened(&mut f0);
             f0.end();
         }
         /*{
@@ -72,7 +66,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             // f0.close();
             f0.end();
         }*/
-        {
+        /*{
             let mut sp = vg::StrokePathBuilder::new(1.0);
             sp.move_to(Vector2(200.0, -200.0 - 10.0).into());
             sp.line_to(Vector2(200.0, -200.0 - 90.0).into());
@@ -87,6 +81,19 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             let mut f = ctx2.begin_figure(vg::FillRule::EvenOdd);
             sp.sink_widened(&mut f);
             f.end();
+        }*/
+        {
+            let mut f = ctx2.begin_figure(vg::FillRule::Winding);
+            f.move_to(Vector2(200.0, -200.0 - 10.0).into());
+            f.line_to(Vector2(200.0, -200.0 - 90.0).into());
+            f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
+            f.line_to(Vector2(340.0, -300.0).into());
+            f.quadratic_bezier_to(Vector2(350.0, -300.0).into(), Vector2(350.0, -290.0).into());
+            f.line_to(Vector2(350.0, -210.0).into());
+            f.quadratic_bezier_to(Vector2(350.0, -200.0).into(), Vector2(340.0, -200.0).into());
+            f.line_to(Vector2(210.0, -200.0).into());
+            f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
+            f.close(); f.end();
         }
 
         let mut bp = BufferPrealloc::new(&e.graphics());

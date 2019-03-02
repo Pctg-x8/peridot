@@ -10,7 +10,7 @@ use font_kit::{error::GlyphLoadingError, hinting::HintingOptions};
 use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, builder::Builder};
 pub use pathfinder_partitioner::FillRule;
 pub use lyon_path::builder::{FlatPathBuilder, PathBuilder};
-use lyon_path::PathEvent;
+// use lyon_path::PathEvent;
 use lyon_path::geom::euclid::{Transform2D, Vector2D, Angle};
 use peridot_math::{Vector2, Vector2F32};
 
@@ -71,7 +71,7 @@ impl Context {
         return Ok(self);
     }
 }
-type V2F32 = euclid::Vector2D<f32>;
+/*type V2F32 = euclid::Vector2D<f32>;
 type P2F32 = euclid::Point2D<f32>;
 /// Compute crosspoint: p0 + a * v0 = p1 + b * v1
 /// 
@@ -92,8 +92,8 @@ fn crosspoint_value(p0: P2F32, p1: P2F32, v0: V2F32, v1: V2F32) -> Option<f32> {
     println!("compute crosspoint: {:?}+a*{:?}={:?}+b*{:?}", p0, v0, p1, v1);
     let cv = v0.cross(v1);
     if cv == 0.0 { None } else { Some(v1.cross(p0 - p1) / cv) }
-}
-pub struct StrokePathBuilder { width: f32, traces: Vec<PathEvent>, last: euclid::Point2D<f32> }
+}*/
+/*pub struct StrokePathBuilder { width: f32, traces: Vec<PathEvent>, last: euclid::Point2D<f32> }
 impl StrokePathBuilder {
     pub fn new(width: f32) -> Self {
         StrokePathBuilder { width, traces: Vec::new(), last: euclid::Point2D::new(0.0, 0.0) }
@@ -422,7 +422,7 @@ impl StrokePathBuilder {
             target_builder.close();
         }
     }
-}
+}*/
 impl<'c> FigureContext<'c> {
     pub fn end(mut self) -> &'c mut Context {
         self.partitioner.partition(self.fill_rule);
