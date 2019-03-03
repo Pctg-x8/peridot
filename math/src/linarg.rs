@@ -447,6 +447,20 @@ VariadicElementOps!(for Vector2 (0, 1));
 VariadicElementOps!(for Vector3 (0, 1, 2));
 VariadicElementOps!(for Vector4 (0, 1, 2, 3));
 
+// Bedrock Interop //
+extern crate bedrock as br;
+impl<T: Into<u32> + Copy> br::ImageSize for Vector2<T> {
+    const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_2D;
+    fn conv(&self) -> br::vk::VkExtent3D {
+        br::vk::VkExtent3D { width: self.0.into(), height: self.1.into(), depth: 1 }
+    }
+}
+impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
+    const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_3D;
+    fn conv(&self) -> br::vk::VkExtent3D {
+        br::vk::VkExtent3D { width: self.0.into(), height: self.1.into(), depth: self.2.into() }
+    }
+}
 // euclid interops (for vg) //
 impl<T> Into<euclid::Point2D<T>> for Vector2<T> {
     fn into(self) -> euclid::Point2D<T> { euclid::Point2D::new(self.0, self.1) }

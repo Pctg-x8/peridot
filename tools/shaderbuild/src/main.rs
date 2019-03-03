@@ -42,21 +42,30 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
     let comsh = CombinedShader::from_parsed_blocks(tok.toplevel_blocks());
     let compile_vs = run_compiler_process("vertex", &comsh.emit_vertex_shader())
         .expect("Failed to spawn compiler process");
+    let mut err = false;
     let fragment_shader = if comsh.is_provided_fsh() {
         let compile_fs = run_compiler_process("fragment", &comsh.emit_fragment_shader())
             .expect("Failed to spawn compiler process");
         let cfs_out = compile_fs.wait_with_output().expect("Failed to waiting compiler");
-        if !cfs_out.status.success() { eprintln!("There are some errors while compiling fragment shader"); }
-        let cout = std::str::from_utf8(&cfs_out.stdout).expect("in shaderc[f] output");
-        trace!("Vertex shader output:\n{}", cout);
-        // println!("cfs output: {:?}", cfs_out.stdout);
-        Some(parse_num_output(cout))
+        if !cfs_out.status.success() {
+            eprintln!("There are some errors while compiling fragment shader");
+            err = true;
+            None
+        }
+        else {
+            let cout = std::str::from_utf8(&cfs_out.stdout).expect("in shaderc[f] output");
+            trace!("Vertex shader output:\n{}", cout);
+            // println!("cfs output: {:?}", cfs_out.stdout);
+            Some(parse_num_output(cout))
+        }
     }
     else { None };
     let cvs_out = compile_vs.wait_with_output().expect("Failed to waiting compiler");
     if !cvs_out.status.success() {
         eprintln!("There are some errors while compiling vertex shader.");
+        err = true;
     }
+    if err { return; }
     let cout = std::str::from_utf8(&cvs_out.stdout).expect("in shaderc[v] output");
     trace!("Vertex shader output:\n{}", cout);
     // let vsh_str = String::from_utf8(cvs_out.stdout).unwrap();
