@@ -59,9 +59,10 @@ impl Context {
         for g in glyphs {
             let (adv, size) = (font.advance(g)?, font.bounds(g)?);
             let mut g0 = Partitioner::new();
-            let tf = self.current_transform.post_translate(Vector2D::new(left_offs, -font.ascent()))
-                .post_scale(font.scale_value(), font.scale_value());
-            font.outline(g, HintingOptions::None, g0.builder_mut())?;
+            let tf = self.current_transform
+                .pre_scale(font.scale_value(), font.scale_value())
+                .pre_translate(Vector2D::new(left_offs, -font.ascent()));
+            font.outline(g, HintingOptions::Full(font.em_size()), g0.builder_mut())?;
             g0.partition(FillRule::Winding);
             g0.builder_mut().build_and_reset();
             let (st, ext) = tfconv_st_ext(tf);

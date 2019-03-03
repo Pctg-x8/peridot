@@ -3,7 +3,10 @@ use font_kit::{
     source::SystemSource, font::Font as UnderlyingHandle,
     error::{FontLoadingError, SelectionError, GlyphLoadingError}
 };
-pub use font_kit::{family_name::FamilyName, properties::Properties as FontProperties, hinting::HintingOptions};
+pub use font_kit::{
+    family_name::FamilyName, properties::Properties as FontProperties, hinting::HintingOptions,
+    properties::{Style, Weight, Stretch}
+};
 use euclid::Rect;
 use peridot_math::{Vector2, Vector2F32};
 use lyon_path::builder::PathBuilder;
@@ -34,6 +37,7 @@ impl Font {
             .load().map(|x| Font(x, units_per_em)).map_err(From::from)
     }
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    pub fn em_size(&self) -> f32 { self.1 }
     pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     pub fn ascent(&self) -> f32 { self.0.metrics().ascent }
     pub fn baseline_offset(&self) -> f32 { self.0.metrics().ascent * self.scale_value() }
@@ -51,4 +55,7 @@ impl Font {
         self.0.outline(glyph, hint_opts, builder)
     }
     pub fn units_per_em(&self) -> u32 { self.0.metrics().units_per_em }
+
+    pub fn full_name(&self) -> String { self.0.full_name() }
+    pub fn properties(&self) -> FontProperties { self.0.properties() }
 }
