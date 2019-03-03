@@ -1,5 +1,5 @@
 [package]
-name = "peridot_mmdloader"
+name = "peridot-mmdloader"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 

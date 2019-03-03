@@ -15,6 +15,7 @@ peridot-archive = { path = "archive" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 peridot-math = { path = "math" }
 peridot-vg = { path = "vg" }
+peridot-mmdloader = { path = "mmdloader" }
 
 [workspace]
 exclude = ["extras/"]
