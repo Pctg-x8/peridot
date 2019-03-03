@@ -15,7 +15,7 @@ pub struct PolygonModelExtended {
     joints: Vec<pmx::Joint>, softbodies: Vec<pmx::Softbody>
 }
 impl PolygonModelExtended {
-    pub fn load<P: AsRef<Path>>(filepath: P) -> Result<Self, pmx::LoadingError> {
+    pub fn load<P: AsRef<Path> + ?Sized>(filepath: &P) -> Result<Self, pmx::LoadingError> {
         let mut bin = File::open(filepath)?;
         let header = pmx::Header::load(&mut bin)?;
         let vertices = pmx::read_array(&mut bin,
@@ -215,9 +215,11 @@ pub mod pmx {
         }
     }
 
+    #[derive(Debug)]
     pub struct Vertex {
         position: Vec3, normal: Vec3, uv: Vec2, additional_vec4s: Vec<Vec4>, deform: WeightDeform, edge_scale: f32
     }
+    #[derive(Debug)]
     pub enum WeightDeform {
         AffectSingleBone(i32), AffectDoubleBones(i32, i32, f32), AffectFourBones([i32; 4], [f32; 4]),
         Spherical { b1: i32, b2: i32, weight1: f32, c: Vec3, r0: Vec3, r1: Vec3 },
@@ -230,10 +232,9 @@ pub mod pmx {
             let position = Vec3::from_bytes(&head_bytes[..]);
             let normal = Vec3::from_bytes(&head_bytes[4*3..]);
             let uv = Vec2::from_bytes(&head_bytes[4 * (3 + 3)..]);
-            let mut additional_vec4s = Vec::with_capacity(additional_vec4_count);
-            for n in 0 .. additional_vec4_count {
-                additional_vec4s.push(Vec4::from_bytes(&head_bytes[4 * (3 + 3 + 2 + 4 * n)..]));
-            }
+            let additional_vec4s = (0 .. additional_vec4_count)
+                .map(|x| Vec4::from_bytes(&head_bytes[4 * (3 + 3 + 2 + 4 * x)..]))
+                .collect();
             let deform_type = head_bytes[head_bytes.len() - 1];
             let deform = match deform_type {
                 0 => {
@@ -854,14 +855,16 @@ pub mod pmx {
 fn main() {
     let filename = args().skip(1).next().map(PathBuf::from).expect("Filename");
     println!("Loading {}...", filename.display());
-    let mut vmdfile = File::open(filename).unwrap();
-    let vmd = vmd::MotionData::read(&mut vmdfile).unwrap();
-    println!("VMD Name: {:?}", vmd.name);
-    /*let model = PolygonModelExtended::load(filename).unwrap();
+    // let mut vmdfile = File::open(filename).unwrap();
+    // let vmd = vmd::MotionData::read(&mut vmdfile).unwrap();
+    // println!("VMD Name: {:?}", vmd.name);
+    let model = PolygonModelExtended::load(&filename).unwrap();
     println!("<<Polygon Model Extended v{}>>", model.header.version);
     println!("{}/{}", model.header.model_name.jp, model.header.model_name.univ);
     println!("*** Comments ***");
     println!("{}", model.header.comment.jp);
+    println!("Vertices:");
+    println!("{:?}", model.vertices);
     println!("SurfaceSection:");
     println!("{:?}", model.surfaces);
     println!("Textures:");
@@ -932,5 +935,5 @@ fn main() {
     }*/
     /*println!("Loaded Model: {} (PMX Version {})", model.header.model_name.jp, model.header.version);
     println!("---Comments---");
-    println!("{}", model.header.comment.jp);*/*/
+    println!("{}", model.header.comment.jp);*/
 }
