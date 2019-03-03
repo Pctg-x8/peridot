@@ -3,8 +3,8 @@ use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor
 use std::io::prelude::{Read, Seek, BufRead};
 
 pub trait PlatformAssetLoader {
-    type Asset: Read + Seek;
-    type StreamingAsset: Read;
+    type Asset: Read + Seek + 'static;
+    type StreamingAsset: Read + 'static;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
