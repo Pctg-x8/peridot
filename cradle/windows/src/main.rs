@@ -10,6 +10,7 @@ use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
 
 #[macro_use] extern crate log;
+#[macro_use] extern crate peridot_derive;
 mod userlib;
 
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");

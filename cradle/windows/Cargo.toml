@@ -11,6 +11,7 @@ UseExternalAssetPath = []
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
 peridot = { path = "../.." }
+peridot_derive = { path = "../../derive" }
 log = "0.4"
 env_logger = "0.5"
 
