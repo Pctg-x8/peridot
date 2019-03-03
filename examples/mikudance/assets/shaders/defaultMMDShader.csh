@@ -8,8 +8,9 @@ Uniform[VertexShader](1, 0) ObjectSettings { mat4 tf; }
 
 VertexShader {
     RasterPosition = transpose(vp) * transpose(tf) * ipos;
+    RasterPosition.y = -RasterPosition.y;
     uv_v = uv;
-    lambert_term = dot(light_dir.xyz, normal.xyz) * 0.5 + 0.5;
+    lambert_term = dot(light_dir.xyz, -normal.xyz * vec3(1.0, -1.0, 1.0)) * 0.5 + 0.5;
 }
 Varyings VertexShader -> FragmentShader {
     uv_v: vec2;

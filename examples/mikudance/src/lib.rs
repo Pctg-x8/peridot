@@ -42,7 +42,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         
         let cam = Camera {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
-            position: Vector3(0.0, 0.0, -15.0), rotation: Quaternion::ONE,
+            position: Vector3(0.0, 10.0, -20.0), rotation: Quaternion::ONE,
             depth_range: 1.0 .. 100.0
         };
 
@@ -175,6 +175,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         };
 
         gpb.layout(&pl_model)
+            .cull_mode(br::vk::VK_CULL_MODE_FRONT_BIT)
             .vertex_processing(model_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST));
         let gp_model = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Create GraphicsPipeline for ModelRendering"), &pl_model);
