@@ -211,7 +211,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         for (r, f) in render_cb.iter().zip(&framebuffers) {
             let mut cbr = r.begin().expect("Start Recoding CB");
             cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[
-                br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(1.0, 0)
+                br::ClearValue::Color([0.0, 0.1, 0.2, 1.0]), br::ClearValue::DepthStencil(1.0, 0)
             ], true);
 
             gp_model.bind(&mut cbr);
@@ -275,7 +275,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer) {
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[
-            br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(1.0, 0)
+            br::ClearValue::Color([0.0, 0.1, 0.2, 1.0]), br::ClearValue::DepthStencil(1.0, 0)
         ], true);
 
         self.gp_model.bind(cmd);
