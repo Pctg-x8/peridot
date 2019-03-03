@@ -514,14 +514,18 @@ impl ReadyResourceBarriers {
 pub struct TransferBatch {
     barrier_range_src: BTreeMap<ResourceKey<Buffer>, Range<u64>>,
     barrier_range_dst: BTreeMap<ResourceKey<Buffer>, Range<u64>>,
+    org_layout_src: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
+    org_layout_dst: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
     copy_buffers: HashMap<(ResourceKey<Buffer>, ResourceKey<Buffer>), Vec<VkBufferCopy>>,
+    init_images: BTreeMap<ResourceKey<Image>, (Buffer, u64)>,
     ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
 }
 impl TransferBatch {
     pub fn new() -> Self {
         TransferBatch {
             barrier_range_src: BTreeMap::new(), barrier_range_dst: BTreeMap::new(),
-            copy_buffers: HashMap::new(),
+            org_layout_src: BTreeMap::new(), org_layout_dst: BTreeMap::new(),
+            copy_buffers: HashMap::new(), init_images: BTreeMap::new(),
             ready_barriers: BTreeMap::new()
         }
     }
@@ -536,10 +540,22 @@ impl TransferBatch {
     pub fn add_mirroring_buffer(&mut self, src: &Buffer, dst: &Buffer, offset: u64, bytes: u64) {
         self.add_copying_buffer((src, offset), (dst, offset), bytes);
     }
+    pub fn init_image_from(&mut self, dest: &Image, src: (&Buffer, u64)) {
+        self.init_images.insert(ResourceKey(dest.clone()), (src.0.clone(), src.1));
+        let size = (dest.size().0 * dest.size().1) as u64 * (dest.format().bpp() >> 3) as u64;
+        Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.0.clone()), src.1 .. src.1 + size);
+        self.org_layout_dst.insert(ResourceKey(dest.clone()), br::ImageLayout::Preinitialized);
+    }
+
     pub fn add_buffer_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
         res: &Buffer, byterange: Range<u64>, access_grants: br::vk::VkAccessFlags) {
         self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
             .buffer.push((res.clone(), byterange, access_grants));
+    }
+    pub fn add_image_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
+        res: &Image, layout: br::ImageLayout) {
+        self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
+            .image.push((res.clone(), br::ImageSubresourceRange::color(0, 0), layout));
     }
     pub fn is_empty(&self) -> bool { self.copy_buffers.is_empty() }
     
@@ -560,18 +576,37 @@ impl TransferBatch {
             .map(|(b, r)| br::BufferMemoryBarrier::new(
                 &b.0, r.start as _ .. r.end as _, 0, br::AccessFlags::TRANSFER.write));
         let barriers: Vec<_> = src_barriers.chain(dst_barriers).collect();
+        let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| br::ImageMemoryBarrier::new(
+            &br::ImageSubref::color(&b.0, 0, 0), l0, br::ImageLayout::TransferSrcOpt
+        ));
+        let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| br::ImageMemoryBarrier::new(
+            &br::ImageSubref::color(&b.0, 0, 0), l0, br::ImageLayout::TransferDestOpt
+        ));
+        let barriers_i: Vec<_> = src_barriers_i.chain(dst_barriers_i).collect();
         
         r.pipeline_barrier(br::PipelineStageFlags::HOST, br::PipelineStageFlags::TRANSFER, false,
-            &[], &barriers, &[]);
+            &[], &barriers, &barriers_i);
         for (&(ref s, ref d), ref rs) in &self.copy_buffers { r.copy_buffer(&s.0, &d.0, &rs); }
+        for (d, s) in &self.init_images {
+            trace!("Copying Image: extent={:?}", br::vk::VkExtent3D::from(d.0.size().clone()));
+            r.copy_buffer_to_image(&s.0, &d.0, br::ImageLayout::TransferDestOpt, &[br::vk::VkBufferImageCopy {
+                bufferOffset: s.1, bufferRowLength: 0, bufferImageHeight: 0,
+                imageSubresource: br::vk::VkImageSubresourceLayers::default(),
+                imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
+                imageExtent: d.0.size().clone().into()
+            }]);
+        }
     }
     pub fn sink_graphics_ready_commands(&self, r: &mut br::CmdRecord) {
-        for (&stg, &ReadyResourceBarriers { ref buffer, .. }) in &self.ready_barriers {
+        for (&stg, &ReadyResourceBarriers { ref buffer, ref image, .. }) in &self.ready_barriers {
             let buf_barriers: Vec<_> = buffer.iter()
                 .map(|&(ref r, ref br, a)| br::BufferMemoryBarrier::new(&r, br.start as _ .. br.end as _,
                     br::AccessFlags::TRANSFER.read, a)).collect();
+            let img_barriers: Vec<_> = image.iter()
+                .map(|(r, range, l)| br::ImageMemoryBarrier::new_raw(&r, range, br::ImageLayout::TransferDestOpt, *l))
+                .collect();
             r.pipeline_barrier(br::PipelineStageFlags::TRANSFER, stg, false,
-                &[], &buf_barriers, &[]);
+                &[], &buf_barriers, &img_barriers);
         }
     }
 }

@@ -61,12 +61,14 @@ impl ModelData for vg::Context {
             if xq.lower_control_point_vertex_index != 0xffff_ffff { 3 } else { 0 }
         })).sum();
         
-        let transforms = alloc.add(BufferContent::uniform_texel_dynarray::<GlyphTransform>(self.meshes().len()));
-        let interior_positions = alloc.add(BufferContent::vertices::<BQuadVertexPositions>(interior_positions_count));
-        let interior_indices = alloc.add(BufferContent::indices::<u32>(interior_indices_count));
-        let curve_positions = alloc.add(BufferContent::vertices::<[f32; 2]>(curve_positions_count));
-        let curve_helper_coords = alloc.add(BufferContent::vertices::<BVertexLoopBlinnData>(curve_helper_coords_count));
-        let curve_indices = alloc.add(BufferContent::indices::<u32>(curve_indices_count));
+        let transforms = alloc.add(BufferContent::uniform_texel_dynarray::<GlyphTransform>(self.meshes().len())) as _;
+        let interior_positions =
+            alloc.add(BufferContent::vertices::<BQuadVertexPositions>(interior_positions_count)) as _;
+        let interior_indices = alloc.add(BufferContent::indices::<u32>(interior_indices_count)) as _;
+        let curve_positions = alloc.add(BufferContent::vertices::<[f32; 2]>(curve_positions_count)) as _;
+        let curve_helper_coords =
+            alloc.add(BufferContent::vertices::<BVertexLoopBlinnData>(curve_helper_coords_count)) as _;
+        let curve_indices = alloc.add(BufferContent::indices::<u32>(curve_indices_count)) as _;
         VgContextPreallocOffsets {
             transforms, interior_positions, interior_indices, curve_positions, curve_helper_coords, curve_indices
         }
@@ -174,15 +176,15 @@ impl ModelData for super::PolygonModelExtended {
     type RendererParams = PMXRenderingParams;
 
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType {
-        let vbuf_suballoc_positions = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len()));
-        let vbuf_suballoc_normals = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len()));
-        let vbuf_suballoc_uvs = alloc.add(BufferContent::vertices::<Vector2F32>(self.vertices.len()));
+        let vbuf_suballoc_positions = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len())) as _;
+        let vbuf_suballoc_normals = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len())) as _;
+        let vbuf_suballoc_uvs = alloc.add(BufferContent::vertices::<Vector2F32>(self.vertices.len())) as _;
         let ibuf_offset = if self.header.index_sizes.vertex == mmdloader::pmx::IndexSize::Long {
             // use 32bit
-            alloc.add(BufferContent::indices::<u32>(self.surfaces.len() * 3))
+            alloc.add(BufferContent::indices::<u32>(self.surfaces.len() * 3)) as _
         }
         else {
-            alloc.add(BufferContent::indices::<u16>(self.surfaces.len() * 3))
+            alloc.add(BufferContent::indices::<u16>(self.surfaces.len() * 3)) as _
         };
 
         PMXDataPlacementOffsets {

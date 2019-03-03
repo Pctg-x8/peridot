@@ -2,5 +2,6 @@ extras/
 target/
 **/*.rs.bk
 *.lock
+.vscode/
 android-build
 **/*.pvp

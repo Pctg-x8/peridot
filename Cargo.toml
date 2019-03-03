@@ -9,13 +9,15 @@ edition = "2018"
 pathfinder_partitioner = { path = "extras/pathfinder/partitioner" }
 log = "*"
 libc = "*"
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 peridot-math = { path = "math" }
 peridot-vg = { path = "vg" }
 peridot-mmdloader = { path = "mmdloader" }
+
+image = "*"
 
 [workspace]
 exclude = ["extras/"]
