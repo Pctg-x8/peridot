@@ -14,6 +14,8 @@ pub struct VgRendererFragmentFixedColor {
     r: f32, g: f32, b: f32, a: f32
 }
 
+const BACK_COLOR: [f32; 4] = [0.2, 0.18, 0.2, 1.0];
+
 pub struct Game<PL: peridot::NativeLinker> {
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, buffer: Buffer,
     _bufview: br::BufferView,
@@ -129,7 +131,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         for (r, f) in render_cb.iter().zip(&framebuffers) {
             let mut cbr = r.begin().expect("Start Recoding CB");
             cbr.begin_render_pass(&renderpass, f, f.size().clone().into(),
-                &[br::ClearValue::Color([0.1, 0.1, 0.1, 1.0])], true);
+                &[br::ClearValue::Color(BACK_COLOR)], true);
             vg_renderer_params.default_render_commands(e, &mut cbr, &buffer, &vg_renderer_exinst);
             cbr.end_render_pass();
         }
@@ -165,7 +167,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer) {
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
-            &[br::ClearValue::Color([0.1, 0.1, 0.1, 1.0])], true);
+            &[br::ClearValue::Color(BACK_COLOR)], true);
         self.vg_renderer_params.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst);
         cmd.end_render_pass();
     }
