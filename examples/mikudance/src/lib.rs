@@ -3,11 +3,13 @@ use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules, vg, SpecConstantStorage, PolygonModelExtended, BufferContent};
+    PvpShaderModules, vg, SpecConstantStorage, PolygonModelExtended, BufferContent,
+    DepthStencilTexture2D};
 use peridot::math::{Vector2, Vector3, Matrix4, Vector4, Camera, ProjectionMethod, Quaternion, One};
 use std::rc::Rc;
 use std::borrow::Cow;
 use peridot::vg::{PathBuilder, FlatPathBuilder};
+use peridot::Discardable;
 
 #[derive(SpecConstantStorage)] #[repr(C)]
 pub struct VgRendererFragmentFixedColor {
@@ -23,6 +25,7 @@ pub struct VgRendererFragmentFixedColor {
 
 pub struct Game<PL: peridot::NativeLinker> {
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, buffer: Buffer,
+    depth_buffer: Discardable<DepthStencilTexture2D>,
     _bufview: br::BufferView,
     _descriptors: (br::DescriptorSetLayout, br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
     vg_renderer_params: peridot::VgRendererParams,
@@ -64,6 +67,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let model_offs = model.prealloc(&mut bp);
         let vg_offs = ctx.prealloc(&mut bp);
 
+        let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
+        let depth_buffer = DepthStencilTexture2D::init(&e.graphics(), &Vector2(screen_size.0, screen_size.1),
+            peridot::PixelFormat::D24S8)
+            .expect("Init DepthStencilTexture2D");
+
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
         
@@ -73,8 +81,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut mb_stg = MemoryBadget::new(&e.graphics());
         mb_stg.add(stg_buffer);
         let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("No objects?").unwrap_buffer();
+
+        let mut mb_scrbuf = MemoryBadget::new(&e.graphics());
+        mb_scrbuf.add(depth_buffer);
+        let depth_buffer = DepthStencilTexture2D::new(
+            mb_scrbuf.alloc().expect("ScreenBuffer Memory Allocation").pop().expect("No objects?").unwrap_image()
+        ).expect("Creating DepthStencilTexture2D");
         
-        let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
         let (vg_renderer_params, model_render_params) = stg_buffer.guard_map(bp.total_size(), |m| {
             let (v, p) = cam.matrixes();
             let aspect = Matrix4::scale(Vector4(screen_size.1 as f32 / screen_size.0 as f32, 1.0, 1.0, 1.0));
@@ -100,14 +113,18 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 br::AccessFlags::SHADER.read | br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::INDEX_READ);
             tfb.sink_transfer_commands(rec);
             tfb.sink_graphics_ready_commands(rec);
+            rec.pipeline_barrier(br::PipelineStageFlags::TOP_OF_PIPE, br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                false, &[], &[], &[
+                    br::ImageMemoryBarrier::new_raw(&depth_buffer, &br::ImageSubresourceRange::depth_stencil(0, 0),
+                        br::ImageLayout::Undefined, br::ImageLayout::DepthStencilAttachmentOpt)
+                ]);
         }).expect("ImmResource Initialization");
 
-        /*let renderpass = RenderPassTemplates::single_render_with_depth(e.backbuffer_format(),
+        let renderpass = RenderPassTemplates::single_render_with_depth(e.backbuffer_format(),
             br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
-            .create(&e.graphics()).expect("RenderPass Creation");*/
-        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
             .create(&e.graphics()).expect("RenderPass Creation");
-        let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
+        let framebuffers = e.backbuffers().iter()
+            .map(|v| br::Framebuffer::new(&renderpass, &[v, &depth_buffer], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
         let dsl = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
@@ -171,7 +188,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0));
         gpb.vertex_processing(interior_vertex_processing)
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
-            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
+            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
+            .depth_test_settings(None, false);
         let gp = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Create GraphicsPipeline"), &pl);
         gpb.vertex_processing(curve_vertex_processing);
         let gp_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
@@ -183,6 +201,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         gpb.layout(&pl_model)
             .cull_mode(br::vk::VK_CULL_MODE_FRONT_BIT)
+            .depth_test_settings(Some(br::CompareOp::Less), true)
             .vertex_processing(model_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST));
         let gp_model = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Create GraphicsPipeline for ModelRendering"), &pl_model);
@@ -191,7 +210,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Creating RenderCB");
         for (r, f) in render_cb.iter().zip(&framebuffers) {
             let mut cbr = r.begin().expect("Start Recoding CB");
-            cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
+            cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[
+                br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(1.0, 0)
+            ], true);
 
             gp_model.bind(&mut cbr);
             cbr.bind_graphics_descriptor_sets(0, &descs[1..3], &[]);
@@ -204,7 +225,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         Game {
             ph: PhantomData, buffer, renderpass, framebuffers, _bufview: bufview,
             _descriptors: (dsl, dsl_model, dp, descs), render_cb, vg_renderer_params, vg_renderer_exinst,
-            gp_model, model_render_params
+            gp_model, model_render_params, depth_buffer: Discardable::from(depth_buffer)
         }
     }
 
@@ -219,9 +240,30 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn discard_backbuffer_resources(&mut self) {
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
+        self.depth_buffer.discard_lw();
     }
     fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>) {
-        self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
+        let &br::Extent3D(w, h, _) = e.backbuffers()[0].size();
+        
+        let depth_buffer = DepthStencilTexture2D::init(&e.graphics(), &Vector2(w, h),
+            peridot::PixelFormat::D24S8)
+            .expect("Init DepthStencilTexture2D");
+        let mut mb_scrbuf = MemoryBadget::new(&e.graphics());
+        mb_scrbuf.add(depth_buffer);
+        self.depth_buffer.set_lw(DepthStencilTexture2D::new(
+            mb_scrbuf.alloc().expect("ScreenBuffer Memory Allocation").pop().expect("No objects?").unwrap_image()
+        ).expect("Creating DepthStencilTexture2D"));
+        e.submit_commands(|rec| {
+            rec.pipeline_barrier(br::PipelineStageFlags::TOP_OF_PIPE, br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                false, &[], &[], &[
+                    br::ImageMemoryBarrier::new_raw(&self.depth_buffer.get(),
+                        &br::ImageSubresourceRange::depth_stencil(0, 0),
+                        br::ImageLayout::Undefined, br::ImageLayout::DepthStencilAttachmentOpt)
+                ]);
+        }).expect("ImmResource Initialization");
+
+        self.framebuffers = e.backbuffers().iter()
+            .map(|v| br::Framebuffer::new(&self.renderpass, &[v, &self.depth_buffer.get()], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         for (r, f) in self.render_cb.iter().zip(&self.framebuffers) {
             let mut cbr = r.begin().expect("Start Recording CB");
@@ -232,7 +274,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer) {
-        cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
+        cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[
+            br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(1.0, 0)
+        ], true);
 
         self.gp_model.bind(cmd);
         cmd.bind_graphics_descriptor_sets(0, &self._descriptors.3[1..3], &[]);

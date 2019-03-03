@@ -190,13 +190,16 @@ impl br::VkHandle for Image {
 #[derive(Clone, Copy)] #[repr(i32)]
 pub enum PixelFormat {
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-    BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM
+    BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM,
+    D24S8 = br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+    D16 = br::vk::VK_FORMAT_D16_UNORM
 }
 impl PixelFormat {
     /// Bits per pixel for each format enums
     pub fn bpp(&self) -> usize {
         match *self {
-            PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32
+            PixelFormat::RGBA32 | PixelFormat::BGRA32 | PixelFormat::D24S8 => 32,
+            PixelFormat::D16 => 16
         }
     }
 }
@@ -218,6 +221,26 @@ impl Texture2D {
     pub fn image(&self) -> &Image { &self.1 }
 }
 impl Deref for Texture2D {
+    type Target = br::ImageView;
+    fn deref(&self) -> &br::ImageView { &self.0 }
+}
+
+pub struct DepthStencilTexture2D(br::ImageView, Image);
+impl DepthStencilTexture2D {
+    pub fn init(g: &br::Device, size: &math::Vector2<u32>, format: PixelFormat) -> br::Result<br::Image> {
+        let idesc = br::ImageDesc::new(size, format as _, br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            br::ImageLayout::Undefined);
+        return idesc.create(g);
+    }
+    pub fn new(img: Image) -> br::Result<Self> {
+        return img.create_view(None, None, &br::ComponentMapping::default(),
+            &br::ImageSubresourceRange::depth_stencil(0, 0))
+            .map(|v| DepthStencilTexture2D(v, img))
+    }
+
+    pub fn image(&self) -> &Image { &self.1 }
+}
+impl Deref for DepthStencilTexture2D {
     type Target = br::ImageView;
     fn deref(&self) -> &br::ImageView { &self.0 }
 }

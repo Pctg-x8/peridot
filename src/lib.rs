@@ -518,7 +518,8 @@ pub struct TransferBatch {
     org_layout_dst: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
     copy_buffers: HashMap<(ResourceKey<Buffer>, ResourceKey<Buffer>), Vec<VkBufferCopy>>,
     init_images: BTreeMap<ResourceKey<Image>, (Buffer, u64)>,
-    ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
+    ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>,
+    undefined_to_ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
 }
 impl TransferBatch {
     pub fn new() -> Self {
@@ -526,7 +527,8 @@ impl TransferBatch {
             barrier_range_src: BTreeMap::new(), barrier_range_dst: BTreeMap::new(),
             org_layout_src: BTreeMap::new(), org_layout_dst: BTreeMap::new(),
             copy_buffers: HashMap::new(), init_images: BTreeMap::new(),
-            ready_barriers: BTreeMap::new()
+            ready_barriers: BTreeMap::new(),
+            undefined_to_ready_barriers: BTreeMap::new()
         }
     }
     pub fn add_copying_buffer(&mut self, src: (&Buffer, u64), dst: (&Buffer, u64), bytes: u64) {
