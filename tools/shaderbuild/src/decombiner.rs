@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclarationOps {
     VertexInput, VertexShader, FragmentShader, Varyings, SpecConstant, Uniform, PushConstant, Header,
-    SamplerBuffer
+    SamplerBuffer, Sampler(usize)
 }
 impl DeclarationOps {
     fn parse(tok: &mut Tokenizer) -> Option<Self> {
@@ -20,6 +20,9 @@ impl DeclarationOps {
             Some("VertexShader") => Some(DeclarationOps::VertexShader),
             Some("PushConstant") => Some(DeclarationOps::PushConstant),
             Some("VertexInput") => Some(DeclarationOps::VertexInput),
+            Some("Sampler1D") => Some(DeclarationOps::Sampler(1)),
+            Some("Sampler2D") => Some(DeclarationOps::Sampler(2)),
+            Some("Sampler3D") => Some(DeclarationOps::Sampler(3)),
             Some("Varyings") => Some(DeclarationOps::Varyings),
             Some("Uniform") => Some(DeclarationOps::Uniform),
             Some("Header") => Some(DeclarationOps::Header),
@@ -262,6 +265,7 @@ pub enum ToplevelBlock<'s> {
     SpecConstant(br::ShaderStage, usize, &'s str, &'s str, &'s str),
     Uniform(br::ShaderStage, usize, usize, &'s str, &'s str),
     SamplerBuffer(br::ShaderStage, usize, usize, &'s str),
+    Sampler(br::ShaderStage, usize, usize, usize, &'s str),
     PushConstant(br::ShaderStage, &'s str, &'s str),
     Header(br::ShaderStage, &'s str)
 }
@@ -325,6 +329,12 @@ impl<'s> Tokenizer<'s> {
         let id = self.strip_ignores().strip_ident().expect("Identifier for GLSL VariableName required");
         return ToplevelBlock::SamplerBuffer(stg, set, binding, id);
     }
+    pub fn sampler(&mut self, dim: usize) -> ToplevelBlock<'s> {
+        let (stg, set, binding) = self.resource_header_rest()
+            .expect("ShaderStage then pair of descriptor set and binding indices required");
+        let id = self.strip_ignores().strip_ident().expect("Identifier for GLSL VariableName required");
+        return ToplevelBlock::Sampler(stg, set, binding, dim, id);
+    }
     pub fn push_constant(&mut self) -> ToplevelBlock<'s> {
         let stg = self.push_constant_header_rest().expect("ShaderStage is required");
         let id = self.strip_ignores().strip_ident().expect("Identifier for PushConstant TypeName required");
@@ -359,7 +369,8 @@ impl<'s> Tokenizer<'s> {
             DeclarationOps::Uniform => self.uniform(),
             DeclarationOps::PushConstant => self.push_constant(),
             DeclarationOps::Header => self.rawcode_header(),
-            DeclarationOps::SamplerBuffer => self.sampler_buffer()
+            DeclarationOps::SamplerBuffer => self.sampler_buffer(),
+            DeclarationOps::Sampler(d) => self.sampler(d)
         }
     }
 
@@ -373,9 +384,9 @@ impl<'s> Tokenizer<'s> {
 pub type GlslType<'s> = &'s str;
 
 #[derive(Debug, Clone)]
-pub enum ResourceDefinition<'s> {
+pub enum DescriptorBoundResource<'s> {
     Uniform { struct_name: &'s str, member_code: &'s str },
-    SamplerBuffer(&'s str)
+    SamplerBuffer(&'s str), Sampler(usize, &'s str)
 }
 #[derive(Debug, Clone)]
 pub struct CombinedShader<'s> {
@@ -384,7 +395,7 @@ pub struct CombinedShader<'s> {
     vertex_shader_code: &'s str, fragment_shader_code: Option<&'s str>,
     varyings_between_shaders: Vec<(br::ShaderStage, br::ShaderStage, Vec<Variable<'s>>)>,
     spec_constants_per_stage: BTreeMap<br::ShaderStage, BTreeMap<usize, (&'s str, GlslType<'s>, &'s str)>>,
-    resources_per_stage: BTreeMap<br::ShaderStage, BTreeMap<(usize, usize), ResourceDefinition<'s>>>,
+    resources_per_stage: BTreeMap<br::ShaderStage, BTreeMap<(usize, usize), DescriptorBoundResource<'s>>>,
     push_constant_per_stage: BTreeMap<br::ShaderStage, (&'s str, &'s str)>
 }
 impl<'s> CombinedShader<'s> {
@@ -423,16 +434,23 @@ impl<'s> CombinedShader<'s> {
                     if storage.contains_key(&(set, binding)) {
                         panic!("Multiple Definitions of the Resource for same (set, binding) in same stage");
                     }
-                    storage.insert((set, binding), ResourceDefinition::Uniform {
+                    storage.insert((set, binding), DescriptorBoundResource::Uniform {
                         struct_name: name, member_code: init
                     });
+                },
+                ToplevelBlock::Sampler(stg, set, binding, dim, name) => {
+                    let storage = cs.resources_per_stage.entry(stg).or_insert_with(BTreeMap::new);
+                    if storage.contains_key(&(set, binding)) {
+                        panic!("Multiple Definitions of the Resource for same (set, binding) in same stage");
+                    }
+                    storage.insert((set, binding), DescriptorBoundResource::Sampler(dim, name));
                 },
                 ToplevelBlock::SamplerBuffer(stg, set, binding, name) => {
                     let storage = cs.resources_per_stage.entry(stg).or_insert_with(BTreeMap::new);
                     if storage.contains_key(&(set, binding)) {
                         panic!("Multiple Definitions of the Resource for same (set, binding) in same stage");
                     }
-                    storage.insert((set, binding), ResourceDefinition::SamplerBuffer(name));
+                    storage.insert((set, binding), DescriptorBoundResource::SamplerBuffer(name));
                 },
                 ToplevelBlock::PushConstant(stg, name, members) => {
                     if cs.push_constant_per_stage.contains_key(&stg) {
@@ -484,19 +502,7 @@ impl<'s> CombinedShader<'s> {
                 code += &format!("layout(constant_id = {}) const {} {} = {};\n", id, ty, name, init);
             }
         }
-        if let Some(ufs) = self.resources_per_stage.get(&br::ShaderStage::VERTEX) {
-            for (&(set, bindings), r) in ufs.iter() {
-                code += &format!("layout(set = {}, binding = {}) ", set, bindings);
-                match r {
-                    ResourceDefinition::Uniform { struct_name, member_code } => {
-                        code += &format!("uniform {} {{{}}};\n", struct_name, member_code);
-                    },
-                    ResourceDefinition::SamplerBuffer(name) => {
-                        code += &format!("uniform samplerBuffer {};\n", name)
-                    }
-                }
-            }
-        }
+        self.emit_resource_bindings(&mut code, br::ShaderStage::VERTEX);
         if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::VERTEX) {
             code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
         }
@@ -539,19 +545,7 @@ impl<'s> CombinedShader<'s> {
                 code += &format!("layout(constant_id = {}) const {} {} = {};\n", id, ty, name, init);
             }
         }
-        if let Some(ufs) = self.resources_per_stage.get(&br::ShaderStage::FRAGMENT) {
-            for (&(set, bindings), r) in ufs.iter() {
-                code += &format!("layout(set = {}, binding = {}) ", set, bindings);
-                match r {
-                    ResourceDefinition::Uniform { struct_name, member_code } => {
-                        code += &format!("uniform {} {{{}}};\n", struct_name, member_code);
-                    },
-                    ResourceDefinition::SamplerBuffer(name) => {
-                        code += &format!("uniform samplerBuffer {};\n", name)
-                    }
-                }
-            }
-        }
+        self.emit_resource_bindings(&mut code, br::ShaderStage::FRAGMENT);
         if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::FRAGMENT) {
             code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
         }
@@ -568,12 +562,18 @@ impl<'s> CombinedShader<'s> {
     fn emit_resource_bindings(&self, code: &mut String, stage: br::ShaderStage) {
         if let Some(ufs) = self.resources_per_stage.get(&stage) {
             for (&(set, bindings), d) in ufs.iter() {
-                *code += &match d {
-                    DescriptorBoundResource::Uniform { id, code } =>
-                        format!("layout(set = {}, binding = {}) uniform {} {{{}}};\n", set, bindings, id, code),
-                    DescriptorBoundResource::Sampler(dim, id) =>
-                        format!("layout(set = {}, binding = {}) uniform sampler{}D {};\n", set, bindings, dim, id)
-                };
+                *code += &format!("layout(set = {}, binding = {}) ", set, bindings);
+                match d {
+                    DescriptorBoundResource::Uniform { struct_name, member_code } => {
+                        *code += &format!("uniform {} {{{}}};\n", struct_name, member_code);
+                    },
+                    DescriptorBoundResource::SamplerBuffer(name) => {
+                        *code += &format!("uniform samplerBuffer {};\n", name);
+                    },
+                    DescriptorBoundResource::Sampler(dim, name) => {
+                        *code += &format!("uniform sampler{}D {};\n", dim, name);
+                    }
+                }
             }
         }
     }
