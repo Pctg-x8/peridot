@@ -35,11 +35,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let font =
             vg::Font::best_match(&[vg::FamilyName::Title("Yu Gothic UI".to_owned())], &vg::FontProperties::new(), 12.0)
             .expect("No Fonts");
-        println!("font: {}", font.full_name());
-        println!("props: {:?}", font.properties());
         let mut ctx = vg::Context::new();
         ctx.text(&font, &format!("Model: {} / {}", model.name_jp(), model.name()));
-        ctx.translate(Vector2(6.0, -14.0)).text(&font, "(C) Appland, Inc. (c)Siro YouTuber");
         /*{
             let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
