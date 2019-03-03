@@ -5,7 +5,7 @@ use bedrock as br;
 use pathfinder_partitioner::{BQuadVertexPositions, BVertexLoopBlinnData};
 use std::ops::Range;
 use std::mem::size_of;
-use self::math::Vector2;
+use self::math::{Vector2, Vector2F32, Vector4F32, Vector4};
 
 // 仮定義
 pub trait ModelData {
@@ -158,5 +158,81 @@ impl DefaultRenderCommands for VgRendererParams {
             cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32));
             cmd.draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
         }
+    }
+}
+
+pub struct PMXDataPlacementOffsets {
+    pub vbuf_suballoc_positions: usize, pub ibuf_offset: usize,
+    pub vbuf_suballoc_normals: usize, pub vbuf_suballoc_uvs: usize
+}
+pub struct PMXRenderingParams {
+    index_size: br::IndexType, offsets: PMXDataPlacementOffsets,
+    index_count: u32
+}
+impl ModelData for super::PolygonModelExtended {
+    type PreallocOffsetType = PMXDataPlacementOffsets;
+    type RendererParams = PMXRenderingParams;
+
+    fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType {
+        let vbuf_suballoc_positions = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len()));
+        let vbuf_suballoc_normals = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len()));
+        let vbuf_suballoc_uvs = alloc.add(BufferContent::vertices::<Vector2F32>(self.vertices.len()));
+        let ibuf_offset = if self.header.index_sizes.vertex == mmdloader::pmx::IndexSize::Long {
+            // use 32bit
+            alloc.add(BufferContent::indices::<u32>(self.surfaces.len() * 3))
+        }
+        else {
+            alloc.add(BufferContent::indices::<u16>(self.surfaces.len() * 3))
+        };
+
+        PMXDataPlacementOffsets {
+            vbuf_suballoc_positions, vbuf_suballoc_normals, vbuf_suballoc_uvs, ibuf_offset
+        }
+    }
+    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: Self::PreallocOffsetType) -> PMXRenderingParams {
+        let positions_stg = unsafe { mem.slice_mut(offsets.vbuf_suballoc_positions, self.vertices.len()) };
+        let normals_stg = unsafe { mem.slice_mut(offsets.vbuf_suballoc_normals, self.vertices.len()) };
+        let uvs_stg = unsafe { mem.slice_mut(offsets.vbuf_suballoc_uvs, self.vertices.len()) };
+        for (i, v) in self.vertices.iter().enumerate() {
+            positions_stg[i] = Vector4(v.position.0, v.position.1, v.position.2, 1.0);
+            normals_stg[i] = Vector4(v.normal.0, v.normal.1, v.normal.2, 0.0);
+            uvs_stg[i] = Vector2(v.uv.0, v.uv.1);
+        }
+
+        let index_size = match self.surfaces {
+            mmdloader::pmx::SurfaceSection::Long(ref lv) => unsafe {
+                // 32bit indices
+                mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).clone_from_slice(&lv);
+                br::IndexType::U32
+            },
+            mmdloader::pmx::SurfaceSection::Short(ref lv) => unsafe {
+                // 16bit indices
+                mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).clone_from_slice(&lv);
+                br::IndexType::U16
+            },
+            mmdloader::pmx::SurfaceSection::Byte(ref lv) => unsafe {
+                // 16bit indices with extending
+                for (d, s) in mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).iter_mut().zip(lv) {
+                    *d = [s[0] as u16, s[1] as u16, s[2] as u16];
+                }
+                br::IndexType::U16
+            }
+        };
+
+        PMXRenderingParams { index_size, offsets, index_count: (self.surfaces.len() * 3) as _ }
+    }
+}
+impl DefaultRenderCommands for PMXRenderingParams {
+    type Extras = ();
+
+    fn default_render_commands<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>,
+        cmd: &mut br::CmdRecord, buffer: &Buffer, _extras: &()) {
+        cmd.bind_vertex_buffers(0, &[
+            (buffer, self.offsets.vbuf_suballoc_positions),
+            (buffer, self.offsets.vbuf_suballoc_normals),
+            (buffer, self.offsets.vbuf_suballoc_uvs),
+        ]);
+        cmd.bind_index_buffer(buffer, self.offsets.ibuf_offset, self.index_size);
+        cmd.draw_indexed(self.index_count, 1, 0, 0, 0);
     }
 }

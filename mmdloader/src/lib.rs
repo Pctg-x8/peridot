@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 mod vmd;
 
 pub struct PolygonModelExtended {
-    header: pmx::Header, vertices: Vec<pmx::Vertex>, surfaces: pmx::SurfaceSection,
+    pub header: pmx::Header, pub vertices: Vec<pmx::Vertex>, pub surfaces: pmx::SurfaceSection,
     textures: Vec<PathBuf>, materials: Vec<pmx::Material>, bones: Vec<pmx::Bone>,
     morphs: Vec<pmx::Morph>, display_frames: Vec<pmx::DisplayFrame>, rigid_bodies: Vec<pmx::RigidBody>,
     joints: Vec<pmx::Joint>, softbodies: Vec<pmx::Softbody>
@@ -104,11 +104,11 @@ pub mod pmx {
         }
     }
     #[repr(C)] #[derive(Clone, Debug)]
-    pub struct Vec2(f32, f32);
+    pub struct Vec2(pub f32, pub f32);
     #[repr(C)] #[derive(Clone, Debug)]
-    pub struct Vec3(f32, f32, f32);
+    pub struct Vec3(pub f32, pub f32, pub f32);
     #[repr(C)] #[derive(Clone, Debug)]
-    pub struct Vec4(f32, f32, f32, f32);
+    pub struct Vec4(pub f32, pub f32, pub f32, pub f32);
     impl TypedReader for Vec2 {
         fn from_bytes(bytes: &[u8]) -> Self { unsafe { transmute::<_, &[Self]>(bytes)[0].clone() } }
         fn read_value1<R: Read + ?Sized>(reader: &mut R) -> IOResult<Self> {
@@ -158,7 +158,7 @@ pub mod pmx {
         pub version: f32, pub string_reader: Box<StringReader>, pub additional_vec4_count: u8,
         pub index_sizes: IndexSizes, pub model_name: GlobalizedStrings, pub comment: GlobalizedStrings
     }
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
     pub enum IndexSize { Byte, Short, Long }
     pub struct IndexSizes {
         pub vertex: IndexSize, pub texture: IndexSize, pub material: IndexSize, pub bone: IndexSize,
@@ -227,7 +227,8 @@ pub mod pmx {
 
     #[derive(Debug)]
     pub struct Vertex {
-        position: Vec3, normal: Vec3, uv: Vec2, additional_vec4s: Vec<Vec4>, deform: WeightDeform, edge_scale: f32
+        pub position: Vec3, pub normal: Vec3, pub uv: Vec2, pub additional_vec4s: Vec<Vec4>,
+        pub deform: WeightDeform, pub edge_scale: f32
     }
     #[derive(Debug)]
     pub enum WeightDeform {
@@ -324,6 +325,13 @@ pub mod pmx {
                     reader.read_exact(sink)?;
                     return Ok(SurfaceSection::Long(bytes));
                 }
+            }
+        }
+        pub fn len(&self) -> usize {
+            match self {
+                SurfaceSection::Byte(v) => v.len(),
+                SurfaceSection::Short(v) => v.len(),
+                SurfaceSection::Long(v) => v.len()
             }
         }
     }
