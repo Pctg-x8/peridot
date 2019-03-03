@@ -99,8 +99,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             tfb.sink_graphics_ready_commands(rec);
         }).expect("ImmResource Initialization");
 
-        let screen_size = e.backbuffers()[0].size().clone();
-        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
+        let renderpass = RenderPassTemplates::single_render_with_depth(e.backbuffer_format(),
+            br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
             .create(&e.graphics()).expect("RenderPass Creation");
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
