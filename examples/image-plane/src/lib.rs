@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::mem::size_of;
 use peridot::Discardable;
 
-pub struct Game<PL: peridot::PlatformLinker> {
+pub struct Game<PL: peridot::NativeLinker> {
     ph: PhantomData<*const PL>, buffer: peridot::Buffer, rot: f32, stg_buffer: peridot::Buffer,
     render_cb: peridot::CommandBundle, update_cb: peridot::CommandBundle,
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>,
@@ -22,11 +22,11 @@ pub struct Game<PL: peridot::PlatformLinker> {
     _res: (peridot::Texture2D, br::Sampler),
     vertices_offset: u64
 }
-impl<PL: peridot::PlatformLinker> Game<PL> {
+impl<PL: peridot::NativeLinker> Game<PL> {
     pub const NAME: &'static str = "Peridot Examples - ImagePlane";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
-impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
+impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
 
@@ -208,7 +208,7 @@ impl<PL: peridot::PlatformLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.populate_render_commands();
     }
 }
-impl<PL: peridot::PlatformLinker> Game<PL> {
+impl<PL: peridot::NativeLinker> Game<PL> {
     fn populate_render_commands(&mut self) {
         for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
             let mut cr = cb.begin().expect("Begin CmdRecord");

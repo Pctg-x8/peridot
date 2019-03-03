@@ -62,26 +62,15 @@ impl peridot::PlatformRenderTarget for WindowHandler {
         (120, 120)
     }
 }
-pub struct PluginLoader<'c> { x11: &'c X11, input: PlatformInputHandler }
-impl<'c> peridot::PluginLoader for PluginLoader<'c> {
+pub struct NativeLink { al: PlatformAssetLoader, wh: WindowHandler, ip: PlatformInputHandler }
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = WindowHandler;
     type InputProcessor = PlatformInputHandler;
 
-    fn new_asset_loader(&self) -> PlatformAssetLoader { PlatformAssetLoader::new() }
-    fn new_render_target_provider(&self) -> WindowHandler {
-        WindowHandler { dp: self.x11.con.get_raw_conn(), vis: self.x11.vis, wid: self.x11.mainwnd_id }
-    }
-    fn input_processor(&mut self) -> &mut PlatformInputHandler { &mut self.input }
-}
-pub struct NativeLink { al: PlatformAssetLoader, prt: WindowHandler }
-impl peridot::PlatformLinker for NativeLink {
-    type AssetLoader = PlatformAssetLoader;
-    type RenderTargetProvider = WindowHandler;
-
-    fn new(al: PlatformAssetLoader, prt: WindowHandler) -> Self { NativeLink { al, prt } }
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
-    fn render_target_provider(&self) -> &WindowHandler { &self.prt }
+    fn render_target_provider(&self) -> &WindowHandler { &self.wh }
+    fn input_processor_mut(&mut self) -> &mut PlatformInputHandler { &mut self.ip }
 }
 type Game = userlib::Game<NativeLink>;
 type Engine = peridot::Engine<Game, NativeLink>;
@@ -136,10 +125,12 @@ fn main() {
     env_logger::init();
     let x11 = X11::init();
 
-    let mut pl = PluginLoader {
-        x11: &x11, input: PlatformInputHandler::new()
+    let n = NativeLink {
+        al: PlatformAssetLoader::new(),
+        wh: WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id },
+        ip: PlatformInputHandler::new()
     };
-    let mut e = Engine::launch(Game::NAME, Game::VERSION, &mut pl).expect("Launching Game");
+    let mut e = Engine::launch(Game::NAME, Game::VERSION, n).expect("Launching Game");
 
     x11.show();
     while x11.process_all_events() { e.do_update(); }

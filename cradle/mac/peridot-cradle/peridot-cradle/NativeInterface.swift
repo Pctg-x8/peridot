@@ -30,9 +30,12 @@ final class NativeGameEngine {
 
 @_cdecl("nsbundle_path_for_resource")
 func nsbundle_path_for_resource(path: NSString, ext: NSString) -> UnsafeMutableRawPointer? {
-    let path = Bundle.main.path(forResource: path as String, ofType: ext as String)
-    if let p = path {
-        return Unmanaged.passRetained(p as NSString).toOpaque()
-    }
-    else { return nil }
+    guard let path = Bundle.main.path(forResource: path as String, ofType: ext as String) else { return nil }
+    return Unmanaged.passRetained(path as NSString).toOpaque()
+}
+
+@_cdecl("nsscreen_backing_scale_factor")
+func nsscreen_backing_scale_factor() -> Float32 {
+    guard let mainScreen = NSScreen.main else { return 0.0 }
+    return Float32(mainScreen.backingScaleFactor)
 }

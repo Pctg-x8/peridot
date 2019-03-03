@@ -12,26 +12,24 @@ mod userlib;
 
 use peridot;
 use self::userlib::Game;
-use std::cell::RefCell;
 use std::rc::Rc;
 
-struct MainWindow {
-    ipp: RefCell<PlatformInputProcessPlugin>, e: RefCell<Option<EngineA>>
-}
+struct MainWindow { e: Option<EngineA> }
 impl MainWindow {
     fn new() -> Self {
-        MainWindow { ipp: PlatformInputProcessPlugin::new().into(), e: RefCell::new(None) }
+        MainWindow { e: None }
     }
-    fn init(&self, app: &android::App) {
-        let mut ipp = self.ipp.borrow_mut();
-        let mut pl = PluginLoader { amgr: unsafe { (*app.activity).asset_manager }, w: app.window, ipp: &mut ipp };
-        *self.e.borrow_mut() = EngineA::launch(GameA::NAME, GameA::VERSION, &mut pl)
-            .expect("Failed to initialize the engine").into();
+    fn init(&mut self, app: &android::App) {
+        let am = unsafe { AssetManager::from_ptr((*app.activity).asset_manager).expect("null assetmanager") };
+        let nl = NativeLink {
+            al: PlatformAssetLoader::new(am), prt: PlatformWindowHandler(app.window),
+            input: PlatformInputProcessPlugin::new()
+        };
+        self.e = EngineA::launch(GameA::NAME, GameA::VERSION, nl).expect("Failed to initialize the engine").into();
     }
-    fn render(&self)
+    fn render(&mut self)
     {
-        let mut b = self.e.borrow_mut();
-        if let Some(e) = b.as_mut() { e.do_update(); }
+        if let Some(e) = self.e.as_mut() { e.do_update(); }
     }
 }
 
@@ -87,29 +85,17 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_STREAMING).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
 }
-struct PluginLoader<'x> {
-    amgr: *mut android::AAssetManager, w: *mut android::ANativeWindow, ipp: &'x mut PlatformInputProcessPlugin
+struct NativeLink {
+    al: PlatformAssetLoader, prt: PlatformWindowHandler, input: PlatformInputProcessPlugin
 }
-impl<'x> peridot::PluginLoader for PluginLoader<'x> {
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
+    type RenderTargetProvider = PlatformWindowHandler;
     type InputProcessor = PlatformInputProcessPlugin;
-    type RenderTargetProvider = PlatformWindowHandler;
 
-    fn new_asset_loader(&self) -> Self::AssetLoader {
-        let am = unsafe { android::AssetManager::from_ptr(self.amgr).expect("null assetmanager") };
-        PlatformAssetLoader::new(am)
-    }
-    fn new_render_target_provider(&self) -> Self::RenderTargetProvider { PlatformWindowHandler(self.w) }
-    fn input_processor(&mut self) -> &mut PlatformInputProcessPlugin { self.ipp }
-}
-struct NativeLink { al: PlatformAssetLoader, prt: PlatformWindowHandler }
-impl peridot::PlatformLinker for NativeLink {
-    type AssetLoader = PlatformAssetLoader;
-    type RenderTargetProvider = PlatformWindowHandler;
-
-    fn new(al: PlatformAssetLoader, prt: PlatformWindowHandler) -> Self { NativeLink { al, prt } }
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &PlatformWindowHandler { &self.prt }
+    fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
 }
 type GameA = Game<NativeLink>;
 type EngineA = peridot::Engine<GameA, NativeLink>;
@@ -118,8 +104,8 @@ type EngineA = peridot::Engine<GameA, NativeLink>;
 pub extern "C" fn android_main(app: *mut android::App) {
     let app = unsafe { app.as_mut().expect("null app") };
     app.on_app_cmd = Some(appcmd_callback);
-    let mw = MainWindow::new();
-    app.user_data = unsafe { std::mem::transmute(&mw) };
+    let mut mw = MainWindow::new();
+    app.user_data = unsafe { std::mem::transmute(&mut mw) };
 
     android_logger::init_once(
         android_logger::Filter::default()
@@ -142,7 +128,7 @@ pub extern "C" fn android_main(app: *mut android::App) {
 
 pub extern "C" fn appcmd_callback(app: *mut android::App, cmd: i32) {
     let app = unsafe { app.as_mut().expect("null app") };
-    let mw = unsafe { std::mem::transmute::<_, *const MainWindow>(app.user_data).as_ref().expect("null window") };
+    let mw = unsafe { std::mem::transmute::<_, *mut MainWindow>(app.user_data).as_mut().expect("null window") };
 
     match cmd {
         android::APP_CMD_INIT_WINDOW => {
