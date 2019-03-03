@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::cell::{Ref, RefMut, RefCell};
 
-mod window; use self::window::WindowRenderTargets;
+mod window; use self::window::{WindowRenderTargets, StateFence};
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
@@ -61,7 +61,8 @@ impl<PL: NativeLinker> EngineEvents<PL> for () {
 
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
     nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
+    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>,
+    last_rendering_completion: StateFence
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
@@ -71,7 +72,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
         let mut this = Engine {
-            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
+            last_rendering_completion: StateFence::new(&g)?,
+            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into(),
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
@@ -123,12 +125,9 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
             _ => ()
         };
         let bb_index = bb_index.expect("Acquiring available backbuffer index");
-        self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _)
-            .wait().expect("Waiting Previous command completion");
+        self.last_rendering_completion.wait().expect("Waiting Last rendering completion");
         self.ip.prepare_for_frame();
         {
-            let bound_wrt = self.wrt.get();
-
             let mut ulib = self.userlib_mut();
             let (copy_submission, mut fb_submission) = ulib.update(self, bb_index);
             if let Some(mut cs) = copy_submission {
@@ -138,8 +137,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
                     (&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                     (&self.g.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER)]);
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
-                self.submit_buffered_commands(&[cs, fb_submission], completion_fence.object())
+                self.submit_buffered_commands(&[cs, fb_submission], self.last_rendering_completion.object())
                     .expect("CommandBuffer Submission");
             }
             else {
@@ -147,14 +145,11 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
                 fb_submission.wait_semaphores.to_mut()
                     .push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
-                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
-                self.submit_buffered_commands(&[fb_submission], completion_fence.object())
+                self.submit_buffered_commands(&[fb_submission], self.last_rendering_completion.object())
                     .expect("CommandBuffer Submission");
             }
         }
-        unsafe {
-            self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _).signal();
-        }
+        unsafe { self.last_rendering_completion.signal(); }
         let pr = self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering]);
         match pr {
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -167,7 +162,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         }
     }
     pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
-        self.wrt.get_mut_lw().wait_all_command_completion_for_backbuffer().expect("Waiting queued commands");
+        self.last_rendering_completion.wait().expect("Waiting Last rendering completion");
         self.userlib_mut_lw().discard_backbuffer_resources();
         self.wrt.discard_lw();
         self.wrt.set(
