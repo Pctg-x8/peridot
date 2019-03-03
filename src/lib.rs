@@ -82,10 +82,10 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
-    pub fn load<A: FromAsset>(&self, path: &str) -> GenericResult<A> {
+    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
     }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> GenericResult<A> {
+    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
     }
 

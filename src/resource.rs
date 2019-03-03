@@ -4,7 +4,7 @@ use std::ops::Deref;
 use std::mem::{size_of, transmute};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferContent { Vertex(usize), Index(usize), Uniform(usize), Raw(usize), UniformTexel(usize) }
+pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64) }
 impl BufferContent {
     fn usage(&self, src: br::BufferUsage) -> br::BufferUsage {
         match *self {
@@ -22,7 +22,7 @@ impl BufferContent {
             _ => 1
         }
     }
-    fn size(&self) -> usize {
+    fn size(&self) -> u64 {
         match *self {
             BufferContent::Vertex(v) | BufferContent::Index(v) | BufferContent::Uniform(v) | BufferContent::Raw(v) |
             BufferContent::UniformTexel(v) => v
@@ -30,14 +30,16 @@ impl BufferContent {
     }
 
     /// Generic Shorthands
-    pub fn vertex<T>() -> Self { BufferContent::Vertex(size_of::<T>()) }
-    pub fn vertices<T>(count: usize) -> Self { BufferContent::Vertex(size_of::<T>() * count) }
-    pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>()) }
-    pub fn indices<T>(count: usize) -> Self { BufferContent::Index(size_of::<T>() * count) }
-    pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>()) }
-    pub fn uniform_dynarray<T>(count: usize) -> Self { BufferContent::Uniform(size_of::<T>() * count) }
-    pub fn uniform_texel<T>() -> Self { BufferContent::UniformTexel(size_of::<T>()) }
-    pub fn uniform_texel_dynarray<T>(count: usize) -> Self { BufferContent::UniformTexel(size_of::<T>() * count) }
+    pub fn vertex<T>() -> Self { BufferContent::Vertex(size_of::<T>() as _) }
+    pub fn vertices<T>(count: usize) -> Self { BufferContent::Vertex(size_of::<T>() as u64 * count as u64) }
+    pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>() as _) }
+    pub fn indices<T>(count: usize) -> Self { BufferContent::Index(size_of::<T>() as u64 * count as u64) }
+    pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>() as _) }
+    pub fn uniform_dynarray<T>(count: usize) -> Self { BufferContent::Uniform(size_of::<T>() as u64 * count as u64) }
+    pub fn uniform_texel<T>() -> Self { BufferContent::UniformTexel(size_of::<T>() as _) }
+    pub fn uniform_texel_dynarray<T>(count: usize) -> Self {
+        BufferContent::UniformTexel(size_of::<T>() as u64 * count as u64)
+    }
 }
 macro_rules! align2 {
     ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
@@ -60,7 +62,7 @@ impl<'g> BufferPrealloc<'g> {
     pub fn add(&mut self, content: BufferContent) -> u64 {
         self.usage = content.usage(self.usage);
         let offs = align2!(self.total, content.alignment(&self.g.adapter));
-        self.total = offs + content.size();
+        self.total = offs + content.size() as u64;
         self.offsets.push(offs);
         return offs;
     }
@@ -159,7 +161,7 @@ impl Buffer {
         self.1.map(self.2 as _ .. (self.2 + size) as _)
     }
     pub unsafe fn unmap(&self) { self.1.unmap() }
-    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, size: usize, f: F) -> br::Result<R> {
+    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, size: u64, f: F) -> br::Result<R> {
         Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(size)?))))
     }
 }
