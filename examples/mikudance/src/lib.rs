@@ -67,9 +67,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
         
-        let buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer(buffer).expect("Mem Allocation");
-        let stg_buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer_host_visible(stg_buffer)
-            .expect("StgMem Allocation");
+        let mut mb = MemoryBadget::new(&e.graphics());
+        mb.add(buffer);
+        let buffer = mb.alloc().expect("Mem Allocation").pop().expect("No objects?").unwrap_buffer();
+        let mut mb_stg = MemoryBadget::new(&e.graphics());
+        mb_stg.add(stg_buffer);
+        let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("No objects?").unwrap_buffer();
         
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
         let (vg_renderer_params, model_render_params) = stg_buffer.guard_map(bp.total_size(), |m| {
@@ -77,8 +80,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             let aspect = Matrix4::scale(Vector4(screen_size.1 as f32 / screen_size.0 as f32, 1.0, 1.0, 1.0));
             let vp = aspect * p * v;
             unsafe {
-                *m.get_mut(world_settings_offs) = WorldSettings { vp, light_dir: Vector4(-0.7, -0.5, 0.3, 0.0) };
-                *m.get_mut(object_settings_offs) = ObjectSettings { tf: Matrix4::ONE };
+                *m.get_mut(world_settings_offs as _) = WorldSettings { vp, light_dir: Vector4(-0.7, -0.5, 0.3, 0.0) };
+                *m.get_mut(object_settings_offs as _) = ObjectSettings { tf: Matrix4::ONE };
             }
 
             let model_render_params = model.stage_data_into(m, model_offs);
@@ -99,8 +102,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             tfb.sink_graphics_ready_commands(rec);
         }).expect("ImmResource Initialization");
 
-        let renderpass = RenderPassTemplates::single_render_with_depth(e.backbuffer_format(),
+        /*let renderpass = RenderPassTemplates::single_render_with_depth(e.backbuffer_format(),
             br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
+            .create(&e.graphics()).expect("RenderPass Creation");*/
+        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
             .create(&e.graphics()).expect("RenderPass Creation");
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
@@ -121,10 +126,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut dub = DescriptorSetUpdateBatch::new();
         dub.write(descs[0], 0, br::DescriptorUpdateInfo::UniformTexelBuffer(vec![bufview.native_ptr()]));
         dub.write(descs[1], 0, br::DescriptorUpdateInfo::UniformBuffer(vec![
-            (buffer.native_ptr(), world_settings_offs .. world_settings_offs + std::mem::size_of::<WorldSettings>())
+            (buffer.native_ptr(),
+                world_settings_offs as usize .. world_settings_offs as usize + std::mem::size_of::<WorldSettings>())
         ]));
         dub.write(descs[2], 0, br::DescriptorUpdateInfo::UniformBuffer(vec![
-            (buffer.native_ptr(), object_settings_offs .. object_settings_offs + std::mem::size_of::<ObjectSettings>())
+            (buffer.native_ptr(),
+                object_settings_offs as usize .. object_settings_offs as usize + std::mem::size_of::<ObjectSettings>())
         ]));
         dub.submit(&e.graphics());
 
