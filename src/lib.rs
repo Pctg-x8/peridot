@@ -9,6 +9,7 @@ extern crate bedrock;
 pub extern crate peridot_math as math;
 pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 pub extern crate peridot_archive as archive;
+pub extern crate peridot_vg as vg;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
@@ -26,6 +27,7 @@ pub mod utils; pub use self::utils::*;
 
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
+mod model; pub use self::model::*;
 
 pub trait NativeLinker {
     type AssetLoader: PlatformAssetLoader;
@@ -35,6 +37,8 @@ pub trait NativeLinker {
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn render_target_provider(&self) -> &Self::RenderTargetProvider;
     fn input_processor_mut(&mut self) -> &mut Self::InputProcessor;
+
+    fn rendering_precision(&self) -> f32 { 1.0 }
 }
 
 pub trait EngineEvents<PL: NativeLinker> : Sized {
@@ -85,6 +89,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
         self.nativelink.asset_loader().get_streaming(path, A::EXT).and_then(A::from_asset)
     }
+
+    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
@@ -242,6 +248,8 @@ impl Graphics
             warn!("Validation Layer is not found!");
         }
         let instance = ib.create()?;
+        unsafe { **std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr()) = 1; }
+        unsafe { *(*std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr())).offset(8) = 1; }
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
@@ -381,13 +389,30 @@ impl SubpassDependencyTemplates
     }
 }
 
+pub enum RenderPassTemplates {}
+impl RenderPassTemplates {
+    pub fn single_render(format: br::vk::VkFormat) -> br::RenderPassBuilder {
+        let mut b = br::RenderPassBuilder::new();
+        let adesc =
+            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        b.add_attachment(adesc);
+        b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
+        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
+
+        return b;
+    }
+}
+
 use std::ffi::CString;
 use vertex_processing_pack::PvpContainer;
-pub struct PvpShaderModules {
+pub struct PvpShaderModules<'d> {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
-    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>
+    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>,
+    vertex_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
+    fragment_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
 }
-impl PvpShaderModules {
+impl<'d> PvpShaderModules<'d> {
     pub fn new(device: &br::Device, container: PvpContainer) -> br::Result<Self> {
         Ok(PvpShaderModules {
             vertex: br::ShaderModule::from_memory(device, &container.vertex_shader)?,
@@ -395,21 +420,28 @@ impl PvpShaderModules {
                 Some(br::ShaderModule::from_memory(device, &b)?)
             }
             else { None },
-            bindings: container.vertex_bindings, attributes: container.vertex_attributes
+            bindings: container.vertex_bindings, attributes: container.vertex_attributes,
+            vertex_spec_constants: None, fragment_spec_constants: None
         })
     }
-    pub fn generate_vps(&self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages {
+    pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d> {
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
-            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"), specinfo: None
+            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"),
+            specinfo: self.vertex_spec_constants.clone()
         }, &self.bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment {
             r.fragment_shader(br::PipelineShader {
-                module: f, entry_name: CString::new("main").expect("unreachable"), specinfo: None
+                module: f, entry_name: CString::new("main").expect("unreachable"),
+                specinfo: self.fragment_spec_constants.clone()
             });
         }
         return r;
     }
+}
+
+pub trait SpecConstantStorage {
+    fn as_pair(&self) -> (Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell);
 }
 
 pub struct LayoutedPipeline(br::Pipeline, Rc<br::PipelineLayout>);

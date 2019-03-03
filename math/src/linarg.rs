@@ -447,6 +447,19 @@ VariadicElementOps!(for Vector2 (0, 1));
 VariadicElementOps!(for Vector3 (0, 1, 2));
 VariadicElementOps!(for Vector4 (0, 1, 2, 3));
 
+// euclid interops (for vg) //
+impl<T> Into<euclid::Point2D<T>> for Vector2<T> {
+    fn into(self) -> euclid::Point2D<T> { euclid::Point2D::new(self.0, self.1) }
+}
+impl<T> Into<euclid::Vector2D<T>> for Vector2<T> {
+    fn into(self) -> euclid::Vector2D<T> { euclid::Vector2D::new(self.0, self.1) }
+}
+
+// cross product 2d //
+impl<T> Vector2<T> where T: Mul<Output = T> + Sub<Output = T> {
+    pub fn cross(self, other: Self) -> T { self.0 * other.1 - self.1 * other.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*; use std;
@@ -481,6 +494,7 @@ mod tests {
         assert_eq!(Vector3(2, 3, 4).dot(Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
         assert_eq!(Vector2(0, 1).dot(Vector2(1, 0)), 0);
         assert_eq!(Vector3(1, 2, 3).len2(), 1 * 1 + 2 * 2 + 3 * 3);
+        assert_eq!(Vector2(10, 3).cross(Vector2(4, 30)), 10 * 30 - 3 * 4);
     }
     #[test] fn inv_quaternion() {
         let q = Quaternion(0.0, 1.0, 0.0, 3.0).normalize();
