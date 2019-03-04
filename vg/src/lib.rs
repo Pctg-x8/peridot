@@ -53,7 +53,8 @@ impl Context {
         FigureContext { ctx: self, partitioner: Partitioner::new(), fill_rule }
     }
 
-    pub fn text(&mut self, font: &Font, text: &str) -> Result<&mut Self, GlyphLoadingError> {
+    /// Returns last origin left(=width of the text) in pixels
+    pub fn text(&mut self, font: &Font, text: &str) -> Result<f32, GlyphLoadingError> {
         let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or(0));
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
         for g in glyphs {
@@ -69,7 +70,7 @@ impl Context {
             self.meshes.push((g0.into_mesh(), st, ext));
             left_offs += adv.x(); max_height = max_height.max(size.size.height);
         }
-        return Ok(self);
+        return Ok(left_offs * font.scale_value());
     }
 }
 /*type V2F32 = euclid::Vector2D<f32>;

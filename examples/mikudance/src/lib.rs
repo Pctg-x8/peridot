@@ -42,6 +42,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let model: PolygonModelExtended =
             e.load("models.SiroDanceWinterCostume_white_v1_1.siro_dance_wintercostume_white_v1_1")
             .expect("Loading Model");
+        for (n, tp) in model.textures.iter().enumerate() {
+            println!("ModelTexture #{}: {}", n, tp.display());
+        }
         
         let cam = Camera {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
@@ -53,13 +56,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             vg::Font::best_match(&[vg::FamilyName::Title("Yu Gothic UI".to_owned())], &vg::FontProperties::new(), 12.0)
             .expect("No Fonts");
         let mut ctx = vg::Context::new();
-        ctx.text(&font, &format!("Model: {} / {}", model.name_jp(), model.name()));
-        /*{
+        let title_width = ctx.text(&font, &format!("Model: {} / {}", model.name_jp(), model.name()))
+            .expect("Rendering Text");
+        {
             let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
-            f0.move_to(Vector2(10.0, -10.0).into());
-            f0.quadratic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -100.0).into());
-            f0.end();
-        }*/
+            f0.move_to(Vector2(0.0, -15.0).into()); f0.line_to(Vector2(title_width * 1.1, -15.0).into());
+            f0.line_to(Vector2(title_width * 1.1, -16.0).into()); f0.line_to(Vector2(0.0, -16.0).into());
+            f0.close(); f0.end();
+        }
 
         let mut bp = BufferPrealloc::new(&e.graphics());
         let world_settings_offs = bp.add(BufferContent::uniform::<WorldSettings>());

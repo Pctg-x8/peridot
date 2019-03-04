@@ -11,7 +11,7 @@ mod vmd;
 
 pub struct PolygonModelExtended {
     pub header: pmx::Header, pub vertices: Vec<pmx::Vertex>, pub surfaces: pmx::SurfaceSection,
-    textures: Vec<PathBuf>, materials: Vec<pmx::Material>, bones: Vec<pmx::Bone>,
+    pub textures: Vec<PathBuf>, materials: Vec<pmx::Material>, bones: Vec<pmx::Bone>,
     morphs: Vec<pmx::Morph>, display_frames: Vec<pmx::DisplayFrame>, rigid_bodies: Vec<pmx::RigidBody>,
     joints: Vec<pmx::Joint>, softbodies: Vec<pmx::Softbody>
 }
