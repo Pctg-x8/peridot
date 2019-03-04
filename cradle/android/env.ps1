@@ -19,6 +19,7 @@ else { Write-Host "* Using existing android build environment" }
 $Env:CC = "$(Get-Location)/android-build/bin/aarch64-linux-android-clang.cmd"
 $Env:CXX = "$(Get-Location)/android-build/bin/aarch64-linux-android-clang++.cmd"
 $Env:LD = "$(Get-Location)/android-build/bin/aarch64-linux-android-clang.cmd"
+$Env:AR = "$(Get-Location)/android-build/bin/aarch64-linux-android-ar.exe"
 # $Env:CFLAGS = Append-Variable $Env:CFLAGS " " "-I$NdkPath\sysroot\usr\include"
 # $Env:CFLAGS = Append-Variable $Env:CFLAGS " " "-I$NdkPath\sysroot\usr\include\aarch64-linux-android"
 # $Env:CFLAGS = Append-Variable $Env:CFLAGS " " "--sysroot=$NdkPath\platforms\android-$ANDROID_NDK_PLATFORM_TARGET\arch-arm64"
