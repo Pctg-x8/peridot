@@ -1,6 +1,7 @@
 
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek, BufRead};
+use std::borrow::Cow;
 
 pub trait PlatformAssetLoader {
     type Asset: Read + Seek + 'static;
@@ -66,10 +67,33 @@ impl DecodedPixelData {
     }
 
     pub fn u8_pixels(&self) -> &[u8] { &self.pixels }
+    pub fn u8_pixels_alphaed(&self) -> Cow<[u8]> {
+        match self.color {
+            image::ColorType::RGBA(8) | image::ColorType::BGRA(8) => Cow::Borrowed(&self.pixels),
+            image::ColorType::RGB(8) | image::ColorType::BGR(8) =>
+                Cow::Owned(self.pixels.chunks(3).flat_map(|rgb| vec![rgb[0], rgb[1], rgb[2], 255]).collect()),
+            c => panic!("conversion method not found for format {:?}", c)
+        }
+    }
+    pub fn is_lacking_alpha_format(&self) -> bool {
+        match self.color {
+            image::ColorType::RGB(8) | image::ColorType::BGR(8) => true,
+            _ => false
+        }
+    }
     pub fn format(&self) -> super::PixelFormat {
         match self.color {
             image::ColorType::RGBA(8) => super::PixelFormat::RGBA32,
             image::ColorType::BGRA(8) => super::PixelFormat::BGRA32,
+            image::ColorType::RGB(8) => super::PixelFormat::RGB24,
+            image::ColorType::BGR(8) => super::PixelFormat::BGR24,
+            c => panic!("unsupported format: {:?}", c)
+        }
+    }
+    pub fn format_alpha(&self) -> super::PixelFormat {
+        match self.color {
+            image::ColorType::RGBA(8) | image::ColorType::RGB(8) => super::PixelFormat::RGBA32,
+            image::ColorType::BGRA(8) | image::ColorType::BGR(8) => super::PixelFormat::BGRA32,
             c => panic!("unsupported format: {:?}", c)
         }
     }

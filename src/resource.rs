@@ -191,6 +191,8 @@ impl br::VkHandle for Image {
 pub enum PixelFormat {
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
     BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM,
+    RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
+    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
     D24S8 = br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
     D16 = br::vk::VK_FORMAT_D16_UNORM
 }
@@ -199,6 +201,7 @@ impl PixelFormat {
     pub fn bpp(&self) -> usize {
         match *self {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 | PixelFormat::D24S8 => 32,
+            PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
             PixelFormat::D16 => 16
         }
     }
@@ -268,7 +271,7 @@ impl<'g> TextureInitializationGroup<'g> {
     pub fn prealloc(self, prealloc: &mut BufferPrealloc) -> br::Result<TexturePreallocatedGroup> {
         let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
         for pd in self.1 {
-            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
+            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format_alpha(), prealloc)?;
             images.push(o); stage_info.push((pd, offs));
         }
         return Ok(TexturePreallocatedGroup(stage_info, images));
@@ -292,8 +295,8 @@ impl TextureInstantiatedGroup {
     pub fn stage_data(&self, mr: &br::MappedMemoryRange) {
         for &(ref pd, offs) in &self.0 {
             unsafe {
-                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
-                    .copy_from_slice(&pd.pixels);
+                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format_alpha().bpp() >> 3) as usize)
+                    .copy_from_slice(&pd.u8_pixels_alphaed());
             }
         }
     }
