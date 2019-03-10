@@ -10,7 +10,7 @@ VertexShader {
     RasterPosition = transpose(vp) * transpose(tf) * ipos;
     RasterPosition.y = -RasterPosition.y;
     uv_v = uv;
-    lambert_term = dot(light_dir.xyz, -normal.xyz) * 0.5 + 0.5;
+    lambert_term = dot(light_dir.xyz, -normal.xyz) * 0.25 + 0.75;
 }
 Varyings VertexShader -> FragmentShader {
     uv_v: vec2;

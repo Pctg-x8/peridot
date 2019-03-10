@@ -14,27 +14,27 @@ pub trait LogicalAssetData: Sized {
 }
 pub trait FromAsset: LogicalAssetData {
     type Error: From<IOError>;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: Read + Seek + 'static>(path: &str, asset: Asset) -> Result<Self, Self::Error>;
     
     fn from_archive(reader: &mut archive::ArchiveRead, path: &str) -> Result<Self, Self::Error> {
         let bin = reader.read_bin(path)?;
         match bin {
             None => Err(IOError::new(ErrorKind::NotFound, "No Entry in primary asset package").into()),
-            Some(b) => Self::from_asset(Cursor::new(b))
+            Some(b) => Self::from_asset(path, Cursor::new(b))
         }
     }
 }
 pub trait FromStreamingAsset: LogicalAssetData {
     type Error: From<IOError>;
 
-    fn from_asset<Asset: Read + 'static>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: Read + 'static>(path: &str, asset: Asset) -> Result<Self, Self::Error>;
 }
 use vertex_processing_pack::*;
 impl LogicalAssetData for PvpContainer { const EXT: &'static str = "pvp"; }
 impl FromAsset for PvpContainer {
     type Error = IOError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> IOResult<Self> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> IOResult<Self> {
         PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
     }
 }
@@ -43,8 +43,9 @@ impl LogicalAssetData for super::PolygonModelExtended { const EXT: &'static str 
 impl FromAsset for super::PolygonModelExtended {
     type Error = super::mmdloader::pmx::LoadingError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error> {
-        super::PolygonModelExtended::load(BufReader::new(asset))
+    fn from_asset<Asset: Read + Seek + 'static>(path: &str, asset: Asset) -> Result<Self, Self::Error> {
+        let mut base = path.split(".").map(|c| c.to_owned()).collect::<Vec<_>>(); base.pop();
+        super::PolygonModelExtended::load(base, BufReader::new(asset))
     }
 }
 
@@ -65,6 +66,13 @@ impl DecodedPixelData {
     }
 
     pub fn u8_pixels(&self) -> &[u8] { &self.pixels }
+    pub fn format(&self) -> super::PixelFormat {
+        match self.color {
+            image::ColorType::RGBA(8) => super::PixelFormat::RGBA32,
+            image::ColorType::BGRA(8) => super::PixelFormat::BGRA32,
+            c => panic!("unsupported format: {:?}", c)
+        }
+    }
 }
 pub struct PNG(pub DecodedPixelData);
 pub struct TGA(pub DecodedPixelData);
@@ -80,37 +88,37 @@ impl LogicalAssetData for BMP { const EXT: &'static str = "bmp"; }
 impl LogicalAssetData for HDR { const EXT: &'static str = "hdr"; }
 impl FromAsset for PNG {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         image::png::PNGDecoder::new(asset).and_then(DecodedPixelData::new).map(PNG)
     }
 }
 impl FromAsset for TGA {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         image::tga::TGADecoder::new(asset).and_then(DecodedPixelData::new).map(TGA)
     }
 }
 impl FromAsset for TIFF {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         image::tiff::TIFFDecoder::new(asset).and_then(DecodedPixelData::new).map(TIFF)
     }
 }
 impl FromAsset for WebP {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         image::webp::WebpDecoder::new(asset).and_then(DecodedPixelData::new).map(WebP)
     }
 }
 impl FromAsset for BMP {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         image::bmp::BMPDecoder::new(asset).and_then(DecodedPixelData::new).map(BMP)
     }
 }
 impl FromAsset for HDR {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         image::hdr::HDRDecoder::new(Box::new(BufReader::new(asset)) as _).map(HDR)
     }
 }

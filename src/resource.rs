@@ -244,3 +244,68 @@ impl Deref for DepthStencilTexture2D {
     type Target = br::ImageView;
     fn deref(&self) -> &br::ImageView { &self.0 }
 }
+
+pub trait LDRImageAsset {
+    fn into_pixel_data_info(self) -> DecodedPixelData;
+}
+impl LDRImageAsset for BMP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for PNG { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for TIFF { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for TGA { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for WebP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<DecodedPixelData>);
+pub struct TexturePreallocatedGroup(Vec<(DecodedPixelData, u64)>, Vec<br::Image>);
+// Note: self.1は逆順に格納されてるので、indexするときに逆向きにする
+pub struct TextureInstantiatedGroup(Vec<(DecodedPixelData, u64)>, Vec<Texture2D>);
+impl<'g> TextureInitializationGroup<'g> {
+    pub fn new(device: &'g br::Device) -> Self { TextureInitializationGroup(device, Vec::new()) }
+    pub fn add<A: LDRImageAsset>(&mut self, asset: A) -> usize {
+        let index = self.1.len();
+        self.1.push(asset.into_pixel_data_info());
+        return index;
+    }
+    pub fn prealloc(self, prealloc: &mut BufferPrealloc) -> br::Result<TexturePreallocatedGroup> {
+        let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
+        for pd in self.1 {
+            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
+            images.push(o); stage_info.push((pd, offs));
+        }
+        return Ok(TexturePreallocatedGroup(stage_info, images));
+    }
+}
+impl TexturePreallocatedGroup {
+    pub fn alloc_and_instantiate(self, mut badget: MemoryBadget)
+            -> br::Result<(TextureInstantiatedGroup, Vec<MemoryBoundResource>)> {
+        let img_count = self.1.len();
+        for isrc in self.1 { badget.add(isrc); }
+        let mut resources = badget.alloc()?;
+        let mut textures = Vec::with_capacity(img_count);
+        for _ in (0 .. img_count).rev() {
+            textures.push(Texture2D::new(resources.pop().expect("Less Resource?").unwrap_image())?);
+        }
+
+        return Ok((TextureInstantiatedGroup(self.0, textures), resources));
+    }
+}
+impl TextureInstantiatedGroup {
+    pub fn stage_data(&self, mr: &br::MappedMemoryRange) {
+        for &(ref pd, offs) in &self.0 {
+            unsafe {
+                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
+                    .copy_from_slice(&pd.pixels);
+            }
+        }
+    }
+    pub fn copy_from_stage_batches(&self, tb: &mut TransferBatch, stgbuf: &Buffer) {
+        for (t, &(_, offs)) in self.1.iter().zip(self.0.iter().rev()) {
+            tb.init_image_from(t.image(), (stgbuf, offs));
+            tb.add_image_graphics_ready(br::PipelineStageFlags::FRAGMENT_SHADER, t.image(),
+                br::ImageLayout::ShaderReadOnlyOpt);
+        }
+    }
+}
+impl std::ops::Index<usize> for TextureInstantiatedGroup {
+    type Output = Texture2D;
+
+    fn index(&self, index: usize) -> &Texture2D { &self.1[(self.1.len() - 1) - index] }
+}

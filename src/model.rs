@@ -12,7 +12,8 @@ pub trait ModelData {
     type PreallocOffsetType;
     type RendererParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+        textures: &mut TextureInitializationGroup) -> Self::PreallocOffsetType;
     fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: Self::PreallocOffsetType)
         -> Self::RendererParams;
 }
@@ -51,7 +52,8 @@ impl ModelData for vg::Context {
     type PreallocOffsetType = VgContextPreallocOffsets;
     type RendererParams = VgRendererParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> VgContextPreallocOffsets {
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, _e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+            _: &mut TextureInitializationGroup) -> VgContextPreallocOffsets {
         let interior_positions_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_positions.len()).sum();
         let interior_indices_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_interior_indices.len()).sum();
         let curve_positions_count = self.meshes().iter().map(|x| x.0.b_vertex_positions.len()).sum();
@@ -165,7 +167,8 @@ impl DefaultRenderCommands for VgRendererParams {
 
 pub struct PMXDataPlacementOffsets {
     pub vbuf_suballoc_positions: usize, pub ibuf_offset: usize,
-    pub vbuf_suballoc_normals: usize, pub vbuf_suballoc_uvs: usize
+    pub vbuf_suballoc_normals: usize, pub vbuf_suballoc_uvs: usize,
+    pub texture_slot_numbers: Vec<usize>
 }
 pub struct PMXRenderingParams {
     index_size: br::IndexType, offsets: PMXDataPlacementOffsets,
@@ -175,7 +178,8 @@ impl ModelData for super::PolygonModelExtended {
     type PreallocOffsetType = PMXDataPlacementOffsets;
     type RendererParams = PMXRenderingParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType {
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+            textures: &mut TextureInitializationGroup) -> Self::PreallocOffsetType {
         let vbuf_suballoc_positions = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len())) as _;
         let vbuf_suballoc_normals = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len())) as _;
         let vbuf_suballoc_uvs = alloc.add(BufferContent::vertices::<Vector2F32>(self.vertices.len())) as _;
@@ -187,8 +191,32 @@ impl ModelData for super::PolygonModelExtended {
             alloc.add(BufferContent::indices::<u16>(self.surfaces.len() * 3)) as _
         };
 
+        // テクスチャロード(そのうち並列化したい......AssetLoaderの改造が必要)
+        let mut texture_slot_numbers = Vec::with_capacity(self.textures.len());
+        for tex in &self.textures {
+            let mut asset_components = self.base_components.iter().map(|x| x as _).collect::<Vec<&str>>();
+            if let Some(p) = tex.parent() {
+                asset_components.extend(p.components().map(|c| c.as_os_str().to_str().expect("Decoding path")));
+            }
+            asset_components.push(tex.file_stem().expect("Address not points to a file?")
+                .to_str().expect("Decoding path"));
+            let asset_path = asset_components.join(".");
+            trace!("Loading Asset in MMD: {}", asset_path);
+            // switch loader by extension
+            let tslot = match tex.extension().and_then(std::ffi::OsStr::to_str) {
+                Some("bmp") => textures.add(e.load::<BMP>(&asset_path).expect("Loading Textures")),
+                Some("png") => textures.add(e.load::<PNG>(&asset_path).expect("Loading Textures")),
+                Some("tiff") => textures.add(e.load::<TIFF>(&asset_path).expect("Loading Textures")),
+                Some("tga") => textures.add(e.load::<TGA>(&asset_path).expect("Loading Textures")),
+                Some("webp") => textures.add(e.load::<WebP>(&asset_path).expect("Loading Textures")),
+                t => panic!("Unsupported Texture: {:?}", t)
+            };
+            texture_slot_numbers.push(tslot);
+        }
+
         PMXDataPlacementOffsets {
-            vbuf_suballoc_positions, vbuf_suballoc_normals, vbuf_suballoc_uvs, ibuf_offset
+            vbuf_suballoc_positions, vbuf_suballoc_normals, vbuf_suballoc_uvs, ibuf_offset,
+            texture_slot_numbers
         }
     }
     fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: Self::PreallocOffsetType) -> PMXRenderingParams {

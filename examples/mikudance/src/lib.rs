@@ -4,7 +4,7 @@ extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
     PvpShaderModules, vg, SpecConstantStorage, PolygonModelExtended, BufferContent,
-    DepthStencilTexture2D};
+    DepthStencilTexture2D, TextureInitializationGroup, AssetLoaderService};
 use peridot::math::{Vector2, Vector3, Matrix4, Vector4, Camera, ProjectionMethod, Quaternion, One};
 use std::rc::Rc;
 use std::borrow::Cow;
@@ -34,7 +34,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     ph: PhantomData<*const PL>
 }
 impl<PL: peridot::NativeLinker> Game<PL> {
-    pub const NAME: &'static str = "Peridot Examples - VectorGraphics";
+    pub const NAME: &'static str = "Peridot Examples - MMD/VRM Loader";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
@@ -65,23 +65,26 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f0.close(); f0.end();
         }
 
+        let mut tinit = TextureInitializationGroup::new(&e.graphics());
         let mut bp = BufferPrealloc::new(&e.graphics());
         let world_settings_offs = bp.add(BufferContent::uniform::<WorldSettings>());
         let object_settings_offs = bp.add(BufferContent::uniform::<ObjectSettings>());
-        let model_offs = model.prealloc(&mut bp);
-        let vg_offs = ctx.prealloc(&mut bp);
+        let model_offs = model.prealloc(e, &mut bp, &mut tinit);
+        let vg_offs = ctx.prealloc(e, &mut bp, &mut tinit);
 
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
         let depth_buffer = DepthStencilTexture2D::init(&e.graphics(), &Vector2(screen_size.0, screen_size.1),
             peridot::PixelFormat::D24S8)
             .expect("Init DepthStencilTexture2D");
 
+        let texture_prealloc = tinit.prealloc(&mut bp).expect("Image Generation");
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
         
         let mut mb = MemoryBadget::new(&e.graphics());
         mb.add(buffer);
-        let buffer = mb.alloc().expect("Mem Allocation").pop().expect("No objects?").unwrap_buffer();
+        let (textures, mut res) = texture_prealloc.alloc_and_instantiate(mb).expect("Mem Allocation");
+        let buffer = res.pop().expect("No objects?").unwrap_buffer();
         let mut mb_stg = MemoryBadget::new(&e.graphics());
         mb_stg.add(stg_buffer);
         let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("No objects?").unwrap_buffer();
@@ -103,6 +106,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
             let model_render_params = model.stage_data_into(m, model_offs);
             let render_params = ctx.stage_data_into(m, vg_offs);
+            textures.stage_data(m);
             return (render_params, model_render_params);
         }).expect("StgMem Initialization");
 
@@ -115,6 +119,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER.vertex_input(), &buffer,
                 0 .. bp.total_size() as _,
                 br::AccessFlags::SHADER.read | br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::INDEX_READ);
+            textures.copy_from_stage_batches(&mut tfb, &stg_buffer);
             tfb.sink_transfer_commands(rec);
             tfb.sink_graphics_ready_commands(rec);
             rec.pipeline_barrier(br::PipelineStageFlags::TOP_OF_PIPE, br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,

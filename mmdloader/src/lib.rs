@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 mod vmd;
 
 pub struct PolygonModelExtended {
+    pub base_components: Vec<String>,
     pub header: pmx::Header, pub vertices: Vec<pmx::Vertex>, pub surfaces: pmx::SurfaceSection,
     pub textures: Vec<PathBuf>, materials: Vec<pmx::Material>, bones: Vec<pmx::Bone>,
     morphs: Vec<pmx::Morph>, display_frames: Vec<pmx::DisplayFrame>, rigid_bodies: Vec<pmx::RigidBody>,
@@ -17,9 +18,12 @@ pub struct PolygonModelExtended {
 }
 impl PolygonModelExtended {
     pub fn from_file<P: AsRef<Path> + ?Sized>(filepath: &P) -> Result<Self, pmx::LoadingError> {
-        File::open(filepath).map(BufReader::new).map_err(From::from).and_then(Self::load)
+        let mut base_components = filepath.as_ref().components()
+            .map(|x| x.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        base_components.pop();
+        File::open(filepath).map(BufReader::new).map_err(From::from).and_then(|r| Self::load(base_components, r))
     }
-    pub fn load<R: Read>(mut reader: R) -> Result<Self, pmx::LoadingError> {
+    pub fn load<R: Read>(base_components: Vec<String>, mut reader: R) -> Result<Self, pmx::LoadingError> {
         let header = pmx::Header::load(&mut reader)?;
         let vertices = pmx::read_array(&mut reader,
             |r| pmx::Vertex::read(r, header.additional_vec4_count as _, header.index_sizes.bone))?;
@@ -37,6 +41,7 @@ impl PolygonModelExtended {
         }
         else { Vec::new() };
         return Ok(PolygonModelExtended {
+            base_components,
             header, vertices, surfaces, textures, materials, bones, morphs, display_frames, rigid_bodies,
             joints, softbodies
         });

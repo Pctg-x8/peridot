@@ -10,6 +10,7 @@ pathfinder_partitioner = { path = "extras/pathfinder/partitioner" }
 log = "*"
 libc = "*"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
+rayon = "1.0"
 
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }

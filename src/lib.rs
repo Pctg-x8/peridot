@@ -59,6 +59,30 @@ impl<PL: NativeLinker> EngineEvents<PL> for () {
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
+pub trait AssetLoaderService {
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>;
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error>;
+}
+impl<E: EngineEvents<NL>, NL: NativeLinker> AssetLoaderService for Engine<E, NL> {
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.nativelink.asset_loader().get(path, A::EXT).map_err(From::from)
+            .and_then(|r| A::from_asset(path, r))
+    }
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.nativelink.asset_loader().get_streaming(path, A::EXT).map_err(From::from)
+            .and_then(|r| A::from_asset(path, r))
+    }
+}
+pub struct AsyncAssetLoader<'d, NL: NativeLinker>(&'d NL::AssetLoader);
+impl<'d, NL: NativeLinker> AssetLoaderService for AsyncAssetLoader<'d, NL> {
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.0.get(path, A::EXT).map_err(From::from).and_then(|r| A::from_asset(path, r))
+    }
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.0.get_streaming(path, A::EXT).map_err(From::from).and_then(|r| A::from_asset(path, r))
+    }
+}
+
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
     nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>,
@@ -86,12 +110,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
-    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
-        self.nativelink.asset_loader().get(path, A::EXT).map_err(From::from).and_then(A::from_asset)
-    }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
-        self.nativelink.asset_loader().get_streaming(path, A::EXT).map_err(From::from).and_then(A::from_asset)
-    }
+    pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL> { AsyncAssetLoader(self.nativelink.asset_loader()) }
 
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 
