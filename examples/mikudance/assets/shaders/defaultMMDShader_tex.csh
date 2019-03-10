@@ -20,5 +20,5 @@ Varyings VertexShader -> FragmentShader {
 }
 FragmentShader {
     Target[0] = texture(tex, uv_v) * diffuse_color;
-    Target[0].rgb *= lambert_term;
+    Target[0].rgb *= lambert_term * Target[0].a;
 }

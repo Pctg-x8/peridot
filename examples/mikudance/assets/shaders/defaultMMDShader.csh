@@ -19,5 +19,5 @@ Varyings VertexShader -> FragmentShader {
 }
 FragmentShader {
     Target[0] = diffuse_color;
-    Target[0].rgb *= lambert_term;
+    Target[0].rgb *= lambert_term * Target[0].a;
 }
