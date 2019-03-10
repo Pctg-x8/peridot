@@ -6,6 +6,7 @@ VertexInput {
 Uniform[VertexShader](0, 0) WorldSettings { mat4 vp; vec4 light_dir; }
 Uniform[VertexShader](1, 0) ObjectSettings { mat4 tf; }
 PushConstant[FragmentShader] MaterialData { vec4 diffuse_color; }
+Sampler2D[FragmentShader](2, 0) tex
 
 VertexShader {
     RasterPosition = transpose(vp) * transpose(tf) * ipos;
@@ -18,6 +19,6 @@ Varyings VertexShader -> FragmentShader {
     lambert_term: float;
 }
 FragmentShader {
-    Target[0] = diffuse_color;
+    Target[0] = texture(tex, uv_v) * diffuse_color;
     Target[0].rgb *= lambert_term;
 }

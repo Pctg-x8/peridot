@@ -219,6 +219,7 @@ impl Texture2D {
     }
 
     pub fn image(&self) -> &Image { &self.1 }
+    pub fn view(&self) -> &br::ImageView { &self.0 }
 }
 impl Deref for Texture2D {
     type Target = br::ImageView;
@@ -303,6 +304,7 @@ impl TextureInstantiatedGroup {
                 br::ImageLayout::ShaderReadOnlyOpt);
         }
     }
+    pub fn into_textures(mut self) -> Vec<Texture2D> { self.1.reverse(); return self.1; }
 }
 impl std::ops::Index<usize> for TextureInstantiatedGroup {
     type Output = Texture2D;

@@ -12,7 +12,7 @@ mod vmd;
 pub struct PolygonModelExtended {
     pub base_components: Vec<String>,
     pub header: pmx::Header, pub vertices: Vec<pmx::Vertex>, pub surfaces: pmx::SurfaceSection,
-    pub textures: Vec<PathBuf>, materials: Vec<pmx::Material>, bones: Vec<pmx::Bone>,
+    pub textures: Vec<PathBuf>, pub materials: Vec<pmx::Material>, bones: Vec<pmx::Bone>,
     morphs: Vec<pmx::Morph>, display_frames: Vec<pmx::DisplayFrame>, rigid_bodies: Vec<pmx::RigidBody>,
     joints: Vec<pmx::Joint>, softbodies: Vec<pmx::Softbody>
 }
@@ -313,19 +313,22 @@ pub mod pmx {
             let count = i32::read_value1(reader)?;
             match vertex_index_size {
                 IndexSize::Byte => {
-                    let mut bytes = vec![[0u8; 3]; (count / 3) as _];
+                    let mut bytes = Vec::<[u8; 3]>::with_capacity((count / 3) as _);
+                    unsafe { bytes.set_len((count / 3) as _); }
                     let mut sink = unsafe { from_raw_parts_mut(bytes.as_ptr() as _, count as _) };
                     reader.read_exact(sink)?;
                     return Ok(SurfaceSection::Byte(bytes));
                 },
                 IndexSize::Short => {
-                    let mut bytes = vec![[0u16; 3]; (count / 3) as _];
+                    let mut bytes = Vec::<[u16; 3]>::with_capacity((count / 3) as _);
+                    unsafe { bytes.set_len((count / 3) as _); }
                     let mut sink = unsafe { from_raw_parts_mut(bytes.as_ptr() as _, (count * 2) as _) };
                     reader.read_exact(sink)?;
                     return Ok(SurfaceSection::Short(bytes));
                 },
                 IndexSize::Long => {
-                    let mut bytes = vec![[0u32; 3]; (count / 3) as _];
+                    let mut bytes = Vec::<[u32; 3]>::with_capacity((count / 3) as _);
+                    unsafe { bytes.set_len((count / 3) as _); }
                     let mut sink = unsafe { from_raw_parts_mut(bytes.as_ptr() as _, (count * 4) as _) };
                     reader.read_exact(sink)?;
                     return Ok(SurfaceSection::Long(bytes));

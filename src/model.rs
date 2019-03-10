@@ -171,8 +171,9 @@ pub struct PMXDataPlacementOffsets {
     pub texture_slot_numbers: Vec<usize>
 }
 pub struct PMXRenderingParams {
-    index_size: br::IndexType, offsets: PMXDataPlacementOffsets,
-    index_count: u32
+    index_size: br::IndexType, offsets: PMXDataPlacementOffsets, index_count: u32,
+    textured_surface_ranges: Vec<(usize, Range<u32>)>,
+    untextured_surface_ranges: Vec<(usize, Range<u32>)>
 }
 impl ModelData for super::PolygonModelExtended {
     type PreallocOffsetType = PMXDataPlacementOffsets;
@@ -249,20 +250,56 @@ impl ModelData for super::PolygonModelExtended {
             }
         };
 
-        PMXRenderingParams { index_size, offsets, index_count: (self.surfaces.len() * 3) as _ }
+        let mut textured_surface_ranges = Vec::new();
+        let mut untextured_surface_ranges = Vec::new();
+        let mut processed_surfaces = 0;
+        for (n, mat) in self.materials.iter().enumerate() {
+            let ps2 = processed_surfaces + mat.surface_affects;
+            if mat.texture_index.is_some() {
+                textured_surface_ranges.push((n, processed_surfaces as u32 .. ps2 as u32));
+            }
+            else {
+                untextured_surface_ranges.push((n, processed_surfaces as u32 .. ps2 as u32));
+            }
+            processed_surfaces = ps2;
+        }
+
+        PMXRenderingParams {
+            index_size, offsets, index_count: (self.surfaces.len() * 3) as _,
+            textured_surface_ranges, untextured_surface_ranges
+        }
     }
 }
-impl DefaultRenderCommands for PMXRenderingParams {
-    type Extras = ();
-
-    fn default_render_commands<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>,
-        cmd: &mut br::CmdRecord, buffer: &Buffer, _extras: &()) {
+impl PMXRenderingParams {
+    pub fn set_vertex_buffer(&self, cmd: &mut br::CmdRecord, buffer: &Buffer) {
         cmd.bind_vertex_buffers(0, &[
             (buffer, self.offsets.vbuf_suballoc_positions),
             (buffer, self.offsets.vbuf_suballoc_normals),
             (buffer, self.offsets.vbuf_suballoc_uvs),
         ]);
-        cmd.bind_index_buffer(buffer, self.offsets.ibuf_offset, self.index_size);
-        cmd.draw_indexed(self.index_count, 1, 0, 0, 0);
+    }
+    pub fn untextured_render(&self, cmd: &mut br::CmdRecord, buffer: &Buffer, model: &PolygonModelExtended) {
+        let index_multiplier = if self.index_size == br::IndexType::U16 { 1 } else { 2 };
+        for &(nmat, ref sr) in &self.untextured_surface_ranges {
+            cmd.push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &model.materials[nmat].diffuse_color);
+            cmd.bind_index_buffer(buffer,
+                self.offsets.ibuf_offset + ((sr.start as usize) << index_multiplier),
+                self.index_size);
+            cmd.draw_indexed(sr.len() as _, 1, 0, 0, 0);
+        }
+    }
+    pub fn textured_render(&self, cmd: &mut br::CmdRecord, buffer: &Buffer, model: &PolygonModelExtended,
+            texture_descs: &[br::vk::VkDescriptorSet]) {
+        let index_multiplier = if self.index_size == br::IndexType::U16 { 1 } else { 2 };
+        for &(nmat, ref sr) in &self.textured_surface_ranges {
+            let texture_slot_index = self.offsets.texture_slot_numbers[
+                model.materials[nmat].texture_index.as_ref().expect("No Texture?").as_index() as usize];
+            cmd.push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &model.materials[nmat].diffuse_color);
+            cmd.bind_graphics_descriptor_sets(2, &texture_descs[texture_slot_index .. texture_slot_index + 1], &[]);
+            cmd.bind_index_buffer(buffer,
+                self.offsets.ibuf_offset + ((sr.start as usize) << index_multiplier),
+                self.index_size);
+            cmd.draw_indexed(sr.len() as _, 1, 0, 0, 0);
+        }
     }
 }
