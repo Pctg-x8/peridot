@@ -492,9 +492,14 @@ impl<'s> CombinedShader<'s> {
             code += &format!("layout(location = {}) {}out {} {};\n", n, if require_flat { "flat " } else { "" },
                 Self::translate_vtype(ovar.type_str), ovar.name);
         }
+        // out gl_PerVertexの宣言を必要に応じて追加する
+        let mut per_vertex_outputs = Vec::new();
         // gl_Positionの宣言を追加
-        if self.vertex_shader_code.contains("RasterPosition") {
-            code += "out gl_PerVertex { out vec4 gl_Position; };\n";
+        if self.vertex_shader_code.contains("RasterPosition") { per_vertex_outputs.push("vec4 gl_Position"); }
+        if !per_vertex_outputs.is_empty() {
+            code += "out gl_PerVertex { ";
+            for o in per_vertex_outputs.into_iter().map(|d| format!("out {};", d)) { code += &o; }
+            code += "};\n";
         }
         // 定数(uniformとspecconstantとpushconstant)
         if let Some(cons) = self.spec_constants_per_stage.get(&br::ShaderStage::VERTEX) {
@@ -513,7 +518,9 @@ impl<'s> CombinedShader<'s> {
             code += "\n";
         }
         // main
-        code += &format!("void main() {{{}}}", self.vertex_shader_code.replace("RasterPosition", "gl_Position"));
+        code += &format!("void main() {{{}}}", self.vertex_shader_code
+            .replace("RasterPosition", "gl_Position")
+            .replace("InstanceIndex", "gl_InstanceIndex"));
         return code;
     }
     pub fn emit_fragment_shader(&self) -> String {
