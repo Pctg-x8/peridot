@@ -34,6 +34,7 @@ final class PeridotRenderableViewController : NSViewController {
         self.view.layerContentsRedrawPolicy = .duringViewResize
         self.enginePointer = NativeGameEngine(forView: &self.view)
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
+        self.view.addTrackingArea(NSTrackingArea(rect: self.view.bounds, options: [.mouseMoved, .activeInActiveApp], owner: self))
         startDisplayLink()
         (self.view as! PeridotRenderableView).enginePointer = self.enginePointer
     }
@@ -43,5 +44,36 @@ final class PeridotRenderableViewController : NSViewController {
     }
     override func viewWillDisappear() {
         if let d = self.dplink { CVDisplayLinkStop(d) }
+    }
+    
+    override func scrollWheel(with event: NSEvent) {
+        print("ScrollWheel: \(event.deltaX) \(event.deltaY) \(event.deltaZ)")
+    }
+    override func magnify(with event: NSEvent) {
+        print("Magnify: \(event.magnification)")
+    }
+    override func rotate(with event: NSEvent) {
+        print("Rotate: \(event.rotation)")
+    }
+    override func mouseDown(with event: NSEvent) {
+        print("MouseDown")
+    }
+    override func mouseUp(with event: NSEvent) {
+        print("MouseUp")
+    }
+    override func mouseMoved(with event: NSEvent) {
+        print("MouseMoved: \(event.locationInWindow)")
+    }
+    override func mouseDragged(with event: NSEvent) {
+        print("MouseDragged: \(event.locationInWindow)")
+    }
+    override func touchesBegan(with event: NSEvent) {
+        print("TouchesBegan: \(event.touches(for: self.view))")
+    }
+    override func touchesEnded(with event: NSEvent) {
+        print("TouchesEnded")
+    }
+    override func touchesMoved(with event: NSEvent) {
+        print("TouchesMoved")
     }
 }
