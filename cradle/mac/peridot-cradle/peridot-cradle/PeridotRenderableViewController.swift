@@ -47,7 +47,7 @@ final class PeridotRenderableViewController : NSViewController {
     }
     
     override func scrollWheel(with event: NSEvent) {
-        print("ScrollWheel: \(event.deltaX) \(event.deltaY) \(event.deltaZ)")
+        print("ScrollWheel: \(event.scrollingDeltaX) \(event.scrollingDeltaY) \(event.hasPreciseScrollingDeltas)")
     }
     override func magnify(with event: NSEvent) {
         print("Magnify: \(event.magnification)")
