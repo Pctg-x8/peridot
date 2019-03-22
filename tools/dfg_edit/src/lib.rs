@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, BufferContent, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules, vg, SpecConstantStorage};
+    PvpShaderModules, vg, SpecConstantStorage, PlatformInputProcessor};
 use peridot::math::{Vector2, Vector2F32};
 use std::rc::Rc;
 use std::borrow::Cow;
@@ -101,6 +101,10 @@ impl std::ops::Deref for DescriptorManager {
     fn deref(&self) -> &[br::vk::VkDescriptorSet] { &self.sets }
 }
 
+#[repr(u32)] pub enum AxisInputIndices {
+    Magnification, ScrollH, ScrollV
+}
+
 pub struct Game<PL: peridot::NativeLinker> {
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, buffer: Buffer,
     _bufview: br::BufferView, descs: DescriptorManager, gp_backgrid: (LayoutedPipeline, LayoutedPipeline),
@@ -114,11 +118,15 @@ impl<PL: peridot::NativeLinker> Game<PL> {
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self {
+    fn init(e: &mut peridot::Engine<Self, PL>) -> Self {
         let font = vg::Font::best_match(&[vg::FamilyName::SansSerif], &vg::FontProperties::new(), 12.0)
             .expect("No Fonts");
         let mut ctx = vg::Context::new();
         ctx.text(&font, "Peridot DataFlowGraph Editor - Untitled.dfg");
+
+        e.input_mut().link_axis(peridot::AxisEventSource::Magnification, AxisInputIndices::Magnification as _);
+        e.input_mut().link_axis(peridot::AxisEventSource::ScrollHorizontal, AxisInputIndices::ScrollH as _);
+        e.input_mut().link_axis(peridot::AxisEventSource::ScrollVertical, AxisInputIndices::ScrollV as _);
 
         let mut bp = BufferPrealloc::new(&e.graphics());
         let screen_props_placement = bp.add(BufferContent::uniform::<ScreenProps>());
@@ -273,6 +281,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
     fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+        println!("axs: {} {} {}",
+            e.input().query_axis(AxisInputIndices::Magnification as _),
+            e.input().query_axis(AxisInputIndices::ScrollH as _),
+            e.input().query_axis(AxisInputIndices::ScrollV as _));
         (None, br::SubmissionBatch {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()

@@ -22,6 +22,16 @@ final class NativeGameEngine {
         resize_game(self.p, UInt32(newSize.width), UInt32(newSize.height))
     }
     
+    func onMouseMove(x: Float32, y: Float32) {
+        on_mousemove(self.p, x, y)
+    }
+    func onScroll(x: Float32, y: Float32) {
+        on_scroll(self.p, x, y)
+    }
+    func onMagnification(amount: Float32) {
+        on_magnification(self.p, amount)
+    }
+    
     static func captionbarText() -> NSString? {
         let p = captionbar_text()
         return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }

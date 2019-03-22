@@ -17,6 +17,9 @@ GameRun* launch_game(void* viewptr);
 void terminate_game(GameRun* engineptr);
 void update_game(GameRun* engineptr);
 void resize_game(GameRun* engineptr, uint32_t w, uint32_t h);
+void on_mousemove(GameRun* engineptr, float x, float y);
+void on_scroll(GameRun* engineptr, float x, float y);
+void on_magnification(GameRun* engineptr, float amount);
 
 void* captionbar_text();
 

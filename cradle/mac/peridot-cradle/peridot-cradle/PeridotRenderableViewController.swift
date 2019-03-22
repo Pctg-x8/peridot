@@ -12,6 +12,7 @@ import Cocoa
 final class PeridotRenderableViewController : NSViewController {
     var dplink: CVDisplayLink? = nil
     var enginePointer: NativeGameEngine? = nil
+    var oldMouseLocation = NSPoint(x: 0, y: 0)
     
     func startDisplayLink() {
         func onUpdateDisplay(_ _: CVDisplayLink,
@@ -47,10 +48,12 @@ final class PeridotRenderableViewController : NSViewController {
     }
     
     override func scrollWheel(with event: NSEvent) {
-        print("ScrollWheel: \(event.scrollingDeltaX) \(event.scrollingDeltaY) \(event.hasPreciseScrollingDeltas)")
+        self.enginePointer?.onScroll(x: Float32(event.scrollingDeltaX), y: Float32(event.scrollingDeltaY))
+        // print("ScrollWheel: \(event.scrollingDeltaX) \(event.scrollingDeltaY) \(event.hasPreciseScrollingDeltas)")
     }
     override func magnify(with event: NSEvent) {
-        print("Magnify: \(event.magnification)")
+        self.enginePointer?.onMagnification(amount: Float32(event.magnification))
+        // print("Magnify: \(event.magnification)")
     }
     override func rotate(with event: NSEvent) {
         print("Rotate: \(event.rotation)")
@@ -62,10 +65,18 @@ final class PeridotRenderableViewController : NSViewController {
         print("MouseUp")
     }
     override func mouseMoved(with event: NSEvent) {
-        print("MouseMoved: \(event.locationInWindow)")
+        let dx = event.locationInWindow.x - self.oldMouseLocation.x
+        let dy = event.locationInWindow.y - self.oldMouseLocation.y
+        self.oldMouseLocation = event.locationInWindow
+        self.enginePointer?.onMouseMove(x: Float32(dx), y: Float32(dy))
+        // print("MouseMoved: \(event.locationInWindow)")
     }
     override func mouseDragged(with event: NSEvent) {
-        print("MouseDragged: \(event.locationInWindow)")
+        let dx = event.locationInWindow.x - self.oldMouseLocation.x
+        let dy = event.locationInWindow.y - self.oldMouseLocation.y
+        self.oldMouseLocation = event.locationInWindow
+        self.enginePointer?.onMouseMove(x: Float32(dx), y: Float32(dy))
+        // print("MouseDragged: \(event.locationInWindow)")
     }
     override func touchesBegan(with event: NSEvent) {
         print("TouchesBegan: \(event.touches(for: self.view))")

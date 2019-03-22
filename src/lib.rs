@@ -31,17 +31,18 @@ mod model; pub use self::model::*;
 pub trait NativeLinker {
     type AssetLoader: PlatformAssetLoader;
     type RenderTargetProvider: PlatformRenderTarget;
-    type InputProcessor: InputProcessPlugin;
+    type InputProcessor: PlatformInputProcessor;
 
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn render_target_provider(&self) -> &Self::RenderTargetProvider;
+    fn input_processor(&self) -> &Self::InputProcessor;
     fn input_processor_mut(&mut self) -> &mut Self::InputProcessor;
 
     fn rendering_precision(&self) -> f32 { 1.0 }
 }
 
 pub trait EngineEvents<PL: NativeLinker> : Sized {
-    fn init(_e: &Engine<Self, PL>) -> Self;
+    fn init(_e: &mut Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -54,12 +55,12 @@ pub trait EngineEvents<PL: NativeLinker> : Sized {
     fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
 }
 impl<PL: NativeLinker> EngineEvents<PL> for () {
-    fn init(_e: &Engine<Self, PL>) -> Self { () }
+    fn init(_e: &mut Engine<Self, PL>) -> Self { () }
 }
 
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
     nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
+    pub(self) g: Graphics, event_handler: Option<RefCell<E>>
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
@@ -69,18 +70,19 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
         let mut this = Engine {
-            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
+            nativelink, g, surface, wrt, event_handler: None
         };
         trace!("Initializing Game...");
-        let eh = E::init(&this);
+        let eh = E::init(&mut this);
         this.submit_commands(|r| this.wrt.get().emit_initialize_backbuffers_commands(r))
             .expect("Initializing Backbuffers");
         this.event_handler = Some(eh.into());
-        this.nativelink.input_processor_mut().on_start_handle(&this.ip);
         return Ok(this);
     }
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
+    pub fn native_link(&self) -> &PL { &self.nativelink }
+    pub fn native_link_mut(&mut self) -> &mut PL { &mut self.nativelink }
 
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
@@ -98,8 +100,9 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
     pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
-    pub fn input(&self) -> &InputProcess { &self.ip }
-    
+    pub fn input(&self) -> &PL::InputProcessor { self.nativelink.input_processor() }
+    pub fn input_mut(&mut self) -> &mut PL::InputProcessor { self.nativelink.input_processor_mut() }
+
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -123,7 +126,6 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         let bb_index = bb_index.expect("Acquiring available backbuffer index");
         self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _)
             .wait().expect("Waiting Previous command completion");
-        self.ip.prepare_for_frame();
         {
             let bound_wrt = self.wrt.get();
 

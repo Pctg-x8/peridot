@@ -10,6 +10,7 @@ extern crate bedrock as br;
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::Cursor;
 use std::rc::Rc;
+use std::collections::BTreeMap;
 
 struct NSLogger;
 impl log::Log for NSLogger {
@@ -116,38 +117,60 @@ impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler {
         (size.width as _, size.height as _)
     }
 }
-// TODO: InputProcessPlugin実装する
-pub struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
-impl PlatformInputProcessPlugin {
-    fn new() -> Self {
-        PlatformInputProcessPlugin { processor: None }
-    }
+pub struct InputProcessor {
+    mouse_ax_handler: (Vec<u32>, Vec<u32>), scroll_ax_handler: (Vec<u32>, Vec<u32>), mag_ax_handler: Vec<u32>,
+    axe_values: BTreeMap<u32, f32>
 }
-impl peridot::InputProcessPlugin for PlatformInputProcessPlugin {
-    fn on_start_handle(&mut self, ip: &Rc<peridot::InputProcess>) {
-        self.processor = Some(ip.clone());
+impl peridot::PlatformInputProcessor for InputProcessor {
+    fn link(&mut self, source: peridot::InputEventSource, vinput_num: u32) {
+        
+    }
+    fn link_axis(&mut self, source: peridot::AxisEventSource, vaxe_num: u32) {
+        match source {
+            peridot::AxisEventSource::MouseMoveHorizontal => self.mouse_ax_handler.0.push(vaxe_num as _),
+            peridot::AxisEventSource::MouseMoveVertical => self.mouse_ax_handler.1.push(vaxe_num as _),
+            peridot::AxisEventSource::ScrollHorizontal => self.scroll_ax_handler.0.push(vaxe_num as _),
+            peridot::AxisEventSource::ScrollVertical => self.scroll_ax_handler.1.push(vaxe_num as _),
+            peridot::AxisEventSource::Magnification => self.mag_ax_handler.push(vaxe_num as _),
+            _ => ()
+        }
+    }
+    fn query(&self, vinput_num: u32) -> bool { false }
+    fn query_axis(&self, vaxe_num: u32) -> f32 { self.axe_values.get(&vaxe_num).cloned().unwrap_or(0.0) }
+}
+impl InputProcessor {
+    pub fn new() -> Self {
+        InputProcessor {
+            mouse_ax_handler: (Vec::new(), Vec::new()), scroll_ax_handler: (Vec::new(), Vec::new()),
+            mag_ax_handler: Vec::new(),
+            axe_values: BTreeMap::new()
+        }
+    }
+    pub fn clear_axe_movements(&mut self) {
+        for (_, v) in self.axe_values.iter_mut() { *v = 0.0; }
     }
 }
 pub struct NativeLink {
     al: PlatformAssetLoader, prt: PlatformRenderTargetHandler,
-    input: PlatformInputProcessPlugin
+    input: InputProcessor
 }
 impl NativeLink {
     pub fn new(rt_view: *mut c_void) -> Self {
         NativeLink {
             al: PlatformAssetLoader::new(), prt: PlatformRenderTargetHandler::new(rt_view),
-            input: PlatformInputProcessPlugin::new()
+            input: InputProcessor::new()
         }
     }
 }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = PlatformRenderTargetHandler;
-    type InputProcessor = PlatformInputProcessPlugin;
+    type InputProcessor = InputProcessor;
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
-    fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
+    fn input_processor(&self) -> &InputProcessor { &self.input }
+    fn input_processor_mut(&mut self) -> &mut InputProcessor { &mut self.input }
 
     fn rendering_precision(&self) -> f32 { unsafe { nsscreen_backing_scale_factor() } }
 }
@@ -179,7 +202,11 @@ pub extern "C" fn terminate_game(gr: *mut GameRun) {
 }
 #[no_mangle]
 pub extern "C" fn update_game(gr: *mut GameRun) {
-    unsafe { (*gr).0.do_update(); }
+    unsafe {
+        let ref mut e = (*gr).0;
+        e.do_update();
+        e.native_link_mut().input.clear_axe_movements();
+    }
 }
 #[no_mangle]
 pub extern "C" fn resize_game(gr: *mut GameRun, w: u32, h: u32) {
@@ -189,4 +216,35 @@ pub extern "C" fn resize_game(gr: *mut GameRun, w: u32, h: u32) {
 pub extern "C" fn captionbar_text() -> *mut c_void {
     NSString::from_str(&format!("{} v{}.{}.{}", Game::NAME, Game::VERSION.0, Game::VERSION.1, Game::VERSION.2))
         .expect("CaptionbarText NSString Allocation").into_id() as *mut _
+}
+
+#[no_mangle]
+pub extern "C" fn on_mousemove(gr: *mut GameRun, x: f32, y: f32) {
+    let engine = unsafe { &mut (*gr).0 };
+    let ref mut input_mut = engine.native_link_mut().input;
+    for &ie in &input_mut.mouse_ax_handler.0 {
+        *input_mut.axe_values.entry(ie).or_insert(0.0) += x;
+    }
+    for &ie in &input_mut.mouse_ax_handler.1 {
+        *input_mut.axe_values.entry(ie).or_insert(0.0) += y;
+    }
+}
+#[no_mangle]
+pub extern "C" fn on_scroll(gr: *mut GameRun, x: f32, y: f32) {
+    let engine = unsafe { &mut (*gr).0 };
+    let ref mut input_mut = engine.native_link_mut().input;
+    for &ie in &input_mut.scroll_ax_handler.0 {
+        *input_mut.axe_values.entry(ie).or_insert(0.0) += x;
+    }
+    for &ie in &input_mut.scroll_ax_handler.1 {
+        *input_mut.axe_values.entry(ie).or_insert(0.0) += y;
+    }
+}
+#[no_mangle]
+pub extern "C" fn on_magnification(gr: *mut GameRun, v: f32) {
+    let engine = unsafe { &mut (*gr).0 };
+    let ref mut input_mut = engine.native_link_mut().input;
+    for &ie in &input_mut.mag_ax_handler {
+        *input_mut.axe_values.entry(ie).or_insert(0.0) += v;
+    }
 }
