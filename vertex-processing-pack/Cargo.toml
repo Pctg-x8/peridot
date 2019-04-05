@@ -4,5 +4,6 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+# bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+bedrock = { path = "../../bedrock" }
 peridot-serialization-utils = { path = "../serialization-utils" }

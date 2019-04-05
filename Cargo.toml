@@ -9,14 +9,18 @@ edition = "2018"
 pathfinder_partitioner = { path = "extras/pathfinder/partitioner" }
 log = "*"
 libc = "*"
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }
-peridot-math = { path = "math" }
+peridot-math = { path = "math", features = ["bedrock_interop"] }
 peridot-vg = { path = "vg" }
 
 image = "*"
+
+[dependencies.bedrock]
+# git = "https://github.com/Pctg-x8/bedrock"
+path = "../bedrock"
+features = ["Presentation", "Implements"]
 
 [workspace]
 exclude = ["extras/"]
