@@ -43,7 +43,7 @@ const BACK_COLOR: [f32; 4] = [0.2, 0.18, 0.2, 1.0];
 
 use std::collections::BTreeMap;
 pub struct DescriptorManager {
-    set_layouts: Vec<br::DescriptorSetLayout>, pool: br::DescriptorPool, sets: Vec<br::vk::VkDescriptorSet>
+    set_layouts: Vec<br::DescriptorSetLayout>, _pool: br::DescriptorPool, sets: Vec<br::vk::VkDescriptorSet>
 }
 impl DescriptorManager {
     pub fn new(dev: &br::Device, bindings: &[br::DSLBindings], set_allocations: &[usize]) -> br::Result<Self> {
@@ -91,7 +91,7 @@ impl DescriptorManager {
         let used_layouts = set_allocations.iter().map(|&i| &set_layouts[i]).collect::<Vec<_>>();
         let sets = pool.alloc(&used_layouts)?;
 
-        return Ok(DescriptorManager { set_layouts, pool, sets })
+        return Ok(DescriptorManager { set_layouts, _pool: pool, sets })
     }
 
     pub fn layouts(&self) -> &[br::DescriptorSetLayout] { &self.set_layouts }
