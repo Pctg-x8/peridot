@@ -71,7 +71,6 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
         let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
-        trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
         let mut this = Engine {
             rctrl: RendererControl::new(&g)?,
@@ -436,7 +435,7 @@ impl CommandBundle
             CBSubmissionType::Transfer => g.graphics_queue.family
         };
         let cp = br::CommandPool::new(&g.device, qf, false, false)?;
-        return Ok(CommandBundle(cp.alloc(count as _, true)?, cp));
+        Ok(CommandBundle(cp.alloc(count as _, true)?, cp))
     }
     pub fn reset(&self) -> br::Result<()> { self.1.reset(true) }
 }
@@ -459,13 +458,20 @@ impl SubpassDependencyTemplates
     }
 }
 
+pub enum RenderPassAttachmentTemplates {}
+impl RenderPassAttachmentTemplates
+{
+    pub fn presented(format: PixelFormat) -> br::AttachmentDescription
+    {
+        br::AttachmentDescription::new(format as _, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+            .store_op(br::StoreOp::Store)
+    }
+}
 pub enum RenderPassTemplates {}
 impl RenderPassTemplates {
-    pub fn single_render(format: br::vk::VkFormat) -> br::RenderPassBuilder {
+    pub fn single_render(format: PixelFormat) -> br::RenderPassBuilder {
         let mut b = br::RenderPassBuilder::new();
-        let adesc =
-            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
-            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        let adesc = RenderPassAttachmentTemplates::presented(format).load_op(br::LoadOp::Clear);
         b.add_attachment(adesc);
         b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
         b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
@@ -516,7 +522,8 @@ pub trait SpecConstantStorage {
 
 pub struct LayoutedPipeline(br::Pipeline, Rc<br::PipelineLayout>);
 impl LayoutedPipeline {
-    pub fn combine(p: br::Pipeline, layout: &Rc<br::PipelineLayout>) -> Self {
+    pub fn combine(p: br::Pipeline, layout: &Rc<br::PipelineLayout>) -> Self
+    {
         LayoutedPipeline(p, layout.clone())
     }
     pub fn pipeline(&self) -> &br::Pipeline { &self.0 }
