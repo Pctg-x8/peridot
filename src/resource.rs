@@ -2,6 +2,7 @@ use bedrock as br; use self::br::traits::*;
 use super::*;
 use std::ops::Deref;
 use std::mem::{size_of, transmute};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64) }
@@ -107,6 +108,7 @@ impl<'g> MemoryBadget<'g> {
         info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
+        trace!(target: "peridot", "Binding Memory Regions to Resources...");
 
         self.entries.into_iter().map(|(x, o)| match x {
             MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
@@ -293,10 +295,18 @@ impl TexturePreallocatedGroup {
 }
 impl TextureInstantiatedGroup {
     pub fn stage_data(&self, mr: &br::MappedMemoryRange) {
+        trace!("Staging Texture Data...");
         for &(ref pd, offs) in &self.0 {
-            unsafe {
+            let s = unsafe
+            {
                 mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format_alpha().bpp() >> 3) as usize)
-                    .copy_from_slice(&pd.u8_pixels_alphaed());
+            };
+
+            match pd.u8_pixels_alphaed()
+            {
+                asset::PixelFormatAlphaed::Raw(r) => s.copy_from_slice(r),
+                asset::PixelFormatAlphaed::Converted(cnv) =>
+                    s.par_chunks_mut(4).zip(cnv).for_each(|(d, s)| d.copy_from_slice(&s))
             }
         }
     }

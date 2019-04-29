@@ -2,6 +2,7 @@
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek, BufRead};
 use std::borrow::Cow;
+use rayon::prelude::*;
 
 pub trait PlatformAssetLoader {
     type Asset: Read + Seek + 'static;
@@ -60,6 +61,8 @@ impl FromAsset for super::mmdloader::vmd::MotionData
     }
 }
 
+pub enum PixelFormatAlphaed<'d, T: 'd + IndexedParallelIterator<Item = [u8; 4]>> { Raw(&'d [u8]), Converted(T) }
+
 use image::{ImageDecoder, ImageResult, ImageError};
 use image::hdr::HDRDecoder;
 pub struct DecodedPixelData {
@@ -77,11 +80,13 @@ impl DecodedPixelData {
     }
 
     pub fn u8_pixels(&self) -> &[u8] { &self.pixels }
-    pub fn u8_pixels_alphaed(&self) -> Cow<[u8]> {
-        match self.color {
-            image::ColorType::RGBA(8) | image::ColorType::BGRA(8) => Cow::Borrowed(&self.pixels),
+    pub fn u8_pixels_alphaed<'d>(&'d self) -> PixelFormatAlphaed<'d, impl 'd + IndexedParallelIterator<Item = [u8; 4]>>
+    {
+        match self.color
+        {
+            image::ColorType::RGBA(8) | image::ColorType::BGRA(8) => PixelFormatAlphaed::Raw(&self.pixels),
             image::ColorType::RGB(8) | image::ColorType::BGR(8) =>
-                Cow::Owned(self.pixels.chunks(3).flat_map(|rgb| vec![rgb[0], rgb[1], rgb[2], 255]).collect()),
+                PixelFormatAlphaed::Converted(self.pixels.par_chunks(3).map(|rgb| [rgb[0], rgb[1], rgb[2], 255])),
             c => panic!("conversion method not found for format {:?}", c)
         }
     }
