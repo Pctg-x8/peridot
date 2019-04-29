@@ -4,7 +4,8 @@ extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
     PvpShaderModules, vg, SpecConstantStorage, PolygonModelExtended, BufferContent,
-    DepthStencilTexture2D, TextureInitializationGroup, AssetLoaderService, Texture2D};
+    DepthStencilTexture2D, TextureInitializationGroup, AssetLoaderService, Texture2D,
+    TextureInstantiatedGroup};
 use peridot::math::{Vector2, Vector3, Matrix4, Vector4, Camera, ProjectionMethod, Quaternion, One};
 use std::rc::Rc;
 use std::borrow::Cow;
@@ -23,9 +24,37 @@ pub struct VgRendererFragmentFixedColor {
     tf: Matrix4<f32>
 }
 
+pub struct FixedMemoryBlock {
+    textures: Vec<Texture2D>, buffer: Buffer
+}
+impl FixedMemoryBlock {
+    pub fn init(g: &peridot::Graphics, mut prealloc: BufferPrealloc, textures: TextureInitializationGroup)
+            -> br::Result<(Buffer, TextureInstantiatedGroup, Buffer, u64)> {
+        let texture_prealloc = textures.prealloc(&mut prealloc)?;
+        let buffer = prealloc.build_transferred()?;
+        let stg_buffer = prealloc.build_upload()?;
+
+        let (mut mb, mut mb_stg) = (MemoryBadget::new(g), MemoryBadget::new(g));
+        mb.add(buffer);
+        mb_stg.add(stg_buffer);
+        let (textures, mut res) = texture_prealloc.alloc_and_instantiate(mb)?;
+        let buffer = res.pop().expect("No objects?").unwrap_buffer();
+        let stg_buffer = mb_stg.alloc_upload()?.pop().expect("No objects?").unwrap_buffer();
+
+        return Ok((buffer, textures, stg_buffer, prealloc.total_size()));
+    }
+    pub fn new(buffer: Buffer, textures: TextureInstantiatedGroup) -> Self
+    {
+        FixedMemoryBlock { textures: textures.into_textures_reversed(), buffer }
+    }
+
+    pub fn iter_textures(&self) -> impl Iterator<Item = &Texture2D> { self.textures.iter().rev() }
+}
+
 pub struct Game<PL: peridot::NativeLinker> {
     model: PolygonModelExtended,
-    renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, buffer: Buffer,
+    renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle,
+    memblock: FixedMemoryBlock,
     depth_buffer: Discardable<DepthStencilTexture2D>,
     _bufview: br::BufferView,
     _descriptors: (br::DescriptorSetLayout, br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
@@ -34,7 +63,6 @@ pub struct Game<PL: peridot::NativeLinker> {
     vg_renderer_params: peridot::VgRendererParams,
     vg_renderer_exinst: peridot::VgRendererExternalInstances,
     gp_model: LayoutedPipeline, gp_model_tex: LayoutedPipeline, model_render_params: peridot::PMXRenderingParams,
-    _textures: Vec<Texture2D>,
     ph: PhantomData<*const PL>
 }
 impl<PL: peridot::NativeLinker> Game<PL> {
@@ -45,10 +73,29 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
         let model: PolygonModelExtended =
             e.load("models.SiroDanceWinterCostume_white_v1_1.siro_dance_wintercostume_white_v1_1")
+            // e.load("models.サーバル.サーバル")
             .expect("Loading Model");
         for (n, tp) in model.textures.iter().enumerate() {
             println!("ModelTexture #{}: {}", n, tp.display());
         }
+        for (n, b) in model.bones.iter().enumerate()
+        {
+            println!("Bone #{}: {}", n, b.name.jp);
+        }
+
+        let motion: peridot::mmdloader::vmd::MotionData =
+            e.load("models.極楽浄土.極楽上半身2ボーンが長い用")
+            .expect("Loading Motion");
+        println!("MotionData:");
+        println!("-- Name: {}", motion.decode_name().expect("Invalid Shift-JIS Sequence"));
+        println!("-- Bones: ");
+        for b in motion.bone_keyframes()
+        {
+            if b.frame_number != 0 { continue; }
+            println!("---- {}: Frame #{}", b.decode_name().expect("Invalid Shift-JIS Sequence"), b.frame_number);
+        }
+        println!("-- FaceFrameCount: {}", motion.face_keyframe_count);
+        println!("-- CameraFrameCount: {}", motion.camera_keyframe_count);
         
         let cam = Camera {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
@@ -80,18 +127,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let depth_buffer = DepthStencilTexture2D::init(&e.graphics(), &Vector2(screen_size.0, screen_size.1),
             peridot::PixelFormat::D24S8)
             .expect("Init DepthStencilTexture2D");
-
-        let texture_prealloc = tinit.prealloc(&mut bp).expect("Image Generation");
-        let buffer = bp.build_transferred().expect("Buffer Allocation");
-        let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
         
-        let mut mb = MemoryBadget::new(&e.graphics());
-        mb.add(buffer);
-        let (textures, mut res) = texture_prealloc.alloc_and_instantiate(mb).expect("Mem Allocation");
-        let buffer = res.pop().expect("No objects?").unwrap_buffer();
-        let mut mb_stg = MemoryBadget::new(&e.graphics());
-        mb_stg.add(stg_buffer);
-        let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("No objects?").unwrap_buffer();
+        let (buffer, textures, stg_buffer, stg_size) = FixedMemoryBlock::init(&e.graphics(), bp, tinit)
+            .expect("Alloc MemoryBlocks");
 
         let mut mb_scrbuf = MemoryBadget::new(&e.graphics());
         mb_scrbuf.add(depth_buffer);
@@ -99,7 +137,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             mb_scrbuf.alloc().expect("ScreenBuffer Memory Allocation").pop().expect("No objects?").unwrap_image()
         ).expect("Creating DepthStencilTexture2D");
         
-        let (vg_renderer_params, model_render_params) = stg_buffer.guard_map(bp.total_size(), |m| {
+        let (vg_renderer_params, model_render_params) = stg_buffer.guard_map(stg_size, |m| {
             let (v, p) = cam.matrixes();
             let aspect = Matrix4::scale(Vector4(screen_size.1 as f32 / screen_size.0 as f32, 1.0, 1.0, 1.0));
             let vp = aspect * p * v;
@@ -119,9 +157,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         e.submit_commands(|rec| {
             let mut tfb = TransferBatch::new();
-            tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, bp.total_size() as _);
-            tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER.vertex_input(), &buffer,
-                0 .. bp.total_size() as _,
+            tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, stg_size as _);
+            tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER.vertex_input(),
+                &buffer, 0 .. stg_size as _,
                 br::AccessFlags::SHADER.read | br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::INDEX_READ);
             textures.copy_from_stage_batches(&mut tfb, &stg_buffer);
             tfb.sink_transfer_commands(rec);
@@ -132,7 +170,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                         br::ImageLayout::Undefined, br::ImageLayout::DepthStencilAttachmentOpt)
                 ]);
         }).expect("ImmResource Initialization");
-        let textures = textures.into_textures();
+        let memblock = FixedMemoryBlock::new(buffer, textures);
 
         let renderpass = RenderPassTemplates::single_render_with_depth(e.backbuffer_format(),
             br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
@@ -141,7 +179,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .map(|v| br::Framebuffer::new(&renderpass, &[v, &depth_buffer], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
-        let i_smp = br::SamplerBuilder::new().create(&e.graphics()).expect("Creating Sampler");
+        let i_smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
         let dsl = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
             uniform_texel_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
             .. br::DSLBindings::empty()
@@ -153,26 +191,26 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             combined_image_sampler: Some((0, 1, br::ShaderStage::FRAGMENT, vec![i_smp.native_ptr()])),
             .. br::DSLBindings::empty()
         }).expect("DescriptorSetLayout for Textured Rendering creation");
-        let dp = br::DescriptorPool::new(&e.graphics(), (3 + textures.len()) as _, &[
+        let dp = br::DescriptorPool::new(&e.graphics(), (3 + memblock.textures.len()) as _, &[
             br::DescriptorPoolSize(br::DescriptorType::UniformTexelBuffer, 1),
             br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 2),
-            br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, textures.len() as _)
+            br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, memblock.textures.len() as _)
         ], false).expect("DescriptorPool Creation");
         let descs = dp.alloc(&[&dsl, &dsl_model, &dsl_model]).expect("DescriptorSet Allocation");
-        let texture_descs = dp.alloc(&vec![&dsl_tex; textures.len()][..])
+        let texture_descs = dp.alloc(&vec![&dsl_tex; memblock.textures.len()][..])
             .expect("DescriptorSet Allocation for Textures");
 
         let mut dub = DescriptorSetUpdateBatch::new();
         dub.write(descs[0], 0, br::DescriptorUpdateInfo::UniformTexelBuffer(vec![bufview.native_ptr()]));
         dub.write(descs[1], 0, br::DescriptorUpdateInfo::UniformBuffer(vec![
-            (buffer.native_ptr(),
+            (memblock.buffer.native_ptr(),
                 world_settings_offs as usize .. world_settings_offs as usize + std::mem::size_of::<WorldSettings>())
         ]));
         dub.write(descs[2], 0, br::DescriptorUpdateInfo::UniformBuffer(vec![
-            (buffer.native_ptr(),
+            (memblock.buffer.native_ptr(),
                 object_settings_offs as usize .. object_settings_offs as usize + std::mem::size_of::<ObjectSettings>())
         ]));
-        for (&td, o) in texture_descs.iter().zip(&textures) {
+        for (&td, o) in texture_descs.iter().zip(memblock.iter_textures()) {
             dub.write(td, 0, br::DescriptorUpdateInfo::CombinedImageSampler(vec![
                 (None, o.view().native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)
             ]));
@@ -213,11 +251,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
         curve_vertex_processing.mod_vertex_shader().specinfo =
             Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
-        
+        let text_color = VgRendererFragmentFixedColor { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
         interior_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
-            Some(VgRendererFragmentFixedColor { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.as_pair());
+            Some(text_color.as_pair());
         curve_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
-            Some(VgRendererFragmentFixedColor { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.as_pair());
+            Some(text_color.as_pair());
         let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0));
         gpb.vertex_processing(interior_vertex_processing)
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
@@ -254,22 +292,22 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             ], true);
 
             gp_model.bind(&mut cbr);
-            model_render_params.set_vertex_buffer(&mut cbr, &buffer);
+            model_render_params.set_vertex_buffer(&mut cbr, &memblock.buffer);
             cbr.bind_graphics_descriptor_sets(0, &descs[1..3], &[]);
-            model_render_params.untextured_render(&mut cbr, &buffer, &model);
+            model_render_params.untextured_render(&mut cbr, &memblock.buffer, &model);
             gp_model_tex.bind(&mut cbr);
             cbr.bind_graphics_descriptor_sets(0, &descs[1..3], &[]);
-            model_render_params.textured_render(&mut cbr, &buffer, &model, &texture_descs);
+            model_render_params.textured_render(&mut cbr, &memblock.buffer, &model, &texture_descs);
 
-            vg_renderer_params.default_render_commands(e, &mut cbr, &buffer, &vg_renderer_exinst);
+            vg_renderer_params.default_render_commands(e, &mut cbr, &memblock.buffer, &vg_renderer_exinst);
             cbr.end_render_pass();
         }
 
         Game {
-            ph: PhantomData, buffer, renderpass, framebuffers, _bufview: bufview,
+            ph: PhantomData, renderpass, framebuffers, _bufview: bufview, memblock,
             _descriptors: (dsl, dsl_model, dp, descs), render_cb, vg_renderer_params, vg_renderer_exinst,
             gp_model, model_render_params, depth_buffer: Discardable::from(depth_buffer),
-            model, gp_model_tex, dsl_tex, texture_descs, _textures: textures
+            model, gp_model_tex, dsl_tex, texture_descs
         }
     }
 
@@ -323,14 +361,14 @@ impl<PL: peridot::NativeLinker> Game<PL> {
         ], true);
 
         self.gp_model.bind(cmd);
-        self.model_render_params.set_vertex_buffer(cmd, &self.buffer);
+        self.model_render_params.set_vertex_buffer(cmd, &self.memblock.buffer);
         cmd.bind_graphics_descriptor_sets(0, &self._descriptors.3[1..3], &[]);
-        self.model_render_params.untextured_render(cmd, &self.buffer, &self.model);
+        self.model_render_params.untextured_render(cmd, &self.memblock.buffer, &self.model);
         self.gp_model_tex.bind(cmd);
         cmd.bind_graphics_descriptor_sets(0, &self._descriptors.3[1..3], &[]);
-        self.model_render_params.textured_render(cmd, &self.buffer, &self.model, &self.texture_descs);
+        self.model_render_params.textured_render(cmd, &self.memblock.buffer, &self.model, &self.texture_descs);
 
-        self.vg_renderer_params.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst);
+        self.vg_renderer_params.default_render_commands(e, cmd, &self.memblock.buffer, &self.vg_renderer_exinst);
         cmd.end_render_pass();
     }
 }
