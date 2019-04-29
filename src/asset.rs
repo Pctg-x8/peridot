@@ -49,6 +49,16 @@ impl FromAsset for super::PolygonModelExtended {
         super::PolygonModelExtended::load(base, BufReader::new(asset))
     }
 }
+impl LogicalAssetData for super::mmdloader::vmd::MotionData { const EXT: &'static str = "vmd"; }
+impl FromAsset for super::mmdloader::vmd::MotionData
+{
+    type Error = super::mmdloader::vmd::LoadingError;
+
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, Self::Error>
+    {
+        super::mmdloader::vmd::MotionData::read(&mut BufReader::new(asset))
+    }
+}
 
 use image::{ImageDecoder, ImageResult, ImageError};
 use image::hdr::HDRDecoder;
@@ -75,9 +85,12 @@ impl DecodedPixelData {
             c => panic!("conversion method not found for format {:?}", c)
         }
     }
-    pub fn is_lacking_alpha_format(&self) -> bool {
-        match self.color {
-            image::ColorType::RGB(8) | image::ColorType::BGR(8) => true,
+    pub fn is_lacking_alpha_format(&self) -> bool { !self.has_alpha() }
+    pub fn has_alpha(&self) -> bool
+    {
+        match self.color
+        {
+            image::ColorType::RGBA(8) | image::ColorType::BGRA(8) => true,
             _ => false
         }
     }

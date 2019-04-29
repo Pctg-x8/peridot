@@ -7,12 +7,13 @@ use std::io::{Read, BufReader};
 use std::env::args;
 use std::path::{Path, PathBuf};
 
-mod vmd;
+pub mod vmd;
+pub use vmd::MotionData;
 
 pub struct PolygonModelExtended {
     pub base_components: Vec<String>,
     pub header: pmx::Header, pub vertices: Vec<pmx::Vertex>, pub surfaces: pmx::SurfaceSection,
-    pub textures: Vec<PathBuf>, pub materials: Vec<pmx::Material>, bones: Vec<pmx::Bone>,
+    pub textures: Vec<PathBuf>, pub materials: Vec<pmx::Material>, pub bones: Vec<pmx::Bone>,
     morphs: Vec<pmx::Morph>, display_frames: Vec<pmx::DisplayFrame>, rigid_bodies: Vec<pmx::RigidBody>,
     joints: Vec<pmx::Joint>, softbodies: Vec<pmx::Softbody>
 }
