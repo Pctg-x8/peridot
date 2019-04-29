@@ -1,19 +1,20 @@
 //! Vocaloid Motion Data
 
 use std::io::prelude::*;
-use std::io::Error as IOError;
+use std::io::{Error as IOError, SeekFrom};
 use encoding::codec::japanese::Windows31JEncoding;
 use encoding::{Encoding, DecoderTrap};
 use std::borrow::Cow;
 use std::slice::from_raw_parts;
 use std::mem::size_of;
+use super::pmx::TypedReader;
 
 pub struct MotionData
 {
-    name_bytes: Vec<u8>, file_bytes: Vec<u8>,
-    pub bone_keyframe_count: u32, pub face_keyframe_count: u32, pub camera_keyframe_count: u32
+    name_bytes: Vec<u8>,
+    bone_motions: Vec<BoneMotionData>, face_motions: Vec<FaceMotionData>, camera_motions: Vec<CameraMotionData>
 }
-#[repr(C, packed)]
+#[repr(C)]
 pub struct BoneMotionData
 {
     name_bytes: [u8; 15], pub frame_number: u32,
@@ -21,12 +22,12 @@ pub struct BoneMotionData
     pub quaternion_x: f32, pub quaterion_y: f32, pub quaternion_z: f32, pub quaterion_w: f32,
     interpolation_bytes: [u8; 64]
 }
-#[repr(C, packed)]
+#[repr(C)]
 pub struct FaceMotionData
 {
     name_bytes: [u8; 15], pub frame_number: u32, pub weight: f32
 }
-#[repr(C, packed)]
+#[repr(C)]
 pub struct CameraMotionData
 {
     pub frame_number: u32, pub length: u32,
@@ -34,32 +35,52 @@ pub struct CameraMotionData
     pub rotation_x: f32, pub rotation_y: f32, pub rotation_z: f32,
     interpolation_bytes: [u8; 24], pub fov_angle: u32, pub perspective: u8
 }
-impl MotionData {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self, LoadingError> {
+impl MotionData
+{
+    pub fn read<R: Read + Seek>(reader: &mut R) -> Result<Self, LoadingError>
+    {
         let mut header_bytes = [0u8; 50];
         reader.read_exact(&mut header_bytes)?;
-        if &header_bytes[..30] != b"Vocaloid Motion Data 0002\0\0\0\0\0" {
+        if &header_bytes[..30] != b"Vocaloid Motion Data 0002\0\0\0\0\0"
+        {
             return Err(LoadingError::SignatureMismatch);
         }
         let name_bytecount = header_bytes[30..50].iter().position(|&b| b == 0x00).unwrap_or(20);
-        let mut file_bytes = Vec::new();
-        reader.read_to_end(&mut file_bytes)?;
-        let bone_keyframe_count = unsafe { *(file_bytes.as_ptr() as *const u32) };
-        let face_keyframe_count = unsafe
-        {
-            *(file_bytes.as_ptr().add(4 + size_of::<BoneMotionData>() * bone_keyframe_count as usize) as *const u32)
-        };
-        let camera_keyframe_count = unsafe
-        {
-            let ptr_face = file_bytes.as_ptr().add(8 + size_of::<BoneMotionData>() * bone_keyframe_count as usize);
-            *(ptr_face.add(size_of::<FaceMotionData>() * face_keyframe_count as usize) as *const u32)
-        };
 
-        return Ok(MotionData
+        let bone_keyframe_count = u32::from_le(u32::read_value1(reader)?);
+        let mut bone_keyframes = Vec::with_capacity(bone_keyframe_count as _);
+        for _ in 0 .. bone_keyframe_count
         {
-            file_bytes, name_bytes: header_bytes[30..30+name_bytecount].to_owned(),
-            bone_keyframe_count, face_keyframe_count, camera_keyframe_count
-        });
+            let mut md: BoneMotionData = unsafe { std::mem::zeroed() };
+            reader.read_exact(&mut md.name_bytes)?;
+            reader.read_exact(unsafe { &mut *((&mut md as *mut _ as *mut u8).offset(16) as *mut [u8; 96]) })?;
+            bone_keyframes.push(md);
+        }
+
+        let face_keyframe_count = u32::from_le(u32::read_value1(reader)?);
+        let mut face_keyframes = Vec::with_capacity(face_keyframe_count as _);
+        for _ in 0 .. face_keyframe_count
+        {
+            let mut md: FaceMotionData = unsafe { std::mem::zeroed() };
+            reader.read_exact(&mut md.name_bytes)?;
+            reader.read_exact(unsafe { &mut *((&mut md as *mut _ as *mut u8).offset(16) as *mut [u8; 4 * 2]) })?;
+            face_keyframes.push(md);
+        }
+
+        let camera_keyframe_count = u32::from_le(u32::read_value1(reader)?);
+        let mut camera_keyframes = Vec::with_capacity(camera_keyframe_count as _);
+        unsafe { camera_keyframes.set_len(camera_keyframe_count as _) };
+        reader.read_exact(unsafe
+        {
+            std::slice::from_raw_parts_mut(camera_keyframes.as_mut_ptr() as *mut _,
+                size_of::<CameraMotionData>() * camera_keyframe_count as usize)
+        })?;
+
+        Ok(MotionData
+        {
+            name_bytes: header_bytes[30..30+name_bytecount].to_owned(),
+            bone_motions: bone_keyframes, face_motions: face_keyframes, camera_motions: camera_keyframes
+        })
     }
 
     /// Decodes the vmd name.
@@ -69,32 +90,9 @@ impl MotionData {
         Windows31JEncoding.decode(&self.name_bytes, DecoderTrap::Strict)
     }
 
-    pub fn bone_keyframes(&self) -> &[BoneMotionData]
-    {
-        unsafe
-        {
-            let md_start_ptr = self.file_bytes.as_ptr().offset(4);
-            from_raw_parts(md_start_ptr as *const _, self.bone_keyframe_count as _)
-        }
-    }
-    pub fn face_keyframes(&self) -> &[FaceMotionData]
-    {
-        unsafe
-        {
-            let f_start_ptr =
-                self.file_bytes.as_ptr().add(4 + size_of::<BoneMotionData>() * self.bone_keyframe_count as usize);
-            from_raw_parts(f_start_ptr as *const _, self.face_keyframe_count as _)
-        }
-    }
-    pub fn camera_keyframes(&self) -> &[CameraMotionData]
-    {
-        unsafe {
-            let cm_start_ptr = self.file_bytes.as_ptr()
-                .add(4 + size_of::<BoneMotionData>() * self.bone_keyframe_count as usize)
-                .add(4 + size_of::<FaceMotionData>() * self.face_keyframe_count as usize);
-            from_raw_parts(cm_start_ptr as *const _, self.camera_keyframe_count as _)
-        }
-    }
+    pub fn bone_keyframes(&self) -> &[BoneMotionData] { &self.bone_motions }
+    pub fn face_keyframes(&self) -> &[FaceMotionData] { &self.face_motions }
+    pub fn camera_keyframes(&self) -> &[CameraMotionData] { &self.camera_motions }
 }
 impl BoneMotionData
 {

@@ -2,6 +2,8 @@
 name = "peridot-mmdloader"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
 
 [dependencies]
 encoding = "*"
+log = "0.4"
