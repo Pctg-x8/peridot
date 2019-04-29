@@ -6,6 +6,8 @@ use pathfinder_partitioner::{BQuadVertexPositions, BVertexLoopBlinnData};
 use std::ops::Range;
 use std::mem::size_of;
 use self::math::{Vector2, Vector2F32, Vector4F32, Vector4};
+use rayon::prelude::*;
+use std::sync::{Arc, RwLock};
 
 // 仮定義
 pub trait ModelData {
@@ -192,10 +194,13 @@ impl ModelData for super::PolygonModelExtended {
             alloc.add(BufferContent::indices::<u16>(self.surfaces.len() * 3)) as _
         };
 
-        // テクスチャロード(そのうち並列化したい......AssetLoaderの改造が必要)
+        let al_ref = e.async_asset_loader();
         let mut texture_slot_numbers = Vec::with_capacity(self.textures.len());
-        for tex in &self.textures {
-            let mut asset_components = self.base_components.iter().map(|x| x as _).collect::<Vec<&str>>();
+        let textures_ref = RwLock::new(textures);
+        let ref cmp = self.base_components;
+        let loaded_textures = self.textures.par_iter().map(|tex|
+        {
+            let mut asset_components = cmp.iter().map(|x| x as _).collect::<Vec<&str>>();
             if let Some(p) = tex.parent() {
                 asset_components.extend(p.components().map(|c| c.as_os_str().to_str().expect("Decoding path")));
             }
@@ -204,15 +209,33 @@ impl ModelData for super::PolygonModelExtended {
             let asset_path = asset_components.join(".");
             trace!("Loading Asset in MMD: {}", asset_path);
             // switch loader by extension
-            let tslot = match tex.extension().and_then(std::ffi::OsStr::to_str) {
-                Some("bmp") => textures.add(e.load::<BMP>(&asset_path).expect("Loading Textures")),
-                Some("png") => textures.add(e.load::<PNG>(&asset_path).expect("Loading Textures")),
-                Some("tiff") => textures.add(e.load::<TIFF>(&asset_path).expect("Loading Textures")),
-                Some("tga") => textures.add(e.load::<TGA>(&asset_path).expect("Loading Textures")),
-                Some("webp") => textures.add(e.load::<WebP>(&asset_path).expect("Loading Textures")),
+            match tex.extension().and_then(std::ffi::OsStr::to_str) {
+                Some("bmp") => al_ref.load::<BMP>(&asset_path).and_then(|l| {
+                    trace!("Texture Loaded! {}", asset_path);
+                    Ok(textures_ref.write().unwrap().add(l))
+                }).expect("Loading Texture"),
+                Some("png") => al_ref.load::<PNG>(&asset_path).and_then(|l| {
+                    trace!("Texture Loaded! {}", asset_path);
+                    Ok(textures_ref.write().unwrap().add(l))
+                }).expect("Loading Texture"),
+                Some("tiff") => al_ref.load::<TIFF>(&asset_path).and_then(|l| {
+                    trace!("Texture Loaded! {}", asset_path);
+                    Ok(textures_ref.write().unwrap().add(l))
+                }).expect("Loading Texture"),
+                Some("tga") => al_ref.load::<TGA>(&asset_path).and_then(|l| {
+                    trace!("Texture Loaded! {}", asset_path);
+                    Ok(textures_ref.write().unwrap().add(l))
+                }).expect("Loading Texture"),
+                Some("webp") => al_ref.load::<WebP>(&asset_path).and_then(|l| {
+                    trace!("Texture Loaded! {}", asset_path);
+                    Ok(textures_ref.write().unwrap().add(l))
+                }).expect("Loading Texture"),
                 t => panic!("Unsupported Texture: {:?}", t)
-            };
-            texture_slot_numbers.push(tslot);
+            }
+        }).collect::<Vec<_>>();
+        for texindex in loaded_textures
+        {
+            texture_slot_numbers.push(texindex);
         }
 
         PMXDataPlacementOffsets {

@@ -308,6 +308,7 @@ impl TextureInstantiatedGroup {
         }
     }
     pub fn into_textures(mut self) -> Vec<Texture2D> { self.1.reverse(); return self.1; }
+    pub fn into_textures_reversed(self) -> Vec<Texture2D> { self.1 }
 }
 impl std::ops::Index<usize> for TextureInstantiatedGroup {
     type Output = Texture2D;
