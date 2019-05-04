@@ -1,6 +1,7 @@
 
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek, BufRead};
+use std::ops::Deref;
 use std::borrow::Cow;
 use rayon::prelude::*;
 
@@ -163,4 +164,22 @@ impl FromAsset for HDR {
     fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         image::hdr::HDRDecoder::new(Box::new(BufReader::new(asset)) as _).map(HDR)
     }
+}
+
+pub struct GLTFBinary(gltf_loader::GLTFRenderableObject);
+impl FromAsset for GLTFBinary
+{
+    type Error = IOError;
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, mut asset: Asset) -> IOResult<Self>
+    {
+        let (info, chunks) = gltf_loader::read_glb(&mut asset)?;
+        let ro = gltf_loader::GLTFRenderableObject::new(&info, chunks.map(|r| r.expect("IO Error")));
+
+        Ok(GLTFBinary(ro))
+    }
+}
+impl Deref for GLTFBinary
+{
+    type Target = gltf_loader::GLTFRenderableObject;
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
