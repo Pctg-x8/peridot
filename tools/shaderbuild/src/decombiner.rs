@@ -588,7 +588,7 @@ impl<'s> CombinedShader<'s> {
                         *code += &format!("uniform {} {{{}}};\n", struct_name, member_code);
                     },
                     DescriptorBoundResource::Storage { struct_name, member_code } => {
-                        *code += &format!("storage {} {{{}}};\n", struct_name, member_code);
+                        *code += &format!("buffer {} {{{}}};\n", struct_name, member_code);
                     },
                     DescriptorBoundResource::SamplerBuffer(name) => {
                         *code += &format!("uniform samplerBuffer {};\n", name);
