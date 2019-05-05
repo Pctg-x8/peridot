@@ -212,23 +212,23 @@ impl ModelData for super::PolygonModelExtended {
             match tex.extension().and_then(std::ffi::OsStr::to_str) {
                 Some("bmp") => al_ref.load::<BMP>(&asset_path).and_then(|l| {
                     trace!("Texture Loaded! {}", asset_path);
-                    Ok(textures_ref.write().unwrap().add(l))
+                    Ok(textures_ref.write().expect("Poisoning?").add(l))
                 }).expect("Loading Texture"),
                 Some("png") => al_ref.load::<PNG>(&asset_path).and_then(|l| {
                     trace!("Texture Loaded! {}", asset_path);
-                    Ok(textures_ref.write().unwrap().add(l))
+                    Ok(textures_ref.write().expect("Poisoning?").add(l))
                 }).expect("Loading Texture"),
                 Some("tiff") => al_ref.load::<TIFF>(&asset_path).and_then(|l| {
                     trace!("Texture Loaded! {}", asset_path);
-                    Ok(textures_ref.write().unwrap().add(l))
+                    Ok(textures_ref.write().expect("Poisoning?").add(l))
                 }).expect("Loading Texture"),
                 Some("tga") => al_ref.load::<TGA>(&asset_path).and_then(|l| {
                     trace!("Texture Loaded! {}", asset_path);
-                    Ok(textures_ref.write().unwrap().add(l))
+                    Ok(textures_ref.write().expect("Poisoning?").add(l))
                 }).expect("Loading Texture"),
                 Some("webp") => al_ref.load::<WebP>(&asset_path).and_then(|l| {
                     trace!("Texture Loaded! {}", asset_path);
-                    Ok(textures_ref.write().unwrap().add(l))
+                    Ok(textures_ref.write().expect("Poisoning?").add(l))
                 }).expect("Loading Texture"),
                 t => panic!("Unsupported Texture: {:?}", t)
             }
