@@ -15,6 +15,10 @@ appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 appkit-derive = { git = "https://github.com/Pctg-x8/appkit-rs" }
 peridot = { path = "../../" }
 peridot_derive = { path = "../../derive" }
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Implements", "Presentation", "VK_MVK_macos_surface"] }
 log = "0.4"
 libc = "0.2"
+
+[dependencies.bedrock]
+git = "https://github.com/Pctg-x8/bedrock"
+# path = "../../../bedrock"
+features = ["Presentation", "Implements", "VK_MVK_macos_surface"]

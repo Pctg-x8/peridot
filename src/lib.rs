@@ -96,7 +96,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn graphics_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     // 将来的に分かれるかも？
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
-    pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
+    pub fn backbuffer_format(&self) -> PixelFormat { self.surface.format() }
     pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
     pub fn input(&self) -> &InputProcess { &self.ip }
     
@@ -109,7 +109,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
 
     pub fn do_update(&mut self)
     {
-        let wait = br::CompletionHandler::Device(&self.g.acquiring_backbuffer);
+        let wait = br::CompletionHandler::Queue(&self.g.acquiring_backbuffer);
         let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
         match bb_index {
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {

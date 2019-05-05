@@ -199,6 +199,9 @@ impl PixelFormat {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32
         }
     }
+
+    /// Coercing Native Format types into this type.
+    pub unsafe fn coerce(nf: br::vk::VkFormat) -> Self { std::mem::transmute(nf) }
 }
 
 pub struct Texture2D(br::ImageView, Image);

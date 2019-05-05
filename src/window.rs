@@ -17,8 +17,8 @@ pub struct SurfaceInfo {
 impl SurfaceInfo
 {
     pub fn gather_info(pd: &br::PhysicalDevice, obj: br::Surface) -> br::Result<Self> {
-        let mut fmq = br::FormatQueryPred::new(); fmq.bit(32)
-            .components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
+        let mut fmq = br::FormatQueryPred::default();
+        fmq.bit(32).components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
         let fmt = pd.surface_formats(&obj)?.into_iter().find(|sf| fmq.satisfy(sf.format))
             .expect("No suitable format found");
         let pres_modes = pd.surface_present_modes(&obj)?;
@@ -35,7 +35,7 @@ impl SurfaceInfo
         
         return Ok(SurfaceInfo { obj, fmt, pres_mode, available_composite_alpha });
     }
-    pub fn format(&self) -> br::vk::VkFormat { self.fmt.format }
+    pub fn format(&self) -> PixelFormat { unsafe { PixelFormat::coerce(self.fmt.format) } }
 }
 
 pub(super) struct WindowRenderTargets
