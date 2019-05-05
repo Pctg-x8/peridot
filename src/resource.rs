@@ -4,29 +4,55 @@ use std::ops::Deref;
 use std::mem::{size_of, transmute};
 use rayon::prelude::*;
 
+fn common_alignment(flags: br::BufferUsage, a: &br::PhysicalDevice) -> u64
+{
+    let mut align = 1;
+    if flags.is_uniform() { align = num::integer::lcm(align, a.properties().limits.minUniformBufferOffsetAlignment); }
+    if flags.is_storage() { align = num::integer::lcm(align, a.properties().limits.minStorageBufferOffsetAlignment); }
+
+    return align;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64) }
-impl BufferContent {
-    fn usage(&self, src: br::BufferUsage) -> br::BufferUsage {
-        match *self {
+pub enum BufferContent
+{
+    Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64), RawPair(u64, br::BufferUsage),
+    Storage(u64)
+}
+impl BufferContent
+{
+    fn usage(&self, src: br::BufferUsage) -> br::BufferUsage
+    {
+        match *self
+        {
             BufferContent::Vertex(_) => src.vertex_buffer(),
             BufferContent::Index(_) => src.index_buffer(),
             BufferContent::Uniform(_) => src.uniform_buffer(),
             BufferContent::Raw(_) => src,
-            BufferContent::UniformTexel(_) => src.uniform_texel_buffer()
+            BufferContent::UniformTexel(_) => src.uniform_texel_buffer(),
+            BufferContent::Storage(_) => src.storage_buffer(),
+            BufferContent::RawPair(_, r) => src | r
         }
     }
-    fn alignment(&self, a: &br::PhysicalDevice) -> u64 {
+    fn alignment(&self, a: &br::PhysicalDevice) -> u64
+    {
         match *self {
             BufferContent::Uniform(_) | BufferContent::UniformTexel(_) =>
                 a.properties().limits.minUniformBufferOffsetAlignment as _,
+            BufferContent::Storage(_) =>
+                a.properties().limits.minStorageBufferOffsetAlignment as _,
+            BufferContent::RawPair(_, v) => if v.is_uniform()
+            {
+                a.properties().limits.minUniformBufferOffsetAlignment as _
+            }
+            else { 1 },
             _ => 1
         }
     }
     fn size(&self) -> u64 {
         match *self {
             BufferContent::Vertex(v) | BufferContent::Index(v) | BufferContent::Uniform(v) | BufferContent::Raw(v) |
-            BufferContent::UniformTexel(v) => v
+            BufferContent::UniformTexel(v) | BufferContent::RawPair(v, _) | BufferContent::Storage(v) => v
         }
     }
 
@@ -37,6 +63,8 @@ impl BufferContent {
     pub fn indices<T>(count: usize) -> Self { BufferContent::Index(size_of::<T>() as u64 * count as u64) }
     pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>() as _) }
     pub fn uniform_dynarray<T>(count: usize) -> Self { BufferContent::Uniform(size_of::<T>() as u64 * count as u64) }
+    pub fn storage<T>() -> Self { BufferContent::Storage(size_of::<T>() as _) }
+    pub fn storage_dynarray<T>(count: usize) -> Self { BufferContent::Storage(size_of::<T>() as u64 * count as u64) }
     pub fn uniform_texel<T>() -> Self { BufferContent::UniformTexel(size_of::<T>() as _) }
     pub fn uniform_texel_dynarray<T>(count: usize) -> Self {
         BufferContent::UniformTexel(size_of::<T>() as u64 * count as u64)
@@ -45,6 +73,7 @@ impl BufferContent {
 macro_rules! align2 {
     ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
 }
+#[derive(Clone)]
 pub struct BufferPrealloc<'g> { g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64 }
 impl<'g> BufferPrealloc<'g> {
     pub fn new(g: &'g Graphics) -> Self {
@@ -68,6 +97,16 @@ impl<'g> BufferPrealloc<'g> {
         return offs;
     }
     pub fn total_size(&self) -> u64 { self.total }
+
+    /// Returns first offset of merged(other's) prealloc-ed block
+    pub fn merge(&mut self, other: &Self) -> u64
+    {
+        let offs = align2!(self.total, common_alignment(other.usage, &self.g.adapter));
+        self.usage |= other.usage;
+        self.total = offs + other.total;
+        self.offsets.extend(other.offsets.iter().map(|&o| o + offs));
+        return offs;
+    }
 }
 
 pub struct MemoryBadget<'g> {

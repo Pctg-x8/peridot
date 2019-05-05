@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(futures_api, async_await)]
 
 // extern crate font_kit;
 #[macro_use] extern crate log;
@@ -11,6 +12,7 @@ pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 pub extern crate peridot_archive as archive;
 pub extern crate peridot_vg as vg;
 pub extern crate peridot_mmdloader as mmdloader;
+extern crate peridot_gltf_loader as gltf_loader;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
@@ -18,6 +20,7 @@ use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::cell::{Ref, RefMut, RefCell};
+use std::time::{Instant as InstantTimer, Duration};
 
 mod window; use self::window::{WindowRenderTargets, StateFence};
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
@@ -31,7 +34,7 @@ mod model; pub use self::model::*;
 pub use self::mmdloader::PolygonModelExtended;
 
 pub trait NativeLinker {
-    type AssetLoader: PlatformAssetLoader;
+    type AssetLoader: PlatformAssetLoader + Sync;
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
 
@@ -45,7 +48,7 @@ pub trait NativeLinker {
 pub trait EngineEvents<PL: NativeLinker> : Sized {
     fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
+    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
@@ -86,7 +89,7 @@ impl<'d, NL: NativeLinker> AssetLoaderService for AsyncAssetLoader<'d, NL> {
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
     nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
     pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>,
-    last_rendering_completion: StateFence
+    last_rendering_completion: StateFence, gametimer: Option<InstantTimer>
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
@@ -98,6 +101,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         let mut this = Engine {
             last_rendering_completion: StateFence::new(&g)?,
             nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into(),
+            gametimer: None
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
@@ -132,7 +136,10 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
 
     pub fn do_update(&mut self)
     {
-        let wait = br::CompletionHandler::Device(&self.g.acquiring_backbuffer);
+        let delta_time = self.gametimer.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
+        self.gametimer = InstantTimer::now().into();
+
+        let wait = br::CompletionHandler::Queue(&self.g.acquiring_backbuffer);
         let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
         match bb_index {
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -148,7 +155,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         self.ip.prepare_for_frame();
         {
             let mut ulib = self.userlib_mut();
-            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index);
+            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, delta_time);
             if let Some(mut cs) = copy_submission {
                 // copy -> render
                 cs.signal_semaphores.to_mut().push(&self.g.buffer_ready);

@@ -167,12 +167,15 @@ impl FromAsset for HDR {
 }
 
 pub struct GLTFBinary(gltf_loader::GLTFRenderableObject);
+impl LogicalAssetData for GLTFBinary { const EXT: &'static str = "glb"; }
 impl FromAsset for GLTFBinary
 {
     type Error = IOError;
     fn from_asset<Asset: Read + Seek + 'static>(_path: &str, mut asset: Asset) -> IOResult<Self>
     {
-        let (info, chunks) = gltf_loader::read_glb(&mut asset)?;
+        let mut chunks = gltf_loader::read_glb(&mut asset)?;
+        let info_chunk_data = chunks.next().expect("Info chunk needed")?.unwrap_json();
+        let info = gltf_loader::deserialize_info_json(&info_chunk_data);
         let ro = gltf_loader::GLTFRenderableObject::new(&info, chunks.map(|r| r.expect("IO Error")));
 
         Ok(GLTFBinary(ro))

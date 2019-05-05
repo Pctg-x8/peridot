@@ -1,26 +1,158 @@
 //! Vocaloid Motion Data
 
 use std::io::prelude::*;
-use std::io::{Error as IOError, SeekFrom};
+use std::io::Error as IOError;
 use encoding::codec::japanese::Windows31JEncoding;
 use encoding::{Encoding, DecoderTrap};
 use std::borrow::Cow;
-use std::slice::from_raw_parts;
 use std::mem::size_of;
-use super::pmx::TypedReader;
+use super::pmx::{TypedReader, Vec3, Vec4};
+use std::collections::{HashMap, BinaryHeap};
+use std::cmp::{PartialOrd, Ord, Ordering};
+
+pub struct BoneKeyframeData
+{
+    pub seconds: f32,
+    pub position: Option<Vec3>, pub rot_quaternion: Option<Vec4>,
+    pub interpolation_bytes: InterpolationData
+}
+impl PartialEq for BoneKeyframeData
+{
+    fn eq(&self, other: &Self) -> bool { self.seconds.eq(&other.seconds) }
+}
+impl PartialOrd for BoneKeyframeData
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { self.seconds.partial_cmp(&other.seconds) }
+}
+impl Eq for BoneKeyframeData {}
+impl Ord for BoneKeyframeData
+{
+    fn cmp(&self, other: &Self) -> Ordering
+    {
+        self.seconds.partial_cmp(&other.seconds).expect("NaN is invalid for timecode")
+    }
+}
+pub type SortedVec<T> = Vec<T>;
+#[derive(Debug)]
+pub struct BonePosture
+{
+    /// Position of bone
+    pub pos: Option<Vec3>,
+    /// Rotation of bone in quaternion
+    pub qrot: Option<Vec4>
+}
+pub struct BoneMotionController
+{
+    keyframes: HashMap<String, SortedVec<BoneKeyframeData>>
+}
+impl BoneMotionController
+{
+    pub fn new(raw_data: &[BoneMotionData], framerate: f32) -> Self
+    {
+        let mut keyframes = HashMap::new();
+        for rd in raw_data
+        {
+            let position = if rd.x == 0.0 && rd.y == 0.0 && rd.z == 0.0 { None } else
+            {
+                Vec3(rd.x, rd.y, rd.z).into()
+            };
+            let rotation =
+                if rd.quaternion_x == 0.0 && rd.quaternion_y == 0.0 && rd.quaternion_z == 0.0 && rd.quaternion_w == 1.0
+                {
+                    None
+                }
+                else
+                {
+                    Vec4(rd.quaternion_x, rd.quaternion_y, rd.quaternion_z, rd.quaternion_w).into()
+                };
+
+            keyframes.entry(&rd.name_bytes).or_insert_with(BinaryHeap::new)
+                .push(BoneKeyframeData
+                {
+                    seconds: rd.frame_number as f32 / framerate, position, rot_quaternion: rotation,
+                    interpolation_bytes: rd.interpolation_bytes.clone()
+                });
+        }
+        
+        BoneMotionController
+        {
+            keyframes: keyframes.into_iter().map(|(k, v)|
+            {
+                #[allow(clippy::or_fun_call)]
+                let key_length = k.iter().position(|&b| b == 0).unwrap_or(k.len());
+                (Windows31JEncoding.decode(&k[..key_length], DecoderTrap::Replace).expect("Invalid BoneName"),
+                    v.into_sorted_vec())
+            }).collect()
+        }
+    }
+
+    pub fn get_bone_postures(&self, for_second: f32) -> HashMap<&str, BonePosture>
+    {
+        self.keyframes.iter()
+            .filter_map(|(k, v)| Self::interpolate_keyframes(v, for_second).map(move |p| (k as &str, p)))
+            .collect()
+    }
+    /// Returns `None` if the bone is not in timeline
+    pub fn get_posture_for_bone(&self, bone_name: &str, for_second: f32) -> Option<BonePosture>
+    {
+        self.keyframes.get(bone_name).and_then(|v| Self::interpolate_keyframes(v, for_second))
+    }
+
+    fn interpolate_keyframes(keyframes: &[BoneKeyframeData], for_second: f32) -> Option<BonePosture>
+    {
+        match keyframes.binary_search_by(|p| p.seconds.partial_cmp(&for_second).expect("NaN is invalid"))
+        {
+            // Found on exact keyframe
+            Ok(kfx) => Some(BonePosture
+            {
+                pos: keyframes[kfx].position.clone(), qrot: keyframes[kfx].rot_quaternion.clone()
+            }),
+            // Not Found and the keyframe has no previous state, which means there is no morphs.
+            Err(0) => None,
+            // Not Found but kfxplus points next element from current second
+            Err(kfxplus) => if kfxplus >= keyframes.len() { None } else {
+                let begin_kf = &keyframes[kfxplus - 1];
+                let end_kf = &keyframes[kfxplus];
+                
+                // TODO: interpolate values here
+                Some(BonePosture { pos: begin_kf.position.clone(), qrot: begin_kf.rot_quaternion.clone() })
+            }
+        }
+    }
+}
 
 pub struct MotionData
 {
     name_bytes: Vec<u8>,
     bone_motions: Vec<BoneMotionData>, face_motions: Vec<FaceMotionData>, camera_motions: Vec<CameraMotionData>
 }
-#[repr(C)]
+#[repr(C)] #[derive(Clone)] pub struct InterpolationData([i8; 64]);
+#[repr(C)] #[derive(Debug)]
 pub struct BoneMotionData
 {
     name_bytes: [u8; 15], pub frame_number: u32,
     pub x: f32, pub y: f32, pub z: f32,
-    pub quaternion_x: f32, pub quaterion_y: f32, pub quaternion_z: f32, pub quaterion_w: f32,
-    interpolation_bytes: [u8; 64]
+    pub quaternion_x: f32, pub quaternion_y: f32, pub quaternion_z: f32, pub quaternion_w: f32,
+    interpolation_bytes: InterpolationData
+}
+impl std::fmt::Debug for InterpolationData
+{
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
+    {
+        for (n, &e) in self.0.iter().enumerate()
+        {
+            if n == self.0.len() - 1
+            {
+                write!(fmt, "{}", f32::from(e) / 127.0)?;
+            }
+            else
+            {
+                write!(fmt, "{}, ", f32::from(e) / 127.0)?;
+            }
+        }
+
+        Ok(())
+    }
 }
 #[repr(C)]
 pub struct FaceMotionData

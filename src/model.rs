@@ -326,3 +326,49 @@ impl PMXRenderingParams {
         }
     }
 }
+
+impl ModelData for super::GLTFBinary
+{
+    type PreallocOffsetType = (Vec<usize>, Option<usize>);
+    type RendererParams = Vec<usize>;
+
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+        _: &mut TextureInitializationGroup) -> (Vec<usize>, Option<usize>)
+    {
+        let mut offsets = Vec::with_capacity(self.buffers().len());
+        for b in self.buffers()
+        {
+            offsets.push(alloc.add(BufferContent::RawPair(b.data.len() as _, b.usage)) as _);
+        }
+        let wb_offs = self.u8_to_u16_buffer().map(|b|
+        {
+            alloc.add(BufferContent::RawPair((b.copied_bytes << 1) as u64, b.usage)) as _
+        });
+        
+        (offsets, wb_offs)
+    }
+    fn stage_data_into(&self, mem: &br::MappedMemoryRange, (mut offsets, wbuf_offset): (Vec<usize>, Option<usize>))
+        -> Vec<usize>
+    {
+        for (&o, b) in offsets.iter().zip(self.buffers())
+        {
+            unsafe { mem.slice_mut(o, b.data.len()).copy_from_slice(&b.data); }
+        }
+        if let Some(wbuf_offs) = wbuf_offset
+        {
+            offsets.push(wbuf_offs);
+
+            let mut copied = 0;
+            for &(o, ref brange) in &self.u8_to_u16_buffer().expect("inconsistent state").buffer_slices
+            {
+                let slice = unsafe { mem.slice_mut::<u16>(wbuf_offs + copied, brange.len()) };
+                for (&b8, dest) in self.buffers()[o].data[brange.clone()].iter().zip(slice)
+                {
+                    *dest = b8 as u16;
+                }
+                copied += brange.len() << 1;
+            }
+        }
+        offsets
+    }
+}
