@@ -137,7 +137,8 @@ impl Softbody
         println!("rigid body count: {}", anchor_rigid_body_count);
         for _ in 0 .. anchor_rigid_body_count
         {
-            let mut buf = vec![0u8; header.index_sizes.rigid_body.bytesize() + header.index_sizes.vertex.bytesize() + 1];
+            let mut buf =
+                vec![0u8; header.index_sizes.rigid_body.bytesize() + header.index_sizes.vertex.bytesize() + 1];
             reader.read_exact(&mut buf)?;
             anchor_rigid_bodies.push(AnchorRigidBody
             {
@@ -190,7 +191,8 @@ impl Softbody
             drag_coefficient: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*6..]),
             lift_coefficient: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*7..]),
             pressure_coefficient: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*8..]),
-            volume_conversation_coefficient: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*9..]),
+            volume_conversation_coefficient:
+                f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*9..]),
             dynamic_friction_coeffecient: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*10..]),
             pose_matching_coefficient: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*11..]),
             rigid_contracts_hardness: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*12..]),
@@ -203,13 +205,20 @@ impl Softbody
             soft_vs_rigid_impulse_split: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*19..]),
             soft_vs_kinetic_impulse_split: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*20..]),
             soft_vs_soft_impulse_split: f32::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*21..]),
-            velocities_solver_iterations: <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*22..]),
-            positions_solver_iterations: <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*23..]),
-            drift_solver_iterations: <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*24..]),
-            cluster_solver_iteratons: <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*25..]),
-            linear_stiffness_coefficient: <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*26..]),
-            area_angular_stiffness_coefficient: <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*27..]),
-            volume_stiffness_coefficient: <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*28..]),
+            velocities_solver_iterations:
+                <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*22..]),
+            positions_solver_iterations:
+                <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*23..]),
+            drift_solver_iterations:
+                <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*24..]),
+            cluster_solver_iteratons:
+                <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*25..]),
+            linear_stiffness_coefficient:
+                <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*26..]),
+            area_angular_stiffness_coefficient:
+                <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*27..]),
+            volume_stiffness_coefficient:
+                <i32 as TypedReader>::from_bytes(&bytes[header.index_sizes.material.bytesize() + 5 + 4*28..]),
             anchor_rigid_bodies, vertex_pins
         })
     }

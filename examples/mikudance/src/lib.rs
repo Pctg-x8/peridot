@@ -214,35 +214,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .filter_map(|(k, v)| bone_index_map.get(*k).map(move |n| (n, v))).collect::<Vec<_>>());
 
         let bone_marker_mesh: GLTFBinary = e.load("icosphere").expect("Loading BoneMarker Model");
-
-        println!("CommandBuffer Emulated:");
-        for (nmat, (mat, v)) in bone_marker_mesh.render_params().iter().enumerate()
-        {
-            println!("BindDescriptorSet Graphics#0 = DescriptorSet#{}(={:?})", nmat, mat);
-            for (npipe, (pipe, vs)) in v.iter().enumerate()
-            {
-                println!("BindPipeline Graphics = Pipeline#{}(config: {:?})", npipe, pipe);
-                for mesh in vs.iter()
-                {
-                    let pos = mesh.vertex_buffers.get("POSITION").expect("Position required for rendering");
-                    let nrm = mesh.vertex_buffers.get("NORMAL").expect("Normal required for rendering");
-                    println!("BindVertexBuffers #0(Position)=(Buffer#{}, {:?}), #1(Normal)=(Buffer#{}, {:?})", pos.0, pos.1, nrm.0, nrm.1);
-                    if let Some((ib, ref ibrange)) = mesh.index_buffer
-                    {
-                        let index_type = match (ibrange.end - ibrange.start) / mesh.vertex_count as u64
-                        {
-                            2 => "u16", 4 => "u32", x => panic!("cannot be rendered: byte_stride of index is {}", x)
-                        };
-                        println!("BindIndexBuffer Buffer#{}, {:?}, type={}", ib, ibrange, index_type);
-                        println!("DrawIndexed indexCount={}", mesh.vertex_count);
-                    }
-                    else
-                    {
-                        println!("Draw vertexCount={}", mesh.vertex_count);
-                    }
-                }
-            }
-        }
         
         let cam = Camera
         {
