@@ -109,32 +109,14 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         let shading = Shading::new(e, &sh_headers, &Vector2(640.0, 480.0)).expect("Creating Shading Pipeline");
 
         let memory = Memory::new(e);
-        let frame_size = e.backbuffers()[0].size().clone();
 
         let framebuffer = e.backbuffers().iter().map(|b| br::Framebuffer::new(&sh_headers.renderpass, &[b], b.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Creating Framebuffer");
         let render_cmd = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffer.len())
             .expect("Alloc CmdBundle");
-        let render_rect = br::vk::VkRect2D
-        {
-            extent: br::vk::VkExtent2D { width: frame_size.0, height: frame_size.1 },
-            .. Default::default()
-        };
         for (cb, f) in render_cmd.iter().zip(&framebuffer)
         {
-            let mut cr = cb.begin().expect("Beginning Recording command");
-
-            cr.begin_render_pass(&sh_headers.renderpass, f, render_rect.clone(),
-                &[br::ClearValue::Color([0.0; 4])], true);
-            cr.bind_graphics_pipeline_pair(&shading.pipe, &sh_headers.layout);
-            cr.set_viewport(0, &[br::vk::VkViewport
-            {
-                width: frame_size.0 as _, height: frame_size.1 as _, .. Default::default()
-            }]);
-            cr.set_scissor(0, &[render_rect.clone()]);
-            cr.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(frame_size.0 as f32 / frame_size.1 as f32));
-            memory.draw_rect(&mut cr);
-            cr.end_render_pass();
+            Self::commands(&mut cb.begin().expect("Beginning Recording commands"), &sh_headers, &shading, &memory, f);
         }
 
         Game
@@ -151,5 +133,47 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
             command_buffers: Cow::Borrowed(&self.render_cmd[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
+    }
+    
+    fn discard_backbuffer_resources(&mut self)
+    {
+        self.render_cmd.reset().expect("Resetting RenderCommands");
+        self.framebuffer.clear();
+    }
+    fn on_resize(&mut self, e: &Engine<Self, NL>, _: Vector2<usize>)
+    {
+        self.framebuffer = e.backbuffers().iter()
+            .map(|b| br::Framebuffer::new(&self.sh_headers.renderpass, &[b], b.size(), 1))
+            .collect::<Result<Vec<_>, _>>().expect("Creating Framebuffer");
+        for (cb, f) in self.render_cmd.iter().zip(&self.framebuffer)
+        {
+            Self::commands(&mut cb.begin().expect("Beginning Recording commands"),
+                &self.sh_headers, &self.shading, &self.memory, f);
+        }
+    }
+}
+impl<NL: NativeLinker> Game<NL>
+{
+    fn commands(rec: &mut br::CmdRecord, sh_headers: &ShadingHeaders, shading: &Shading,
+        memory: &Memory, framebuffer: &br::Framebuffer)
+    {
+        let frame_size = framebuffer.size();
+        let render_rect = br::vk::VkRect2D
+        {
+            extent: br::vk::VkExtent2D { width: frame_size.0 as _, height: frame_size.1 as _ },
+            .. Default::default()
+        };
+
+        rec.begin_render_pass(&sh_headers.renderpass, framebuffer, render_rect.clone(),
+            &[br::ClearValue::Color([0.0; 4])], true);
+        rec.bind_graphics_pipeline_pair(&shading.pipe, &sh_headers.layout);
+        rec.set_viewport(0, &[br::vk::VkViewport
+        {
+            width: frame_size.0 as _, height: frame_size.1 as _, .. Default::default()
+        }]);
+        rec.set_scissor(0, &[render_rect.clone()]);
+        rec.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(frame_size.0 as f32 / frame_size.1 as f32));
+        memory.draw_rect(rec);
+        rec.end_render_pass();
     }
 }
