@@ -3,7 +3,7 @@ VertexInput {
 }
 VertexShader {
     RasterPosition = vec4(pos, 0.0, 1.0);
-    vpos = pos;
+    vpos = pos * vec2(aspect_wh, 1.0);
 }
 Varyings VertexShader -> FragmentShader {
     vpos: vec2;
@@ -15,3 +15,6 @@ FragmentShader {
 }
 
 SpecConstant[FragmentShader](0) FOCAL_LENGTH: float = 25.0;
+PushConstant[VertexShader] ScreenInfo {
+    float aspect_wh;
+}

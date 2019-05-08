@@ -20,7 +20,7 @@ impl ShadingHeaders
 {
     pub fn new<NL: NativeLinker>(e: &Engine<Game<NL>, NL>, bb_format: PixelFormat) -> br::Result<Self>
     {
-        let layout = br::PipelineLayout::new(&e.graphics(), &[], &[])?;
+        let layout = br::PipelineLayout::new(&e.graphics(), &[], &[(br::ShaderStage::VERTEX, 0 .. 4)])?;
         let renderpass = RenderPassTemplates::single_render(bb_format as _).create(&e.graphics())?;
 
         Ok(ShadingHeaders { layout, renderpass })
@@ -132,6 +132,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
                 width: frame_size.0 as _, height: frame_size.1 as _, .. Default::default()
             }]);
             cr.set_scissor(0, &[render_rect.clone()]);
+            cr.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(frame_size.0 as f32 / frame_size.1 as f32));
             memory.draw_rect(&mut cr);
             cr.end_render_pass();
         }
