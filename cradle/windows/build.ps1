@@ -27,6 +27,6 @@ $Env:PERIDOT_WINDOWS_APPID = $AppPackageID
 try {
     Push-Location
     Set-Location $ScriptPath
-    cargo $CargoSubcommand --features $($Features -join ",")
+    cargo +nightly $CargoSubcommand --features $($Features -join ",")
 }
 finally { Pop-Location }
