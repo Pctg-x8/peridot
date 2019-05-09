@@ -19,16 +19,16 @@ Header[FragmentShader] {
     float dist_cross(vec3 p)
     {
         float inf = 100.0;
-        float dx = dist_box(p, vec3(inf, 2.0, 2.0));
-        float dy = dist_box(p, vec3(2.0, inf, 2.0));
-        float dz = dist_box(p, vec3(2.0, 2.0, inf));
+        float dx = dist_box(p.xyz, vec3(inf, 2.0, 2.0));
+        float dy = dist_box(p.yzx, vec3(2.0, inf, 2.0));
+        float dz = dist_box(p.zxy, vec3(2.0, 2.0, inf));
         return min(min(dx, dy), dz);
     }
     float dist_menger(vec3 p)
     {
         float d = dist_box(p, vec3(4.0));
         float s = 1.0;
-        for (int _ = 0; _ < 3; _++)
+        for (int _ = 0; _ < 4; _++)
         {
             vec3 a = mod(p * s, 2.0) - 1.0;
             s *= 3.0;
