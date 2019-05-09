@@ -7,10 +7,11 @@ use std::ops::Range;
 use std::mem::size_of;
 use self::math::{Vector2, Vector2F32, Vector4F32, Vector4};
 use rayon::prelude::*;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 // 仮定義
-pub trait ModelData {
+pub trait ModelData
+{
     type PreallocOffsetType;
     type RendererParams;
 

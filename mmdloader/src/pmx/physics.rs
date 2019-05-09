@@ -14,15 +14,18 @@ pub struct RigidBody
 }
 impl RigidBody
 {
-    pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError> {
+    pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError>
+    {
         let name = header.string_reader.read_globalized(reader)?;
         let mut bytes = vec![0u8; header.index_sizes.bone.bytesize() + 1 + 2 + 1 + 4 * (3 * 3 + 5) + 1];
         reader.read_exact(&mut bytes)?;
-        let shape = match bytes[header.index_sizes.bone.bytesize() + 1 + 2] {
+        let shape = match bytes[header.index_sizes.bone.bytesize() + 1 + 2]
+        {
             0 => ShapeType::Sphere, 1 => ShapeType::Box, 2 => ShapeType::Capsule,
             v => return Err(LoadingError::UnknownShapeType(v))
         };
-        let mode = match bytes[bytes.len() - 1] {
+        let mode = match bytes[bytes.len() - 1]
+        {
             0 => PhysicsMode::FollowBone, 1 => PhysicsMode::Physics, 2 => PhysicsMode::PhysicsWithBone,
             v => return Err(LoadingError::UnknownPhysicsMode(v))
         };

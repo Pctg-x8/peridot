@@ -6,9 +6,7 @@ extern crate encoding;
 
 use std::fs::File;
 use std::io::{Read, BufReader};
-use std::env::args;
 use std::path::{Path, PathBuf};
-#[macro_use] extern crate log;
 
 pub mod pmx;
 pub mod vmd;
@@ -21,8 +19,10 @@ pub struct PolygonModelExtended {
     pub morphs: Vec<pmx::Morph>, pub display_frames: Vec<pmx::DisplayFrame>, rigid_bodies: Vec<pmx::RigidBody>,
     joints: Vec<pmx::Joint>, softbodies: Vec<pmx::Softbody>
 }
-impl PolygonModelExtended {
-    pub fn from_file<P: AsRef<Path> + ?Sized>(filepath: &P) -> Result<Self, pmx::LoadingError> {
+impl PolygonModelExtended
+{
+    pub fn from_file<P: AsRef<Path> + ?Sized>(filepath: &P) -> Result<Self, pmx::LoadingError>
+    {
         let mut base_components = filepath.as_ref().components()
             .map(|x| x.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>();
         base_components.pop();
