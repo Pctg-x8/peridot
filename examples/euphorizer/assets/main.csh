@@ -71,7 +71,7 @@ Header[FragmentShader] {
 }
 FragmentShader {
     vec3 eyepos = vec3(0.0, 0.0, -FOCAL_LENGTH);
-    vec3 raydir = vec3(vpos, 0.0) - eyepos;
+    vec3 raydir = normalize(vec3(vpos, 0.0) - eyepos);
 
     Target[0] = iterate_ray(eyepos, raydir);
 }
