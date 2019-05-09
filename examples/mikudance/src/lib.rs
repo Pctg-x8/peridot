@@ -209,9 +209,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }*/
         println!("-- FaceFrameCount: {}", motion.face_keyframes().len());
         println!("-- CameraFrameCount: {}", motion.camera_keyframes().len());
-        let bone_ctrl = BoneMotionController::new(motion.bone_keyframes(), 60.0);
-        println!("-- Bone Morphs at 0 secs: {:#?}", bone_ctrl.get_bone_postures(0.0).iter()
-            .filter_map(|(k, v)| bone_index_map.get(*k).map(move |n| (n, v))).collect::<Vec<_>>());
+        let bone_ctrl = BoneMotionController::new(motion.bone_keyframes(), 30.0);
 
         let bone_marker_mesh: GLTFBinary = e.load("icosphere").expect("Loading BoneMarker Model");
         
@@ -528,12 +526,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     let mut dirty_local = false;
                     if let Some(ref p) = posture.pos
                     {
-                        self.bone_transform_data.borrow_mut()[bindex].pos = Vector3(p.0, p.1, p.2);
+                        self.bone_transform_data.borrow_mut()[bindex].pos = p.clone();
                         dirty_local = true;
                     }
                     if let Some(ref q) = posture.qrot
                     {
-                        self.bone_transform_data.borrow_mut()[bindex].rot = Quaternion(q.0, q.1, q.2, q.3);
+                        self.bone_transform_data.borrow_mut()[bindex].rot = q.clone();
                         dirty_local = true;
                     }
 
