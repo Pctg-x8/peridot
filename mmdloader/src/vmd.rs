@@ -9,11 +9,12 @@ use std::mem::size_of;
 use super::pmx::{TypedReader, Vec3, Vec4};
 use std::collections::{HashMap, BinaryHeap};
 use std::cmp::{PartialOrd, Ord, Ordering};
+use peridot_math::{Vector3, Quaternion};
 
 pub struct BoneKeyframeData
 {
     pub seconds: f32,
-    pub position: Option<Vec3>, pub rot_quaternion: Option<Vec4>,
+    pub position: Option<Vector3<f32>>, pub rot_quaternion: Option<Quaternion<f32>>,
     pub interpolation_bytes: InterpolationData
 }
 impl PartialEq for BoneKeyframeData
@@ -37,9 +38,9 @@ pub type SortedVec<T> = Vec<T>;
 pub struct BonePosture
 {
     /// Position of bone
-    pub pos: Option<Vec3>,
+    pub pos: Option<Vector3<f32>>,
     /// Rotation of bone in quaternion
-    pub qrot: Option<Vec4>
+    pub qrot: Option<Quaternion<f32>>
 }
 pub struct BoneMotionController
 {
@@ -52,19 +53,12 @@ impl BoneMotionController
         let mut keyframes = HashMap::new();
         for rd in raw_data
         {
-            let position = if rd.x == 0.0 && rd.y == 0.0 && rd.z == 0.0 { None } else
-            {
-                Vec3(rd.x, rd.y, rd.z).into()
+            let position = if !rd.has_position_data() { None } else {
+                Vector3(rd.x, rd.y, rd.z).into()
             };
-            let rotation =
-                if rd.quaternion_x == 0.0 && rd.quaternion_y == 0.0 && rd.quaternion_z == 0.0 && rd.quaternion_w == 1.0
-                {
-                    None
-                }
-                else
-                {
-                    Vec4(rd.quaternion_x, rd.quaternion_y, rd.quaternion_z, rd.quaternion_w).into()
-                };
+            let rotation = if !rd.has_rotation_data() { None } else {
+                Quaternion(rd.quaternion_x, rd.quaternion_y, rd.quaternion_z, rd.quaternion_w).into()
+            };
 
             keyframes.entry(&rd.name_bytes).or_insert_with(BinaryHeap::new)
                 .push(BoneKeyframeData
@@ -134,6 +128,15 @@ pub struct BoneMotionData
     pub x: f32, pub y: f32, pub z: f32,
     pub quaternion_x: f32, pub quaternion_y: f32, pub quaternion_z: f32, pub quaternion_w: f32,
     interpolation_bytes: InterpolationData
+}
+impl BoneMotionData
+{
+    pub fn has_position_data(&self) -> bool { self.x + self.y + self.z != 0.0 }
+    pub fn has_rotation_data(&self) -> bool
+    {
+        self.quaternion_x + self.quaternion_y + self.quaternion_z != 0.0 &&
+            (1.0 - self.quaternion_w).abs() > std::f32::EPSILON
+    }
 }
 impl std::fmt::Debug for InterpolationData
 {
