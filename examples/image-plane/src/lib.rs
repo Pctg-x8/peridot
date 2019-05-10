@@ -112,7 +112,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             tfb.sink_graphics_ready_commands(&mut rec);
         }
 
-        let attdesc = br::AttachmentDescription::new(e.backbuffer_format(),
+        let attdesc = br::AttachmentDescription::new(e.backbuffer_format() as _,
             br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
             .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
         let renderpass = br::RenderPassBuilder::new().add_attachment(attdesc)
@@ -122,7 +122,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         
-        let smp = br::SamplerBuilder::new().create(&e.graphics()).expect("Creating Sampler");
+        let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
         let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
             uniform_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
             combined_image_sampler: Some((1, 1, br::ShaderStage::FRAGMENT, vec![smp.native_ptr()])),
