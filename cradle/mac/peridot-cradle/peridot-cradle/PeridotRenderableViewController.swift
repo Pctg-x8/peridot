@@ -21,7 +21,7 @@ final class PeridotRenderableViewController : NSViewController {
                              _ flagsOut: UnsafeMutablePointer<CVOptionFlags>,
                              _ context: UnsafeMutableRawPointer?) -> CVReturn {
             let self_ = unsafeBitCast(context, to: PeridotRenderableViewController.self)
-            DispatchQueue.main.async { self_.enginePointer!.update() }
+            DispatchQueue.main.sync { self_.enginePointer!.update() }
             return kCVReturnSuccess
         }
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
