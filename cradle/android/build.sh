@@ -7,7 +7,7 @@ if [ $# -lt 1 ]; then echo "No enough args"; exit 1; fi
 echo "Game Basedir: $1"
 echo "Syncing Game Kernel source..."
 [ ! -d src/game ] && mkdir -p src/game
-rsync -aud --progress $1/src/ src/game
+rsync -acd --progress $1/src/ src/game
 [ -f src/main.rs ] && rm src/main.rs
 
 RUSTFLAGS="-C link-arg=--sysroot=$ANDROID_HOME\ndk-bundle\platforms\android-$ANDROID_NDK_PLATFORM_TARGET\arch-arm64"
