@@ -11,15 +11,25 @@ import Cocoa
 import QuartzCore
 
 final class PeridotRenderableView : NSView {
-    override func makeBackingLayer() -> CALayer {
+    weak var enginePointer: NativeGameEngine? = nil
+    
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSLog("Draw")
+    }
+    
+    override func awakeFromNib() {
+        super.awakeFromNib()
+        
+        self.wantsLayer = true
+        self.layerContentsRedrawPolicy = .onSetNeedsDisplay
+        self.layerContentsPlacement = .scaleAxesIndependently
+        
         let layer = CAMetalLayer()
         let scaling = self.convertToBacking(NSSize(width: 1.0, height: 1.0))
         layer.contentsScale = min(scaling.width, scaling.height)
-        return layer
+        self.layer = layer
     }
-    override var wantsUpdateLayer: Bool { get { return true } }
-    
-    var enginePointer: NativeGameEngine? = nil
     
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
