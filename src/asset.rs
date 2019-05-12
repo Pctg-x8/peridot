@@ -161,7 +161,7 @@ impl FromAsset for BMP {
 }
 impl FromAsset for HDR {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, ImageError> {
         let ireader = HDRDecoder::new(BufReader::new(asset))?;
         let meta = ireader.metadata();
         let pixels = ireader.read_image_native()?;
