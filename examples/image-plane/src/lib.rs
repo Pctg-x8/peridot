@@ -11,7 +11,6 @@ use peridot::{
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
-use peridot::Discardable;
 
 pub struct Game<PL: peridot::NativeLinker> {
     ph: PhantomData<*const PL>, buffer: peridot::Buffer, rot: f32, stg_buffer: peridot::Buffer,
@@ -122,7 +121,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         
-        let smp = br::SamplerBuilder::new().create(&e.graphics()).expect("Creating Sampler");
+        let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
         let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
             uniform_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
             combined_image_sampler: Some((1, 1, br::ShaderStage::FRAGMENT, vec![smp.native_ptr()])),
