@@ -32,7 +32,7 @@ if [ -z ${ASSET_PATH+x} ]; then echo "Error: AssetDirectory required"; exit 1; f
 
 echo "Building Assets..."
 TOOL_PATH=`realpath $SCRIPT_PATH`/../../target/release
-(cd `realpath $ASSET_PATH`; for path in **/*.csh; do $TOOL_PATH/peridot-shaderbuild $path; done)
+(cd `realpath $ASSET_PATH`; for path in `find . -name *.csh`; do $TOOL_PATH/peridot-shaderbuild $path; done)
 
 echo "Syncing Userlib Source from $USERLIB_DIRECTORY..."
 mv $SCRIPT_PATH/src/userlib/glib.rs $SCRIPT_PATH/src/userlib/lib.rs 2>/dev/null || true
