@@ -11,7 +11,6 @@ use peridot::{
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
-use peridot::Discardable;
 
 pub struct Game<PL: peridot::NativeLinker> {
     ph: PhantomData<*const PL>, buffer: peridot::Buffer, rot: f32, stg_buffer: peridot::Buffer,

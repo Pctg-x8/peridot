@@ -4,8 +4,6 @@ sudo: required
 rust:
 - stable
 cache: cargo
-before_script:
-- "./sync_extras.sh"
 before_install:
 - sudo apt-get -qq update
 - sudo apt-get install -y python

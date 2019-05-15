@@ -39,7 +39,7 @@ impl FromAsset for PvpContainer {
 }
 
 use image::{ImageDecoder, ImageResult, ImageError};
-use image::hdr::HDRDecoder;
+use image::hdr::{HDRDecoder, HDRMetadata, RGBE8Pixel};
 pub struct DecodedPixelData {
     pub pixels: Vec<u8>, pub size: math::Vector2<u32>,
     pub color: image::ColorType, pub stride: usize
@@ -61,7 +61,7 @@ pub struct TGA(pub DecodedPixelData);
 pub struct TIFF(pub DecodedPixelData);
 pub struct WebP(pub DecodedPixelData);
 pub struct BMP(pub DecodedPixelData);
-// pub struct HDR(pub HDRDecoder);
+pub struct HDR { pub info: HDRMetadata, pub pixels: Vec<RGBE8Pixel> }
 impl LogicalAssetData for PNG { const EXT: &'static str = "png"; }
 impl LogicalAssetData for TGA { const EXT: &'static str = "tga"; }
 impl LogicalAssetData for TIFF { const EXT: &'static str = "tiff"; }
@@ -101,6 +101,10 @@ impl FromAsset for BMP {
 /*impl FromAsset for HDR {
     type Error = ImageError;
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
-        image::hdr::HDRDecoder::new(BufReader::new(asset)).map(HDR)
+        let ireader = HDRDecoder::new(BufReader::new(asset))?;
+        let meta = ireader.metadata();
+        let pixels = ireader.read_image_native()?;
+
+        Ok(HDR { info: meta, pixels })
     }
 }*/
