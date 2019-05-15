@@ -67,7 +67,7 @@ impl LogicalAssetData for TGA { const EXT: &'static str = "tga"; }
 impl LogicalAssetData for TIFF { const EXT: &'static str = "tiff"; }
 impl LogicalAssetData for WebP { const EXT: &'static str = "webp"; }
 impl LogicalAssetData for BMP { const EXT: &'static str = "bmp"; }
-// impl LogicalAssetData for HDR { const EXT: &'static str = "hdr"; }
+impl LogicalAssetData for HDR { const EXT: &'static str = "hdr"; }
 impl FromAsset for PNG {
     type Error = ImageError;
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
@@ -98,7 +98,7 @@ impl FromAsset for BMP {
         image::bmp::BMPDecoder::new(asset).and_then(DecodedPixelData::new).map(BMP)
     }
 }
-/*impl FromAsset for HDR {
+impl FromAsset for HDR {
     type Error = ImageError;
     fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
         let ireader = HDRDecoder::new(BufReader::new(asset))?;
@@ -107,4 +107,4 @@ impl FromAsset for BMP {
 
         Ok(HDR { info: meta, pixels })
     }
-}*/
+}
