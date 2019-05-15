@@ -2,6 +2,16 @@ use bedrock as br; use self::br::traits::*;
 use super::*;
 use std::ops::Deref;
 use std::mem::{size_of, transmute};
+use num::Integer;
+
+fn common_alignment(flags: br::BufferUsage, a: &br::PhysicalDevice) -> u64
+{
+    let mut align: u64 = 1;
+    if flags.is_uniform() { align = align.lcm(&a.properties().limits.minUniformBufferOffsetAlignment); }
+    if flags.is_storage() { align = align.lcm(&a.properties().limits.minStorageBufferOffsetAlignment); }
+
+    return align;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64) }
@@ -67,6 +77,16 @@ impl<'g> BufferPrealloc<'g> {
         return offs;
     }
     pub fn total_size(&self) -> u64 { self.total }
+
+    /// Returns first offset of merged(other's) prealloc-ed block
+    pub fn merge(&mut self, other: &Self) -> u64
+    {
+        let offs = align2!(self.total, common_alignment(other.usage, &self.g.adapter));
+        self.usage |= other.usage;
+        self.total = offs + other.total;
+        self.offsets.extend(other.offsets.iter().map(|&o| o + offs));
+        return offs;
+    }
 }
 
 pub struct MemoryBadget<'g> {
