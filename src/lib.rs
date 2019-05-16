@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::cell::{Ref, RefMut, RefCell};
+use std::time::{Instant as InstantTimer, Duration};
 
 mod window; use self::window::WindowRenderTargets;
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
@@ -58,8 +59,13 @@ impl<PL: NativeLinker> EngineEvents<PL> for () {
 }
 
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
-    nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>
+    nativelink: PL,
+    surface: SurfaceInfo,
+    wrt: Discardable<WindowRenderTargets>,
+    pub(self) g: Graphics,
+    event_handler: Option<RefCell<E>>,
+    ip: Rc<InputProcess>,
+    gametimer: GameTimer
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
@@ -68,8 +74,15 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
             g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
-        let mut this = Engine {
-            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into()
+        let mut this = Engine
+        {
+            nativelink,
+            g,
+            surface,
+            wrt,
+            event_handler: None,
+            ip: InputProcess::new().into(),
+            gametimer: GameTimer::new()
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
@@ -109,6 +122,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
 
     pub fn do_update(&mut self)
     {
+        let dt = self.gametimer.delta_time();
+        
         let wait = br::CompletionHandler::Queue(&self.g.acquiring_backbuffer);
         let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
         match bb_index {
@@ -331,6 +346,19 @@ impl Graphics
 impl Deref for Graphics {
     type Target = br::Device;
     fn deref(&self) -> &br::Device { &self.device }
+}
+
+struct GameTimer(Option<InstantTimer>);
+impl GameTimer
+{
+    pub fn new() -> Self { GameTimer(None) }
+    pub fn delta_time(&mut self) -> Duration
+    {
+        let d = self.0.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
+        self.0 = InstantTimer::now().into();
+
+        return d;
+    }
 }
 
 struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
