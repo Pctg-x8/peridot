@@ -241,3 +241,14 @@ impl Deref for Texture2D {
     type Target = br::ImageView;
     fn deref(&self) -> &br::ImageView { &self.0 }
 }
+
+/// Low Dynamic Range(8bit colors) image asset
+pub trait LDRImageAsset
+{
+    fn into_pixel_data_info(self) -> DecodedPixelData;
+}
+impl LDRImageAsset for BMP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for PNG { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for TGA { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for TIFF { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
+impl LDRImageAsset for WebP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
