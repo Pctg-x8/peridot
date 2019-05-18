@@ -1,6 +1,7 @@
 
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek};
+use super::PixelFormat;
 
 pub trait PlatformAssetLoader {
     type Asset: Read + Seek;
@@ -52,6 +53,17 @@ impl DecodedPixelData {
         let pixels = decoder.read_image()?;
         
         Ok(DecodedPixelData { pixels, size: math::Vector2(w as _, h as _), color, stride: stride as _ })
+    }
+    pub fn format(&self) -> PixelFormat
+    {
+        match self.color
+        {
+            image::ColorType::RGB(8) => PixelFormat::RGB24,
+            image::ColorType::RGBA(8) => PixelFormat::RGBA32,
+            image::ColorType::BGR(8) => PixelFormat::BGR24,
+            image::ColorType::BGRA(8) => PixelFormat::BGRA32,
+            _ => panic!("unsupported color type: {:?}", self.color)
+        }
     }
 
     pub fn u8_pixels(&self) -> &[u8] { &self.pixels }
