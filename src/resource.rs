@@ -54,6 +54,7 @@ impl BufferContent {
 macro_rules! align2 {
     ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
 }
+#[derive(Clone)]
 pub struct BufferPrealloc<'g> { g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64 }
 impl<'g> BufferPrealloc<'g> {
     pub fn new(g: &'g Graphics) -> Self {
