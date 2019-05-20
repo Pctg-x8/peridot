@@ -90,9 +90,12 @@ impl<'g> BufferPrealloc<'g> {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum ResourceTilingState { Linear, NonLinear }
+
 pub struct MemoryBadget<'g> {
     g: &'g Graphics, entries: Vec<(MemoryBadgetEntry, u64)>, total_size: u64,
-    memory_type_bitmask: u32
+    memory_type_bitmask: u32, last_resource_tiling: Option<ResourceTilingState>
 }
 pub enum MemoryBadgetEntry { Buffer(br::Buffer), Image(br::Image) }
 pub enum MemoryBoundResource { Buffer(Buffer), Image(Image) }
@@ -112,12 +115,26 @@ impl MemoryBoundResource {
 }
 impl<'g> MemoryBadget<'g> {
     pub fn new(g: &'g Graphics) -> Self {
-        MemoryBadget { g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0 }
+        MemoryBadget { g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0, last_resource_tiling: None }
     }
     pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64 {
         let req = v.requirements();
         let new_offset = align2!(self.total_size, req.alignment);
-        self.entries.push((v.into(), new_offset));
+        let ent = v.into();
+        let resource_tiling = match ent
+        {
+            MemoryBadgetEntry::Buffer(_) => ResourceTilingState::Linear,
+            MemoryBadgetEntry::Image(_) => ResourceTilingState::NonLinear
+        };
+        let new_offset = match (self.last_resource_tiling, resource_tiling)
+        {
+            (None, _) => new_offset,
+            (Some(l), r) if l == r => new_offset,
+            // Adjacent Linear and Non-Linear tiling resources requires Buffer-Image Granularity
+            _ => align2!(new_offset, self.g.adapter.properties().limits.bufferImageGranularity)
+        };
+        self.last_resource_tiling = Some(resource_tiling);
+        self.entries.push((ent, new_offset));
         self.total_size = new_offset + req.size;
         self.memory_type_bitmask |= req.memoryTypeBits;
         return new_offset;
@@ -324,7 +341,8 @@ impl TextureInstantiatedGroup
     pub fn stage_data(&self, mr: &br::MappedMemoryRange)
     {
         trace!("Staging Texture Data...");
-        for &(ref pd, offs) in &self.0 {
+        for &(ref pd, offs) in &self.0
+        {
             let s = unsafe
             {
                 mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
