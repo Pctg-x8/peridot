@@ -89,9 +89,17 @@ impl<'g> BufferPrealloc<'g> {
     }
 }
 
-pub struct MemoryBadget<'g> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResourceTiling { Linear, NonLinear }
+impl ResourceTiling
+{
+    fn is_additional_alignment_required(self, other: Self) -> bool { self != other }
+}
+
+pub struct MemoryBadget<'g>
+{
     g: &'g Graphics, entries: Vec<(MemoryBadgetEntry, u64)>, total_size: u64,
-    memory_type_bitmask: u32
+    memory_type_bitmask: u32, last_resource_tiling: Option<ResourceTiling>
 }
 pub enum MemoryBadgetEntry { Buffer(br::Buffer), Image(br::Image) }
 pub enum MemoryBoundResource { Buffer(Buffer), Image(Image) }
@@ -101,46 +109,79 @@ impl From<br::Buffer> for MemoryBadgetEntry {
 impl From<br::Image> for MemoryBadgetEntry {
     fn from(v: br::Image) -> Self { MemoryBadgetEntry::Image(v) }
 }
-impl MemoryBoundResource {
-    pub fn unwrap_buffer(self) -> Buffer {
+impl MemoryBadgetEntry
+{
+    fn tiling(&self) -> ResourceTiling
+    {
+        match self
+        {
+            MemoryBadgetEntry::Buffer(_) => ResourceTiling::Linear,
+            // Note: Peridotが扱うImageは全てNonLinearTiling
+            MemoryBadgetEntry::Image(_) => ResourceTiling::NonLinear
+        }
+    }
+}
+impl MemoryBoundResource
+{
+    pub fn unwrap_buffer(self) -> Buffer
+    {
         match self { MemoryBoundResource::Buffer(b) => b, _ => panic!("Not a buffer") }
     }
-    pub fn unwrap_image(self) -> Image {
+    pub fn unwrap_image(self) -> Image
+    {
         match self { MemoryBoundResource::Image(b) => b, _ => panic!("Not an image") }
     }
 }
-impl<'g> MemoryBadget<'g> {
-    pub fn new(g: &'g Graphics) -> Self {
-        MemoryBadget { g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0 }
+impl<'g> MemoryBadget<'g>
+{
+    pub fn new(g: &'g Graphics) -> Self
+    {
+        MemoryBadget
+        {
+            g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0, last_resource_tiling: None
+        }
     }
-    pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64 {
+    pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64
+    {
         let req = v.requirements();
         let new_offset = align2!(self.total_size, req.alignment);
-        self.entries.push((v.into(), new_offset));
+        let entry = v.into();
+        let new_offset =
+            if self.last_resource_tiling.map_or(false, |t| t.is_additional_alignment_required(entry.tiling()))
+            {
+                align2!(new_offset, self.g.adapter.properties().limits.bufferImageGranularity)
+            }
+            else { new_offset };
+        self.last_resource_tiling = Some(entry.tiling());
+        self.entries.push((entry, new_offset));
         self.total_size = new_offset + req.size;
         self.memory_type_bitmask |= req.memoryTypeBits;
         return new_offset;
     }
-    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>> {
+    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>>
+    {
         let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, self.memory_type_bitmask)
             .expect("No Device-Local Memory");
         info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
 
-        self.entries.into_iter().map(|(x, o)| match x {
+        self.entries.into_iter().map(|(x, o)| match x
+        {
             MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
             MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
         }).collect()
     }
-    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>> {
+    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>>
+    {
         let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE.host_coherent(),
             self.memory_type_bitmask).expect("No Host-Visible memory");
         info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
         
-        self.entries.into_iter().map(|(x, o)| match x {
+        self.entries.into_iter().map(|(x, o)| match x
+        {
             MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
             MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
         }).collect()
