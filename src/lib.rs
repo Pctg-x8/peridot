@@ -29,7 +29,8 @@ mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 mod model; pub use self::model::*;
 
-pub trait NativeLinker {
+pub trait NativeLinker
+{
     type AssetLoader: PlatformAssetLoader;
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
@@ -41,10 +42,11 @@ pub trait NativeLinker {
     fn rendering_precision(&self) -> f32 { 1.0 }
 }
 
-pub trait EngineEvents<PL: NativeLinker> : Sized {
+pub trait EngineEvents<PL: NativeLinker> : Sized
+{
     fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
+    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
@@ -54,11 +56,13 @@ pub trait EngineEvents<PL: NativeLinker> : Sized {
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
     fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
 }
-impl<PL: NativeLinker> EngineEvents<PL> for () {
+impl<PL: NativeLinker> EngineEvents<PL> for ()
+{
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
-pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
+pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker>
+{
     nativelink: PL,
     surface: SurfaceInfo,
     wrt: Discardable<WindowRenderTargets>,
@@ -68,8 +72,10 @@ pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
     gametimer: GameTimer,
     last_rendering_completion: StateFence
 }
-impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
-    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
+impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
+{
+    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self>
+    {
         let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
@@ -144,7 +150,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
 
         {
             let mut ulib = self.userlib_mut();
-            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index);
+            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, dt);
             if let Some(mut cs) = copy_submission {
                 // copy -> render
                 cs.signal_semaphores.to_mut().push(&self.g.buffer_ready);
