@@ -258,9 +258,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
+    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, delta_time: Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        self.rot += 1.0f32.to_radians();
+        let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
+        self.rot += (dtsec * 60.0 * 1.0).to_radians();
         self.buffers.mut_buffer.0.guard_map(size_of::<Matrix4F32>() as _, |m| unsafe
         {
             m.get_mut::<Uniform>(self.mut_uniform_offset as _).object
