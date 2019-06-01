@@ -7,77 +7,14 @@ use peridot::math::{
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, MemoryBadget, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
-    TextureInitializationGroup, Texture2D, Buffer
+    TextureInitializationGroup, Texture2D, Buffer,
+    FixedMemory, FixedBufferInitializer
 };
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
 use std::ops::Range;
-
-pub trait FixedBufferInitializer
-{
-    fn stage_data(&mut self, m: &br::MappedMemoryRange);
-    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buffer: &Buffer, buffer_range: Range<u64>);
-}
-pub struct FixedBuffer
-{
-    buffer: (Buffer, u64), mut_buffer: (Buffer, u64), mut_buffer_placement: u64,
-    textures: Vec<Texture2D>
-}
-impl FixedBuffer
-{
-    pub fn new<'g, I: FixedBufferInitializer + ?Sized>(g: &'g peridot::Graphics,
-        mut prealloc: BufferPrealloc<'g>, mut prealloc_mut: BufferPrealloc<'g>,
-        textures: TextureInitializationGroup<'g>,
-        initializer: &mut I, tfb: &mut TransferBatch)
-        -> br::Result<Self>
-    {
-        let mut p_bufferdata_prealloc = prealloc.clone();
-        let mut_buffer = prealloc_mut.build_upload()?;
-        let imm_buffer_size = p_bufferdata_prealloc.total_size();
-        let mut_buffer_placement = p_bufferdata_prealloc.merge(&prealloc_mut);
-        let buffer = p_bufferdata_prealloc.build_transferred()?;
-
-        let stg_buffer_size = prealloc.total_size();
-        let tex_preallocs = textures.prealloc(&mut prealloc)?;
-        let stg_buffer_fullsize = prealloc.total_size();
-        let stg_buffer = prealloc.build_upload()?;
-
-        let mut mb = MemoryBadget::new(g);
-        mb.add(buffer);
-        let (tex, mut bres) = tex_preallocs.alloc_and_instantiate(mb)?;
-        let buffer = bres.pop().expect("objectless").unwrap_buffer();
-        let mut mb_stg = MemoryBadget::new(g);
-        mb_stg.add(stg_buffer);
-        let stg_buffer = mb_stg.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
-        let mut mb_mut = MemoryBadget::new(g);
-        mb_mut.add(mut_buffer);
-        let mut_buffer = mb_mut.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
-
-        stg_buffer.guard_map(stg_buffer_size, |m| { tex.stage_data(m); initializer.stage_data(m); })?;
-
-        tex.copy_from_stage_batches(tfb, &stg_buffer);
-        tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, stg_buffer_size as _);
-        initializer.buffer_graphics_ready(tfb, &buffer, 0 .. imm_buffer_size as _);
-
-        Ok(FixedBuffer
-        {
-            buffer: (buffer, imm_buffer_size), mut_buffer: (mut_buffer, prealloc_mut.total_size()),
-            mut_buffer_placement,
-            textures: tex.into_textures()
-        })
-    }
-
-    pub fn range_in_mut_buffer<T>(&self, r: Range<T>) -> Range<T> where
-        T: std::ops::Add<Output = T> + std::convert::TryFrom<u64> + Copy
-    {
-        match T::try_from(self.mut_buffer_placement)
-        {
-            Ok(p) => r.start + p .. r.end + p,
-            Err(_) => panic!("Overflowing Placement offset")
-        }
-    }
-}
+use std::time::Duration;
 
 pub struct IPFixedBufferInitializer
 {
@@ -105,7 +42,8 @@ impl FixedBufferInitializer for IPFixedBufferInitializer
     }
 }
 
-pub struct Game<PL: peridot::NativeLinker> {
+pub struct Game<PL: peridot::NativeLinker>
+{
     ph: PhantomData<*const PL>, rot: f32,
     render_cb: peridot::CommandBundle, update_cb: peridot::CommandBundle,
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>,
@@ -113,14 +51,17 @@ pub struct Game<PL: peridot::NativeLinker> {
     descriptor: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
     _sampler: br::Sampler,
     vertices_offset: u64,
-    buffers: FixedBuffer, mut_uniform_offset: u64
+    buffers: FixedMemory, mut_uniform_offset: u64
 }
-impl<PL: peridot::NativeLinker> Game<PL> {
+impl<PL: peridot::NativeLinker> Game<PL>
+{
     pub const NAME: &'static str = "Peridot Examples - ImagePlane";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
-impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self {
+impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
+{
+    fn init(e: &peridot::Engine<Self, PL>) -> Self
+    {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
         let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;
 
@@ -143,10 +84,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut_uniform_offset = bp_mut.add(BufferContent::uniform::<Uniform>());
 
         let mut tfb = TransferBatch::new();
-        let buffers = FixedBuffer::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
+        let buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
         
-        let cam = Camera {
+        let cam = Camera
+        {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
             position: Vector3(-3.0, 0.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
             // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
