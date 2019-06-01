@@ -1,6 +1,6 @@
 use bedrock as br; use self::br::traits::*;
 use super::*;
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 use std::mem::{size_of, transmute};
 use num::Integer;
 
@@ -90,12 +90,17 @@ impl<'g> BufferPrealloc<'g> {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum ResourceTilingState { Linear, NonLinear }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResourceTiling { Linear, NonLinear }
+impl ResourceTiling
+{
+    fn is_additional_alignment_required(self, other: Self) -> bool { self != other }
+}
 
-pub struct MemoryBadget<'g> {
+pub struct MemoryBadget<'g>
+{
     g: &'g Graphics, entries: Vec<(MemoryBadgetEntry, u64)>, total_size: u64,
-    memory_type_bitmask: u32, last_resource_tiling: Option<ResourceTilingState>
+    memory_type_bitmask: u32, last_resource_tiling: Option<ResourceTiling>
 }
 pub enum MemoryBadgetEntry { Buffer(br::Buffer), Image(br::Image) }
 pub enum MemoryBoundResource { Buffer(Buffer), Image(Image) }
@@ -105,60 +110,79 @@ impl From<br::Buffer> for MemoryBadgetEntry {
 impl From<br::Image> for MemoryBadgetEntry {
     fn from(v: br::Image) -> Self { MemoryBadgetEntry::Image(v) }
 }
-impl MemoryBoundResource {
-    pub fn unwrap_buffer(self) -> Buffer {
+impl MemoryBadgetEntry
+{
+    fn tiling(&self) -> ResourceTiling
+    {
+        match self
+        {
+            MemoryBadgetEntry::Buffer(_) => ResourceTiling::Linear,
+            // Note: Peridotが扱うImageは全てNonLinearTiling
+            MemoryBadgetEntry::Image(_) => ResourceTiling::NonLinear
+        }
+    }
+}
+impl MemoryBoundResource
+{
+    pub fn unwrap_buffer(self) -> Buffer
+    {
         match self { MemoryBoundResource::Buffer(b) => b, _ => panic!("Not a buffer") }
     }
-    pub fn unwrap_image(self) -> Image {
+    pub fn unwrap_image(self) -> Image
+    {
         match self { MemoryBoundResource::Image(b) => b, _ => panic!("Not an image") }
     }
 }
-impl<'g> MemoryBadget<'g> {
-    pub fn new(g: &'g Graphics) -> Self {
-        MemoryBadget { g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0, last_resource_tiling: None }
+impl<'g> MemoryBadget<'g>
+{
+    pub fn new(g: &'g Graphics) -> Self
+    {
+        MemoryBadget
+        {
+            g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0, last_resource_tiling: None
+        }
     }
-    pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64 {
+    pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64
+    {
         let req = v.requirements();
         let new_offset = align2!(self.total_size, req.alignment);
-        let ent = v.into();
-        let resource_tiling = match ent
-        {
-            MemoryBadgetEntry::Buffer(_) => ResourceTilingState::Linear,
-            MemoryBadgetEntry::Image(_) => ResourceTilingState::NonLinear
-        };
-        let new_offset = match (self.last_resource_tiling, resource_tiling)
-        {
-            (None, _) => new_offset,
-            (Some(l), r) if l == r => new_offset,
-            // Adjacent Linear and Non-Linear tiling resources requires Buffer-Image Granularity
-            _ => align2!(new_offset, self.g.adapter.properties().limits.bufferImageGranularity)
-        };
-        self.last_resource_tiling = Some(resource_tiling);
-        self.entries.push((ent, new_offset));
+        let entry = v.into();
+        let new_offset =
+            if self.last_resource_tiling.map_or(false, |t| t.is_additional_alignment_required(entry.tiling()))
+            {
+                align2!(new_offset, self.g.adapter.properties().limits.bufferImageGranularity)
+            }
+            else { new_offset };
+        self.last_resource_tiling = Some(entry.tiling());
+        self.entries.push((entry, new_offset));
         self.total_size = new_offset + req.size;
         self.memory_type_bitmask |= req.memoryTypeBits;
         return new_offset;
     }
-    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>> {
+    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>>
+    {
         let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, self.memory_type_bitmask)
             .expect("No Device-Local Memory");
         info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
 
-        self.entries.into_iter().map(|(x, o)| match x {
+        self.entries.into_iter().map(|(x, o)| match x
+        {
             MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
             MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
         }).collect()
     }
-    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>> {
+    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>>
+    {
         let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE.host_coherent(),
             self.memory_type_bitmask).expect("No Host-Visible memory");
         info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
         
-        self.entries.into_iter().map(|(x, o)| match x {
+        self.entries.into_iter().map(|(x, o)| match x
+        {
             MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
             MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
         }).collect()
@@ -368,4 +392,68 @@ impl Deref for TextureInstantiatedGroup
 {
     type Target = [Texture2D];
     fn deref(&self) -> &[Texture2D] { &self.1 }
+}
+
+/// Describing the type that can be used as initializer of `FixedBuffer`s
+pub trait FixedBufferInitializer
+{
+    /// Setup memory data in staging buffer
+    fn stage_data(&mut self, m: &br::MappedMemoryRange);
+    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buf: &Buffer, range: Range<u64>);
+}
+/// The Fix-sized buffers and textures manager
+pub struct FixedMemory
+{
+    /// Device accessible buffer object
+    pub buffer: (Buffer, u64),
+    /// Host buffer staging per-frame mutable data
+    pub mut_buffer: (Buffer, u64),
+    /// The placement offset of mut_buffer data in buffer
+    pub mut_buffer_placement: u64,
+    /// Textures
+    pub textures: Vec<Texture2D>
+}
+impl FixedMemory
+{
+    /// Initialize a FixedMemory using preallocation structures
+    pub fn new<'g, I: FixedBufferInitializer + ?Sized>(
+        g: &'g Graphics,
+        mut prealloc: BufferPrealloc<'g>,
+        prealloc_mut: BufferPrealloc<'g>,
+        textures: TextureInitializationGroup<'g>,
+        initializer: &mut I, tfb: &mut TransferBatch) -> br::Result<Self>
+    {
+        let mut_buffer = prealloc_mut.build_upload()?;
+        let mut p_bufferdata_prealloc = prealloc.clone();
+        let imm_buffer_size = p_bufferdata_prealloc.total_size();
+        let mut_buffer_placement = p_bufferdata_prealloc.merge(&prealloc_mut);
+        let buffer = p_bufferdata_prealloc.build_transferred()?;
+
+        let tex_preallocs = textures.prealloc(&mut prealloc)?;
+        let stg_buffer_fullsize = prealloc.total_size();
+        let stg_buffer = prealloc.build_upload()?;
+
+        let (mut mb, mut mb_mut) = (MemoryBadget::new(g), MemoryBadget::new(g));
+        mb.add(buffer);
+        mb_mut.add(mut_buffer);
+        let (textures, mut bufs) = tex_preallocs.alloc_and_instantiate(mb)?;
+        let buffer = bufs.pop().expect("objectless").unwrap_buffer();
+        let mut_buffer = mb_mut.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
+        let mut mb_stg = MemoryBadget::new(g);
+        mb_stg.add(stg_buffer);
+        let stg_buffer = mb_stg.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
+
+        stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
+
+        textures.copy_from_stage_batches(tfb, &stg_buffer);
+        tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, imm_buffer_size);
+        initializer.buffer_graphics_ready(tfb, &buffer, 0 .. imm_buffer_size);
+
+        Ok(FixedMemory
+        {
+            buffer: (buffer, imm_buffer_size), mut_buffer: (mut_buffer, prealloc_mut.total_size()),
+            mut_buffer_placement,
+            textures: textures.into_textures()
+        })
+    }
 }
