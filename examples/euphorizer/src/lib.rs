@@ -7,6 +7,7 @@ use peridot::{
 };
 use std::marker::PhantomData;
 use std::borrow::Cow;
+use std::time::Duration;
 
 pub struct ShadingHeaders
 {
@@ -125,7 +126,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         }
     }
 
-    fn update(&mut self, e: &Engine<Self, NL>, on_backbuffer_of: u32)
+    fn update(&mut self, e: &Engine<Self, NL>, on_backbuffer_of: u32, delta_time: Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         (None, br::SubmissionBatch
