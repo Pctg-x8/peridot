@@ -111,7 +111,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
 
         let memory = Memory::new(e);
 
-        let framebuffer = e.backbuffers().iter().map(|b| br::Framebuffer::new(&sh_headers.renderpass, &[b], b.size(), 1))
+        let framebuffer =
+            e.backbuffers().iter().map(|b| br::Framebuffer::new(&sh_headers.renderpass, &[b], b.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Creating Framebuffer");
         let render_cmd = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffer.len())
             .expect("Alloc CmdBundle");
