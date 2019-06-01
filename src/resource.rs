@@ -365,7 +365,8 @@ impl TextureInstantiatedGroup
     pub fn stage_data(&self, mr: &br::MappedMemoryRange)
     {
         trace!("Staging Texture Data...");
-        for &(ref pd, offs) in &self.0 {
+        for &(ref pd, offs) in &self.0
+        {
             let s = unsafe
             {
                 mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
@@ -454,5 +455,15 @@ impl FixedMemory
             mut_buffer_placement,
             textures: textures.into_textures()
         })
+    }
+
+    pub fn range_in_mut_buffer<T>(&self, r: Range<T>) -> Range<T> where
+        T: std::ops::Add<Output = T> + std::convert::TryFrom<u64> + Copy
+    {
+        match T::try_from(self.mut_buffer_placement)
+        {
+            Ok(p) => r.start + p .. r.end + p,
+            Err(_) => panic!("Overflowing Placement offset")
+        }
     }
 }
