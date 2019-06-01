@@ -456,4 +456,14 @@ impl FixedMemory
             textures: textures.into_textures()
         })
     }
+
+    pub fn range_in_mut_buffer<T>(&self, r: Range<T>) -> Range<T> where
+        T: std::ops::Add<Output = T> + std::convert::TryFrom<u64> + Copy
+    {
+        match T::try_from(self.mut_buffer_placement)
+        {
+            Ok(p) => r.start + p .. r.end + p,
+            Err(_) => panic!("Overflowing Placement offset")
+        }
+    }
 }
