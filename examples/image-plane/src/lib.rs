@@ -5,9 +5,9 @@ use peridot::math::{
     Vector3F32, Vector3, Vector2F32, Vector2, Camera, ProjectionMethod, Matrix4F32, Quaternion, Matrix4, Vector4, One
 };
 use peridot::{
-    CommandBundle, CBSubmissionType, TransferBatch, MemoryBadget, BufferPrealloc, BufferContent,
+    CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
-    TextureInitializationGroup, Texture2D, Buffer,
+    TextureInitializationGroup, Buffer,
     FixedMemory, FixedBufferInitializer
 };
 use std::borrow::Cow;
