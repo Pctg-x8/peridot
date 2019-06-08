@@ -31,7 +31,7 @@ mod model; pub use self::model::*;
 
 pub trait NativeLinker
 {
-    type AssetLoader: PlatformAssetLoader;
+    type AssetLoader: PlatformAssetLoader + Sync;
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
 
@@ -44,10 +44,12 @@ pub trait NativeLinker
 
 pub trait EngineEvents<PL: NativeLinker> : Sized
 {
+    /// Initializes a Game.
     fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
-            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+        -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
+    {
         (None, br::SubmissionBatch::default())
     }
     /// Discards backbuffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
@@ -103,11 +105,10 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
-    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
-    }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+    /// Retrieves an AssetLoaderService object for asynchronous asset loading.
+    pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL::AssetLoader>
+    {
+        AsyncAssetLoader(self.nativelink.asset_loader())
     }
 
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }

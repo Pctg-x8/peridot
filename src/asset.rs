@@ -1,7 +1,7 @@
 
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek};
-use super::PixelFormat;
+use super::{PixelFormat, NativeLinker, EngineEvents, Engine};
 
 pub trait PlatformAssetLoader {
     type Asset: Read + Seek;
@@ -29,6 +29,36 @@ pub trait FromStreamingAsset: LogicalAssetData {
     type Error: From<IOError>;
     fn from_asset<Asset: Read>(asset: Asset) -> Result<Self, Self::Error>;
 }
+
+pub trait AssetLoaderService
+{
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>;
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error>;
+}
+impl<EE: EngineEvents<NL>, NL: NativeLinker> AssetLoaderService for Engine<EE, NL>
+{
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>
+    {
+        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
+    }
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error>
+    {
+        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+    }
+}
+pub struct AsyncAssetLoader<'a, A: 'a + PlatformAssetLoader + Sync>(pub(crate) &'a A);
+impl<'a, A: 'a + PlatformAssetLoader + Sync> AssetLoaderService for AsyncAssetLoader<'a, A>
+{
+    fn load<As: FromAsset>(&self, path: &str) -> Result<As, As::Error>
+    {
+        self.0.get(path, As::EXT).map_err(From::from).and_then(As::from_asset)
+    }
+    fn streaming<As: FromStreamingAsset>(&self, path: &str) -> Result<As, As::Error>
+    {
+        self.0.get_streaming(path, As::EXT).map_err(From::from).and_then(As::from_asset)
+    }
+}
+
 use vertex_processing_pack::*;
 impl LogicalAssetData for PvpContainer { const EXT: &'static str = "pvp"; }
 impl FromAsset for PvpContainer {
