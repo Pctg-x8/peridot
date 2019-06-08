@@ -8,7 +8,7 @@ use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
-    FixedMemory, FixedBufferInitializer
+    FixedMemory, FixedBufferInitializer, AssetLoaderService
 };
 use std::borrow::Cow;
 use std::rc::Rc;
