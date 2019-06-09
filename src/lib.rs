@@ -267,8 +267,6 @@ impl Graphics
             warn!("Validation Layer is not found!");
         }
         let instance = ib.create()?;
-        unsafe { **std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr()) = 1; }
-        unsafe { *(*std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr())).offset(8) = 1; }
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
