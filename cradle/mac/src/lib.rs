@@ -34,7 +34,8 @@ use std::io::prelude::{Read, Seek};
 use std::io::SeekFrom;
 /// View of a Readable Element
 pub struct ReaderView<R: Read + Seek> { inner: R, offset: u64, length: u64 }
-impl<R: Read + Seek> ReaderView<R> {
+impl<R: Read + Seek> ReaderView<R>
+{
     pub fn new(mut reader: R, offset: u64, length: u64) -> IOResult<Self> {
         reader.seek(SeekFrom::Start(offset))?;
         return Ok(ReaderView { inner: reader, offset, length });
@@ -59,24 +60,36 @@ impl<R: Read + Seek> Seek for ReaderView<R> {
         return self.inner.seek(pos_translated);
     }
 }
-pub struct PlatformAssetLoader { par_path: CocoaObject<NSString> }
-impl PlatformAssetLoader {
-    fn new() -> Self {
+pub struct NativeString(CocoaObject<NSString>);
+unsafe impl Sync for NativeString {}
+unsafe impl Send for NativeString {}
+impl std::ops::Deref for NativeString
+{
+    type Target = NSString;
+    fn deref(&self) -> &NSString { &self.0 }
+}
+pub struct PlatformAssetLoader { par_path: NativeString }
+impl PlatformAssetLoader
+{
+    fn new() -> Self
+    {
         let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
         let mut pathext = NSString::from_str("par").expect("NSString for ext");
         let par_path = unsafe {
             CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext)).expect("No Primary Asset")
         };
 
-        PlatformAssetLoader { par_path }
+        PlatformAssetLoader { par_path: NativeString(par_path) }
     }
 }
 use peridot::archive as par;
-impl peridot::PlatformAssetLoader for PlatformAssetLoader {
+impl peridot::PlatformAssetLoader for PlatformAssetLoader
+{
     type Asset = Cursor<Vec<u8>>;
     type StreamingAsset = ReaderView<par::EitherArchiveReader>;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>> {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>>
+    {
         let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
         let b = arc.read_bin(&format!("{}.{}", path.replace(".", "/"), ext))?;
         match b {
@@ -84,7 +97,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             Some(b) => Ok(Cursor::new(b))
         }
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>> {
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>>
+    {
         let arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
         let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
         match e {
@@ -128,19 +142,23 @@ impl peridot::InputProcessPlugin for PlatformInputProcessPlugin {
         self.processor = Some(ip.clone());
     }
 }
-pub struct NativeLink {
+pub struct NativeLink
+{
     al: PlatformAssetLoader, prt: PlatformRenderTargetHandler,
     input: PlatformInputProcessPlugin
 }
-impl NativeLink {
-    pub fn new(rt_view: *mut c_void) -> Self {
+impl NativeLink
+{
+    pub fn new(rt_view: *mut c_void) -> Self
+    {
         NativeLink {
             al: PlatformAssetLoader::new(), prt: PlatformRenderTargetHandler::new(rt_view),
             input: PlatformInputProcessPlugin::new()
         }
     }
 }
-impl peridot::NativeLinker for NativeLink {
+impl peridot::NativeLinker for NativeLink
+{
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = PlatformRenderTargetHandler;
     type InputProcessor = PlatformInputProcessPlugin;
