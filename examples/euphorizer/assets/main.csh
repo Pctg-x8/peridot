@@ -44,6 +44,14 @@ Header[FragmentShader] {
         return dist_menger(mod(p, 5.0));
     }
 
+    // vec3 input: h, s, v
+    vec3 hsv2rgb(vec3 c)
+    {
+        const vec4 k = vec4(1.0, 1.0 / 3.0, 2.0 / 3.0, 3.0);
+        vec3 p = abs(fract(c.xxx + k.xzy) * 6.0 - k.www);
+        return c.z * mix(k.xxx, clamp(p - k.xxx, 0.0, 1.0), c.y);
+    }
+
     vec4 iterate_ray(vec3 eyepos, vec3 raydir)
     {
         const float maxd = 100.0;
@@ -60,25 +68,30 @@ Header[FragmentShader] {
             dcur = dist_scene(p);
         }
 
+        const vec3 fog_color = vec3(0.8, 0.8, 1.0);
+        vec3 mesh_color = hsv2rgb(vec3(time_sec * 0.5, 0.5, 0.7));
         if (f < maxd)
         {
             const vec2 e = vec2(0.02, 0.0);
-            vec4 col = vec4(0.6, 0.6, 0.8, 1.0);
+            vec4 col = vec4(mesh_color, 1.0);
             vec3 nrm = vec3(
                 dcur - dist_scene(p - e.xyy),
                 dcur - dist_scene(p - e.yxy),
                 dcur - dist_scene(p - e.yyx));
-            float b = dot(normalize(nrm), normalize(eyepos - p));
-            return vec4((b * col.xyz) * (1.0 - f * .01), 1.0) * col.a;
+            vec3 light_dir_inv = normalize(eyepos - p);
+            float b = dot(normalize(nrm), light_dir_inv);
+            vec3 mesh_color = b * col.xyz;
+            float fog_level = f * 0.01;
+            return vec4(mix(mesh_color, fog_color, fog_level), 1.0) * col.a;
         }
-        else { return vec4(0.0, 0.0, 0.0, 1.0); }
+        else { return vec4(fog_color, 1.0); }
     }
 }
 FragmentShader {
     vec3 eyepos = vec3(0.0, 0.0, -FOCAL_LENGTH);
     vec3 raydir = normalize(vec3(vpos, 0.0) - eyepos);
 
-    vec3 camera_pos = vec3(0.0, 0.0, 5.0) * pow(time_sec, 1.2);
+    vec3 camera_pos = vec3(0.0, 0.0, 5.0) * pow(time_sec, 1.5);
 
     Target[0] = iterate_ray(eyepos + camera_pos, raydir);
 }
