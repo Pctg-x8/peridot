@@ -39,6 +39,11 @@ Header[FragmentShader] {
         return d;
     }
 
+    float dist_scene(vec3 p)
+    {
+        return dist_menger(mod(p, 5.0));
+    }
+
     vec4 iterate_ray(vec3 eyepos, vec3 raydir)
     {
         const float maxd = 100.0;
@@ -52,7 +57,7 @@ Header[FragmentShader] {
 
             f += dcur;
             p = eyepos + raydir * f;
-            dcur = dist_menger(p);
+            dcur = dist_scene(p);
         }
 
         if (f < maxd)
@@ -60,9 +65,9 @@ Header[FragmentShader] {
             const vec2 e = vec2(0.02, 0.0);
             vec4 col = vec4(0.6, 0.6, 0.8, 1.0);
             vec3 nrm = vec3(
-                dcur - dist_menger(p - e.xyy),
-                dcur - dist_menger(p - e.yxy),
-                dcur - dist_menger(p - e.yyx));
+                dcur - dist_scene(p - e.xyy),
+                dcur - dist_scene(p - e.yxy),
+                dcur - dist_scene(p - e.yyx));
             float b = dot(normalize(nrm), normalize(eyepos - p));
             return vec4((b * col.xyz) * (1.0 - f * .01), 1.0) * col.a;
         }
@@ -73,10 +78,15 @@ FragmentShader {
     vec3 eyepos = vec3(0.0, 0.0, -FOCAL_LENGTH);
     vec3 raydir = normalize(vec3(vpos, 0.0) - eyepos);
 
-    Target[0] = iterate_ray(eyepos, raydir);
+    vec3 camera_pos = vec3(0.0, 0.0, 5.0) * pow(time_sec, 1.2);
+
+    Target[0] = iterate_ray(eyepos + camera_pos, raydir);
 }
 
 SpecConstant[FragmentShader](0) FOCAL_LENGTH: float = 25.0;
 PushConstant[VertexShader] ScreenInfo {
     float aspect_wh;
+}
+Uniform[FragmentShader](0, 0) DynamicParams {
+    float time_sec;
 }
