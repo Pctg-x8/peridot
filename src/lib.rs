@@ -9,17 +9,18 @@ extern crate bedrock;
 pub extern crate peridot_math as math;
 pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 pub extern crate peridot_archive as archive;
+pub extern crate peridot_vg as vg;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::io::Result as IOResult;
 use std::cell::{Ref, RefMut, RefCell};
 use std::sync::{Arc, RwLock};
+use std::time::{Instant as InstantTimer, Duration};
 
-mod window; use self::window::WindowRenderTargets;
+mod window; use self::window::{WindowRenderTargets, StateFence};
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
@@ -28,8 +29,10 @@ pub mod utils; pub use self::utils::*;
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 pub mod audio;
+mod model; pub use self::model::*;
 
-pub trait NativeLinker {
+pub trait NativeLinker
+{
     type AssetLoader: PlatformAssetLoader;
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
@@ -37,12 +40,15 @@ pub trait NativeLinker {
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn render_target_provider(&self) -> &Self::RenderTargetProvider;
     fn input_processor_mut(&mut self) -> &mut Self::InputProcessor;
+
+    fn rendering_precision(&self) -> f32 { 1.0 }
 }
 
-pub trait EngineEvents<PL: NativeLinker> : Sized {
+pub trait EngineEvents<PL: NativeLinker> : Sized
+{
     fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
+    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
@@ -52,25 +58,43 @@ pub trait EngineEvents<PL: NativeLinker> : Sized {
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
     fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
 }
-impl<PL: NativeLinker> EngineEvents<PL> for () {
+impl<PL: NativeLinker> EngineEvents<PL> for ()
+{
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
-pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
-    nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>,
+pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker>
+{
+    nativelink: PL,
+    surface: SurfaceInfo,
+    wrt: Discardable<WindowRenderTargets>,
+    pub(self) g: Graphics,
+    event_handler: Option<RefCell<E>>,
+    ip: Rc<InputProcess>,
+    gametimer: GameTimer,
+    last_rendering_completion: StateFence,
     amixer: Arc<RwLock<audio::Mixer>>
 }
-impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
-    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
+impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
+{
+    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self>
+    {
         let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
-        let mut this = Engine {
-            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into(),
-            amixer: Arc::new(RwLock::new(audio::Mixer::new()))
+        let mut this = Engine
+        {
+            event_handler: None,
+            ip: InputProcess::new().into(),
+            gametimer: GameTimer::new(),
+            last_rendering_completion: StateFence::new(&g)?,
+            amixer: Arc::new(RwLock::new(audio::Mixer::new())),
+            nativelink,
+            g,
+            surface,
+            wrt
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
@@ -83,12 +107,14 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
-    pub fn load<A: FromAsset>(&self, path: &str) -> IOResult<A> {
-        self.nativelink.asset_loader().get(path, A::EXT).and_then(A::from_asset)
+    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
     }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> IOResult<A> {
-        self.nativelink.asset_loader().get_streaming(path, A::EXT).and_then(A::from_asset)
+    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
     }
+
+    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
@@ -110,26 +136,27 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
 
     pub fn do_update(&mut self)
     {
-        let wait = br::CompletionHandler::Device(&self.g.acquiring_backbuffer);
+        let dt = self.gametimer.delta_time();
+        
+        let wait = br::CompletionHandler::Queue(&self.g.acquiring_backbuffer);
         let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
-        match bb_index {
+        let bb_index = match bb_index
+        {
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize and do nothing
                 let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
                 self.do_resize_backbuffer(math::Vector2(w as _, h as _));
                 return;
-            }
-            _ => ()
+            },
+            e => e.expect("Acquiring available backbuffer index")
         };
-        let bb_index = bb_index.expect("Acquiring available backbuffer index");
-        self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _)
-            .wait().expect("Waiting Previous command completion");
-        self.ip.prepare_for_frame();
-        {
-            let bound_wrt = self.wrt.get();
+        self.last_rendering_completion.wait().expect("Waiting Last command completion");
 
+        self.ip.prepare_for_frame();
+
+        {
             let mut ulib = self.userlib_mut();
-            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index);
+            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, dt);
             if let Some(mut cs) = copy_submission {
                 // copy -> render
                 cs.signal_semaphores.to_mut().push(&self.g.buffer_ready);
@@ -137,8 +164,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
                     (&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                     (&self.g.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER)]);
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
-                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
-                self.submit_buffered_commands(&[cs, fb_submission], completion_fence.object())
+                self.submit_buffered_commands(&[cs, fb_submission], self.last_rendering_completion.object())
                     .expect("CommandBuffer Submission");
             }
             else {
@@ -146,14 +172,12 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
                 fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
                 fb_submission.wait_semaphores.to_mut()
                     .push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
-                let completion_fence = bound_wrt.command_completion_for_backbuffer(bb_index as _);
-                self.submit_buffered_commands(&[fb_submission], completion_fence.object())
+                self.submit_buffered_commands(&[fb_submission], self.last_rendering_completion.object())
                     .expect("CommandBuffer Submission");
             }
         }
-        unsafe {
-            self.wrt.get_mut_lw().command_completion_for_backbuffer_mut(bb_index as _).signal();
-        }
+        unsafe { self.last_rendering_completion.signal(); }
+
         let pr = self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering]);
         match pr {
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -166,7 +190,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         }
     }
     pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
-        self.wrt.get_mut_lw().wait_all_command_completion_for_backbuffer().expect("Waiting queued commands");
+        self.last_rendering_completion.wait().expect("Waiting Last command completion");
         self.userlib_mut_lw().discard_backbuffer_resources();
         self.wrt.discard_lw();
         self.wrt.set(
@@ -254,6 +278,8 @@ impl Graphics
             warn!("Validation Layer is not found!");
         }
         let instance = ib.create()?;
+        unsafe { **std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr()) = 1; }
+        unsafe { *(*std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr())).offset(8) = 1; }
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
@@ -338,6 +364,19 @@ impl Deref for Graphics {
     fn deref(&self) -> &br::Device { &self.device }
 }
 
+struct GameTimer(Option<InstantTimer>);
+impl GameTimer
+{
+    pub fn new() -> Self { GameTimer(None) }
+    pub fn delta_time(&mut self) -> Duration
+    {
+        let d = self.0.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
+        self.0 = InstantTimer::now().into();
+
+        return d;
+    }
+}
+
 struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
 impl<'p> ::std::ops::Deref for LocalCommandBundle<'p>
 {
@@ -393,13 +432,30 @@ impl SubpassDependencyTemplates
     }
 }
 
+pub enum RenderPassTemplates {}
+impl RenderPassTemplates {
+    pub fn single_render(format: br::vk::VkFormat) -> br::RenderPassBuilder {
+        let mut b = br::RenderPassBuilder::new();
+        let adesc =
+            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        b.add_attachment(adesc);
+        b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
+        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
+
+        return b;
+    }
+}
+
 use std::ffi::CString;
 use vertex_processing_pack::PvpContainer;
-pub struct PvpShaderModules {
+pub struct PvpShaderModules<'d> {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
-    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>
+    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>,
+    vertex_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
+    fragment_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
 }
-impl PvpShaderModules {
+impl<'d> PvpShaderModules<'d> {
     pub fn new(device: &br::Device, container: PvpContainer) -> br::Result<Self> {
         Ok(PvpShaderModules {
             vertex: br::ShaderModule::from_memory(device, &container.vertex_shader)?,
@@ -407,21 +463,28 @@ impl PvpShaderModules {
                 Some(br::ShaderModule::from_memory(device, &b)?)
             }
             else { None },
-            bindings: container.vertex_bindings, attributes: container.vertex_attributes
+            bindings: container.vertex_bindings, attributes: container.vertex_attributes,
+            vertex_spec_constants: None, fragment_spec_constants: None
         })
     }
-    pub fn generate_vps(&self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages {
+    pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d> {
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
-            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"), specinfo: None
+            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"),
+            specinfo: self.vertex_spec_constants.clone()
         }, &self.bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment {
             r.fragment_shader(br::PipelineShader {
-                module: f, entry_name: CString::new("main").expect("unreachable"), specinfo: None
+                module: f, entry_name: CString::new("main").expect("unreachable"),
+                specinfo: self.fragment_spec_constants.clone()
             });
         }
         return r;
     }
+}
+
+pub trait SpecConstantStorage {
+    fn as_pair(&self) -> (Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell);
 }
 
 pub struct LayoutedPipeline(br::Pipeline, Rc<br::PipelineLayout>);
@@ -480,14 +543,18 @@ impl ReadyResourceBarriers {
 pub struct TransferBatch {
     barrier_range_src: BTreeMap<ResourceKey<Buffer>, Range<u64>>,
     barrier_range_dst: BTreeMap<ResourceKey<Buffer>, Range<u64>>,
+    org_layout_src: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
+    org_layout_dst: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
     copy_buffers: HashMap<(ResourceKey<Buffer>, ResourceKey<Buffer>), Vec<VkBufferCopy>>,
+    init_images: BTreeMap<ResourceKey<Image>, (Buffer, u64)>,
     ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
 }
 impl TransferBatch {
     pub fn new() -> Self {
         TransferBatch {
             barrier_range_src: BTreeMap::new(), barrier_range_dst: BTreeMap::new(),
-            copy_buffers: HashMap::new(),
+            org_layout_src: BTreeMap::new(), org_layout_dst: BTreeMap::new(),
+            copy_buffers: HashMap::new(), init_images: BTreeMap::new(),
             ready_barriers: BTreeMap::new()
         }
     }
@@ -502,10 +569,22 @@ impl TransferBatch {
     pub fn add_mirroring_buffer(&mut self, src: &Buffer, dst: &Buffer, offset: u64, bytes: u64) {
         self.add_copying_buffer((src, offset), (dst, offset), bytes);
     }
+    pub fn init_image_from(&mut self, dest: &Image, src: (&Buffer, u64)) {
+        self.init_images.insert(ResourceKey(dest.clone()), (src.0.clone(), src.1));
+        let size = (dest.size().0 * dest.size().1) as u64 * (dest.format().bpp() >> 3) as u64;
+        Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.0.clone()), src.1 .. src.1 + size);
+        self.org_layout_dst.insert(ResourceKey(dest.clone()), br::ImageLayout::Preinitialized);
+    }
+
     pub fn add_buffer_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
         res: &Buffer, byterange: Range<u64>, access_grants: br::vk::VkAccessFlags) {
         self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
             .buffer.push((res.clone(), byterange, access_grants));
+    }
+    pub fn add_image_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
+        res: &Image, layout: br::ImageLayout) {
+        self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
+            .image.push((res.clone(), br::ImageSubresourceRange::color(0, 0), layout));
     }
     pub fn is_empty(&self) -> bool { self.copy_buffers.is_empty() }
     
@@ -526,18 +605,37 @@ impl TransferBatch {
             .map(|(b, r)| br::BufferMemoryBarrier::new(
                 &b.0, r.start as _ .. r.end as _, 0, br::AccessFlags::TRANSFER.write));
         let barriers: Vec<_> = src_barriers.chain(dst_barriers).collect();
+        let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| br::ImageMemoryBarrier::new(
+            &br::ImageSubref::color(&b.0, 0, 0), l0, br::ImageLayout::TransferSrcOpt
+        ));
+        let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| br::ImageMemoryBarrier::new(
+            &br::ImageSubref::color(&b.0, 0, 0), l0, br::ImageLayout::TransferDestOpt
+        ));
+        let barriers_i: Vec<_> = src_barriers_i.chain(dst_barriers_i).collect();
         
         r.pipeline_barrier(br::PipelineStageFlags::HOST, br::PipelineStageFlags::TRANSFER, false,
-            &[], &barriers, &[]);
+            &[], &barriers, &barriers_i);
         for (&(ref s, ref d), ref rs) in &self.copy_buffers { r.copy_buffer(&s.0, &d.0, &rs); }
+        for (d, s) in &self.init_images {
+            trace!("Copying Image: extent={:?}", br::vk::VkExtent3D::from(d.0.size().clone()));
+            r.copy_buffer_to_image(&s.0, &d.0, br::ImageLayout::TransferDestOpt, &[br::vk::VkBufferImageCopy {
+                bufferOffset: s.1, bufferRowLength: 0, bufferImageHeight: 0,
+                imageSubresource: br::vk::VkImageSubresourceLayers::default(),
+                imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
+                imageExtent: d.0.size().clone().into()
+            }]);
+        }
     }
     pub fn sink_graphics_ready_commands(&self, r: &mut br::CmdRecord) {
-        for (&stg, &ReadyResourceBarriers { ref buffer, .. }) in &self.ready_barriers {
+        for (&stg, &ReadyResourceBarriers { ref buffer, ref image, .. }) in &self.ready_barriers {
             let buf_barriers: Vec<_> = buffer.iter()
                 .map(|&(ref r, ref br, a)| br::BufferMemoryBarrier::new(&r, br.start as _ .. br.end as _,
                     br::AccessFlags::TRANSFER.read, a)).collect();
+            let img_barriers: Vec<_> = image.iter()
+                .map(|(r, range, l)| br::ImageMemoryBarrier::new_raw(&r, range, br::ImageLayout::TransferDestOpt, *l))
+                .collect();
             r.pipeline_barrier(br::PipelineStageFlags::TRANSFER, stg, false,
-                &[], &buf_barriers, &[]);
+                &[], &buf_barriers, &img_barriers);
         }
     }
 }

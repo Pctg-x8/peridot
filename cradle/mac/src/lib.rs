@@ -5,6 +5,7 @@ extern crate appkit; use appkit::{NSString, NSRect, CocoaObject};
 extern crate libc; use libc::c_void;
 
 extern crate peridot;
+#[macro_use] extern crate peridot_derive;
 extern crate bedrock as br;
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::Cursor;
@@ -13,13 +14,13 @@ use std::rc::Rc;
 struct NSLogger;
 impl log::Log for NSLogger {
     fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
+        // if self.enabled(record.metadata()) {
             unsafe {
                 let mut fmt = NSString::from_str(&format!("[{}] {}", record.level(), record.args()))
                     .expect("NSString");
                 NSLog(&mut *fmt);
             }
-        }
+        // }
     }
     fn enabled(&self, metadata: &log::Metadata) -> bool { metadata.level() <= log::Level::Info }
     fn flush(&self) {}
@@ -147,6 +148,8 @@ impl peridot::NativeLinker for NativeLink {
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
     fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
+
+    fn rendering_precision(&self) -> f32 { unsafe { nsscreen_backing_scale_factor() } }
 }
 mod userlib;
 type Game = userlib::Game<NativeLink>;
@@ -156,6 +159,7 @@ type Engine = peridot::Engine<Game, NativeLink>;
 
 extern "C" {
     fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
+    fn nsscreen_backing_scale_factor() -> f32;
 }
 
 #[allow(dead_code)]

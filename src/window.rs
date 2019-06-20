@@ -17,8 +17,8 @@ pub struct SurfaceInfo {
 impl SurfaceInfo
 {
     pub fn gather_info(pd: &br::PhysicalDevice, obj: br::Surface) -> br::Result<Self> {
-        let mut fmq = br::FormatQueryPred::new(); fmq.bit(32)
-            .components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
+        let mut fmq = br::FormatQueryPred::default();
+        fmq.bit(32).components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
         let fmt = pd.surface_formats(&obj)?.into_iter().find(|sf| fmq.satisfy(sf.format))
             .expect("No suitable format found");
         let pres_modes = pd.surface_present_modes(&obj)?;
@@ -40,7 +40,7 @@ impl SurfaceInfo
 
 pub(super) struct WindowRenderTargets
 {
-    chain: br::Swapchain, bb: Vec<br::ImageView>, command_completions_for_backbuffer: Vec<StateFence>
+    chain: br::Swapchain, bb: Vec<br::ImageView>
 }
 impl WindowRenderTargets
 {
@@ -62,14 +62,13 @@ impl WindowRenderTargets
         
         let isr_c0 = br::ImageSubresourceRange::color(0, 0);
         let images = chain.get_images()?;
-        let (mut bb, mut command_completions_for_backbuffer) =
-            (Vec::with_capacity(images.len()), Vec::with_capacity(images.len()));
-        for x in images {
+        let mut bb = Vec::with_capacity(images.len());
+        for x in images
+        {
             bb.push(x.create_view(None, None, &Default::default(), &isr_c0)?);
-            command_completions_for_backbuffer.push(StateFence::new(&g.device)?);
         }
 
-        return Ok(WindowRenderTargets { command_completions_for_backbuffer, bb, chain });
+        return Ok(WindowRenderTargets { bb, chain });
     }
 
     pub(super) fn emit_initialize_backbuffers_commands(&self, recorder: &mut br::CmdRecord) {
@@ -88,28 +87,6 @@ impl WindowRenderTargets
     }
     pub fn present_on(&self, q: &br::Queue, index: u32, occurence_after: &[&br::Semaphore]) -> br::Result<()> {
         self.chain.queue_present(q, index, occurence_after)
-    }
-    pub fn command_completion_for_backbuffer(&self, index: usize) -> &StateFence {
-        &self.command_completions_for_backbuffer[index]
-    }
-    pub fn command_completion_for_backbuffer_mut(&mut self, index: usize) -> &mut StateFence {
-        &mut self.command_completions_for_backbuffer[index]
-    }
-    pub fn wait_all_command_completion_for_backbuffer(&mut self) -> br::Result<()> {
-        {
-            let fences = self.command_completions_for_backbuffer.iter()
-                .filter(|x| x.is_signaled()).map(|x| x.object()).collect::<Vec<_>>();
-            if !fences.is_empty() { br::Fence::wait_multiple(&fences, true, None)?; }
-        }
-        for f in &mut self.command_completions_for_backbuffer { unsafe { f.unsignal(); } }
-        return Ok(());
-    }
-}
-impl Drop for WindowRenderTargets
-{
-    fn drop(&mut self)
-    {
-        for f in self.command_completions_for_backbuffer.iter_mut() { f.wait().expect("waiting completion fence"); }
     }
 }
 
