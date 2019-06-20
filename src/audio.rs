@@ -429,8 +429,11 @@ pub struct PreloadedPlayableWav {
     samples: Vec<[f32; 2]>, current_smp: usize, state: PlayableAudioState
 }
 impl super::LogicalAssetData for PreloadedPlayableWav { const EXT: &'static str = "wav"; }
-impl super::FromAsset for PreloadedPlayableWav {
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self> {
+impl super::FromAsset for PreloadedPlayableWav
+{
+    type Error = std::io::Error;
+    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self>
+    {
         let mut loader = RIFFLoader::new(asset)?;
         let fmt = loader.read_fmt()?;
         let data = WaveSamples::from(loader.read_data_uncompressed(&fmt)?).into();
@@ -457,7 +460,9 @@ pub struct StreamingPlayableWav {
     state: PlayableAudioState
 }
 impl super::LogicalAssetData for StreamingPlayableWav { const EXT: &'static str = "wav"; }
-impl super::FromStreamingAsset for StreamingPlayableWav {
+impl super::FromStreamingAsset for StreamingPlayableWav
+{
+    type Error = std::io::Error;
     fn from_asset<Asset: super::InputStream + 'static>(asset: Asset) -> IOResult<Self> {
         let mut loader = RIFFStreamingLoader::from(BoxedInputStream::new(asset));
         loader.file.skip(4 * 3)?;

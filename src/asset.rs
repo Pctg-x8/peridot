@@ -34,7 +34,7 @@ pub trait FromAsset: LogicalAssetData {
 }
 pub trait FromStreamingAsset: LogicalAssetData {
     type Error: From<IOError>;
-    fn from_asset<Asset: Read>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: InputStream + 'static>(asset: Asset) -> Result<Self, Self::Error>;
 }
 use vertex_processing_pack::*;
 impl LogicalAssetData for PvpContainer { const EXT: &'static str = "pvp"; }
