@@ -8,13 +8,15 @@ use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
-    FixedMemory, FixedBufferInitializer
+    FixedMemory, FixedBufferInitializer,
+    audio::StreamingPlayableWav
 };
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
 use std::ops::Range;
 use std::time::Duration;
+use std::sync::{Arc, RwLock};
 
 pub struct IPFixedBufferInitializer
 {
