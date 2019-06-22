@@ -41,7 +41,7 @@ Header[FragmentShader] {
             vec3 a = mod(p * s, 2.0) - 1.0;
             s *= 3.0;
             vec3 r = 1.0 - 4.0 * abs(a);
-            float c = dist_cross(r, 0.8) / s;
+            float c = dist_cross(r, lerp(1.1, 2.0, cos(time_sec * 0.008) * 0.5 + 0.5)) / s;
             d = max(d, c);
         }
         return d;
@@ -58,6 +58,15 @@ Header[FragmentShader] {
         float r = floor(rbase / nr) * nr;
 
         return vec3(pin.xy * rot(r), pin.z);
+    mat3 rotx(float rad)
+    {
+        float s = sin(rad), c = cos(rad);
+        return mat3(1, 0, 0, 0, c, s, 0, -s, c);
+    }
+    mat3 roty(float rad)
+    {
+        float s = sin(rad), c = cos(rad);
+        return mat3(c, 0, -s, 0, 1, 0, s, 0, c);
     }
 
     float dist_scene(vec3 p)
@@ -65,7 +74,7 @@ Header[FragmentShader] {
         /*float d = 10000000.0;
         for (float i = 0; i < 6; i++)
         {
-            vec3 pp = vec3(p.xy * rot((i / 6.0) * PI * 2.0), p.z);
+            vec3 pp = vec3(rot((i / 6.0) * PI * 2.0) * p.xy, p.z);
             d = min(d, dist_menger(mod(pp, 9.0)));
         }
         return d;*/
@@ -125,9 +134,11 @@ Header[FragmentShader] {
 FragmentShader {
     vec3 eyepos = vec3(0.0, 0.0, -FOCAL_LENGTH);
     vec3 raydir = normalize(vec3(vpos, 0.0) - eyepos);
+    float rx = sin(time_sec * 0.3) * 0.004;
+    float ry = sin(time_sec * 0.15 - 0.5) * 0.002;
 
     vec3 camera_pos = vec3(0.0, 0.0, 5.0) * pow(time_sec, 1.0);
-    vec3 rd = vec3(raydir.xy * rot((time_sec * 6.0) * PI / 180.0), raydir.z);
+    vec3 rd = roty(ry) * rotx(rx) * raydir;
 
     Target[0] = iterate_ray(eyepos + camera_pos, normalize(rd));
 }
