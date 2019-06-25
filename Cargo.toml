@@ -6,9 +6,11 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-pathfinder_partitioner = { path = "extras/pathfinder/partitioner" }
+pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 log = "*"
 libc = "*"
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
+num = "*"
 
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }

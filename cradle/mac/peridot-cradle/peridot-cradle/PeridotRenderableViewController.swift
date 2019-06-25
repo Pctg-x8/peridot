@@ -13,8 +13,9 @@ final class PeridotRenderableViewController : NSViewController {
     var dplink: CVDisplayLink? = nil
     var enginePointer: NativeGameEngine? = nil
     var oldMouseLocation = NSPoint(x: 0, y: 0)
+    var workDispatcher: DispatchSourceUserDataAdd? = nil
     
-    func startDisplayLink() {
+    func initDispatchers() {
         func onUpdateDisplay(_ _: CVDisplayLink,
                              _ inNow: UnsafePointer<CVTimeStamp>,
                              _ inOutputTime: UnsafePointer<CVTimeStamp>,
@@ -22,29 +23,41 @@ final class PeridotRenderableViewController : NSViewController {
                              _ flagsOut: UnsafeMutablePointer<CVOptionFlags>,
                              _ context: UnsafeMutableRawPointer?) -> CVReturn {
             let self_ = unsafeBitCast(context, to: PeridotRenderableViewController.self)
-            DispatchQueue.main.async { self_.enginePointer!.update() }
+            self_.workDispatcher!.add(data: 1)
             return kCVReturnSuccess
         }
+        let workDispatcher = DispatchSource.makeUserDataAddSource(queue: DispatchQueue.main)
+        workDispatcher.setEventHandler(handler: { () in self.enginePointer!.update() })
+        self.workDispatcher = workDispatcher
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
         CVDisplayLinkSetOutputCallback(self.dplink!, onUpdateDisplay,
                                        unsafeBitCast(self, to: UnsafeMutableRawPointer.self))
+        CVDisplayLinkSetCurrentCGDisplay(self.dplink!, CGMainDisplayID())
     }
     
     override func viewDidLoad() {
-        self.view.wantsLayer = true
-        self.view.layerContentsRedrawPolicy = .duringViewResize
+        super.viewDidLoad()
         self.enginePointer = NativeGameEngine(forView: &self.view)
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
         self.view.addTrackingArea(NSTrackingArea(rect: self.view.bounds, options: [.mouseMoved, .activeInActiveApp], owner: self))
-        startDisplayLink()
+        initDispatchers()
         (self.view as! PeridotRenderableView).enginePointer = self.enginePointer
     }
     override func viewDidAppear() {
+        super.viewDidAppear()
         NSLog("BeginTimer")
+        if let d = self.workDispatcher { d.resume() }
         if let d = self.dplink { CVDisplayLinkStart(d) }
     }
     override func viewWillDisappear() {
-        if let d = self.dplink { CVDisplayLinkStop(d) }
+        super.viewWillDisappear()
+        NSLog("ViewWillDisappear")
+        if let d = self.dplink {
+            NSLog("Stopping Timer")
+            let rv = CVDisplayLinkStop(d)
+            NSLog("Stopped Timer with %d", rv)
+        }
+        if let d = self.workDispatcher { d.cancel() }
     }
     
     override func scrollWheel(with event: NSEvent) {

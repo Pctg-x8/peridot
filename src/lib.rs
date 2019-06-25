@@ -17,9 +17,10 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::cell::{Ref, RefMut, RefCell, Cell};
+use std::cell::{Ref, RefMut, RefCell};
+use std::time::{Instant as InstantTimer, Duration};
 
-mod window; use self::window::WindowRenderTargets;
+mod window; use self::window::{WindowRenderTargets, StateFence};
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
@@ -29,7 +30,8 @@ mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 mod model; pub use self::model::*;
 
-pub trait NativeLinker {
+pub trait NativeLinker
+{
     type AssetLoader: PlatformAssetLoader;
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: PlatformInputProcessor;
@@ -42,10 +44,11 @@ pub trait NativeLinker {
     fn rendering_precision(&self) -> f32 { 1.0 }
 }
 
-pub trait EngineEvents<PL: NativeLinker> : Sized {
-    fn init(_e: &mut Engine<Self, PL>) -> Self;
+pub trait EngineEvents<PL: NativeLinker> : Sized
+{
+    fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32)
+    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         (None, br::SubmissionBatch::default())
     }
@@ -55,14 +58,21 @@ pub trait EngineEvents<PL: NativeLinker> : Sized {
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
     fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
 }
-impl<PL: NativeLinker> EngineEvents<PL> for () {
-    fn init(_e: &mut Engine<Self, PL>) -> Self { () }
+impl<PL: NativeLinker> EngineEvents<PL> for ()
+{
+    fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker>
 {
-    nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, rctrl: RendererControl
+    nativelink: PL,
+    surface: SurfaceInfo,
+    wrt: Discardable<WindowRenderTargets>,
+    pub(self) g: Graphics,
+    event_handler: Option<RefCell<E>>,
+    ip: Rc<InputProcess>,
+    gametimer: GameTimer,
+    last_rendering_completion: StateFence
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
 {
@@ -72,9 +82,16 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
-        let mut this = Engine {
-            rctrl: RendererControl::new(&g)?,
-            nativelink, g, surface, wrt, event_handler: None
+        let mut this = Engine
+        {
+            event_handler: None,
+            ip: InputProcess::new().into(),
+            gametimer: GameTimer::new(),
+            last_rendering_completion: StateFence::new(&g)?,
+            nativelink,
+            g,
+            surface,
+            wrt
         };
         trace!("Initializing Game...");
         let eh = E::init(&mut this);
@@ -116,69 +133,61 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
 
     pub fn do_update(&mut self)
     {
-        // acquire backbuffer index
-        let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, From::from(&self.rctrl.backbuffer_ready));
+        let dt = self.gametimer.delta_time();
+        
+        let wait = br::CompletionHandler::Queue(&self.g.acquiring_backbuffer);
+        let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
         let bb_index = match bb_index
         {
-            Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR =>
-            {
+            Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize and do nothing
                 let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
                 self.do_resize_backbuffer(math::Vector2(w as _, h as _));
                 return;
+            },
+            e => e.expect("Acquiring available backbuffer index")
+        };
+        self.last_rendering_completion.wait().expect("Waiting Last command completion");
+
+        self.ip.prepare_for_frame();
+
+        {
+            let mut ulib = self.userlib_mut();
+            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, dt);
+            if let Some(mut cs) = copy_submission {
+                // copy -> render
+                cs.signal_semaphores.to_mut().push(&self.g.buffer_ready);
+                fb_submission.wait_semaphores.to_mut().extend(vec![
+                    (&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
+                    (&self.g.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER)]);
+                fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
+                self.submit_buffered_commands(&[cs, fb_submission], self.last_rendering_completion.object())
+                    .expect("CommandBuffer Submission");
             }
-            x => x.expect("Acquiring available backbuffer index Failed!")
-        };
-
-        // update(wait copy operations(its exclusive!) before)
-        self.rctrl.wait_last_copy().expect("Waiting last copy commands completion Failed!");
-        let mut userlib = self.userlib_mut();
-        let (copy_submission, mut fb_submission) = userlib.update(&self, bb_index);
-
-        // wait previous rendering before copying here(because it used)
-        self.rctrl.wait_last_render().expect("Waiting last rendering");
-
-        // submit commands
-        if let Some(mut cs) = copy_submission
-        {
-            // copy first
-            cs.signal_semaphores.to_mut().push(&self.rctrl.buffer_ready);
-            fb_submission.wait_semaphores.to_mut()
-                .push((&self.rctrl.buffer_ready, br::PipelineStageFlags::VERTEX_SHADER));
-            self.g.submit_buffered_graphics_commands(&[cs], &self.rctrl.exclusive_copy_completion)
-                .expect("Submitting Copy");
-            self.rctrl.last_frame_copy_occured.set(true);
+            else {
+                // render only(old logic)
+                fb_submission.signal_semaphores.to_mut().push(&self.g.present_ordering);
+                fb_submission.wait_semaphores.to_mut()
+                    .push((&self.g.acquiring_backbuffer, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
+                self.submit_buffered_commands(&[fb_submission], self.last_rendering_completion.object())
+                    .expect("CommandBuffer Submission");
+            }
         }
-        
-        // wait backbuffer, then present!
-        let present_result = 
-        {
-            fb_submission.wait_semaphores.to_mut()
-                .push((&self.rctrl.backbuffer_ready, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT));
-            self.do_render_then_present(bb_index, fb_submission)
-        };
-        match present_result
-        {
-            Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR =>
-            {
-                // Fire resize(in next frame)
+        unsafe { self.last_rendering_completion.signal(); }
+
+        let pr = self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering]);
+        match pr {
+            Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                // Fire resize
+                let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
+                self.do_resize_backbuffer(math::Vector2(w as _, h as _));
                 return;
             },
             v => v.expect("Present Submission")
         }
     }
-    pub fn do_render_then_present<'s>(&'s self, backbuffer_index: u32, mut render_commands: br::SubmissionBatch<'s>)
-        -> br::Result<()>
-    {
-        render_commands.signal_semaphores.to_mut().push(&self.rctrl.present_ready);
-        self.g.submit_buffered_graphics_commands(&[render_commands], &self.rctrl.render_completion)?;
-        self.wrt.get().present_on(&self.g.graphics_queue, backbuffer_index, &[&self.rctrl.present_ready])?;
-        self.rctrl.last_frame_render_occured.set(true);
-        return Ok(());
-    }
-    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>)
-    {
-        self.wrt.get_mut_lw().wait_all_command_completion_for_backbuffer().expect("Waiting queued commands");
+    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
+        self.last_rendering_completion.wait().expect("Waiting Last command completion");
         self.userlib_mut_lw().discard_backbuffer_resources();
         self.wrt.discard_lw();
         self.wrt.set(
@@ -401,6 +410,19 @@ impl Graphics
 impl Deref for Graphics {
     type Target = br::Device;
     fn deref(&self) -> &br::Device { &self.device }
+}
+
+struct GameTimer(Option<InstantTimer>);
+impl GameTimer
+{
+    pub fn new() -> Self { GameTimer(None) }
+    pub fn delta_time(&mut self) -> Duration
+    {
+        let d = self.0.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
+        self.0 = InstantTimer::now().into();
+
+        return d;
+    }
 }
 
 struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);

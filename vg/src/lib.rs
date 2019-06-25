@@ -423,8 +423,10 @@ impl StrokePathBuilder {
         }
     }
 }*/
-impl<'c> FigureContext<'c> {
-    pub fn end(mut self) -> &'c mut Context {
+impl<'c> FigureContext<'c>
+{
+    pub fn end(mut self) -> &'c mut Context
+    {
         self.partitioner.partition(self.fill_rule);
         self.partitioner.builder_mut().build_and_reset();
         let (st, ext) = tfconv_st_ext(self.ctx.current_transform);
@@ -433,7 +435,8 @@ impl<'c> FigureContext<'c> {
         return self.ctx;
     }
 }
-impl<'c> FlatPathBuilder for FigureContext<'c> {
+impl<'c> FlatPathBuilder for FigureContext<'c>
+{
     type PathType = <Builder as FlatPathBuilder>::PathType;
 
     fn move_to(&mut self, p: Point2D<f32>) { self.partitioner.builder_mut().move_to(p) }
@@ -443,7 +446,8 @@ impl<'c> FlatPathBuilder for FigureContext<'c> {
     fn build_and_reset(&mut self) -> Self::PathType { self.partitioner.builder_mut().build_and_reset() }
     fn current_position(&self) -> Point2D<f32> { self.partitioner.builder().current_position() }
 }
-impl<'c> PathBuilder for FigureContext<'c> {
+impl<'c> PathBuilder for FigureContext<'c>
+{
     fn quadratic_bezier_to(&mut self, c: Point2D<f32>, to: Point2D<f32>) {
         self.partitioner.builder_mut().quadratic_bezier_to(c, to)
     }

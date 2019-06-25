@@ -15,7 +15,11 @@ final class NativeGameEngine {
     init(forView v: inout NSView) {
         self.p = launch_game(unsafeBitCast(v, to: UnsafeMutablePointer.self))
     }
-    deinit { terminate_game(self.p) }
+    deinit {
+        NSLog("GameEngine Terminating")
+        terminate_game(self.p)
+        NSLog("GameEngine Terminated")
+    }
     
     func update() { update_game(self.p) }
     func resize(_ newSize: NSSize) {
