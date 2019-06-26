@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 #![warn(clippy::all)]
+#![allow(clippy::needless_return)]
 
 // extern crate font_kit;
 #[macro_use] extern crate log;
@@ -46,7 +47,7 @@ pub trait NativeLinker
 
 pub trait EngineEvents<PL: NativeLinker> : Sized
 {
-    fn init(_e: &Engine<Self, PL>) -> Self;
+    fn init(_e: &mut Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -60,7 +61,7 @@ pub trait EngineEvents<PL: NativeLinker> : Sized
 }
 impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
-    fn init(_e: &Engine<Self, PL>) -> Self { () }
+    fn init(_e: &mut Engine<Self, PL>) -> Self { }
 }
 
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker>
@@ -98,7 +99,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
         this.submit_commands(|r| this.wrt.get().emit_initialize_backbuffers_commands(r))
             .expect("Initializing Backbuffers");
         this.event_handler = Some(eh.into());
-        return Ok(this);
+
+        Ok(this)
     }
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
@@ -206,53 +208,6 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Drop for Engine<E, PL>
     }
 }
 
-pub struct RendererControl
-{
-    backbuffer_ready: br::Semaphore,
-    exclusive_copy_completion: br::Fence,
-    buffer_ready: br::Semaphore,
-    render_completion: br::Fence,
-    present_ready: br::Semaphore,
-    last_frame_copy_occured: Cell<bool>,
-    last_frame_render_occured: Cell<bool>
-}
-impl RendererControl
-{
-    fn new(dev: &br::Device) -> br::Result<Self>
-    {
-        Ok(RendererControl
-        {
-            backbuffer_ready: br::Semaphore::new(&dev)?,
-            exclusive_copy_completion: br::Fence::new(&dev, false)?,
-            buffer_ready: br::Semaphore::new(&dev)?,
-            render_completion: br::Fence::new(&dev, false)?,
-            present_ready: br::Semaphore::new(&dev)?,
-            last_frame_copy_occured: Cell::new(false),
-            last_frame_render_occured: Cell::new(false)
-        })
-    }
-    pub fn wait_last_copy(&self) -> br::Result<()>
-    {
-        if self.last_frame_copy_occured.get()
-        {
-            self.exclusive_copy_completion.wait()?;
-            self.exclusive_copy_completion.reset()?;
-            self.last_frame_copy_occured.set(false);
-        }
-        Ok(())
-    }
-    pub fn wait_last_render(&self) -> br::Result<()>
-    {
-        if self.last_frame_render_occured.get()
-        {
-            self.render_completion.wait()?;
-            self.render_completion.reset()?;
-            self.last_frame_render_occured.set(false);
-        }
-        Ok(())
-    }
-}
-
 pub struct LateInit<T>(RefCell<Option<T>>);
 impl<T> LateInit<T>
 {
@@ -337,7 +292,7 @@ impl Graphics
             db.create()?
         };
         
-        return Ok(Graphics
+        Ok(Graphics
         {
             buffer_ready: br::Semaphore::new(&device)?,
             present_ordering: br::Semaphore::new(&device)?,
@@ -347,7 +302,7 @@ impl Graphics
             instance, adapter, device,
             #[cfg(debug_assertions)] _d,
             memory_type_index_cache: RefCell::new(BTreeMap::new())
-        });
+        })
     }
 
     fn diag_memory_properties(mp: &br::MemoryProperties) {
@@ -388,7 +343,8 @@ impl Graphics
                 return Some(n as _);
             }
         }
-        return None;
+
+        None
     }
     
     fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()>
@@ -421,7 +377,7 @@ impl GameTimer
         let d = self.0.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
         self.0 = InstantTimer::now().into();
 
-        return d;
+        d
     }
 }
 
@@ -498,7 +454,7 @@ impl RenderPassTemplates {
         b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
         b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
 
-        return b;
+        b
     }
 }
 
@@ -534,7 +490,8 @@ impl<'d> PvpShaderModules<'d> {
                 specinfo: self.fragment_spec_constants.clone()
             });
         }
-        return r;
+
+        r
     }
 }
 
