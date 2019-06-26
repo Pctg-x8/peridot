@@ -1,3 +1,5 @@
+#![allow(clippy::needless_return)]
+
 use bedrock as br; use self::br::traits::*;
 use super::*;
 use std::ops::{Deref, Range};
@@ -266,6 +268,8 @@ impl PixelFormat {
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24
         }
     }
+
+    pub unsafe fn force_cast(v: br::vk::VkFormat) -> Self { std::mem::transmute(v) }
 }
 
 pub struct Texture2D(br::ImageView, Image);

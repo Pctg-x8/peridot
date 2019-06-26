@@ -19,6 +19,6 @@ log = "0.4"
 libc = "0.2"
 
 [dependencies.bedrock]
-# git = "https://github.com/Pctg-x8/bedrock"
-path = "../../../bedrock"
+git = "https://github.com/Pctg-x8/bedrock"
+# path = "../../../bedrock"
 features = ["Presentation", "Implements", "VK_MVK_macos_surface"]

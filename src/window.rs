@@ -1,3 +1,5 @@
+#![allow(clippy::needless_return)]
+
 use super::*;
 use bedrock as br;
 

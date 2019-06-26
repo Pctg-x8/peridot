@@ -168,7 +168,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }).expect("ImmResource Initialization");
 
         let screen_size = e.backbuffers()[0].size().clone();
-        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
+        let renderpass = RenderPassTemplates::single_render(unsafe { peridot::PixelFormat::force_cast(e.backbuffer_format()) })
             .create(&e.graphics()).expect("RenderPass Creation");
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
@@ -279,7 +279,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
+    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _delta_time: std::time::Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         println!("axs: {} {} {}",
             e.input().query_axis(AxisInputIndices::Magnification as _),

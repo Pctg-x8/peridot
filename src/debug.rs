@@ -1,3 +1,5 @@
+#![allow(clippy::needless_return)]
+
 use bedrock as br;
 use libc::{size_t, c_char, c_void};
 use std::ffi::CStr;
@@ -46,8 +48,7 @@ impl DebugReport
             warn!("  Location: {}", location);
             warn!("  Layer-Prefix: {}", layer_prefix);
         }
-        else
-        {
+        else {
             info!("vkinfo: {}", msg);
             info!("  Code: {}", message_code);
             info!("  Object: {} type={}", object, object_type);

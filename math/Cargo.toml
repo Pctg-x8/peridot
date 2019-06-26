@@ -8,6 +8,6 @@ default = []
 bedrock_interop = ["bedrock"]
 
 [dependencies]
-# bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
-bedrock = { path = "../../bedrock", optional = true }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", optional = true }
+# bedrock = { path = "../../bedrock", optional = true }
 euclid = "*"
