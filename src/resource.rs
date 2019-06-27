@@ -401,8 +401,10 @@ impl Deref for TextureInstantiatedGroup
 /// Describing the type that can be used as initializer of `FixedBuffer`s
 pub trait FixedBufferInitializer
 {
+    type StagingResult;
+
     /// Setup memory data in staging buffer
-    fn stage_data(&mut self, m: &br::MappedMemoryRange);
+    fn stage_data(&mut self, m: &br::MappedMemoryRange) -> Self::StagingResult;
     fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buf: &Buffer, range: Range<u64>);
 }
 /// The Fix-sized buffers and textures manager
@@ -425,7 +427,7 @@ impl FixedMemory
         mut prealloc: BufferPrealloc<'g>,
         prealloc_mut: BufferPrealloc<'g>,
         textures: TextureInitializationGroup<'g>,
-        initializer: &mut I, tfb: &mut TransferBatch) -> br::Result<Self>
+        initializer: &mut I, tfb: &mut TransferBatch) -> br::Result<(Self, I::StagingResult)>
     {
         let mut_buffer = prealloc_mut.build_upload()?;
         let mut p_bufferdata_prealloc = prealloc.clone();
@@ -447,18 +449,19 @@ impl FixedMemory
         mb_stg.add(stg_buffer);
         let stg_buffer = mb_stg.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
 
-        stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
+        let stg_result =
+            stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m) })?;
 
         textures.copy_from_stage_batches(tfb, &stg_buffer);
         tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, imm_buffer_size);
         initializer.buffer_graphics_ready(tfb, &buffer, 0 .. imm_buffer_size);
 
-        Ok(FixedMemory
+        Ok((FixedMemory
         {
             buffer: (buffer, imm_buffer_size), mut_buffer: (mut_buffer, prealloc_mut.total_size()),
             mut_buffer_placement,
             textures: textures.into_textures()
-        })
+        }, stg_result))
     }
 
     pub fn range_in_mut_buffer<T>(&self, r: Range<T>) -> Range<T> where
