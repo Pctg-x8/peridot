@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, BufferContent, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules, vg, SpecConstantStorage, PlatformInputProcessor, FixedMemory, TextureInitializationGroup};
+    PvpShaderModules, vg, SpecConstantStorage, PlatformInputProcessor, FixedMemory, TextureInitializationGroup,
+    ShaderBinary};
 use peridot::math::{Vector2, Vector2F32};
 use std::rc::Rc;
 use std::borrow::Cow;
@@ -232,6 +233,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Loading CurveShader")).expect("Creating CurveShader");
         let instline_shader = PvpShaderModules::new(&e.graphics(), e.load("shaders.instancedLine_constantColor")
             .expect("Loading InstancedLineConstantColorShader")).expect("Creating InstancedLineConstantColorShader");
+        let noderender_v_shader = e.load::<ShaderBinary>("shaders.nodeRenderer_v").expect("Loading nodeRenderer_v")
+            .instantiate(&e.graphics()).expect("Instantiating nodeRenderer_v");
+        let noderender_f_shader = e.load::<ShaderBinary>("shaders.nodeRenderer_f").expect("Loading nodeRenderer_f")
+            .instantiate(&e.graphics()).expect("Instantiating nodeRenderer_f");
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(),
             &[&descs.layouts()[0]], &[(br::ShaderStage::VERTEX, 0 .. 4 * 4)])
             .expect("Create PipelineLayout").into();
