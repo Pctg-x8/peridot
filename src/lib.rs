@@ -60,6 +60,23 @@ impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
+pub trait FeatureRequests
+{
+    const ENABLE_GEOMETRY_SHADER: bool = false;
+    const ENABLE_TESSELLATION_SHADER: bool = false;
+    const USE_STORAGE_BUFFERS_IN_VERTEX_SHADER: bool = false;
+    
+    fn requested_features() -> br::vk::VkPhysicalDeviceFeatures
+    {
+        br::vk::VkPhysicalDeviceFeatures
+        {
+            geometryShader: Self::ENABLE_GEOMETRY_SHADER as _,
+            tessellationShader: Self::ENABLE_TESSELLATION_SHADER as _,
+            vertexPipelineStoresAndAtomics: Self::USE_STORAGE_BUFFERS_IN_VERTEX_SHADER as _,
+            .. Default::default()
+        }
+    }
+}
 
 pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker>
 {
@@ -72,11 +89,12 @@ pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker>
     gametimer: GameTimer,
     last_rendering_completion: StateFence
 }
-impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
+impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
 {
     pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self>
     {
-        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
+        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name(),
+            E::requested_features())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
@@ -237,7 +255,8 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str) -> br::Result<Self>
+    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str,
+        features: br::vk::VkPhysicalDeviceFeatures) -> br::Result<Self>
     {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
@@ -279,6 +298,7 @@ impl Graphics
             let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extension("VK_KHR_swapchain").add_queue(qci);
             #[cfg(debug_assertions)] db.add_layer("VK_LAYER_LUNARG_standard_validation");
+            *db.mod_features() = features;
             db.create()?
         };
         
