@@ -81,7 +81,7 @@ pub trait FeatureRequests
     }
 }
 
-pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker>
+pub struct Engine<E, PL>
 {
     nativelink: PL,
     surface: SurfaceInfo,
@@ -120,19 +120,13 @@ impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
 
         Ok(this)
     }
+}
+impl<E, PL> Engine<E, PL>
+{
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
     pub fn native_link(&self) -> &PL { &self.nativelink }
     pub fn native_link_mut(&mut self) -> &mut PL { &mut self.nativelink }
-
-    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
-    }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
-    }
-
-    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
@@ -150,7 +144,20 @@ impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
     pub fn submit_buffered_commands(&self, batches: &[br::SubmissionBatch], fence: &br::Fence) -> br::Result<()> {
         self.g.graphics_queue.q.submit(batches, Some(fence))
     }
-
+}
+impl<E, PL: NativeLinker> Engine<E, PL>
+{
+    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
+    }
+    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+    }
+    
+    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
+}
+impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
+{
     pub fn do_update(&mut self)
     {
         let dt = self.gametimer.delta_time();
@@ -206,7 +213,9 @@ impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
             v => v.expect("Present Submission")
         }
     }
-    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
+
+    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>)
+    {
         self.last_rendering_completion.wait().expect("Waiting Last command completion");
         self.userlib_mut_lw().discard_backbuffer_resources();
         self.wrt.discard_lw();
@@ -218,7 +227,7 @@ impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
         self.userlib_mut().on_resize(self, new_size);
     }
 }
-impl<E: EngineEvents<PL>, PL: NativeLinker> Drop for Engine<E, PL>
+impl<E, PL> Drop for Engine<E, PL>
 {
     fn drop(&mut self)
     {
