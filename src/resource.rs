@@ -16,7 +16,7 @@ fn common_alignment(flags: br::BufferUsage, a: &br::PhysicalDevice) -> u64
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64) }
+pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64), Storage(u64) }
 impl BufferContent {
     fn usage(&self, src: br::BufferUsage) -> br::BufferUsage {
         match *self {
@@ -24,20 +24,22 @@ impl BufferContent {
             BufferContent::Index(_) => src.index_buffer(),
             BufferContent::Uniform(_) => src.uniform_buffer(),
             BufferContent::Raw(_) => src,
-            BufferContent::UniformTexel(_) => src.uniform_texel_buffer()
+            BufferContent::UniformTexel(_) => src.uniform_texel_buffer(),
+            BufferContent::Storage(_) => src.storage_buffer()
         }
     }
     fn alignment(&self, a: &br::PhysicalDevice) -> u64 {
         match *self {
             BufferContent::Uniform(_) | BufferContent::UniformTexel(_) =>
                 a.properties().limits.minUniformBufferOffsetAlignment as _,
+            BufferContent::Storage(_) => a.properties().limits.minStorageBufferOffsetAlignment,
             _ => 1
         }
     }
     fn size(&self) -> u64 {
         match *self {
             BufferContent::Vertex(v) | BufferContent::Index(v) | BufferContent::Uniform(v) | BufferContent::Raw(v) |
-            BufferContent::UniformTexel(v) => v
+            BufferContent::UniformTexel(v) | BufferContent::Storage(v) => v
         }
     }
 
@@ -47,6 +49,7 @@ impl BufferContent {
     pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>() as _) }
     pub fn indices<T>(count: usize) -> Self { BufferContent::Index(size_of::<T>() as u64 * count as u64) }
     pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>() as _) }
+    pub fn storage<T>() -> Self { BufferContent::Storage(size_of::<T>() as _) }
     pub fn uniform_dynarray<T>(count: usize) -> Self { BufferContent::Uniform(size_of::<T>() as u64 * count as u64) }
     pub fn uniform_texel<T>() -> Self { BufferContent::UniformTexel(size_of::<T>() as _) }
     pub fn uniform_texel_dynarray<T>(count: usize) -> Self {
