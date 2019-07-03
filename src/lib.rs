@@ -135,8 +135,6 @@ impl<E, PL> Engine<E, PL>
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
     pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
-    pub fn input(&self) -> &PL::InputProcessor { self.nativelink.input_processor() }
-    pub fn input_mut(&mut self) -> &mut PL::InputProcessor { self.nativelink.input_processor_mut() }
 
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()> {
         self.g.submit_commands(generator)
@@ -155,6 +153,9 @@ impl<E, PL: NativeLinker> Engine<E, PL>
     }
     
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
+    
+    pub fn input(&self) -> &PL::InputProcessor { self.nativelink.input_processor() }
+    pub fn input_mut(&mut self) -> &mut PL::InputProcessor { self.nativelink.input_processor_mut() }
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
 {

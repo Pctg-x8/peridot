@@ -17,7 +17,7 @@ struct RenderParam
     vec2 offset; vec2 size;
     vec4 tint_color;
 };
-layout(set = 1, binding = 0) uniform NodeRenderingParams
+layout(set = 1, binding = 0) buffer NodeRenderingParams
 {
     RenderParam render_params[MaxRenderableInstances];
 };
@@ -26,7 +26,7 @@ void main()
 {
     const RenderParam idata = render_params[gl_InstanceIndex];
     vec2 p = ipos * 0.5f * idata.size + offset_g + idata.offset;
-    gl_Position = vec4(p, 0.0f, 1.0f);
+    gl_Position = vec4(p * scaling, 0.0f, 1.0f);
     uv = ipos * 0.5f + 0.5f;
     tint_color = idata.tint_color;
     uv_scale = idata.size;

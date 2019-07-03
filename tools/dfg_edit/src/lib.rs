@@ -1,7 +1,7 @@
 
 use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
-use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, BufferContent, MemoryBadget, ModelData,
+use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, BufferContent, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
     PvpShaderModules, vg, SpecConstantStorage, PlatformInputProcessor, FixedMemory, TextureInitializationGroup,
     ShaderBinary};
@@ -9,7 +9,7 @@ use peridot::math::{Vector2, Vector2F32};
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::mem::size_of;
-use peridot::vg::{PathBuilder, FlatPathBuilder};
+// use peridot::vg::{PathBuilder, FlatPathBuilder};
 
 #[derive(SpecConstantStorage)] #[repr(C)]
 pub struct VgRendererFragmentFixedColor {
@@ -20,6 +20,27 @@ pub struct InstancedLineShaderGenParams { spacing: f32, clone_direction: i32, as
 
 #[repr(C)]
 pub struct ScreenProps { scaling: f32, pad: f32, offset: Vector2F32 }
+
+#[repr(C)]
+pub struct NodeRenderParam
+{
+    offset: [f32; 2], size: [f32; 2],
+    tint_color: [f32; 4]
+}
+const MAX_RENDERABLE_NODE_INSTANCES: usize = 32;
+
+const VIB_POS2: &[br::vk::VkVertexInputBindingDescription] = &[
+    br::vk::VkVertexInputBindingDescription
+    {
+        binding: 0, stride: size_of::<[f32; 2]>() as _, inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX
+    }
+];
+const VIA_POS2: &[br::vk::VkVertexInputAttributeDescription] = &[
+    br::vk::VkVertexInputAttributeDescription
+    {
+        binding: 0, location: 0, format: br::vk::VK_FORMAT_R32G32_SFLOAT, offset: 0
+    }
+];
 
 struct GridModel;
 impl ModelData for GridModel {
@@ -108,11 +129,13 @@ impl std::ops::Deref for DescriptorManager {
 
 pub struct FixedMemoryInitializer
 {
-    grid_offset: usize, vg_offset: peridot::VgContextPreallocOffsets, vg_context: vg::Context
+    grid_offset: usize, ipos2_rect_offset: usize,
+    vg_offset: peridot::VgContextPreallocOffsets, vg_context: vg::Context
 }
 pub struct FixedMemoryOffsets
 {
-    grid_offset: usize, vg_renderer_params: peridot::VgRendererParams
+    grid_offset: usize, ipos2_rect_offset: usize,
+    vg_renderer_params: peridot::VgRendererParams
 }
 impl peridot::FixedBufferInitializer for FixedMemoryInitializer
 {
@@ -122,10 +145,16 @@ impl peridot::FixedBufferInitializer for FixedMemoryInitializer
     {
         let grid_offset = GridModel.stage_data_into(m, self.grid_offset);
         let vg_renderer_params = self.vg_context.stage_data_into(m, self.vg_offset.clone());
+        unsafe
+        {
+            m.slice_mut(self.ipos2_rect_offset, 4).clone_from_slice(&[
+                [-1.0f32, -1.0f32], [1.0f32, -1.0f32], [-1.0f32, 1.0f32], [1.0f32, 1.0f32]
+            ]);
+        }
         
         FixedMemoryOffsets
         {
-            grid_offset, vg_renderer_params
+            grid_offset, vg_renderer_params, ipos2_rect_offset: self.ipos2_rect_offset
         }
     }
     fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buf: &Buffer, range: std::ops::Range<u64>)
@@ -138,6 +167,7 @@ impl peridot::FixedBufferInitializer for FixedMemoryInitializer
 pub struct Game<PL: peridot::NativeLinker> {
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle,
     _bufview: br::BufferView, descs: DescriptorManager, gp_backgrid: (LayoutedPipeline, LayoutedPipeline),
+    gp_node_render: LayoutedPipeline,
     fixed_memory: FixedMemory,
     fixed_offsets: FixedMemoryOffsets,
     vg_renderer_exinst: peridot::VgRendererExternalInstances,
@@ -146,6 +176,10 @@ pub struct Game<PL: peridot::NativeLinker> {
 impl<PL: peridot::NativeLinker> Game<PL> {
     pub const NAME: &'static str = "Peridot DataFlowGraph Editor";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
+}
+impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL>
+{
+    const USE_STORAGE_BUFFERS_IN_VERTEX_SHADER: bool = true;
 }
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &mut peridot::Engine<Self, PL>) -> Self {
@@ -160,14 +194,17 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let mut bp = BufferPrealloc::new(e.graphics());
         let grid_offs = GridModel.prealloc(&mut bp);
+        let ipos2_rect_offset = bp.add(BufferContent::vertex::<[[f32; 2]; 4]>());
         let vg_offs = ctx.prealloc(&mut bp);
         let mut bp_mut = BufferPrealloc::new(e.graphics());
         let screen_props_placement = bp_mut.add(BufferContent::uniform::<ScreenProps>());
+        let node_render_params_placement =
+            bp_mut.add(BufferContent::storage::<[NodeRenderParam; MAX_RENDERABLE_NODE_INSTANCES]>());
 
         let mut tfb = TransferBatch::new();
         let mut fbinit = FixedMemoryInitializer
         {
-            grid_offset: grid_offs, vg_offset: vg_offs, vg_context: ctx
+            grid_offset: grid_offs, vg_offset: vg_offs, vg_context: ctx, ipos2_rect_offset: ipos2_rect_offset as _
         };
         let (fixed_memory, fixed_offsets) = FixedMemory::new(e.graphics(),
             bp, bp_mut, TextureInitializationGroup::new(e.graphics()),
@@ -177,6 +214,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         {
             *m.get_mut(screen_props_placement as _) = ScreenProps {
                 scaling: 0.01, pad: 0.0, offset: Vector2(5.0, 2.5)
+            };
+            m.get_mut::<[_; MAX_RENDERABLE_NODE_INSTANCES]>(node_render_params_placement as _)[0] = NodeRenderParam
+            {
+                offset: [0.0; 2], size: [32.0, 24.0], tint_color: [1.0, 0.0, 0.0, 1.0]
             };
         }).expect("MutMem Initialization");
         tfb.add_copying_buffer((&fixed_memory.mut_buffer.0, 0),
@@ -205,8 +246,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             },
             br::DSLBindings {
                 uniform_buffer: (0, 1, br::ShaderStage::VERTEX).into(), .. br::DSLBindings::empty()
+            },
+            br::DSLBindings {
+                storage_buffer: (0, 1, br::ShaderStage::VERTEX).into(), .. br::DSLBindings::empty()
             }
-        ], &[0, 1]).expect("DescriptorSet Initialization");
+        ], &[0, 1, 2]).expect("DescriptorSet Initialization");
 
         let mut dub = DescriptorSetUpdateBatch::new();
         dub.write(descs[0], 0, br::DescriptorUpdateInfo::UniformTexelBuffer(vec![bufview.native_ptr()]));
@@ -214,6 +258,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             (fixed_memory.buffer.0.native_ptr(),
                 fixed_memory.range_in_mut_buffer(
                     screen_props_placement as usize .. screen_props_placement as usize + size_of::<ScreenProps>()))
+        ]));
+        dub.write(descs[2], 0, br::DescriptorUpdateInfo::StorageBuffer(vec![
+            (fixed_memory.buffer.0.native_ptr(), fixed_memory.range_in_mut_buffer(
+                node_render_params_placement as usize .. node_render_params_placement as usize +
+                    size_of::<[NodeRenderParam; MAX_RENDERABLE_NODE_INSTANCES]>()
+            ))
         ]));
         dub.submit(e.graphics());
 
@@ -243,6 +293,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let pl_backgrid: Rc<_> = br::PipelineLayout::new(&e.graphics(),
             &[&descs.layouts()[1]], &[(br::ShaderStage::FRAGMENT, 0 .. 4 * 4)])
             .expect("Create PipelineLayout for GridRendering").into();
+        let pl_node_render: Rc<_> = br::PipelineLayout::new(&e.graphics(),
+            &[&descs.layouts()[1], &descs.layouts()[2]], &[])
+            .expect("Create PipelineLayout for NodeRender").into();
         let spc_map = vec![
             br::vk::VkSpecializationMapEntry { constantID: 0, offset: 0, size: 4 },
             br::vk::VkSpecializationMapEntry { constantID: 1, offset: 4, size: 4 }
@@ -283,6 +336,19 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         gpb.vertex_processing(backgrid_vertex_processing_y);
         let gp_backgrid_y = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Create GraphicsPipeline of BackgridRender-Y"), &pl_backgrid);
+        
+        let shader_default_ep = std::ffi::CString::new("main").expect("building CString shader ep");
+        let mut vps_node_render = br::VertexProcessingStages::new(
+            br::PipelineShader { module: &noderender_v_shader, entry_name: shader_default_ep.clone(), specinfo: None },
+            &VIB_POS2, &VIA_POS2, br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
+        );
+        vps_node_render.fragment_shader(br::PipelineShader
+        {
+            module: &noderender_f_shader, entry_name: shader_default_ep.clone(), specinfo: None
+        });
+        gpb.layout(&pl_node_render).vertex_processing(vps_node_render);
+        let gp_node_render = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
+            .expect("Create GraphicsPipeline for NodeRender"), &pl_node_render);
 
         let render_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffers.len())
             .expect("Creating RenderCB");
@@ -298,6 +364,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             cbr.draw(2, 100, 0, 0);
             gp_backgrid_y.bind(&mut cbr);
             cbr.draw(2, 100, 2, 0);
+            gp_node_render.bind(&mut cbr);
+            cbr.bind_graphics_descriptor_sets(0, &descs[1..3], &[]);
+            cbr.bind_vertex_buffers(0, &[(&fixed_memory.buffer.0, fixed_offsets.ipos2_rect_offset)]);
+            cbr.draw(4, 1, 0, 0);
             
             fixed_offsets.vg_renderer_params.default_render_commands(e,
                 &mut cbr, &fixed_memory.buffer.0, &vg_renderer_exinst);
@@ -308,16 +378,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             ph: PhantomData, renderpass, framebuffers, _bufview: bufview,
             descs, render_cb, vg_renderer_exinst,
             fixed_memory, fixed_offsets,
-            gp_backgrid: (gp_backgrid_x, gp_backgrid_y)
+            gp_backgrid: (gp_backgrid_x, gp_backgrid_y), gp_node_render
         }
     }
 
     fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _delta_time: std::time::Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        println!("axs: {} {} {}",
+        /*println!("axs: {} {} {}",
             e.input().query_axis(AxisInputIndices::Magnification as _),
             e.input().query_axis(AxisInputIndices::ScrollH as _),
-            e.input().query_axis(AxisInputIndices::ScrollV as _));
+            e.input().query_axis(AxisInputIndices::ScrollV as _));*/
         (None, br::SubmissionBatch {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
@@ -350,6 +420,10 @@ impl<PL: peridot::NativeLinker> Game<PL> {
         cmd.draw(2, 100, 0, 0);
         self.gp_backgrid.1.bind(cmd);
         cmd.draw(2, 100, 2, 0);
+        self.gp_node_render.bind(cmd);
+        cmd.bind_graphics_descriptor_sets(0, &self.descs[1..3], &[]);
+        cmd.bind_vertex_buffers(0, &[(&self.fixed_memory.buffer.0, self.fixed_offsets.ipos2_rect_offset)]);
+        cmd.draw(4, 1, 0, 0);
         
         self.fixed_offsets.vg_renderer_params.default_render_commands(e, cmd,
             &self.fixed_memory.buffer.0, &self.vg_renderer_exinst);
