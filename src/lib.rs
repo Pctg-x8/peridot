@@ -60,11 +60,18 @@ impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
+#[derive(Debug, PartialEq, Eq)]
+pub enum WindowExtents
+{
+    Fixed(u16, u16), Resizable(u16, u16), Fullscreen
+}
 pub trait FeatureRequests
 {
     const ENABLE_GEOMETRY_SHADER: bool = false;
     const ENABLE_TESSELLATION_SHADER: bool = false;
     const USE_STORAGE_BUFFERS_IN_VERTEX_SHADER: bool = false;
+    /// The Size of Main Window. default=640x480, non-resizable
+    const WINDOW_EXTENTS: WindowExtents = WindowExtents::Fixed(640, 480);
     
     fn requested_features() -> br::vk::VkPhysicalDeviceFeatures
     {
@@ -93,7 +100,11 @@ impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
 {
     pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self>
     {
-        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name(),
+        let requires_fullscreen = E::WINDOW_EXTENTS == WindowExtents::Fullscreen;
+
+        let g = Graphics::new(name, version,
+            nativelink.render_target_provider().surface_extension_name(),
+            requires_fullscreen,
             E::requested_features())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
@@ -265,6 +276,7 @@ pub struct Graphics
 impl Graphics
 {
     fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str,
+        requires_fullscreen: bool,
         features: br::vk::VkPhysicalDeviceFeatures) -> br::Result<Self>
     {
         info!("Supported Layers: ");
@@ -292,6 +304,11 @@ impl Graphics
         }
         else {
             warn!("Validation Layer is not found!");
+        }
+        if requires_fullscreen
+        {
+            ib.add_extension("VK_EXT_full_screen_exclusive")
+                .add_extension("VK_KHR_get_surface_capabilities2");
         }
         let instance = ib.create()?;
         unsafe { **std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr()) = 1; }
