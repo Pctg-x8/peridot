@@ -32,8 +32,14 @@ fn main() {
     let wname = format!("{} v{}.{}.{}", GameW::NAME, GameW::VERSION.0, GameW::VERSION.1, GameW::VERSION.2);
     let wname_c = std::ffi::CString::new(wname).expect("Unable to generate a c-style string");
 
-    let style = WS_OVERLAPPEDWINDOW;
-    let mut wrect = RECT { left: 0, top: 0, right: 640, bottom: 480 };
+    let (w, h, style) = match GameW::WINDOW_EXTENTS
+    {
+        peridot::WindowExtents::Fixed(w, h) =>
+            (w, h, WS_OVERLAPED | WS_TITLE | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX),
+        peridot::WindowExtents::Resizable(w, h) => (w, h, WS_OVERLAPPEDWINDOW),
+        peridot::WindowExtents::Fullscreen => unimplemented!("todo for full-screen window generation");
+    };
+    let mut wrect = RECT { left: 0, top: 0, right: w as _, bottom: h as _ };
     unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
     let w = unsafe {
         CreateWindowExA(WS_EX_APPWINDOW, wcatom as _, wname_c.as_ptr(), style,

@@ -58,7 +58,10 @@ impl<PL: peridot::NativeLinker> Game<PL>
     pub const NAME: &'static str = "Peridot Examples - ImagePlane";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
-impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
+impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL>
+{
+    const WINDOW_EXTENTS: peridot::WindowExtents = peridot::WindowExtents::Fixed(320, 240);
+}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
     fn init(e: &peridot::Engine<Self, PL>) -> Self
