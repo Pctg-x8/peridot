@@ -39,6 +39,7 @@ fn main() {
         peridot::WindowExtents::Fixed(w, h) =>
             (w, h, WS_OVERLAPPED | WS_CAPTION | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX),
         peridot::WindowExtents::Resizable(w, h) => (w, h, WS_OVERLAPPEDWINDOW),
+        // TODO: for fullscreen window generation
         peridot::WindowExtents::Fullscreen => unimplemented!("todo for full-screen window generation")
     };
     let mut wrect = RECT { left: 0, top: 0, right: w as _, bottom: h as _ };
