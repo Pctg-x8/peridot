@@ -2,12 +2,14 @@ use winapi::um::winuser::{
     DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
     AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL, WM_SIZE,
     PostQuitMessage, PM_REMOVE,
-    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
+    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA,
+    WS_OVERLAPPED, WS_BORDER, WS_CAPTION, WS_SYSMENU, WS_MINIMIZEBOX
 };
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 use winapi::um::libloaderapi::{GetModuleHandleA};
 use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
+use peridot::FeatureRequests;
 
 #[macro_use] extern crate log;
 mod userlib;
@@ -35,9 +37,9 @@ fn main() {
     let (w, h, style) = match GameW::WINDOW_EXTENTS
     {
         peridot::WindowExtents::Fixed(w, h) =>
-            (w, h, WS_OVERLAPED | WS_TITLE | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX),
+            (w, h, WS_OVERLAPPED | WS_CAPTION | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX),
         peridot::WindowExtents::Resizable(w, h) => (w, h, WS_OVERLAPPEDWINDOW),
-        peridot::WindowExtents::Fullscreen => unimplemented!("todo for full-screen window generation");
+        peridot::WindowExtents::Fullscreen => unimplemented!("todo for full-screen window generation")
     };
     let mut wrect = RECT { left: 0, top: 0, right: w as _, bottom: h as _ };
     unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
