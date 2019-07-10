@@ -217,7 +217,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             };
             m.get_mut::<[_; MAX_RENDERABLE_NODE_INSTANCES]>(node_render_params_placement as _)[0] = NodeRenderParam
             {
-                offset: [0.0; 2], size: [32.0, 24.0], tint_color: [1.0, 0.0, 0.0, 1.0]
+                offset: [0.0; 2], size: [64.0, 48.0], tint_color: [1.0, 0.0, 0.0, 1.0]
             };
         }).expect("MutMem Initialization");
         tfb.add_copying_buffer((&fixed_memory.mut_buffer.0, 0),
