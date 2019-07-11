@@ -217,7 +217,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             };
             m.get_mut::<[_; MAX_RENDERABLE_NODE_INSTANCES]>(node_render_params_placement as _)[0] = NodeRenderParam
             {
-                offset: [0.0; 2], size: [64.0, 48.0], tint_color: [1.0, 0.0, 0.0, 1.0]
+                offset: [0.0; 2], size: [128.0, 48.0], tint_color: [1.0, 1.0, 0.0, 1.0]
             };
         }).expect("MutMem Initialization");
         tfb.add_copying_buffer((&fixed_memory.mut_buffer.0, 0),
@@ -294,7 +294,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             &[&descs.layouts()[1]], &[(br::ShaderStage::FRAGMENT, 0 .. 4 * 4)])
             .expect("Create PipelineLayout for GridRendering").into();
         let pl_node_render: Rc<_> = br::PipelineLayout::new(&e.graphics(),
-            &[&descs.layouts()[1], &descs.layouts()[2]], &[])
+            &[&descs.layouts()[1], &descs.layouts()[2]], &[(br::ShaderStage::VERTEX, 0 .. 4 * 2)])
             .expect("Create PipelineLayout for NodeRender").into();
         let spc_map = vec![
             br::vk::VkSpecializationMapEntry { constantID: 0, offset: 0, size: 4 },
@@ -367,6 +367,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             gp_node_render.bind(&mut cbr);
             cbr.bind_graphics_descriptor_sets(0, &descs[1..3], &[]);
             cbr.bind_vertex_buffers(0, &[(&fixed_memory.buffer.0, fixed_offsets.ipos2_rect_offset)]);
+            cbr.push_graphics_constant(br::ShaderStage::VERTEX, 0, &[screen_size.0 as f32, screen_size.1 as f32]);
             cbr.draw(4, 1, 0, 0);
             
             fixed_offsets.vg_renderer_params.default_render_commands(e,
@@ -409,7 +410,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 }
 
 impl<PL: peridot::NativeLinker> Game<PL> {
-    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer) {
+    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
+    {
+        let screen_size = fb.size();
+
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
             &[br::ClearValue::Color(BACK_COLOR)], true);
             
@@ -423,6 +427,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
         self.gp_node_render.bind(cmd);
         cmd.bind_graphics_descriptor_sets(0, &self.descs[1..3], &[]);
         cmd.bind_vertex_buffers(0, &[(&self.fixed_memory.buffer.0, self.fixed_offsets.ipos2_rect_offset)]);
+        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &[screen_size.0 as f32, screen_size.1 as f32]);
         cmd.draw(4, 1, 0, 0);
         
         self.fixed_offsets.vg_renderer_params.default_render_commands(e, cmd,

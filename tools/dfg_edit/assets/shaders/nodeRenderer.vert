@@ -5,6 +5,10 @@ layout(location = 0) out vec2 uv;
 layout(location = 1) out vec4 tint_color;
 layout(location = 2) out vec2 uv_scale;
 out gl_PerVertex { out vec4 gl_Position; };
+layout(push_constant) uniform ScreenFixedProps
+{
+    vec2 screen_size;
+};
 
 #define MaxRenderableInstances 32
 
@@ -26,7 +30,7 @@ void main()
 {
     const RenderParam idata = render_params[gl_InstanceIndex];
     vec2 p = ipos * 0.5f * idata.size + offset_g + idata.offset;
-    gl_Position = vec4(p * scaling, 0.0f, 1.0f);
+    gl_Position = vec4(p * scaling * vec2(1.0f, screen_size.x / screen_size.y), 0.0f, 1.0f);
     uv = ipos * 0.5f + 0.5f;
     tint_color = idata.tint_color;
     uv_scale = idata.size;
