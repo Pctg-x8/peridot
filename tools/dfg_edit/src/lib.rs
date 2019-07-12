@@ -71,7 +71,8 @@ impl DescriptorManager {
     pub fn new(dev: &br::Device, bindings: &[br::DSLBindings], set_allocations: &[usize]) -> br::Result<Self> {
         let set_layouts = bindings.iter().map(|b| br::DescriptorSetLayout::new(dev, b)).collect::<Result<Vec<_>, _>>()?;
         let mut allocations_per_type = BTreeMap::new();
-        for b in bindings {
+        for b in set_allocations.iter().map(|&i| &bindings[i])
+        {
             if let Some((_, count, _, _)) = b.sampler {
                 *allocations_per_type.entry(br::DescriptorType::Sampler).or_insert(0) += count;
             }
