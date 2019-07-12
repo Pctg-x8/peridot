@@ -3,7 +3,10 @@ use font_kit::{
     source::SystemSource, font::Font as UnderlyingHandle,
     error::{FontLoadingError, SelectionError, GlyphLoadingError}
 };
-pub use font_kit::{family_name::FamilyName, properties::Properties as FontProperties, hinting::HintingOptions};
+pub use font_kit::{
+    family_name::FamilyName, properties::Properties as FontProperties, hinting::HintingOptions,
+    properties::Weight as FontWeight
+};
 use euclid::Rect;
 use peridot_math::{Vector2, Vector2F32};
 use lyon_path::builder::PathBuilder;
