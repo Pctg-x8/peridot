@@ -18,7 +18,7 @@ pub struct VgRendererFragmentFixedColor {
 #[derive(SpecConstantStorage)] #[repr(C)]
 pub struct InstancedLineShaderGenParams { spacing: f32, clone_direction: i32, aspect_wh: f32 }
 
-#[repr(C)]
+#[repr(C)] #[derive(Clone)]
 pub struct ScreenProps { scaling: f32, pad: f32, offset: Vector2F32 }
 
 #[repr(C)]
@@ -169,9 +169,45 @@ impl peridot::FixedBufferInitializer for FixedMemoryInitializer
     }
 }
 
+pub struct NativeScroll
+{
+    current: ScreenProps
+}
+impl NativeScroll
+{
+    pub fn new() -> Self
+    {
+        NativeScroll
+        {
+            current: ScreenProps
+            {
+                scaling: 0.01, pad: 0.0, offset: Vector2(5.0, 2.5)
+            }
+        }
+    }
+
+    // return: dirty flag
+    pub fn update(&mut self, mem: &FixedMemory, scroll_x: f32, scroll_y: f32, mag: f32) -> bool
+    {
+        self.current.scaling = 0.001f32.max(self.current.scaling + mag as f32 * 0.02);
+        self.current.offset += Vector2(scroll_x, scroll_y) * (0.005 / self.current.scaling);
+
+        let dirty = scroll_x != 0.0 || scroll_y != 0.0 || mag != 0.0;
+        if dirty
+        {
+            mem.mut_buffer.0.guard_map(size_of::<ScreenProps>() as _, |m| unsafe
+            {
+                *m.get_mut(0) = self.current.clone();
+            }).expect("Updating Memory");
+        }
+
+        dirty
+    }
+}
+
 pub struct Game<PL: peridot::NativeLinker>
 {
-    renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle,
+    renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, update_cb: CommandBundle,
     _bufview: br::BufferView, _bufview_overlay: br::BufferView,
     descs: DescriptorManager, gp_backgrid: (LayoutedPipeline, LayoutedPipeline),
     gp_node_render: LayoutedPipeline,
@@ -179,6 +215,7 @@ pub struct Game<PL: peridot::NativeLinker>
     fixed_offsets: FixedMemoryOffsets,
     vg_renderer_exinst: peridot::VgRendererExternalInstances,
     vg_renderer_exinst0: peridot::VgRendererExternalInstances,
+    scroll: NativeScroll,
     ph: PhantomData<*const PL>
 }
 impl<PL: peridot::NativeLinker> Game<PL>
@@ -226,11 +263,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             bp, bp_mut, TextureInitializationGroup::new(e.graphics()),
             &mut fbinit, &mut tfb).expect("Allocating for Fixed Memory");
         
+        let scroll = NativeScroll::new();
+        
         fixed_memory.mut_buffer.0.guard_map(fixed_memory.mut_buffer.1, |m| unsafe
         {
-            *m.get_mut(screen_props_placement as _) = ScreenProps {
-                scaling: 0.01, pad: 0.0, offset: Vector2(5.0, 2.5)
-            };
+            *m.get_mut(screen_props_placement as _) = scroll.current.clone();
             m.get_mut::<[_; MAX_RENDERABLE_NODE_INSTANCES]>(node_render_params_placement as _)[0] = NodeRenderParam
             {
                 offset: [0.0; 2], size: [128.0, 40.0], tint_color: [1.0, 1.0, 0.0, 1.0]
@@ -383,6 +420,34 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         gpb.layout(&pl_node_render).vertex_processing(vps_node_render);
         let gp_node_render = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Create GraphicsPipeline for NodeRender"), &pl_node_render);
+        
+        let update_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, 1)
+            .expect("Creating UpdateCB");
+        {
+            // Note ひとまず今はScreenPropsだけ更新
+
+            let mut cp = update_cb[0].begin().expect("Start Updating CB");
+            let mb_target = br::BufferMemoryBarrier::new(&fixed_memory.buffer.0,
+                fixed_memory.range_in_mut_buffer(0..size_of::<ScreenProps>()),
+                br::AccessFlags::SHADER.read, br::AccessFlags::TRANSFER.write);
+            let mb_source = br::BufferMemoryBarrier::new(&fixed_memory.mut_buffer.0,
+                0..size_of::<ScreenProps>(), br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read);
+            let mb_target_r = mb_target.clone().flip();
+            let mb_source_r = mb_source.clone().flip();
+            cp.pipeline_barrier(br::PipelineStageFlags::HOST, br::PipelineStageFlags::TRANSFER, false,
+                &[], &[mb_source], &[]);
+            cp.pipeline_barrier(br::PipelineStageFlags::VERTEX_SHADER, br::PipelineStageFlags::TRANSFER, false,
+                &[], &[mb_target], &[]);
+            cp.copy_buffer(&fixed_memory.mut_buffer.0, &fixed_memory.buffer.0,
+                &[br::vk::VkBufferCopy
+                {
+                    srcOffset: 0, dstOffset: fixed_memory.mut_buffer_placement, size: size_of::<ScreenProps>() as _
+                }]);
+            cp.pipeline_barrier(br::PipelineStageFlags::TRANSFER, br::PipelineStageFlags::HOST, false,
+                &[], &[mb_source_r], &[]);
+            cp.pipeline_barrier(br::PipelineStageFlags::TRANSFER, br::PipelineStageFlags::VERTEX_SHADER, false,
+                &[], &[mb_target_r], &[]);
+        }
 
         let render_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffers.len())
             .expect("Creating RenderCB");
@@ -413,19 +478,27 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
         Game {
             ph: PhantomData, renderpass, framebuffers, _bufview: bufview, _bufview_overlay: bufview_overlay,
-            descs, render_cb, vg_renderer_exinst, vg_renderer_exinst0,
-            fixed_memory, fixed_offsets,
+            descs, render_cb, update_cb, vg_renderer_exinst, vg_renderer_exinst0,
+            fixed_memory, fixed_offsets, scroll,
             gp_backgrid: (gp_backgrid_x, gp_backgrid_y), gp_node_render
         }
     }
 
     fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _delta_time: std::time::Duration)
-            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        /*println!("axs: {} {} {}",
-            e.input().query_axis(AxisInputIndices::Magnification as _),
+        -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
+    {
+        let dirty = self.scroll.update(&self.fixed_memory,
             e.input().query_axis(AxisInputIndices::ScrollH as _),
-            e.input().query_axis(AxisInputIndices::ScrollV as _));*/
-        (None, br::SubmissionBatch {
+            e.input().query_axis(AxisInputIndices::ScrollV as _),
+            e.input().query_axis(AxisInputIndices::Magnification as _));
+        
+        let update = if dirty
+        {
+            Some(br::SubmissionBatch { command_buffers: Cow::Borrowed(&self.update_cb[..]), .. Default::default() })
+        }
+        else { None };
+        (update, br::SubmissionBatch
+        {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
