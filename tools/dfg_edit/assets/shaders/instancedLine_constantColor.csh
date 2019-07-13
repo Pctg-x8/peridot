@@ -13,8 +13,7 @@ Header[VertexShader] {
 }
 
 VertexShader {
-    vec2 offset_l = offset - floor(offset / Spacing) * Spacing;
-    vec2 p = pos + vdir() * (offset_l + vec2(Spacing * InstanceIndex)) * scaling * aspectCorrect() - vdir();
+    vec2 p = pos + vdir() * (mod(offset, Spacing) + vec2(Spacing * (InstanceIndex - 50.0))) * scaling * aspectCorrect();
     RasterPosition = vec4(p, 0.0, 1.0);
 }
 FragmentShader {
