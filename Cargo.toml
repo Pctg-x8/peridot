@@ -27,5 +27,5 @@ exclude = ["extras/"]
 members = [
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
     "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
-    "tools/archiver"
+    "tools/archiver", "tools/dfg_edit"
 ]
