@@ -291,8 +291,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }).expect("ImmResource Initialization");
 
         let screen_size = e.backbuffers()[0].size().clone();
-        let renderpass = RenderPassTemplates::single_render(unsafe { peridot::PixelFormat::force_cast(e.backbuffer_format()) })
-            .create(&e.graphics()).expect("RenderPass Creation");
+        let renderpass = RenderPassTemplates::single_render(unsafe
+        {
+            peridot::PixelFormat::force_cast(e.backbuffer_format())
+        }).create(&e.graphics()).expect("RenderPass Creation");
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         

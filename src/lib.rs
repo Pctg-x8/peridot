@@ -387,7 +387,8 @@ impl Graphics
         }], None)?;
         self.graphics_queue.q.wait()
     }
-    fn submit_buffered_graphics_commands<'s: 'b, 'b>(&'s self, batches: &[br::SubmissionBatch<'b>], signalizer: &br::Fence)
+    fn submit_buffered_graphics_commands<'s: 'b, 'b>(&'s self,
+        batches: &[br::SubmissionBatch<'b>], signalizer: &br::Fence)
         -> br::Result<()>
     {
         self.graphics_queue.q.submit(batches, Some(signalizer))

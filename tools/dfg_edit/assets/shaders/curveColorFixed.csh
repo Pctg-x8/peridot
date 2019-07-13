@@ -13,7 +13,8 @@ Header[VertexShader] {
         return pos;
     }
 }
-PushConstant[VertexShader] ScreenInfo {
+PushConstant[VertexShader] ScreenInfo
+{
     vec2 target_pixels; int glyph_index; int dummy;
 }
 SpecConstant[VertexShader](0) RasterOffsetX: float = 0.0;
