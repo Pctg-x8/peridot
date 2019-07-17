@@ -520,7 +520,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     }
 }
 
-impl<PL: peridot::NativeLinker> Game<PL> {
+impl<PL: peridot::NativeLinker> Game<PL>
+{
     fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
     {
         let screen_size = fb.size();
