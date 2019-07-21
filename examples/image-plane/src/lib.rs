@@ -246,7 +246,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
     }
 }
 
-#[derive(Clone)] #[repr(C)]
+#[derive(Clone)] #[repr(C, align(4))]
 struct UVVert { pos: Vector3F32, uv: Vector2F32 }
 
 #[repr(C)] struct Uniform { camera: Matrix4F32, object: Matrix4F32 }

@@ -3,81 +3,133 @@
 use bedrock as br; use self::br::traits::*;
 use super::*;
 use std::ops::{Deref, Range};
-use std::mem::{size_of, transmute};
+use std::mem::{size_of, transmute, align_of};
 use num::Integer;
 
-fn common_alignment(flags: br::BufferUsage, a: &br::PhysicalDevice) -> u64
+fn common_alignment(flags: br::BufferUsage, mut align: u64, a: &br::PhysicalDevice) -> u64
 {
-    let mut align: u64 = 1;
     if flags.is_uniform() { align = align.lcm(&a.properties().limits.minUniformBufferOffsetAlignment); }
     if flags.is_storage() { align = align.lcm(&a.properties().limits.minStorageBufferOffsetAlignment); }
 
     return align;
 }
 
+/// (size, align)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferContent { Vertex(u64), Index(u64), Uniform(u64), Raw(u64), UniformTexel(u64), Storage(u64) }
-impl BufferContent {
-    fn usage(&self, src: br::BufferUsage) -> br::BufferUsage {
-        match *self {
-            BufferContent::Vertex(_) => src.vertex_buffer(),
-            BufferContent::Index(_) => src.index_buffer(),
-            BufferContent::Uniform(_) => src.uniform_buffer(),
-            BufferContent::Raw(_) => src,
-            BufferContent::UniformTexel(_) => src.uniform_texel_buffer(),
-            BufferContent::Storage(_) => src.storage_buffer()
+pub enum BufferContent
+{
+    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64), Storage(u64, u64)
+}
+impl BufferContent
+{
+    fn usage(&self, src: br::BufferUsage) -> br::BufferUsage
+    {
+        use self::BufferContent::*;
+
+        match *self
+        {
+            Vertex(_, _) => src.vertex_buffer(),
+            Index(_, _) => src.index_buffer(),
+            Uniform(_, _) => src.uniform_buffer(),
+            Raw(_, _) => src,
+            UniformTexel(_, _) => src.uniform_texel_buffer(),
+            Storage(_, _) => src.storage_buffer(),
         }
     }
-    fn alignment(&self, a: &br::PhysicalDevice) -> u64 {
-        match *self {
-            BufferContent::Uniform(_) | BufferContent::UniformTexel(_) =>
-                a.properties().limits.minUniformBufferOffsetAlignment as _,
-            BufferContent::Storage(_) => a.properties().limits.minStorageBufferOffsetAlignment,
-            _ => 1
+    fn alignment(&self, pd: &br::PhysicalDevice) -> u64
+    {
+        use self::BufferContent::*;
+
+        match *self
+        {
+            Vertex(_, a) | Index(_, a) | Raw(_, a) => a,
+            Uniform(_, a) | UniformTexel(_, a) =>
+                u64::lcm(&pd.properties().limits.minUniformBufferOffsetAlignment as _, &a),
+            Storage(_, a) =>
+                u64::lcm(&pd.properties().limits.minStorageBufferOffsetAlignment as _, &a),
         }
     }
-    fn size(&self) -> u64 {
-        match *self {
-            BufferContent::Vertex(v) | BufferContent::Index(v) | BufferContent::Uniform(v) | BufferContent::Raw(v) |
-            BufferContent::UniformTexel(v) | BufferContent::Storage(v) => v
+    fn size(&self) -> u64
+    {
+        use self::BufferContent::*;
+
+        match *self
+        {
+            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) | Storage(v, _) => v
         }
     }
 
     /// Generic Shorthands
-    pub fn vertex<T>() -> Self { BufferContent::Vertex(size_of::<T>() as _) }
-    pub fn vertices<T>(count: usize) -> Self { BufferContent::Vertex(size_of::<T>() as u64 * count as u64) }
-    pub fn index<T>()  -> Self { BufferContent::Index(size_of::<T>() as _) }
-    pub fn indices<T>(count: usize) -> Self { BufferContent::Index(size_of::<T>() as u64 * count as u64) }
-    pub fn uniform<T>() -> Self { BufferContent::Uniform(size_of::<T>() as _) }
-    pub fn storage<T>() -> Self { BufferContent::Storage(size_of::<T>() as _) }
-    pub fn uniform_dynarray<T>(count: usize) -> Self { BufferContent::Uniform(size_of::<T>() as u64 * count as u64) }
-    pub fn uniform_texel<T>() -> Self { BufferContent::UniformTexel(size_of::<T>() as _) }
-    pub fn uniform_texel_dynarray<T>(count: usize) -> Self {
-        BufferContent::UniformTexel(size_of::<T>() as u64 * count as u64)
+    pub fn vertex<T>() -> Self
+    {
+        BufferContent::Vertex(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn vertices<T>(count: usize) -> Self
+    {
+        BufferContent::Vertex(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
+    }
+    pub fn index<T>()  -> Self
+    {
+        BufferContent::Index(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn indices<T>(count: usize) -> Self
+    {
+        BufferContent::Index(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
+    }
+    pub fn uniform<T>() -> Self
+    {
+        BufferContent::Uniform(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn storage<T>() -> Self
+    {
+        BufferContent::Storage(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn uniform_dynarray<T>(count: usize) -> Self
+    {
+        BufferContent::Uniform(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
+    }
+    pub fn uniform_texel<T>() -> Self
+    {
+        BufferContent::UniformTexel(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn uniform_texel_dynarray<T>(count: usize) -> Self
+    {
+        BufferContent::UniformTexel(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
     }
 }
 macro_rules! align2 {
     ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
 }
 #[derive(Clone)]
-pub struct BufferPrealloc<'g> { g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64 }
-impl<'g> BufferPrealloc<'g> {
-    pub fn new(g: &'g Graphics) -> Self {
-        BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0 }
+pub struct BufferPrealloc<'g>
+{
+    g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64, common_align: u64
+}
+impl<'g> BufferPrealloc<'g>
+{
+    pub fn new(g: &'g Graphics) -> Self
+    {
+        BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0, common_align: 1 }
     }
-    pub fn build(&self) -> br::Result<br::Buffer> {
+    pub fn build(&self) -> br::Result<br::Buffer>
+    {
         br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
     }
-    pub fn build_transferred(&self) -> br::Result<br::Buffer> {
+    pub fn build_transferred(&self) -> br::Result<br::Buffer>
+    {
         br::BufferDesc::new(self.total as _, self.usage.transfer_dest()).create(&self.g.device)
     }
-    pub fn build_upload(&self) -> br::Result<br::Buffer> {
+    pub fn build_upload(&self) -> br::Result<br::Buffer>
+    {
         br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(&self.g.device)
     }
 
-    pub fn add(&mut self, content: BufferContent) -> u64 {
+    pub fn add(&mut self, content: BufferContent) -> u64
+    {
         self.usage = content.usage(self.usage);
-        let offs = align2!(self.total, content.alignment(&self.g.adapter));
+        let content_align = content.alignment(&self.g.adapter);
+        self.common_align = self.common_align.lcm(&content_align);
+        let offs = align2!(self.total, content_align);
         self.total = offs + content.size() as u64;
         self.offsets.push(offs);
         return offs;
@@ -87,7 +139,8 @@ impl<'g> BufferPrealloc<'g> {
     /// Returns first offset of merged(other's) prealloc-ed block
     pub fn merge(&mut self, other: &Self) -> u64
     {
-        let offs = align2!(self.total, common_alignment(other.usage, &self.g.adapter));
+        self.common_align = self.common_align.lcm(&other.common_align);
+        let offs = align2!(self.total, other.common_align);
         self.usage |= other.usage;
         self.total = offs + other.total;
         self.offsets.extend(other.offsets.iter().map(|&o| o + offs));
@@ -283,7 +336,9 @@ impl Texture2D
     {
         let idesc = br::ImageDesc::new(size, format as _, br::ImageUsage::SAMPLED.transfer_dest(),
             br::ImageLayout::Preinitialized);
-        let pixels_stg = prealloc.add(BufferContent::Raw((size.x() * size.y()) as u64 * (format.bpp() >> 3) as u64));
+        let bytes_per_pixel = (format.bpp() >> 3) as u64;
+        let pixels_stg = prealloc.add(
+            BufferContent::Raw((size.x() * size.y()) as u64 * bytes_per_pixel, bytes_per_pixel));
         return idesc.create(g).map(|o| (o, pixels_stg));
     }
     pub fn new(img: Image) -> br::Result<Self>

@@ -472,11 +472,11 @@ impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
 }
 
 // euclid interops (for vg) //
-impl<T> Into<euclid::Point2D<T>> for Vector2<T> {
-    fn into(self) -> euclid::Point2D<T> { euclid::Point2D::new(self.0, self.1) }
+impl<T, U> Into<euclid::Point2D<T, U>> for Vector2<T> {
+    fn into(self) -> euclid::Point2D<T, U> { euclid::Point2D::new(self.0, self.1) }
 }
-impl<T> Into<euclid::Vector2D<T>> for Vector2<T> {
-    fn into(self) -> euclid::Vector2D<T> { euclid::Vector2D::new(self.0, self.1) }
+impl<T, U> Into<euclid::Vector2D<T, U>> for Vector2<T> {
+    fn into(self) -> euclid::Vector2D<T, U> { euclid::Vector2D::new(self.0, self.1) }
 }
 
 // cross product 2d //
