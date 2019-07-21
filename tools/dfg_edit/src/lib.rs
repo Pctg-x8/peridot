@@ -181,7 +181,7 @@ impl NativeScroll
         {
             current: ScreenProps
             {
-                scaling: 0.01, pad: 0.0, offset: Vector2(5.0, 2.5)
+                scaling: 0.01, pad: 0.0, offset: Vector2(0.0, 0.0)
             }
         }
     }
@@ -237,7 +237,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let mut ctx = vg::Context::new();
         ctx.text(&font, "Peridot DataFlowGraph Editor - Untitled.dfg");
         let mut ctx_zerobase_overlay = vg::Context::new();
-        ctx_zerobase_overlay.translate(Vector2(0.0, 28.0)).text(&font_b, "Draw");
+        ctx_zerobase_overlay.translate(Vector2(0.0, 36.0)).text_hcenter(&font_b, "Draw");
+        ctx_zerobase_overlay.translate(Vector2(0.0, -16.0)).text_hcenter(&font, "Draws a mesh");
 
         e.input_mut().link_axis(peridot::AxisEventSource::Magnification, AxisInputIndices::Magnification as _);
         e.input_mut().link_axis(peridot::AxisEventSource::ScrollHorizontal, AxisInputIndices::ScrollH as _);
