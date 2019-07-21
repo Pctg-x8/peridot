@@ -1,7 +1,7 @@
 //! PeridotExtendedMathematics: Vector/Matrix
 
 use numtraits::{One, Zero};
-use std::ops::{Mul, Div, Add, Sub, Neg};
+use std::ops::{Mul, Div, Add, Sub, Neg, AddAssign, SubAssign};
 use std::mem::transmute;
 
 /// 2-dimensional vector
@@ -414,9 +414,15 @@ macro_rules! VariadicElementOps {
             type Output = $e<<T as Add>::Output>;
             fn add(self, other: Self) -> Self::Output { $e($(self.$n + other.$n),*) }
         }
+        impl<T: AddAssign> AddAssign for $e<T> {
+            fn add_assign(&mut self, rhs: Self) { self.0 += rhs.0; self.1 += rhs.1; }
+        }
         impl<T: Sub> Sub for $e<T> {
             type Output = $e<<T as Sub>::Output>;
             fn sub(self, other: Self) -> Self::Output { $e($(self.$n - other.$n),*) }
+        }
+        impl<T: SubAssign> SubAssign for $e<T> {
+            fn sub_assign(&mut self, rhs: Self) { self.0 -= rhs.0; self.1 -= rhs.1; }
         }
         impl<T: Mul + Copy> Mul<T> for $e<T> {
             type Output = $e<<T as Mul>::Output>;
@@ -448,19 +454,23 @@ VariadicElementOps!(for Vector3 (0, 1, 2));
 VariadicElementOps!(for Vector4 (0, 1, 2, 3));
 
 // Bedrock Interop //
+#[cfg(feature = "bedrock_interop")]
 extern crate bedrock as br;
+#[cfg(feature = "bedrock_interop")]
 impl<T: Into<u32> + Copy> br::ImageSize for Vector2<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_2D;
     fn conv(&self) -> br::vk::VkExtent3D {
         br::vk::VkExtent3D { width: self.0.into(), height: self.1.into(), depth: 1 }
     }
 }
+#[cfg(feature = "bedrock_interop")]
 impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_3D;
     fn conv(&self) -> br::vk::VkExtent3D {
         br::vk::VkExtent3D { width: self.0.into(), height: self.1.into(), depth: self.2.into() }
     }
 }
+
 // euclid interops (for vg) //
 impl<T, U> Into<euclid::Point2D<T, U>> for Vector2<T> {
     fn into(self) -> euclid::Point2D<T, U> { euclid::Point2D::new(self.0, self.1) }

@@ -1,5 +1,7 @@
 //! ModelData Traits and Impls
 
+#![allow(clippy::needless_return)]
+
 use super::*;
 use bedrock as br;
 use pathfinder_partitioner::{BQuadVertexPositions, BVertexLoopBlinnData};

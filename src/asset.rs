@@ -39,6 +39,25 @@ impl FromAsset for PvpContainer {
     }
 }
 
+pub struct ShaderBinary(Vec<u8>);
+impl LogicalAssetData for ShaderBinary { const EXT: &'static str = "spv"; }
+impl FromAsset for ShaderBinary
+{
+    type Error = IOError;
+    fn from_asset<Asset: Read>(mut asset: Asset) -> IOResult<Self>
+    {
+        let mut buf = Vec::new();
+        asset.read_to_end(&mut buf).map(move |_| ShaderBinary(buf))
+    }
+}
+impl ShaderBinary
+{
+    pub fn instantiate(&self, d: &bedrock::Device) -> bedrock::Result<bedrock::ShaderModule>
+    {
+        bedrock::ShaderModule::from_memory(d, &self.0)
+    }
+}
+
 use image::{ImageDecoder, ImageResult, ImageError};
 use image::hdr::{HDRDecoder, HDRMetadata, RGBE8Pixel};
 pub struct DecodedPixelData {

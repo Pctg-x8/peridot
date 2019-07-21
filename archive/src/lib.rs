@@ -16,16 +16,16 @@ use std::path::Path;
 #[repr(C)] pub struct AssetEntryHeadingPair { pub byte_length: u64, pub relative_offset: u64 }
 impl AssetEntryHeadingPair {
     fn write<W: Write>(&self, writer: &mut W) -> IOResult<usize> {
-        writer.write(unsafe { &transmute::<_, &[u8; 8 * 2]>(self)[..] }).map(|_| 16)
+        writer.write(unsafe { &(*(self as *const Self as *const [u8; 8 * 2]))[..] }).map(|_| 16)
     }
     fn read<R: BufRead>(reader: &mut R) -> IOResult<Self> {
         let mut sink = AssetEntryHeadingPair { byte_length: 0, relative_offset: 0 };
-        reader.read_exact(unsafe { &mut transmute::<_, &mut [u8; 8 * 2]>(&mut sink)[..] }).map(|_| sink)
+        reader.read_exact(unsafe { &mut (*(&mut sink as *mut Self as *mut [u8; 8 * 2]))[..] }).map(|_| sink)
     }
 }
 fn read_asset_entries<R: BufRead>(reader: &mut R) -> IOResult<HashMap<String, AssetEntryHeadingPair>> {
     let VariableUInt(count) = VariableUInt::read(reader)?;
-    if count <= 0 { return Ok(HashMap::new()); }
+    if count == 0 { return Ok(HashMap::new()); }
     let mut elements = HashMap::with_capacity(count as _);
     for _ in 0 .. count {
         let heading = AssetEntryHeadingPair::read(reader)?;

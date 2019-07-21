@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![warn(clippy::all)]
+#![allow(clippy::needless_return)]
 
 // extern crate font_kit;
 #[macro_use] extern crate log;
@@ -33,10 +35,11 @@ pub trait NativeLinker
 {
     type AssetLoader: PlatformAssetLoader;
     type RenderTargetProvider: PlatformRenderTarget;
-    type InputProcessor: InputProcessPlugin;
+    type InputProcessor: PlatformInputProcessor;
 
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn render_target_provider(&self) -> &Self::RenderTargetProvider;
+    fn input_processor(&self) -> &Self::InputProcessor;
     fn input_processor_mut(&mut self) -> &mut Self::InputProcessor;
 
     fn rendering_precision(&self) -> f32 { 1.0 }
@@ -44,7 +47,7 @@ pub trait NativeLinker
 
 pub trait EngineEvents<PL: NativeLinker> : Sized
 {
-    fn init(_e: &Engine<Self, PL>) -> Self;
+    fn init(_e: &mut Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
             -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -58,7 +61,7 @@ pub trait EngineEvents<PL: NativeLinker> : Sized
 }
 impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
-    fn init(_e: &Engine<Self, PL>) -> Self { () }
+    fn init(_e: &mut Engine<Self, PL>) -> Self { }
 }
 pub trait FeatureRequests
 {
@@ -97,7 +100,6 @@ impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
             E::requested_features())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
-        trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
         let mut this = Engine
         {
@@ -111,18 +113,20 @@ impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
             wrt
         };
         trace!("Initializing Game...");
-        let eh = E::init(&this);
+        let eh = E::init(&mut this);
         this.submit_commands(|r| this.wrt.get().emit_initialize_backbuffers_commands(r))
             .expect("Initializing Backbuffers");
         this.event_handler = Some(eh.into());
-        this.nativelink.input_processor_mut().on_start_handle(&this.ip);
-        return Ok(this);
+
+        Ok(this)
     }
 }
 impl<E, PL> Engine<E, PL>
 {
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
+    pub fn native_link(&self) -> &PL { &self.nativelink }
+    pub fn native_link_mut(&mut self) -> &mut PL { &mut self.nativelink }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
@@ -131,8 +135,7 @@ impl<E, PL> Engine<E, PL>
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
     pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
-    pub fn input(&self) -> &InputProcess { &self.ip }
-    
+
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -150,6 +153,9 @@ impl<E, PL: NativeLinker> Engine<E, PL>
     }
     
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
+    
+    pub fn input(&self) -> &PL::InputProcessor { self.nativelink.input_processor() }
+    pub fn input_mut(&mut self) -> &mut PL::InputProcessor { self.nativelink.input_processor_mut() }
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
 {
@@ -222,8 +228,10 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
         self.userlib_mut().on_resize(self, new_size);
     }
 }
-impl<E, PL> Drop for Engine<E, PL> {
-    fn drop(&mut self) {
+impl<E, PL> Drop for Engine<E, PL>
+{
+    fn drop(&mut self)
+    {
         self.graphics().device.wait().expect("device error");
     }
 }
@@ -253,6 +261,11 @@ impl<T> From<T> for Discardable<T> {
 }
 
 pub struct Queue { q: br::Queue, family: u32 }
+impl Deref for Queue
+{
+    type Target = br::Queue;
+    fn deref(&self) -> &br::Queue { &self.q }
+}
 pub struct Graphics
 {
     pub(self) instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
@@ -294,8 +307,6 @@ impl Graphics
             warn!("Validation Layer is not found!");
         }
         let instance = ib.create()?;
-        unsafe { **std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr()) = 1; }
-        unsafe { *(*std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr())).offset(8) = 1; }
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
@@ -311,7 +322,7 @@ impl Graphics
             db.create()?
         };
         
-        return Ok(Graphics
+        Ok(Graphics
         {
             buffer_ready: br::Semaphore::new(&device)?,
             present_ordering: br::Semaphore::new(&device)?,
@@ -321,7 +332,7 @@ impl Graphics
             instance, adapter, device,
             #[cfg(debug_assertions)] _d,
             memory_type_index_cache: RefCell::new(BTreeMap::new())
-        });
+        })
     }
 
     fn diag_memory_properties(mp: &br::MemoryProperties) {
@@ -362,7 +373,8 @@ impl Graphics
                 return Some(n as _);
             }
         }
-        return None;
+
+        None
     }
     
     fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()>
@@ -374,6 +386,12 @@ impl Graphics
             command_buffers: Cow::from(&cb[..]), .. Default::default()
         }], None)?;
         self.graphics_queue.q.wait()
+    }
+    fn submit_buffered_graphics_commands<'s: 'b, 'b>(&'s self,
+        batches: &[br::SubmissionBatch<'b>], signalizer: &br::Fence)
+        -> br::Result<()>
+    {
+        self.graphics_queue.q.submit(batches, Some(signalizer))
     }
 }
 impl Deref for Graphics {
@@ -390,7 +408,7 @@ impl GameTimer
         let d = self.0.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
         self.0 = InstantTimer::now().into();
 
-        return d;
+        d
     }
 }
 
@@ -426,7 +444,7 @@ impl CommandBundle
             CBSubmissionType::Transfer => g.graphics_queue.family
         };
         let cp = br::CommandPool::new(&g.device, qf, false, false)?;
-        return Ok(CommandBundle(cp.alloc(count as _, true)?, cp));
+        Ok(CommandBundle(cp.alloc(count as _, true)?, cp))
     }
     pub fn reset(&self) -> br::Result<()> { self.1.reset(true) }
 }
@@ -449,18 +467,25 @@ impl SubpassDependencyTemplates
     }
 }
 
+pub enum RenderPassAttachmentTemplates {}
+impl RenderPassAttachmentTemplates
+{
+    pub fn presented(format: PixelFormat) -> br::AttachmentDescription
+    {
+        br::AttachmentDescription::new(format as _, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+            .store_op(br::StoreOp::Store)
+    }
+}
 pub enum RenderPassTemplates {}
 impl RenderPassTemplates {
-    pub fn single_render(format: br::vk::VkFormat) -> br::RenderPassBuilder {
+    pub fn single_render(format: PixelFormat) -> br::RenderPassBuilder {
         let mut b = br::RenderPassBuilder::new();
-        let adesc =
-            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
-            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        let adesc = RenderPassAttachmentTemplates::presented(format).load_op(br::LoadOp::Clear);
         b.add_attachment(adesc);
         b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
         b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
 
-        return b;
+        b
     }
 }
 
@@ -496,7 +521,8 @@ impl<'d> PvpShaderModules<'d> {
                 specinfo: self.fragment_spec_constants.clone()
             });
         }
-        return r;
+
+        r
     }
 }
 
@@ -506,7 +532,8 @@ pub trait SpecConstantStorage {
 
 pub struct LayoutedPipeline(br::Pipeline, Rc<br::PipelineLayout>);
 impl LayoutedPipeline {
-    pub fn combine(p: br::Pipeline, layout: &Rc<br::PipelineLayout>) -> Self {
+    pub fn combine(p: br::Pipeline, layout: &Rc<br::PipelineLayout>) -> Self
+    {
         LayoutedPipeline(p, layout.clone())
     }
     pub fn pipeline(&self) -> &br::Pipeline { &self.0 }

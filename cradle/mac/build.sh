@@ -44,5 +44,5 @@ FEATURES="bedrock/VK_EXT_debug_report,bedrock/VK_MVK_macos_surface"
 (cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURES && xcodebuild -project peridot-cradle/peridot-cradle.xcodeproj -configuration Debug build)
 
 if [ $AFTER_RUN -ne 0 ]; then
-    lldb $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app
+    lldb -o run $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app
 fi

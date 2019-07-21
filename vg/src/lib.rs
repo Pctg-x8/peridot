@@ -59,8 +59,9 @@ impl Context {
         for g in glyphs {
             let (adv, size) = (font.advance(g)?, font.bounds(g)?);
             let mut g0 = Partitioner::new();
-            let tf = self.current_transform.post_translate(Vector2D::new(left_offs, -font.ascent()))
-                .post_scale(font.scale_value(), font.scale_value());
+            let tf = self.current_transform
+                .pre_scale(font.scale_value(), font.scale_value())
+                .pre_translate(Vector2D::new(left_offs, -font.ascent()));
             font.outline(g, HintingOptions::None, g0.builder_mut())?;
             g0.partition(FillRule::Winding);
             g0.builder_mut().build_and_reset();
@@ -68,6 +69,32 @@ impl Context {
             self.meshes.push((g0.into_mesh(), st, ext));
             left_offs += adv.x(); max_height = max_height.max(size.size.height);
         }
+        return Ok(self);
+    }
+    pub fn text_hcenter(&mut self, font: &Font, text: &str) -> Result<&mut Self, GlyphLoadingError>
+    {
+        let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or(0)).collect::<Vec<_>>();
+        let mut left_offsets = Vec::with_capacity(glyphs.len());
+        let (mut width, mut max_height) = (0.0f32, 0.0f32);
+        for &g in &glyphs
+        {
+            let (adv, size) = (font.advance(g)?, font.bounds(g)?);
+            left_offsets.push(width);
+            width += adv.x(); max_height = max_height.max(size.size.height);
+        }
+        for (g, left) in glyphs.into_iter().zip(left_offsets)
+        {
+            let mut g0 = Partitioner::new();
+            let tf = self.current_transform
+                .pre_scale(font.scale_value(), font.scale_value())
+                .pre_translate(Vector2D::new(left - width * 0.5, -font.ascent()));
+            font.outline(g, HintingOptions::None, g0.builder_mut())?;
+            g0.partition(FillRule::Winding);
+            g0.builder_mut().build_and_reset();
+            let (st, ext) = tfconv_st_ext(tf);
+            self.meshes.push((g0.into_mesh(), st, ext));
+        }
+
         return Ok(self);
     }
 }

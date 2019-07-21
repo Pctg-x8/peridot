@@ -1,3 +1,5 @@
+#![allow(clippy::needless_return)]
+
 use super::*;
 use bedrock as br;
 
@@ -114,4 +116,9 @@ impl StateFence {
         match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }
     }
     fn take_object(self) -> br::Fence { match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f } }
+}
+impl Deref for StateFence
+{
+    type Target = br::Fence;
+    fn deref(&self) -> &br::Fence { self.object() }
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::needless_return)]
+
 use bedrock as br; use self::br::traits::*;
 use super::*;
 use std::ops::{Deref, Range};
@@ -16,7 +18,7 @@ fn common_alignment(flags: br::BufferUsage, mut align: u64, a: &br::PhysicalDevi
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferContent
 {
-    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64)
+    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64), Storage(u64, u64)
 }
 impl BufferContent
 {
@@ -30,7 +32,8 @@ impl BufferContent
             Index(_, _) => src.index_buffer(),
             Uniform(_, _) => src.uniform_buffer(),
             Raw(_, _) => src,
-            UniformTexel(_, _) => src.uniform_texel_buffer()
+            UniformTexel(_, _) => src.uniform_texel_buffer(),
+            Storage(_, _) => src.storage_buffer(),
         }
     }
     fn alignment(&self, pd: &br::PhysicalDevice) -> u64
@@ -42,6 +45,8 @@ impl BufferContent
             Vertex(_, a) | Index(_, a) | Raw(_, a) => a,
             Uniform(_, a) | UniformTexel(_, a) =>
                 u64::lcm(&pd.properties().limits.minUniformBufferOffsetAlignment as _, &a),
+            Storage(_, a) =>
+                u64::lcm(&pd.properties().limits.minStorageBufferOffsetAlignment as _, &a),
         }
     }
     fn size(&self) -> u64
@@ -50,7 +55,7 @@ impl BufferContent
 
         match *self
         {
-            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) => v
+            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) | Storage(v, _) => v
         }
     }
 
@@ -74,6 +79,10 @@ impl BufferContent
     pub fn uniform<T>() -> Self
     {
         BufferContent::Uniform(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn storage<T>() -> Self
+    {
+        BufferContent::Storage(size_of::<T>() as _, align_of::<T>() as _)
     }
     pub fn uniform_dynarray<T>(count: usize) -> Self
     {
@@ -315,6 +324,8 @@ impl PixelFormat {
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24
         }
     }
+
+    pub unsafe fn force_cast(v: br::vk::VkFormat) -> Self { std::mem::transmute(v) }
 }
 
 pub struct Texture2D(br::ImageView, Image);
@@ -448,8 +459,10 @@ impl Deref for TextureInstantiatedGroup
 /// Describing the type that can be used as initializer of `FixedBuffer`s
 pub trait FixedBufferInitializer
 {
+    type StagingResult;
+
     /// Setup memory data in staging buffer
-    fn stage_data(&mut self, m: &br::MappedMemoryRange);
+    fn stage_data(&mut self, m: &br::MappedMemoryRange) -> Self::StagingResult;
     fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buf: &Buffer, range: Range<u64>);
 }
 /// The Fix-sized buffers and textures manager
@@ -472,7 +485,7 @@ impl FixedMemory
         mut prealloc: BufferPrealloc<'g>,
         prealloc_mut: BufferPrealloc<'g>,
         textures: TextureInitializationGroup<'g>,
-        initializer: &mut I, tfb: &mut TransferBatch) -> br::Result<Self>
+        initializer: &mut I, tfb: &mut TransferBatch) -> br::Result<(Self, I::StagingResult)>
     {
         let mut_buffer = prealloc_mut.build_upload()?;
         let mut p_bufferdata_prealloc = prealloc.clone();
@@ -494,18 +507,19 @@ impl FixedMemory
         mb_stg.add(stg_buffer);
         let stg_buffer = mb_stg.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
 
-        stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
+        let stg_result =
+            stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m) })?;
 
         textures.copy_from_stage_batches(tfb, &stg_buffer);
         tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, imm_buffer_size);
         initializer.buffer_graphics_ready(tfb, &buffer, 0 .. imm_buffer_size);
 
-        Ok(FixedMemory
+        Ok((FixedMemory
         {
             buffer: (buffer, imm_buffer_size), mut_buffer: (mut_buffer, prealloc_mut.total_size()),
             mut_buffer_placement,
             textures: textures.into_textures()
-        })
+        }, stg_result))
     }
 
     pub fn range_in_mut_buffer<T>(&self, r: Range<T>) -> Range<T> where
