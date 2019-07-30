@@ -209,7 +209,7 @@ impl ArchiveRead {
         match comp {
             CompressionMethod::Lz4(ub) =>
             {
-                let mut compressed = Vec:::new();
+                let mut compressed = Vec::new();
                 EitherArchiveReader::new(body).read_to_end(&mut compressed).expect("reading error");
                 body = WhereArchive::OnMemory(
                     lz4_compression::prelude::decompress(&compressed).expect("decoding error"));
