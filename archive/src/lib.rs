@@ -7,7 +7,7 @@ use std::io::{SeekFrom, Seek, BufReader};
 use std::fs::File;
 use std::mem::{transmute, replace};
 use std::collections::HashMap;
-use libflate::deflate as zlib; use lz4; use zstd;
+use libflate::deflate as zlib; use lz4_compression; use zstd;
 use crc::crc32;
 use std::path::Path;
 
@@ -98,13 +98,14 @@ impl ArchiveWrite {
                 Self::write_common(writer, b"pard", Some(uncompressed_bytes),
                     &body.finish().into_result()?.into_inner()[..])
             }
-            CompressionMethod::Lz4(_) => {
-                let mut body = lz4::EncoderBuilder::new().build(Cursor::new(Vec::new()))?;
+            CompressionMethod::Lz4(_) =>
+            {
+                let mut body = Cursor::new(Vec::new());
                 let uncompressed_bytes = self.write_asset_entries(&mut body)
                     .and_then(|wa| body.write_all(&self.2[..]).map(move |_| wa + self.2.len()))? as u64;
-                let (body, r) = body.finish(); r?;
+                let body = lz4_compression::prelude::compress(&body.into_inner());
 
-                Self::write_common(writer, b"parz", Some(uncompressed_bytes), &body.into_inner()[..])
+                Self::write_common(writer, b"parz", Some(uncompressed_bytes), &body[..])
             },
             CompressionMethod::Zstd11(_) => {
                 let mut body = zstd::Encoder::new(Cursor::new(Vec::new()), 11)?;
@@ -206,11 +207,12 @@ impl ArchiveRead {
             // println!(" ok");
         }
         match comp {
-            CompressionMethod::Lz4(ub) => {
-                let mut sink = Vec::with_capacity(ub as _);
-                let mut decoder = lz4::Decoder::new(EitherArchiveReader::new(body)).expect("initializing lz4 decoder");
-                decoder.read_to_end(&mut sink).expect("decoding error");
-                body = WhereArchive::OnMemory(sink);
+            CompressionMethod::Lz4(ub) =>
+            {
+                let mut compressed = Vec:::new();
+                EitherArchiveReader::new(body).read_to_end(&mut compressed).expect("reading error");
+                body = WhereArchive::OnMemory(
+                    lz4_compression::prelude::decompress(&compressed).expect("decoding error"));
             },
             CompressionMethod::Zlib(ub) => {
                 let mut sink = Vec::with_capacity(ub as _);
