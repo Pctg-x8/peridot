@@ -6,10 +6,11 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 [dependencies]
 peridot-math = { path = "../math" }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
-# 0.3.1のコミットに合わせる
-font-kit = { git = "https://github.com/pcwalton/font-kit", rev = "e54e9d9546f59dab0ae7d91db052908773488edd" }
 lyon_path = "0.12"
 euclid = "0.19"
 
 [target.'cfg(target_os="macos")'.dependencies]
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
+
+[target.'cfg(target_os="android")'.dependencies]
+android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
