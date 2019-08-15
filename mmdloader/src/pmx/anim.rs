@@ -254,7 +254,7 @@ impl Morph {
                 0 => MorphOffset::read_as_group(reader, header)?,
                 1 => MorphOffset::read_as_vertex(reader, header)?,
                 2 => MorphOffset::read_as_bone(reader, header)?,
-                3 ... 7 => MorphOffset::read_as_uv(reader, header)?,
+                3 ..= 7 => MorphOffset::read_as_uv(reader, header)?,
                 8 => MorphOffset::read_as_material(reader, header)?,
                 9 => MorphOffset::read_as_flip(reader, header)?,
                 10 => MorphOffset::read_as_impulse(reader, header)?,
@@ -287,9 +287,9 @@ impl DisplayFrame
     pub fn read<R: Read>(reader: &mut R, header: &Header) -> Result<Self, LoadingError>
     {
         let name = header.string_reader.read_globalized(reader)?;
-        let mut bytes = [0u8; 1 + 4];
-        reader.read_exact(&mut bytes)?;
-        let frame_count = unsafe { *(bytes.as_ptr().offset(1) as *const i32) };
+        let mut bytes = [0u32; 2];
+        reader.read_exact(unsafe { &mut (*(&mut bytes as *mut _ as *mut [u8; 2 * 4]))[3..] })?;
+        let frame_count = bytes[1] as i32;
         let mut frames = Vec::with_capacity(frame_count as _);
         for _ in 0 .. frame_count
         {
@@ -302,7 +302,8 @@ impl DisplayFrame
                 v => return Err(LoadingError::InvalidFrameData(v))
             });
         }
+        let is_special = unsafe { *(bytes.as_ptr() as *const u8).offset(3) == 1 };
 
-        Ok(DisplayFrame { name, is_special: bytes[0] == 1, frames })
+        Ok(DisplayFrame { name, is_special, frames })
     }
 }

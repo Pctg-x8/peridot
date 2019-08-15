@@ -6,7 +6,7 @@ use encoding::codec::japanese::Windows31JEncoding;
 use encoding::{Encoding, DecoderTrap};
 use std::borrow::Cow;
 use std::mem::size_of;
-use super::pmx::{TypedReader, Vec3, Vec4};
+use super::pmx::TypedReader;
 use std::collections::{HashMap, BinaryHeap};
 use std::cmp::{PartialOrd, Ord, Ordering};
 use peridot_math::{Vector3, Quaternion};
@@ -106,7 +106,7 @@ impl BoneMotionController
             // Not Found but kfxplus points next element from current second
             Err(kfxplus) => if kfxplus >= keyframes.len() { None } else {
                 let begin_kf = &keyframes[kfxplus - 1];
-                let end_kf = &keyframes[kfxplus];
+                // let end_kf = &keyframes[kfxplus];
                 
                 // TODO: interpolate values here
                 Some(BonePosture { pos: begin_kf.position.clone(), qrot: begin_kf.rot_quaternion.clone() })
@@ -142,19 +142,7 @@ impl std::fmt::Debug for InterpolationData
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
     {
-        for (n, &e) in self.0.iter().enumerate()
-        {
-            if n == self.0.len() - 1
-            {
-                write!(fmt, "{}", f32::from(e) / 127.0)?;
-            }
-            else
-            {
-                write!(fmt, "{}, ", f32::from(e) / 127.0)?;
-            }
-        }
-
-        Ok(())
+        write!(fmt, "{:?}", self.0.iter().map(|&x| f32::from(x) / 127.0).collect::<Vec<_>>())
     }
 }
 #[repr(C)]
@@ -245,7 +233,8 @@ impl FaceMotionData
 }
 
 #[derive(Debug)]
-pub enum LoadingError {
+pub enum LoadingError
+{
     IO(IOError), SignatureMismatch
 }
 impl From<IOError> for LoadingError { fn from(v: IOError) -> Self { LoadingError::IO(v) } }

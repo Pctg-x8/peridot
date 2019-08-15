@@ -333,7 +333,7 @@ impl ModelData for super::GLTFBinary
     type PreallocOffsetType = (Vec<usize>, Option<usize>);
     type RendererParams = Vec<usize>;
 
-    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, _e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
         _: &mut TextureInitializationGroup) -> (Vec<usize>, Option<usize>)
     {
         let mut offsets = Vec::with_capacity(self.buffers().len());

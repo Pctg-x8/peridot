@@ -1,8 +1,7 @@
 
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
-use std::io::prelude::{Read, Seek, BufRead};
+use std::io::prelude::{Read, Seek};
 use std::ops::Deref;
-use std::borrow::Cow;
 use rayon::prelude::*;
 
 pub trait PlatformAssetLoader {
@@ -81,11 +80,13 @@ impl DecodedPixelData {
     }
 
     pub fn u8_pixels(&self) -> &[u8] { &self.pixels }
-    pub fn u8_pixels_alphaed<'d>(&'d self) -> PixelFormatAlphaed<'d, impl 'd + IndexedParallelIterator<Item = [u8; 4]>>
+    pub fn u8_pixels_alphaed<'d>(&'d self)
+        -> PixelFormatAlphaed<'d, rayon::iter::Map<rayon::slice::Chunks<'d, u8>, impl Fn(&'d [u8]) -> [u8; 4]>>
     {
         match self.color
         {
-            image::ColorType::RGBA(8) | image::ColorType::BGRA(8) => PixelFormatAlphaed::Raw(&self.pixels),
+            image::ColorType::RGBA(8) | image::ColorType::BGRA(8) =>
+                PixelFormatAlphaed::Raw(&self.pixels),
             image::ColorType::RGB(8) | image::ColorType::BGR(8) =>
                 PixelFormatAlphaed::Converted(self.pixels.par_chunks(3).map(|rgb| [rgb[0], rgb[1], rgb[2], 255])),
             c => panic!("conversion method not found for format {:?}", c)

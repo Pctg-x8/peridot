@@ -20,8 +20,8 @@ macro_rules! ReadExactBytes
 
 pub trait StringReader
 {
-    fn read_string(&self, reader: &mut Read) -> IOResult<String>;
-    fn read_globalized(&self, reader: &mut Read) -> IOResult<GlobalizedStrings>
+    fn read_string(&self, reader: &mut dyn Read) -> IOResult<String>;
+    fn read_globalized(&self, reader: &mut dyn Read) -> IOResult<GlobalizedStrings>
     {
         Ok(GlobalizedStrings { jp: self.read_string(reader)?, univ: self.read_string(reader)? })
     }
@@ -30,7 +30,7 @@ pub struct Utf8StringReader;
 pub struct Utf16LEStringReader;
 impl StringReader for Utf8StringReader
 {
-    fn read_string(&self, reader: &mut Read) -> IOResult<String>
+    fn read_string(&self, reader: &mut dyn Read) -> IOResult<String>
     {
         let byte_length = i32::read_value1(reader)?;
         let mut bytes = vec![0u8; byte_length as _];
@@ -40,7 +40,7 @@ impl StringReader for Utf8StringReader
 }
 impl StringReader for Utf16LEStringReader
 {
-    fn read_string(&self, reader: &mut Read) -> IOResult<String>
+    fn read_string(&self, reader: &mut dyn Read) -> IOResult<String>
     {
         let byte_length = i32::read_value1(reader)?;
         let mut bytes = vec![0u16; (byte_length >> 1) as _];

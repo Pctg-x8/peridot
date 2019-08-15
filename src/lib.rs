@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![feature(futures_api, async_await)]
+#![feature(async_await)]
 
 // extern crate font_kit;
 #[macro_use] extern crate log;

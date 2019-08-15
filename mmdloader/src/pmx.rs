@@ -11,7 +11,7 @@ use std::io::Read;
 
 pub struct Header
 {
-    pub version: f32, pub string_reader: Box<StringReader>, pub additional_vec4_count: u8,
+    pub version: f32, pub string_reader: Box<dyn StringReader>, pub additional_vec4_count: u8,
     pub index_sizes: IndexSizes, pub model_name: GlobalizedStrings, pub comment: GlobalizedStrings
 }
 #[repr(C)] struct Globals
@@ -39,9 +39,10 @@ impl Header
         let mut globals_b = vec![0u8; fixed_headers.globals_count as _];
         reader.read_exact(&mut globals_b)?;
         let globals = unsafe { &*(globals_b.as_ptr() as *const Globals) };
-        let string_reader: Box<StringReader> = match globals.string_encoding_type
+        let string_reader: Box<dyn StringReader> = match globals.string_encoding_type
         {
-            0 => Box::new(Utf16LEStringReader) as _, 1 => Box::new(Utf8StringReader) as _,
+            0 => Box::new(Utf16LEStringReader) as _,
+            1 => Box::new(Utf8StringReader) as _,
             v => return Err(LoadingError::UnknownStringEncoding(v))
         };
         let index_sizes = IndexSizes
