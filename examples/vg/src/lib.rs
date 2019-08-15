@@ -31,7 +31,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
-        let font = vg::Font::best_match(&[vg::FamilyName::SansSerif], &vg::FontProperties::new(), 12.0)
+        let font = vg::Font::best_match("sans-serif", &vg::FontProperties::default(), 12.0)
             .expect("No Fonts");
         let mut ctx = vg::Context::new();
         ctx.text(&font, "Hello, World!|Opaque");
@@ -103,9 +103,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
         
-        let buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer(buffer).expect("Mem Allocation");
-        let stg_buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer_host_visible(stg_buffer)
-            .expect("StgMem Allocation");
+        let mut mb = MemoryBadget::new(e.graphics());
+        mb.add(buffer);
+        let buffer = mb.alloc().expect("Mem allocation").pop().expect("no object?").unwrap_buffer();
+        let mut mb_stg = MemoryBadget::new(e.graphics());
+        mb_stg.add(stg_buffer);
+        let stg_buffer = mb_stg.alloc_upload().expect("StgMem allocation").pop().expect("no object")
+            .unwrap_buffer();
         
         let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(bp.total_size(), |m| {
             let p0 = ctx.stage_data_into(m, vg_offs);
@@ -220,19 +224,22 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
-            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
+        -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
+    {
         (None, br::SubmissionBatch {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_backbuffer_resources(&mut self)
+    {
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>) {
+    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>)
+    {
         self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         for (r, f) in self.render_cb.iter().zip(&self.framebuffers) {
