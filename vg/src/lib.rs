@@ -6,6 +6,13 @@ extern crate lyon_path; extern crate euclid;
 
 #[cfg(target_os="macos")]
 extern crate appkit;
+#[cfg(target_os = "windows")]
+extern crate comdrive;
+#[cfg(target_os = "windows")]
+extern crate winapi;
+#[cfg(target_os = "windows")]
+extern crate libc;
+#[macro_use] extern crate log;
 
 mod font; pub use font::*;
 
@@ -73,6 +80,7 @@ impl Context {
                 self.meshes.push((g0.into_mesh(), st, ext));
             }
             left_offs += adv; max_height = max_height.max(size.size.height);
+            info!("Advance: {}", adv);
         }
         return Ok(self);
     }

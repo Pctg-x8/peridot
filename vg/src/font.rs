@@ -4,6 +4,8 @@ use peridot_math::Vector2;
 use lyon_path::builder::PathBuilder;
 
 #[cfg(target_os = "macos")] use appkit::ObjcObjectBase;
+#[cfg(target_os = "windows")] mod dwrite_driver;
+#[cfg(target_os = "windows")] use self::dwrite_driver::*;
 
 pub struct GlyphBound<T> { left: T, top: T, right: T, bottom: T }
 impl<T: Copy> GlyphBound<T>
@@ -35,10 +37,19 @@ impl FontProperties
 }
 
 #[derive(Debug)]
-pub enum FontConstructionError { SysAPICallError(&'static str) }
+pub enum FontConstructionError { SysAPICallError(&'static str), IO(std::io::Error) }
+impl From<std::io::Error> for FontConstructionError
+{
+    fn from(v: std::io::Error) -> Self { FontConstructionError::IO(v) }
+}
 #[derive(Debug)]
-pub enum GlyphLoadingError { SysAPICallError(&'static str) }
+pub enum GlyphLoadingError { SysAPICallError(&'static str), IO(std::io::Error) }
+impl From<std::io::Error> for GlyphLoadingError
+{
+    fn from(v: std::io::Error) -> Self { GlyphLoadingError::IO(v) }
+}
 #[cfg(target_os = "macos")] type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
+#[cfg(target_os = "windows")] type UnderlyingHandle = comdrive::dwrite::FontFace;
 pub struct Font(UnderlyingHandle, f32);
 #[cfg(target_os = "macos")]
 impl Font
@@ -126,4 +137,65 @@ impl Font
     }
 
     pub fn units_per_em(&self) -> u32 { self.0.units_per_em() }
+}
+
+#[cfg(target_os = "windows")]
+impl Font
+{
+    pub fn best_match(family_name: &str, properties: &FontProperties, size: f32)
+        -> Result<Self, FontConstructionError>
+    {
+        let factory = comdrive::dwrite::Factory::new()?;
+        let collection = factory.system_font_collection(false)?;
+        let family_index = collection.find_family_name(family_name)?.unwrap_or(0);
+        let family = collection.font_family(family_index)?;
+        let font_style = if properties.italic
+        {
+            comdrive::dwrite::FontStyle::Italic
+        }
+        else
+        {
+            comdrive::dwrite::FontStyle::None
+        };
+        let font = family.first_matching_font(properties.weight as _, comdrive::dwrite::FONT_STRETCH_NORMAL,
+            font_style)?;
+        
+        font.new_font_face().map(|x| Font(x, size)).map_err(From::from)
+    }
+    pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    /// Returns a scaled ascent metric value
+    pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 * self.scale_value() }
+
+    pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
+    {
+        self.0.glyph_indices(&[c]).ok().map(|x| x[0] as _)
+    }
+    pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
+    {
+        self.0.design_glyph_metrics(&[glyph as _], false)
+            .map(|m| self.scale_value() * m[0].advanceWidth as f32).map_err(From::from)
+    }
+    pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
+    {
+        let m = self.0.design_glyph_metrics(&[glyph as _], false)?[0];
+        
+        Ok(Rect::new(euclid::point2(m.leftSideBearing as _, m.topSideBearing as _), euclid::size2(
+            (m.leftSideBearing + m.rightSideBearing + m.advanceWidth as i32) as f32,
+            (m.topSideBearing + m.bottomSideBearing + m.advanceHeight as i32) as f32,
+        )))
+    }
+    pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
+    {
+        let sink = comdrive::ComPtr(PathEventReceiver::new());
+        self.0.sink_glyph_run_outline(self.1 as _, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 })?;
+        for pe in unsafe { sink.0.as_mut().expect("null sink").drain_all_paths() }
+        {
+            builder.path_event(pe);
+        }
+
+        Ok(())
+    }
+
+    pub fn units_per_em(&self) -> u32 { self.0.metrics().designUnitsPerEm as _ }
 }
