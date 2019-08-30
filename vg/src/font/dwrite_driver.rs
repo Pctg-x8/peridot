@@ -76,7 +76,8 @@ impl PathEventReceiver
             (*(this as *mut Self)).paths.push(PathEvent::LineTo(point2(p.x, -p.y)));
         }
     }
-    unsafe extern "system" fn add_beziers(this: *mut ID2D1SimplifiedGeometrySink, p: *const d2::BezierSegment, count: u32)
+    unsafe extern "system"
+    fn add_beziers(this: *mut ID2D1SimplifiedGeometrySink, p: *const d2::BezierSegment, count: u32)
     {
         for p in from_raw_parts(p, count as _)
         {
@@ -85,7 +86,8 @@ impl PathEventReceiver
             (*(this as *mut Self)).paths.push(PathEvent::CubicTo(p1, p2, p3));
         }
     }
-    unsafe extern "system" fn begin_figure(this: *mut ID2D1SimplifiedGeometrySink, p: d2::Point2F, _begin: D2D1_FIGURE_BEGIN)
+    unsafe extern "system"
+    fn begin_figure(this: *mut ID2D1SimplifiedGeometrySink, p: d2::Point2F, _begin: D2D1_FIGURE_BEGIN)
     {
         let p = point2(p.x, -p.y);
         (*(this as *mut Self)).paths.push(PathEvent::MoveTo(p));
