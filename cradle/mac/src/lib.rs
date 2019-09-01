@@ -72,8 +72,8 @@ impl PlatformAssetLoader {
         PlatformAssetLoader { par_path }
     }
 }
-use peridot::archive as par;
-impl peridot::PlatformAssetLoader for PlatformAssetLoader {
+impl peridot::PlatformAssetLoader for PlatformAssetLoader
+{
     type Asset = Cursor<Vec<u8>>;
     type StreamingAsset = ReaderView<par::EitherArchiveReader>;
 
@@ -85,7 +85,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             Some(b) => Ok(Cursor::new(b))
         }
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>> {
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>>
+    {
         let arc = par::ArchiveRead::from_file(self.par_path.to_str(), false)?;
         let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
         match e {
