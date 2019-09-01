@@ -10,6 +10,7 @@ extern crate bedrock as br;
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::Cursor;
 use std::rc::Rc;
+use peridot_archive as par;
 
 struct NSLogger;
 impl log::Log for NSLogger {
@@ -77,7 +78,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type StreamingAsset = ReaderView<par::EitherArchiveReader>;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>> {
-        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
+        let mut arc = par::ArchiveRead::from_file(self.par_path.to_str(), false)?;
         let b = arc.read_bin(&format!("{}.{}", path.replace(".", "/"), ext))?;
         match b {
             None => Err(IOError::new(ErrorKind::NotFound, "not in primary asset package")),
@@ -85,7 +86,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         }
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>> {
-        let arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
+        let arc = par::ArchiveRead::from_file(self.par_path.to_str(), false)?;
         let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
         match e {
             None => Err(IOError::new(ErrorKind::NotFound, "not in primary asset package")),

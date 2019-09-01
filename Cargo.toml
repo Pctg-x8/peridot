@@ -14,7 +14,6 @@ num = "*"
 
 peridot-module-interface = { path = "mif" }
 
-peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
 peridot-vg = { path = "vg" }
 

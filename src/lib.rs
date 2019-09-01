@@ -7,7 +7,6 @@ extern crate libc;
 extern crate pathfinder_partitioner;
 extern crate bedrock;
 pub extern crate peridot_math as math;
-pub extern crate peridot_archive as archive;
 pub extern crate peridot_vg as vg;
 
 use bedrock as br; use bedrock::traits::*;
