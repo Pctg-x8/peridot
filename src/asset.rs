@@ -11,7 +11,7 @@ impl<T> InputStream for T where T: Seek + Read {
 }
 
 pub trait PlatformAssetLoader {
-    type Asset: Read + Seek;
+    type Asset: Read + Seek + 'static;
     type StreamingAsset: InputStream + 'static;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
@@ -22,7 +22,7 @@ pub trait LogicalAssetData: Sized {
 }
 pub trait FromAsset: LogicalAssetData {
     type Error: From<IOError>;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>;
     
     fn from_archive(reader: &mut archive::ArchiveRead, path: &str) -> Result<Self, Self::Error> {
         let bin = reader.read_bin(path)?;
@@ -41,7 +41,7 @@ impl LogicalAssetData for PvpContainer { const EXT: &'static str = "pvp"; }
 impl FromAsset for PvpContainer {
     type Error = IOError;
 
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> IOResult<Self> {
         PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
     }
 }
@@ -53,7 +53,8 @@ pub struct DecodedPixelData {
     pub color: image::ColorType, pub stride: usize
 }
 impl DecodedPixelData {
-    pub fn new<D: ImageDecoder>(decoder: D) -> ImageResult<Self> {
+    pub fn new<'d, D>(decoder: D) -> ImageResult<Self> where D: ImageDecoder<'d>
+    {
         let color = decoder.colortype();
         let (w, h) = decoder.dimensions();
         let stride = decoder.row_bytes();
@@ -89,37 +90,37 @@ impl LogicalAssetData for BMP { const EXT: &'static str = "bmp"; }
 impl LogicalAssetData for HDR { const EXT: &'static str = "hdr"; }
 impl FromAsset for PNG {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
         image::png::PNGDecoder::new(asset).and_then(DecodedPixelData::new).map(PNG)
     }
 }
 impl FromAsset for TGA {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
         image::tga::TGADecoder::new(asset).and_then(DecodedPixelData::new).map(TGA)
     }
 }
 impl FromAsset for TIFF {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
         image::tiff::TIFFDecoder::new(asset).and_then(DecodedPixelData::new).map(TIFF)
     }
 }
 impl FromAsset for WebP {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
         image::webp::WebpDecoder::new(asset).and_then(DecodedPixelData::new).map(WebP)
     }
 }
 impl FromAsset for BMP {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
         image::bmp::BMPDecoder::new(asset).and_then(DecodedPixelData::new).map(BMP)
     }
 }
 impl FromAsset for HDR {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
         let ireader = HDRDecoder::new(BufReader::new(asset))?;
         let meta = ireader.metadata();
         let pixels = ireader.read_image_native()?;

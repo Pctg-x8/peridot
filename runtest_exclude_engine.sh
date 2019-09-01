@@ -10,3 +10,6 @@ do (cd $(dirname $c) && cargo test --verbose) || exit 1; done
 for c in !(extras|cradle|examples)/*/Cargo.toml
 do (cd $(dirname $c) && cargo test --verbose) || exit 2; done
 
+# check engine
+cargo check --verbose --features=bedrock/VK_EXT_debug_report
+

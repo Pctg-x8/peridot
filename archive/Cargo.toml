@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 crc = "1.8"
-lz4 = "1.23"
+lz4-compression = "0.6"
 libflate = "0.1"
 zstd = "0.4"
 peridot-serialization-utils = { path = "../serialization-utils" }

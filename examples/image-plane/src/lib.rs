@@ -60,6 +60,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
     pub const NAME: &'static str = "Peridot Examples - ImagePlane";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
+impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
     fn init(e: &peridot::Engine<Self, PL>) -> Self
@@ -252,7 +253,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
     }
 }
 
-#[derive(Clone)] #[repr(C)]
+#[derive(Clone)] #[repr(C, align(4))]
 struct UVVert { pos: Vector3F32, uv: Vector2F32 }
 
 #[repr(C)] struct Uniform { camera: Matrix4F32, object: Matrix4F32 }
