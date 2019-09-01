@@ -3,6 +3,7 @@ use super::*;
 use std::ops::{Deref, Range};
 use std::mem::{size_of, transmute, align_of};
 use num::Integer;
+use peridot_module_interface::{PixelData, LDRImageAsset, PixelFormat};
 
 fn common_alignment(flags: br::BufferUsage, mut align: u64, a: &br::PhysicalDevice) -> u64
 {
@@ -298,25 +299,6 @@ impl br::VkHandle for Image {
     type Handle = <br::Image as br::VkHandle>::Handle; fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }
 
-#[derive(Clone, Copy)] #[repr(i32)]
-pub enum PixelFormat {
-    RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-    BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM,
-    RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
-    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM
-}
-impl PixelFormat {
-    /// Bits per pixel for each format enums
-    pub fn bpp(self) -> usize
-    {
-        match self
-        {
-            PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
-            PixelFormat::RGB24 | PixelFormat::BGR24 => 24
-        }
-    }
-}
-
 pub struct Texture2D(br::ImageView, Image);
 impl Texture2D
 {
@@ -359,23 +341,12 @@ impl Deref for Texture2D {
     fn deref(&self) -> &br::ImageView { &self.0 }
 }
 
-/// Low Dynamic Range(8bit colors) image asset
-pub trait LDRImageAsset
-{
-    fn into_pixel_data_info(self) -> DecodedPixelData;
-}
-impl LDRImageAsset for BMP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for PNG { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for TGA { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for TIFF { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for WebP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-
 /// Stg1. Group what textures are being initialized
-pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<DecodedPixelData>);
+pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<PixelData>);
 /// Stg2. Describes where textures are being staged
-pub struct TexturePreallocatedGroup(Vec<(DecodedPixelData, u64)>, Vec<br::Image>);
+pub struct TexturePreallocatedGroup(Vec<(PixelData, u64)>, Vec<br::Image>);
 /// Stg3. Describes where textures are being staged, allocated and bound their memory
-pub struct TextureInstantiatedGroup(Vec<(DecodedPixelData, u64)>, Vec<Texture2D>);
+pub struct TextureInstantiatedGroup(Vec<(PixelData, u64)>, Vec<Texture2D>);
 
 impl<'g> TextureInitializationGroup<'g>
 {
@@ -390,7 +361,7 @@ impl<'g> TextureInitializationGroup<'g>
     {
         let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
         for pd in self.1 {
-            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
+            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format, prealloc)?;
             images.push(o); stage_info.push((pd, offs));
         }
         return Ok(TexturePreallocatedGroup(stage_info, images));
@@ -420,7 +391,7 @@ impl TextureInstantiatedGroup
         {
             let s = unsafe
             {
-                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
+                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format.bpp() >> 3) as usize)
             };
             s.copy_from_slice(pd.u8_pixels());
         }
