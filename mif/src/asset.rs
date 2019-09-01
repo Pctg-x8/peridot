@@ -1,6 +1,7 @@
 //! Asset Interface
 
 use std::io::Error as IOError;
+use std::io::prelude::{Read, Seek};
 
 /// Asset Data Description in Filesystem.
 pub trait LogicalAssetData: Sized
