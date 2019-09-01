@@ -18,6 +18,9 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::cell::{Ref, RefMut, RefCell};
 use std::time::{Instant as InstantTimer, Duration};
+use peridot_module_interface::{FromAsset, FromStreamingAsset};
+use std::io::prelude::{Read, Seek};
+use std::io::Result as IOResult;
 
 mod window; use self::window::{WindowRenderTargets, StateFence};
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
@@ -25,10 +28,17 @@ mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
 pub mod utils; pub use self::utils::*;
 
-mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 mod model; pub use self::model::*;
 
+pub trait PlatformAssetLoader
+{
+    type Asset: Read + Seek + 'static;
+    type StreamingAsset: Read + 'static;
+
+    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
+}
 pub trait NativeLinker
 {
     type AssetLoader: PlatformAssetLoader;
