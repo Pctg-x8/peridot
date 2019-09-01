@@ -1,16 +1,18 @@
 use super::*;
 use bedrock as br;
 
-use std::mem::{uninitialized, replace, forget};
+use std::mem::{replace, forget};
 
-pub trait PlatformRenderTarget {
+pub trait PlatformRenderTarget
+{
     fn surface_extension_name(&self) -> &'static str;
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<SurfaceInfo>;
     fn current_geometry_extent(&self) -> (usize, usize);
 }
 
-pub struct SurfaceInfo {
+pub struct SurfaceInfo
+{
     obj: br::Surface, fmt: br::vk::VkSurfaceFormatKHR, pres_mode: br::PresentMode,
     available_composite_alpha: br::CompositeAlpha
 }
@@ -91,26 +93,31 @@ impl WindowRenderTargets
 }
 
 pub enum StateFence { Signaled(br::Fence), Unsignaled(br::Fence) }
-impl StateFence {
+impl StateFence
+{
     pub fn new(d: &br::Device) -> br::Result<Self> { br::Fence::new(d, false).map(StateFence::Unsignaled) }
     /// must be coherent with background API
-    pub unsafe fn signal(&mut self) {
-        let unsafe_ = replace(self, uninitialized());
-        forget(replace(self, StateFence::Signaled(unsafe_.take_object())));
+    pub unsafe fn signal(&mut self)
+    {
+        let obj = std::ptr::read(match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _ });
+        forget(replace(self, StateFence::Signaled(obj)));
     }
     /// must be coherent with background API
-    unsafe fn unsignal(&mut self) {
-        let unsafe_ = replace(self, uninitialized());
-        forget(replace(self, StateFence::Unsignaled(unsafe_.take_object())));
+    unsafe fn unsignal(&mut self)
+    {
+        let obj = std::ptr::read(match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _ });
+        forget(replace(self, StateFence::Unsignaled(obj)));
     }
 
-    pub fn wait(&mut self) -> br::Result<()> {
+    pub fn wait(&mut self) -> br::Result<()>
+    {
         if let StateFence::Signaled(ref f) = *self { f.wait()?; f.reset()?; }
         unsafe { self.unsignal(); } return Ok(());
     }
     pub fn is_signaled(&self) -> bool { match *self { StateFence::Signaled(_) => true, _ => false } }
 
-    pub fn object(&self) -> &br::Fence {
+    pub fn object(&self) -> &br::Fence
+    {
         match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }
     }
     fn take_object(self) -> br::Fence { match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f } }
