@@ -15,6 +15,7 @@
 		4B40D4AE21DB5C0200C1B31F /* VkLayer_parameter_validation.json in Copy Vulkan Layer Definition Files */ = {isa = PBXBuildFile; fileRef = 4B40D4A421DB5B9E00C1B31F /* VkLayer_parameter_validation.json */; };
 		4B40D4AF21DB5C0600C1B31F /* VkLayer_object_tracker.json in Copy Vulkan Layer Definition Files */ = {isa = PBXBuildFile; fileRef = 4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */; };
 		4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */ = {isa = PBXBuildFile; fileRef = 4B40D4B621DCFB5B00C1B31F /* assets.par */; };
+		4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B696EED231BD4E000C2417C /* AudioUnit.framework */; };
 		4B699CCB21DA435F0048FA7F /* vulkan.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		4B699CCE21DA43D20048FA7F /* libvulkan.1.1.92.dylib in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4B699CCD21DA43D20048FA7F /* libvulkan.1.1.92.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4BA45A0621DB564500915AC9 /* libVkLayer_threading.dylib in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4BA45A0021DB564400915AC9 /* libVkLayer_threading.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -104,6 +105,9 @@
 		4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_object_tracker.json; sourceTree = "<group>"; };
 		4B40D4A721DB5B9E00C1B31F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = MoltenVK_icd.json; sourceTree = "<group>"; };
 		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
+		4B696EED231BD4E000C2417C /* AudioUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioUnit.framework; path = System/Library/Frameworks/AudioUnit.framework; sourceTree = SDKROOT; };
+		4B696EEF231BDB3200C2417C /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		4B696EF1231BDB4900C2417C /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
 		4B699C8921DA30910048FA7F /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
 		4B699C8C21DA30B50048FA7F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = MoltenVK_icd.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"; sourceTree = "<group>"; };
 		4B699C8F21DA318C0048FA7F /* VkLayer_core_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_core_validation.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_core_validation.json"; sourceTree = "<group>"; };
@@ -171,6 +175,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */,
 				4BC8ED2921B3F5FA00FB4AF9 /* vulkan.framework in Frameworks */,
 				4BC8ED2721B3F54900FB4AF9 /* QuartzCore.framework in Frameworks */,
 				4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */,
@@ -293,6 +298,9 @@
 		4BAF7A3321B3C7380006BE24 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				4B696EF1231BDB4900C2417C /* CoreAudio.framework */,
+				4B696EEF231BDB3200C2417C /* AudioToolbox.framework */,
+				4B696EED231BD4E000C2417C /* AudioUnit.framework */,
 				4BF8B2E021D1C0C8007F80AB /* MoltenVK.framework */,
 				4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */,
 				4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */,
