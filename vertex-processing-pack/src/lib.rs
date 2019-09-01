@@ -2,10 +2,13 @@
 
 extern crate bedrock;
 extern crate peridot_serialization_utils; use peridot_serialization_utils::*;
+extern crate peridot_module_interface as mif;
 
 use bedrock as br;
-use std::io::{Write, BufRead, Seek, SeekFrom, Result as IOResult, Error as IOError, ErrorKind, Cursor};
-use std::io::BufReader;
+use std::io::{
+    Write, BufRead, BufReader, Read, Seek, SeekFrom,
+    Result as IOResult, Error as IOError, ErrorKind, Cursor
+};
 use std::fs::File;
 use std::path::Path;
 
@@ -43,8 +46,19 @@ impl PvpContainer {
         writer.write(&blob.into_inner()).map(drop)
     }
 }
+impl mif::LogicalAssetData for PvpContainer { const EXT: &'static str = "pvp"; }
+impl mif::FromAsset for PvpContainer
+{
+    type Error = IOError;
 
-pub struct PvpContainerReader<R: BufRead + Seek> {
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> IOResult<Self>
+    {
+        PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
+    }
+}
+
+pub struct PvpContainerReader<R: BufRead + Seek>
+{
     vb_offset: usize, va_offset: usize, vsh_offset: usize, fsh_offset: Option<usize>,
     reader: R
 }
