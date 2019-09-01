@@ -12,6 +12,8 @@ libc = "*"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 num = "*"
 
+peridot-module-interface = { path = "mif" }
+
 peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
@@ -22,7 +24,7 @@ image = "*"
 [workspace]
 exclude = ["extras/"]
 members = [
-    "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
+    "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive", "mif",
     "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
     "tools/archiver"
 ]
