@@ -15,3 +15,4 @@ env_logger = "0.5"
 xcb = "0.8"
 
 peridot-image-loader = { path = "../../image-loader" }
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }

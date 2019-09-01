@@ -6,11 +6,12 @@ use peridot::math::{
 };
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
-    SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
+    SubpassDependencyTemplates, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
     FixedMemory, FixedBufferInitializer
 };
 use peridot_image_loader::PNG;
+use peridot_vertex_processing_pack::PvpShaderModules;
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
@@ -143,7 +144,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         
         let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
-        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
+        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings
+        {
             uniform_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
             combined_image_sampler: Some((1, 1, br::ShaderStage::FRAGMENT, vec![smp.native_ptr()])),
             .. br::DSLBindings::empty()
@@ -164,7 +166,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
         let shaderfile = e.load("shaders.prim").expect("Loading prim");
         let shader = PvpShaderModules::new(&e.graphics(), shaderfile).expect("Create ShaderModules");
-        let vp = [br::vk::VkViewport {
+        let vp = [br::vk::VkViewport
+        {
             width: screen_size.0 as _, height: screen_size.1 as _, x: 0.0, y: 0.0,
             minDepth: 0.0, maxDepth: 1.0
         }];

@@ -15,6 +15,7 @@ log = "0.4"
 env_logger = "0.5"
 
 peridot-image-loader = { path = "../../image-loader" }
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
 
 [dependencies.winapi]
 version = "0.3"
