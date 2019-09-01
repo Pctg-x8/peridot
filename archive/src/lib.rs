@@ -190,38 +190,45 @@ pub struct ArchiveRead {
     entries: HashMap<String, AssetEntryHeadingPair>, content: EitherArchiveReader,
     content_baseptr: u64
 }
-impl ArchiveRead {
-    pub fn from_file<P: AsRef<Path>>(path: P, check_integrity: bool) -> IOResult<Self> {
+impl ArchiveRead
+{
+    pub fn from_file<P: AsRef<Path>>(path: P, check_integrity: bool) -> IOResult<Self>
+    {
         let mut fi = File::open(path).map(BufReader::new).expect("file opening error");
         let (comp, crc) = read_file_header(&mut fi).expect("header reading error");
         // println!("Compression Method: {:?}", comp);
         // println!("Checksum: 0x{:08x}", crc);
         let mut body = WhereArchive::FromIO(fi);
-        if check_integrity {
+        if check_integrity
+        {
             // std::io::stdout().write_all(b"Checking archive integrity...").unwrap();
             // std::io::stdout().flush().unwrap();
             let input_crc = crc32::checksum_ieee(&body.on_memory().expect("reading error")[..]);
-            if input_crc != crc {
+            if input_crc != crc
+            {
                 panic!("Checking Integrity Failed: Mismatching CRC-32: input=0x{:08x}", input_crc);
             }
             // println!(" ok");
         }
-        match comp {
-            CompressionMethod::Lz4(ub) =>
+        match comp
+        {
+            CompressionMethod::Lz4(_) =>
             {
                 let mut compressed = Vec::new();
                 EitherArchiveReader::new(body).read_to_end(&mut compressed).expect("reading error");
                 body = WhereArchive::OnMemory(
                     lz4_compression::prelude::decompress(&compressed).expect("decoding error"));
             },
-            CompressionMethod::Zlib(ub) => {
+            CompressionMethod::Zlib(ub) =>
+            {
                 let mut sink = Vec::with_capacity(ub as _);
                 let reader = EitherArchiveReader::new(body);
                 let mut decoder = zlib::Decoder::new(reader);
                 decoder.read_to_end(&mut sink).expect("decoding error");
                 body = WhereArchive::OnMemory(sink);
             },
-            CompressionMethod::Zstd11(ub) => {
+            CompressionMethod::Zstd11(ub) =>
+            {
                 let mut sink = Vec::with_capacity(ub as _);
                 let mut decoder = zstd::Decoder::new(EitherArchiveReader::new(body))
                     .expect("initializing zstd decoder");
@@ -237,9 +244,7 @@ impl ArchiveRead {
         }*/
         let content_baseptr = areader.seek(SeekFrom::Current(0)).expect("telling ptr");
 
-        return Ok(ArchiveRead {
-            entries, content: areader, content_baseptr
-        });
+        return Ok(ArchiveRead { entries, content: areader, content_baseptr });
     }
 
     pub fn read_bin(&mut self, path: &str) -> IOResult<Option<Vec<u8>>> {
