@@ -11,6 +11,7 @@ use std::io::{
 };
 use std::fs::File;
 use std::path::Path;
+use std::ffi::CString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PvpContainer {
@@ -54,6 +55,45 @@ impl mif::FromAsset for PvpContainer
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> IOResult<Self>
     {
         PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
+    }
+}
+pub struct PvpShaderModules<'d>
+{
+    bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
+    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>,
+    vertex_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
+    fragment_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
+}
+impl<'d> PvpShaderModules<'d>
+{
+    pub fn new(device: &br::Device, container: PvpContainer) -> br::Result<Self>
+    {
+        let vertex = br::ShaderModule::from_memory(device, &container.vertex_shader)?;
+        let fragment = container.fragment_shader.map(|b| br::ShaderModule::from_memory(device, &b)).transpose()?;
+
+        Ok(PvpShaderModules
+        {
+            vertex, fragment,
+            bindings: container.vertex_bindings, attributes: container.vertex_attributes,
+            vertex_spec_constants: None, fragment_spec_constants: None
+        })
+    }
+    pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d>
+    {
+        let mut r = br::VertexProcessingStages::new(br::PipelineShader
+        {
+            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"),
+            specinfo: self.vertex_spec_constants.clone()
+        }, &self.bindings, &self.attributes, primitive_topo);
+        if let Some(ref f) = self.fragment
+        {
+            r.fragment_shader(br::PipelineShader
+            {
+                module: f, entry_name: CString::new("main").expect("unreachable"),
+                specinfo: self.fragment_spec_constants.clone()
+            });
+        }
+        return r;
     }
 }
 
