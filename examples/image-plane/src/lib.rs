@@ -10,6 +10,7 @@ use peridot::{
     TextureInitializationGroup, Buffer,
     FixedMemory, FixedBufferInitializer
 };
+use peridot_image_loader::PNG;
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
@@ -66,9 +67,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
         let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;
 
-        let image_data: peridot::PNG = e.load("images.example").expect("No image found");
+        let image_data: PNG = e.load("images.example").expect("No image found");
         println!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
-        println!("ImageColor: {:?}", image_data.0.color);
+        println!("ImageFormat: {:?}", image_data.0.format);
         println!("ImageStride: {} bytes", image_data.0.stride);
 
         let mut bp = BufferPrealloc::new(e.graphics());

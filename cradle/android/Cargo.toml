@@ -16,3 +16,5 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Implements"
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
 android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
 peridot = { path = "../.." }
+
+peridot-image-loader = { path = "../../image-loader" }
