@@ -20,6 +20,7 @@ peridot-vg = { path = "vg" }
 [workspace]
 exclude = ["extras/"]
 members = [
+    "coreutils",
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive", "mif", "image-loader",
     "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
     "tools/archiver"
