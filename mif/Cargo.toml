@@ -8,4 +8,5 @@ edition = "2018"
 
 [dependencies]
 peridot-math = { path = "../math" }
+peridot-coreutils = { path = "../coreutils" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
