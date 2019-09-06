@@ -23,6 +23,6 @@ image = "*"
 exclude = ["extras/"]
 members = [
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
-    "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
+    "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac", "cradle/crt",
     "tools/archiver"
 ]
