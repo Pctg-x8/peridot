@@ -3,7 +3,8 @@ param(
     [parameter(HelpMessage="An structure name of entry point of the game")][String]$EntryTyName = "Game",
     [switch]$Run = $false,
     [parameter(HelpMessage="Asset Directory")][String]$AssetDirectory,
-    [parameter(HelpMessage="Package Bundle ID")][String]$AppPackageID = "com.cterm2.peridot"
+    [parameter(HelpMessage="Package Bundle ID")][String]$AppPackageID = "com.cterm2.peridot",
+    [switch]$Release = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,6 +76,7 @@ pub use $ExternCrateName::$EntryTyName as Game;" | Out-File $ScriptPath\src\user
 
 $CargoSubcommand = if ($Run) { "run" } else { "build" }
 $Features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_win32_surface"
+$OptFlags = if ($Release) { "--release" } else { "" }
 if ($AssetDirectory) {
     $Env:PERIDOT_EXTERNAL_ASSET_PATH = $(Resolve-Path $AssetDirectory).Path
     $Features += "UseExternalAssetPath"
@@ -83,6 +85,6 @@ $Env:PERIDOT_WINDOWS_APPID = $AppPackageID
 try {
     Push-Location
     Set-Location $ScriptPath
-    cargo $CargoSubcommand --features $($Features -join ",")
+    cargo $CargoSubcommand --features $($Features -join ",") $OptFlags
 }
 finally { Pop-Location }
