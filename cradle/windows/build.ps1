@@ -52,7 +52,7 @@ function ParseProjectCrateName([String]$ProjectRoot) {
 }
 function BuildCargoManifestFromTemplate([String]$PackageName) {
     $template = Get-Content $ScriptPath\Cargo.template.toml
-    $template = $template.Replace("%KERNEL_CRATE_NAME%", $PackageName)
+    $template = $template.Replace("#%KERNEL_CRATE_NAME%", $PackageName)
     $template = $template.Replace("%KERNEL_CRATE_PATH%", (Resolve-Path $UserlibDirectory).Path.Replace("\", "/"))
     $template | Out-File $ScriptPath\Cargo.toml -Encoding UTF8
 }
