@@ -58,7 +58,10 @@ function BuildCargoManifestFromTemplate([String]$PackageName) {
 }
 
 $PackageName = ParseProjectCrateName($UserlibDirectory)
-Write-Host -NoNewLine "Building Project "
+Write-Host -ForegroundColor White -NoNewLine ">"
+Write-Host -ForegroundColor Gray -NoNewLine ">"
+Write-Host -ForegroundColor DarkGray -NoNewLine ">"
+Write-Host -NoNewLine " Building Project "
 Write-Host -ForegroundColor Cyan -NoNewLine $PackageName
 Write-Host -NoNewLine " for "
 Write-Host -ForegroundColor Yellow -NoNewLine "Win32"
