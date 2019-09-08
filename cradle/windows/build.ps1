@@ -58,7 +58,11 @@ function BuildCargoManifestFromTemplate([String]$PackageName) {
 }
 
 $PackageName = ParseProjectCrateName($UserlibDirectory)
-Write-Host "Building Project $PackageName..."
+Write-Host -NoNewLine "Building Project "
+Write-Host -ForegroundColor Cyan -NoNewLine $PackageName
+Write-Host -NoNewLine " for "
+Write-Host -ForegroundColor Yellow -NoNewLine "Win32"
+Write-Host " Deployment..."
 BuildCargoManifestFromTemplate($PackageName)
 
 $ExternCrateName = $PackageName.Replace("-", "_")
@@ -66,7 +70,6 @@ $ExternCrateName = $PackageName.Replace("-", "_")
 
 pub use $ExternCrateName::$EntryTyName as Game;" | Out-File $ScriptPath\src\userlib.rs -Encoding UTF8
 
-Write-Host "Building Win32 Exe......"
 $CargoSubcommand = if ($Run) { "run" } else { "build" }
 $Features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_win32_surface"
 if ($AssetDirectory) {
