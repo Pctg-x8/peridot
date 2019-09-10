@@ -243,6 +243,10 @@ impl<NL: NativeLinker> Game<NL>
         rec.end_render_pass();
     }
 }
+impl<NL: NativeLinker> peridot::FeatureRequests for Game<NL>
+{
+    
+}
 
 #[repr(C)]
 pub struct DynamicParams
