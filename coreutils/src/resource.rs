@@ -5,7 +5,8 @@ use peridot_math::Vector2;
 use num::Integer;
 use std::mem::{size_of, align_of, ManuallyDrop, transmute};
 use std::rc::Rc;
-use std::ops::Deref;
+use std::ops::{Deref, Range};
+use crate::{Texture2D, TransferBatch, TextureInitializationGroup};
 
 fn common_alignment(flags: br::BufferUsage, mut align: u64, pd: &br::PhysicalDevice) -> u64
 {
@@ -321,6 +322,85 @@ impl<'m> Drop for AutocloseMappedMemoryRange<'m>
         {
             ManuallyDrop::drop(&mut self.1);
             self.0.unmap();
+        }
+    }
+}
+
+/// Describing the type that can be used as initializer of `FixedBuffer`s
+pub trait FixedBufferInitializer
+{
+    /// Setup memory data in staging buffer
+    fn stage_data(&mut self, m: &br::MappedMemoryRange);
+    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buf: &Buffer, range: Range<u64>);
+}
+/// The Fix-sized buffers and textures manager
+pub struct FixedMemory
+{
+    /// Device accessible buffer object
+    pub buffer: (Buffer, u64),
+    /// Host buffer staging per-frame mutable data
+    pub mut_buffer: (Buffer, u64),
+    /// The placement offset of mut_buffer data in buffer
+    pub mut_buffer_placement: u64,
+    /// Textures
+    pub textures: Vec<Texture2D>
+}
+impl FixedMemory
+{
+    /// Initialize a FixedMemory using preallocation structures
+    pub fn new<'g, I: FixedBufferInitializer + ?Sized>(
+        device: &'g br::Device, pd: &'g br::PhysicalDevice,
+        mut prealloc: BufferPrealloc<'g>,
+        prealloc_mut: BufferPrealloc<'g>,
+        textures: TextureInitializationGroup<'g>,
+        initializer: &mut I, tfb: &mut TransferBatch) -> br::Result<Self>
+    {
+        let mut_buffer = prealloc_mut.build_upload(device)?;
+        let mut p_bufferdata_prealloc = prealloc.clone();
+        let imm_buffer_size = p_bufferdata_prealloc.total_size();
+        let mut_buffer_placement = p_bufferdata_prealloc.merge(&prealloc_mut);
+        let buffer = p_bufferdata_prealloc.build_transferred(device)?;
+
+        let tex_preallocs = textures.prealloc(&mut prealloc)?;
+        let stg_buffer_fullsize = prealloc.total_size();
+        let stg_buffer = prealloc.build_upload(device)?;
+
+        let (mut mb, mut mb_mut) = (MemoryBadget::new(pd), MemoryBadget::new(pd));
+        mb.add(buffer);
+        mb_mut.add(mut_buffer);
+        let (textures, mut bufs) = tex_preallocs.alloc_and_instantiate(mb, device, pd)?;
+        let buffer = bufs.pop().expect("objectless").unwrap_buffer();
+        let pd_memory_props = pd.memory_properties();
+        let mb_mt_index = pd_memory_props.find_host_visible_index(mb_mut.memory_type_index_mask())
+            .expect("no matching memory type index for mut buffer");
+        let mut_buffer = mb_mut.alloc(device, mb_mt_index)?.pop().expect("objectless").unwrap_buffer();
+        let mut mb_stg = MemoryBadget::new(pd);
+        mb_stg.add(stg_buffer);
+        let stg_mt_index = pd_memory_props.find_host_visible_index(mb_stg.memory_type_index_mask())
+            .expect("no matching memory type index for stg buffer");
+        let stg_buffer = mb_stg.alloc(device, stg_mt_index)?.pop().expect("objectless").unwrap_buffer();
+
+        stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
+
+        textures.copy_from_stage_batches(tfb, &stg_buffer);
+        tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, imm_buffer_size);
+        initializer.buffer_graphics_ready(tfb, &buffer, 0 .. imm_buffer_size);
+
+        Ok(FixedMemory
+        {
+            buffer: (buffer, imm_buffer_size), mut_buffer: (mut_buffer, prealloc_mut.total_size()),
+            mut_buffer_placement,
+            textures: textures.into_textures()
+        })
+    }
+
+    pub fn range_in_mut_buffer<T>(&self, r: Range<T>) -> Range<T> where
+        T: std::ops::Add<Output = T> + std::convert::TryFrom<u64> + Copy
+    {
+        match T::try_from(self.mut_buffer_placement)
+        {
+            Ok(p) => r.start + p .. r.end + p,
+            Err(_) => panic!("Overflowing Placement offset")
         }
     }
 }
