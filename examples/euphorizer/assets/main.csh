@@ -142,12 +142,12 @@ Header[FragmentShader] {
     }
     float dist_scene_randomfold(vec3 p)
     {
-        const float FoldZ = dot(noize2(floor((0.5f * vpos.xy + 0.5f) * vec2(8.0f, 16.0f))), vec2(0.5f)) * 0.01f + 0.3f;
+        const float FoldZ = dot(noize2(floor((0.5f * vpos.xy + 0.5f) * vec2(8.0f, 16.0f))), vec2(0.5f)) * 0.001f + 0.3f;
         const vec3 ModInstanceIndex = floor((p - 0.5 * vec3(0.025f, 0.025f, FoldZ) * 40.0f) * vec3(0.025f, 0.025f, FoldZ) * 40.0f);
         const mat3 r =
-            rotx(dot(noize2(ModInstanceIndex.yx / 40.0f), vec2(0.5f)) * PI * 0.8 - PI * 0.4)
+            rotx(dot(noize2(ModInstanceIndex.yx / 20.0f), vec2(0.5f)) * PI * 0.8 - PI * 0.4) *
             rotz(dot(noize2(ModInstanceIndex.zy / 40.0f), vec2(0.5f)) * PI * 0.8 - PI * 0.4);
-        return dist_cube(r * fold3(p, vec3(0.025f, 0.025f, FoldZ)), 0.006f);
+        return dist_cube(r * fold3(p, vec3(0.025f, 0.025f, FoldZ)), 0.008f);
     }
     #define DIST_SCENE dist_scene_randomfold
 
@@ -181,7 +181,7 @@ Header[FragmentShader] {
         if (f < maxd)
         {
             const vec2 e = vec2(1.0, -1.0);
-            const float h = 0.001 * 0.5773;
+            const float h = 0.0001 * 0.5773;
             // return vec4(vec3(pow(1.0 - f / maxd, 4.0)), 1.0);
             // http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
             vec3 nrm = normalize(

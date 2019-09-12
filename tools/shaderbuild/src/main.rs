@@ -18,7 +18,8 @@ fn main() {
     let app = clap::App::new("peridot-shaderbuild")
         .version("0.1.0").author("S.Percentage <Syn.Tri.Naga@gmail.com>")
         .about("Combined Shader to Combined SPIR-V Builder for Peridot Engine via Google's shaderc")
-        .arg(clap::Arg::with_name("input-file").help("Input File(s)").required(true).multiple(true));
+        .arg(clap::Arg::with_name("input-file").help("Input File(s)").required(true).multiple(true))
+        .arg(clap::Arg::with_name("verbose").short("v").help("Verbose Mode(output generated GLSL code)"));
     let matches = app.get_matches();
     for fp in matches.values_of("input-file").expect("no input file")
     {
@@ -29,22 +30,36 @@ fn main() {
         let ofile = fp_pair.next().map_or_else(|| {
             let mut pb = PathBuf::from(ifile); pb.set_extension("pvp"); return Cow::Owned(pb);
         }, |s| Cow::Borrowed(Path::new(s)));
-        process(ifile, &ofile);
+        process(ifile, &ofile, matches.is_present("verbose"));
     }
 }
 
-fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
+fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O, verbose: bool) {
     println!("Loading/Decomposing \"{}\"...", infile_path.as_ref().display());
     let content = std::fs::File::open(infile_path)
         .and_then(|mut fp| { let mut s = String::new(); fp.read_to_string(&mut s).map(|_| s) })
         .expect("reading source");
     let mut tok = Tokenizer::new(&content);
     let comsh = CombinedShader::from_parsed_blocks(tok.toplevel_blocks());
-    let compile_vs = run_compiler_process("vertex", &comsh.emit_vertex_shader())
+    let vsh_code = comsh.emit_vertex_shader();
+    if verbose {
+        println!("=== Compiled Vertex Shader ===");
+        for (ln, v) in vsh_code.split("\n").enumerate() {
+            println!("{:4}: {}", ln + 1, v);
+        }
+    }
+    let compile_vs = run_compiler_process("vertex", &vsh_code)
         .expect("Failed to spawn compiler process");
     let mut err = false;
     let fragment_shader = if comsh.is_provided_fsh() {
-        let compile_fs = run_compiler_process("fragment", &comsh.emit_fragment_shader())
+        let fsh_code = comsh.emit_fragment_shader();
+        if verbose {
+            println!("=== Compiled Fragment Shader ===");
+            for (ln, v) in fsh_code.split("\n").enumerate() {
+                println!("{:4}: {}", ln + 1, v);
+            }
+        }
+        let compile_fs = run_compiler_process("fragment", &fsh_code)
             .expect("Failed to spawn compiler process");
         let cfs_out = compile_fs.wait_with_output().expect("Failed to waiting compiler");
         if !cfs_out.status.success() {
