@@ -5,13 +5,11 @@
 extern "C" {
 #endif
 
-#include <vulkan.h>
-
 typedef struct _PeCrtRenderTargetInfo
 {
     const char* vk_surface_extension_name;
     void* surface_factory_context_ptr;
-    VkSurface (*surface_factory)(void* context, VkInstance instance);
+    VkSurfaceKHR (*surface_factory)(void* context, VkInstance instance);
     void (*get_current_extent)(void* context, uint32_t* width, uint32_t* height);
 } PeCrtRenderTargetInfo;
 typedef struct _PeCrtRuntimeInfo
