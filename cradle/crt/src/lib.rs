@@ -39,6 +39,12 @@ pub extern "C" fn pecrtEndGame(core: *mut c_void)
 {
     drop(Box::from_raw(core as *mut GameRun));
 }
+#[no_mangle]
+pub extern "C" fn pecrtNextFrame(core: *mut c_void)
+{
+    let engine: &mut Engine = unsafe { (core as *mut GameRun).as_mut().expect("nullptr").0 };
+    engine.do_update();
+}
 
 use std::io::Result as IOResult;
 use std::ffi::CStr;

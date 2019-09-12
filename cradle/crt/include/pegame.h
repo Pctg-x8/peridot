@@ -24,6 +24,7 @@ typedef struct _PeCrtGameCore* PeCrtGameCore;
 
 PeCrtGameCore pecrtInitGame(const PeCrtRuntimeInfo* rt_info);
 void pecrtEndGame(PeCrtGameCore core);
+void pecrtNextFrame(PeCrtGameCore core);
 
 #ifdef __cplusplus
 }
