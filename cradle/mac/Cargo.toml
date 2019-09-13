@@ -20,3 +20,4 @@ log = "0.4"
 libc = "0.2"
 
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-vg = { path = "../../vg" }
