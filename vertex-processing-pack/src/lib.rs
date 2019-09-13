@@ -4,10 +4,12 @@ extern crate bedrock;
 extern crate peridot_serialization_utils; use peridot_serialization_utils::*;
 
 use bedrock as br;
-use std::io::{Write, BufRead, Seek, SeekFrom, Result as IOResult, Error as IOError, ErrorKind, Cursor};
-use std::io::BufReader;
+use std::io::{
+    Read, Write, BufRead, BufReader, Seek, SeekFrom, Result as IOResult, Error as IOError, ErrorKind, Cursor
+};
 use std::fs::File;
 use std::path::Path;
+use std::ffi::CString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PvpContainer {

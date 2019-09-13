@@ -18,3 +18,5 @@ peridot_derive = { path = "../../derive" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Implements", "Presentation", "VK_MVK_macos_surface"] }
 log = "0.4"
 libc = "0.2"
+
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }

@@ -6,10 +6,11 @@ use peridot::math::{
 };
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
-    SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
+    SubpassDependencyTemplates, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
     FixedMemory, FixedBufferInitializer
 };
+use peridot_vertex_processing_pack::PvpShaderModules;
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
