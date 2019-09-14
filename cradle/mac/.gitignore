@@ -2,3 +2,4 @@
 src/userlib
 src/userlib.rs
 peridot-cradle/assets.par
+Cargo.toml
