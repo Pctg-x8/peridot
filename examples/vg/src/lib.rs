@@ -3,28 +3,31 @@ use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules, vg, SpecConstantStorage};
+    PvpShaderModules, SpecConstantStorage};
 use peridot::math::Vector2;
 use std::rc::Rc;
 use std::borrow::Cow;
-use peridot::vg::{PathBuilder, FlatPathBuilder};
+use peridot_vg::lyon_reexports::{PathBuilder, FlatPathBuilder};
+use peridot_vg as pvg;
 
 #[derive(SpecConstantStorage)] #[repr(C)]
 pub struct VgRendererFragmentFixedColor {
     r: f32, g: f32, b: f32, a: f32
 }
 
-pub struct Game<PL: peridot::NativeLinker> {
+pub struct Game<PL: peridot::NativeLinker>
+{
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, buffer: Buffer,
     _bufview: br::BufferView, _bufview2: br::BufferView,
     _descriptors: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
-    vg_renderer_params: peridot::VgRendererParams,
-    vg_renderer_params2: peridot::VgRendererParams,
-    vg_renderer_exinst: peridot::VgRendererExternalInstances,
-    vg_renderer_exinst2: peridot::VgRendererExternalInstances,
+    vg_renderer_params: pvg::RendererParams,
+    vg_renderer_params2: pvg::RendererParams,
+    vg_renderer_exinst: pvg::RendererExternalInstances,
+    vg_renderer_exinst2: pvg::RendererExternalInstances,
     ph: PhantomData<*const PL>
 }
-impl<PL: peridot::NativeLinker> Game<PL> {
+impl<PL: peridot::NativeLinker> Game<PL>
+{
     pub const NAME: &'static str = "Peridot Examples - VectorGraphics";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
@@ -103,9 +106,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
         
-        let buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer(buffer).expect("Mem Allocation");
-        let stg_buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer_host_visible(stg_buffer)
-            .expect("StgMem Allocation");
+        let mut mb = MemoryBadget::new(e.graphics());
+        let mut mb_stg = MemoryBadget::new(e.graphics());
+        mb.add(buffer);
+        mb_stg.add(stg_buffer);
+        let buffer = mb.alloc().expect("Mem Allocation").pop().expect("no objects?").unwrap_buffer();
+        let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("no objects?").unwrap_buffer();
         
         let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(bp.total_size(), |m| {
             let p0 = ctx.stage_data_into(m, vg_offs);
@@ -171,9 +177,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut interior_vertex_processing = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         let mut curve_vertex_processing = curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         interior_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         curve_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         
         interior_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
@@ -194,11 +200,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             Some(VgRendererFragmentFixedColor { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }.as_pair());
         let gp2_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Creating GraphicsPipeline2 for CurveRender"), &pl);
-        let vg_renderer_exinst = peridot::VgRendererExternalInstances {
+        let vg_renderer_exinst = pvg::RendererExternalInstances {
             interior_pipeline: gp, curve_pipeline: gp_curve, transform_buffer_descriptor_set: descs[0],
             target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _)
         };
-        let vg_renderer_exinst2 = peridot::VgRendererExternalInstances {
+        let vg_renderer_exinst2 = pvg::RendererExternalInstances
+        {
             interior_pipeline: gp2, curve_pipeline: gp2_curve, transform_buffer_descriptor_set: descs[1],
             target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _)
         };
@@ -220,9 +227,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
-            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        (None, br::SubmissionBatch {
+    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
+        -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
+    {
+        (None, br::SubmissionBatch
+        {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
