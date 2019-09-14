@@ -13,3 +13,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
 log = "0.4"
 env_logger = "0.5"
 xcb = "0.8"
+
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-vg = { path = "../../vg" }
