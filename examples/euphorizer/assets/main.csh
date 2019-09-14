@@ -142,12 +142,14 @@ Header[FragmentShader] {
     }
     float dist_scene_randomfold(vec3 p)
     {
-        const float FoldZ = dot(noize2(floor((0.5f * vpos.xy + 0.5f) * vec2(8.0f, 16.0f))), vec2(0.5f)) * 0.001f + 0.3f;
-        const vec3 ModInstanceIndex = floor((p - 0.5 * vec3(0.025f, 0.025f, FoldZ) * 40.0f) * vec3(0.025f, 0.025f, FoldZ) * 40.0f);
+        const float FoldZ = dot(noize2(floor((0.5f * vpos.xy + 0.5f) * vec2(4.0f, 5.0f))), vec2(0.5f)) * 0.001f + 0.3f;
+        const vec3 ModInstanceIndex = floor(p / vec3(0.025f, 0.025f, FoldZ));
+        const float ZL = dot(noize2(ModInstanceIndex.xz * 30.0f), vec2(0.5f)) * 0.008f + 0.004f;
+        const float ZD = dot(noize2(ModInstanceIndex.xy), vec2(0.5f)) * 0.16f - 0.08f;
         const mat3 r =
-            rotx(dot(noize2(ModInstanceIndex.yx / 20.0f), vec2(0.5f)) * PI * 0.8 - PI * 0.4) *
-            rotz(dot(noize2(ModInstanceIndex.zy / 40.0f), vec2(0.5f)) * PI * 0.8 - PI * 0.4);
-        return dist_cube(r * fold3(p, vec3(0.025f, 0.025f, FoldZ)), 0.008f);
+            rotx(dot(noize2(ModInstanceIndex.yx * 30.0f), vec2(0.5f)) * PI * 0.8 - PI * 0.4) *
+            rotz(dot(noize2(ModInstanceIndex.zy * 40.0f), vec2(0.5f)) * PI * 0.8 - PI * 0.4);
+        return dist_box(r * (fold3(p, vec3(0.025f, 0.025f, FoldZ)) - vec3(0.0f, 0.0f, ZD)), vec3(0.008f, 0.008f, ZL) * 0.7f);
     }
     #define DIST_SCENE dist_scene_randomfold
 
@@ -159,27 +161,42 @@ Header[FragmentShader] {
         return c.z * mix(k.xxx, clamp(p - k.xxx, 0.0, 1.0), c.y);
     }
 
-    vec4 iterate_ray(vec3 eyepos, vec3 raydir)
+    bool cast_ray(in vec3 origin, in vec3 dir, out float dist)
     {
         const float maxd = 10.0;
-        const int iterate_max = 256;
-        float dcur = 0.02, f = 0.1;
-        vec3 p;
-        bool iterate_over = false;
+        const int iterate_max = 512;
+        dist = 0.01;
 
-        for (int _ = 0; _ < iterate_max && f <= maxd; _++)
+        for (int _ = 0; _ < iterate_max && dist <= maxd; _++)
         {
-            p = fma(raydir, vec3(f), eyepos);
-            dcur = DIST_SCENE(p);
-            if (abs(dcur) < 0.0002 * f) { iterate_over = true; break; }
-            f += dcur;
+            vec3 p = fma(dir, vec3(dist), origin);
+            float d = DIST_SCENE(p);
+            if (abs(d) < 0.002 * dist) return true;
+            dist += d * 0.4f;
         }
+        return false;
+    }
+
+    vec3 apply_fast_half_lambert(in vec3 surface_color, in vec3 normal, in vec3 light_dir)
+    {
+        const float factor = dot(normal, -light_dir) * 0.75f + 0.25f;
+        return surface_color * factor;
+    }
+
+    vec4 iterate_ray(vec3 eyepos, vec3 raydir)
+    {
+        float f;
+        const bool first_hit = cast_ray(eyepos, raydir, f);
+
+        const float irrad = (1.0f - fract(time_sec * (102.0f / 60.0f))) * 0.4f + 1.0f;
 
         const vec3 fog_color = vec3(0.0, 0.0, 0.0);
         // vec3 mesh_color = hsv2rgb(vec3(time_sec * 0.5, 0.5, 0.7));
         vec3 mesh_color = vec3(0.1f, 0.2f, 0.5f);
-        if (f < maxd)
+        const vec3 light_dir = normalize(vec3(0.0, 0.0, 1.0));
+        if (first_hit)
         {
+            const vec3 p = fma(raydir, vec3(f), eyepos);
             const vec2 e = vec2(1.0, -1.0);
             const float h = 0.0001 * 0.5773;
             // return vec4(vec3(pow(1.0 - f / maxd, 4.0)), 1.0);
@@ -190,13 +207,29 @@ Header[FragmentShader] {
                 e.yxy * DIST_SCENE(p + e.yxy * h) +
                 e.xxx * DIST_SCENE(p + e.xxx * h)
             );
-            vec4 col = vec4(mesh_color, 1.0);
-            vec3 light_dir_inv = -normalize(vec3(0.0, 0.0, 1.0));
             // return vec4(nrm * 0.5 + 0.5, 1.0);
-            float b = dot(nrm, light_dir_inv);
-            vec3 mesh_color = b * col.xyz;
+
+            vec4 surface_color = vec4(apply_fast_half_lambert(mesh_color, nrm, light_dir), 1.0f);
+
+            float f2;
+            const vec3 refdir = reflect(raydir, nrm);
+            const bool first_reflection = cast_ray(p, refdir, f2);
+            if (first_reflection)
+            {
+                vec3 p2 = fma(refdir, vec3(f2), p);
+                vec3 nrm2 = normalize(
+                    e.xyy * DIST_SCENE(p2 + e.xyy * h) +
+                    e.yyx * DIST_SCENE(p2 + e.yyx * h) +
+                    e.yxy * DIST_SCENE(p2 + e.yxy * h) +
+                    e.xxx * DIST_SCENE(p2 + e.xxx * h)
+                );
+                vec4 col2 = vec4(apply_fast_half_lambert(mesh_color, nrm2, light_dir), 1.0);
+                surface_color = mix(col2, surface_color, f2 * 0.25 + 0.75);
+            }
+
             float fog_level = min(pow(f * 0.8, 2.0f), 1.0f);
-            return vec4(mix(mesh_color, fog_color, fog_level), 1.0) * col.a;
+            vec4 final_color = mix(surface_color * irrad, vec4(fog_color, 1.0f), fog_level);
+            return vec4(final_color.xyz * final_color.a, final_color.a);
         }
         else { return vec4(fog_color, 1.0); }
     }
