@@ -1,12 +1,15 @@
 //! ModelData Traits and Impls
 
-use peridot::{LayoutedPipeline, ModelData, DefaultRenderCommands};
+use peridot::{
+    LayoutedPipeline, ModelData, DefaultRenderCommands, Buffer, Engine, BufferPrealloc, BufferContent,
+    EngineEvents, NativeLinker
+};
 use bedrock as br;
 use super::*;
 use pathfinder_partitioner::{BQuadVertexPositions, BVertexLoopBlinnData};
 use std::ops::Range;
 use std::mem::size_of;
-use peridot_math::Vector2;
+use peridot::math::Vector2;
 
 #[repr(C)] struct GlyphTransform { st: [f32; 4], ext: [f32; 2], pad: [f32; 2] }
 
@@ -43,7 +46,7 @@ impl ModelData for Context
     type PreallocOffsetType = ContextPreallocOffsets;
     type RendererParams = RendererParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> VgContextPreallocOffsets {
+    fn prealloc(&self, alloc: &mut BufferPrealloc) -> ContextPreallocOffsets {
         let interior_positions_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_positions.len()).sum();
         let interior_indices_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_interior_indices.len()).sum();
         let curve_positions_count = self.meshes().iter().map(|x| x.0.b_vertex_positions.len()).sum();
@@ -61,11 +64,12 @@ impl ModelData for Context
         let curve_helper_coords =
             alloc.add(BufferContent::vertices::<BVertexLoopBlinnData>(curve_helper_coords_count)) as _;
         let curve_indices = alloc.add(BufferContent::indices::<u32>(curve_indices_count)) as _;
-        VgContextPreallocOffsets {
+        ContextPreallocOffsets
+        {
             transforms, interior_positions, interior_indices, curve_positions, curve_helper_coords, curve_indices
         }
     }
-    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: VgContextPreallocOffsets) -> VgRendererParams {
+    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: ContextPreallocOffsets) -> RendererParams {
         let transforms_stg = unsafe { mem.slice_mut(offsets.transforms, self.meshes().len()) };
         let mut vofs = offsets.interior_positions;
         let (mut cpofs, mut chofs) = (offsets.curve_positions, offsets.curve_helper_coords);
@@ -116,18 +120,22 @@ impl ModelData for Context
             curve_vindex_offset += v.b_vertex_positions.len() as u32;
         }
 
-        return VgRendererParams {
-            buffer_offsets: offsets, render_info: VgContextRenderInfo {
+        return RendererParams
+        {
+            buffer_offsets: offsets, render_info: ContextRenderInfo
+            {
                 interior_index_range_per_mesh, curve_index_range_per_mesh
             }
         };
     }
 }
-impl DefaultRenderCommands for VgRendererParams {
-    type Extras = VgRendererExternalInstances;
+impl DefaultRenderCommands for RendererParams
+{
+    type Extras = RendererExternalInstances;
 
     fn default_render_commands<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>,
-        cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras) {
+        cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras)
+    {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
         extras.interior_pipeline.bind(cmd);
         cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &renderscale);

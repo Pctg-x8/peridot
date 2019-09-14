@@ -3,11 +3,12 @@ use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules, SpecConstantStorage};
+    SpecConstantStorage};
+use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot::math::Vector2;
 use std::rc::Rc;
 use std::borrow::Cow;
-use peridot_vg::lyon_reexports::{PathBuilder, FlatPathBuilder};
+use peridot_vg::{PathBuilder, FlatPathBuilder};
 use peridot_vg as pvg;
 
 #[derive(SpecConstantStorage)] #[repr(C)]
@@ -34,18 +35,18 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
-        let font = vg::Font::best_match(&[vg::FamilyName::SansSerif], &vg::FontProperties::new(), 12.0)
+        let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
             .expect("No Fonts");
-        let mut ctx = vg::Context::new();
+        let mut ctx = pvg::Context::new();
         ctx.text(&font, "Hello, World!|Opaque");
         {
-            let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
+            let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
             f0.quadratic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -100.0).into());
             f0.end();
         }
         /*{
-            let mut f = ctx.begin_figure(vg::FillRule::Winding);
+            let mut f = ctx.begin_figure(pvg::FillRule::Winding);
             f.move_to(Vector2(200.0, -200.0 - 10.0).into());
             f.line_to(Vector2(200.0, -200.0 - 90.0).into());
             f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
@@ -57,9 +58,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
             f.close(); f.end();
         }*/
-        let mut ctx2 = vg::Context::new();
+        let mut ctx2 = pvg::Context::new();
         /*{
-            let mut f0 = ctx2.begin_figure(vg::FillRule::Winding);
+            let mut f0 = ctx2.begin_figure(pvg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
             /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
                 Vector2(100.0, -100.0).into());*/
@@ -70,7 +71,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f0.end();
         }*/
         /*{
-            let mut sp = vg::StrokePathBuilder::new(1.0);
+            let mut sp = pvg::StrokePathBuilder::new(1.0);
             sp.move_to(Vector2(200.0, -200.0 - 10.0).into());
             sp.line_to(Vector2(200.0, -200.0 - 90.0).into());
             sp.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
@@ -86,7 +87,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f.end();
         }*/
         {
-            let mut f = ctx2.begin_figure(vg::FillRule::Winding);
+            let mut f = ctx2.begin_figure(pvg::FillRule::Winding);
             f.move_to(Vector2(200.0, -200.0 - 10.0).into());
             f.line_to(Vector2(200.0, -200.0 - 90.0).into());
             f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
