@@ -15,6 +15,9 @@ log = "0.4"
 env_logger = "0.5"
 peridot_derive = { path = "../../derive" }
 
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-vg = { path = "../../vg" }
+
 [dependencies.winapi]
 version = "0.3"
 features = ["winuser", "libloaderapi"]

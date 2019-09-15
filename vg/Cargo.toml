@@ -10,7 +10,8 @@ use-freetype = ["freetype2"]
 use-fontconfig = ["fontconfig"]
 
 [dependencies]
-peridot-math = { path = "../math" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+peridot = { path = ".." }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 lyon_path = "0.12"
 euclid = "0.19"

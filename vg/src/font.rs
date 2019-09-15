@@ -1,6 +1,6 @@
 
 use euclid::Rect;
-use peridot_math::Vector2;
+use peridot::math::{Vector2, Vector2F32};
 use lyon_path::builder::PathBuilder;
 
 #[cfg(target_os = "macos")] use appkit::ObjcObjectBase;

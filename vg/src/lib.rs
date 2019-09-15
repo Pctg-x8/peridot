@@ -1,6 +1,7 @@
 //! Peridot Vector Graphics Dept. powered by Pathfinder 2(lyon)
 
-extern crate peridot_math;
+extern crate bedrock;
+extern crate peridot;
 extern crate pathfinder_partitioner;
 extern crate lyon_path; extern crate euclid;
 
@@ -17,11 +18,14 @@ extern crate libc;
 mod font; pub use font::*;
 
 use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, builder::Builder};
-pub use pathfinder_partitioner::FillRule;
-pub use lyon_path::builder::{FlatPathBuilder, PathBuilder};
 // use lyon_path::PathEvent;
 use lyon_path::geom::euclid::{Transform2D, Vector2D, Angle};
-use peridot_math::{Vector2, Vector2F32};
+use peridot::math::{Vector2, Vector2F32};
+
+mod rendering; pub use self::rendering::*;
+
+pub use pathfinder_partitioner::FillRule;
+pub use lyon_path::{PathEvent, builder::{FlatPathBuilder, PathBuilder}};
 
 pub struct Context {
     meshes: Vec<(Mesh, [f32; 4], [f32; 2])>,
