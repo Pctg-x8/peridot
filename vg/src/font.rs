@@ -6,6 +6,8 @@ use lyon_path::builder::PathBuilder;
 #[cfg(target_os = "macos")] use appkit::ObjcObjectBase;
 #[cfg(target_os = "windows")] mod dwrite_driver;
 #[cfg(target_os = "windows")] use self::dwrite_driver::*;
+#[cfg(feature = "use-freetype")] mod ft_drivers;
+#[cfg(feature = "use-fontconfig")] mod fc_drivers;
 
 pub struct GlyphBound<T> { left: T, top: T, right: T, bottom: T }
 impl<T: Copy> GlyphBound<T>
@@ -37,25 +39,65 @@ impl FontProperties
 }
 
 #[derive(Debug)]
-pub enum FontConstructionError { SysAPICallError(&'static str), IO(std::io::Error) }
+pub enum FontConstructionError
+{
+    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error)
+}
 impl From<std::io::Error> for FontConstructionError
 {
     fn from(v: std::io::Error) -> Self { FontConstructionError::IO(v) }
 }
 #[derive(Debug)]
-pub enum GlyphLoadingError { SysAPICallError(&'static str), IO(std::io::Error) }
+pub enum GlyphLoadingError
+{
+    SysAPICallError(&'static str), IO(std::io::Error),
+    #[cfg(feature = "use-freetype")]
+    FT2(freetype2::FT_Error)
+}
 impl From<std::io::Error> for GlyphLoadingError
 {
     fn from(v: std::io::Error) -> Self { GlyphLoadingError::IO(v) }
 }
+#[cfg(feature = "use-freetype")]
+impl From<freetype2::FT_Error> for GlyphLoadingError
+{
+    fn from(v: freetype2::FT_Error) -> Self { GlyphLoadingError::FT2(v) }
+}
+
+pub struct FontProvider
+{
+    #[cfg(target_os = "windows")]
+    factory: comdrive::dwrite::Factory,
+    #[cfg(feature = "use-freetype")]
+    ftlib: self::ft_drivers::System,
+    #[cfg(feature = "use-fontconfig")]
+    fc: self::fc_drivers::Config
+}
+impl FontProvider
+{
+    pub fn new() -> Result<Self, FontConstructionError>
+    {
+        Ok(FontProvider
+        {
+            #[cfg(target_os = "windows")]
+            factory: comdrive::dwrite::Factory::new()?,
+            #[cfg(feature = "use-freetype")]
+            ftlib: self::ft_drivers::System::new(),
+            #[cfg(feature = "use-fontconfig")]
+            fc: self::fc_drivers::Config::init()
+        })
+    }
+}
+
 #[cfg(target_os = "macos")] type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
 #[cfg(target_os = "windows")] type UnderlyingHandle = comdrive::dwrite::FontFace;
+#[cfg(feature = "use-freetype")] type UnderlyingHandle = self::ft_drivers::Face;
 pub struct Font(UnderlyingHandle, f32);
 #[cfg(target_os = "macos")]
-impl Font
+impl FontProvider
 {
-    pub fn best_match(family_name: &str, properties: &FontProperties, size: f32)
-        -> Result<Self, FontConstructionError>
+    pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
+        -> Result<Font, FontConstructionError>
     {
         let traits = appkit::NSMutableDictionary::with_capacity(2)
             .map_err(|_| FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity"))?;
@@ -79,6 +121,10 @@ impl Font
             .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
             .map(|x| Font(x, size))
     }
+}
+#[cfg(target_os = "macos")]
+impl Font
+{
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
     pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
@@ -140,13 +186,12 @@ impl Font
 }
 
 #[cfg(target_os = "windows")]
-impl Font
+impl FontProvider
 {
-    pub fn best_match(family_name: &str, properties: &FontProperties, size: f32)
-        -> Result<Self, FontConstructionError>
+    pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
+        -> Result<Font, FontConstructionError>
     {
-        let factory = comdrive::dwrite::Factory::new()?;
-        let collection = factory.system_font_collection(false)?;
+        let collection = self.factory.system_font_collection(false)?;
         let family_index = collection.find_family_name(family_name)?.unwrap_or(0);
         let family = collection.font_family(family_index)?;
         let font_style = if properties.italic
@@ -162,6 +207,10 @@ impl Font
         
         font.new_font_face().map(|x| Font(x, size)).map_err(From::from)
     }
+}
+#[cfg(target_os = "windows")]
+impl Font
+{
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
     fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
@@ -198,4 +247,70 @@ impl Font
     }
 
     pub fn units_per_em(&self) -> u32 { self.0.metrics().designUnitsPerEm as _ }
+}
+
+#[cfg(feature = "use-freetype")]
+impl FontProvider
+{
+    #[cfg(feature = "use-fontconfig")]
+    pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
+        -> Result<Font, FontConstructionError>
+    {
+        let c_family_name = std::ffi::CString::new(family_name).expect("FFI Conversion failure");
+        let mut pat = fc_drivers::Pattern::with_name_weight_style_size(c_family_name.as_ptr() as *const _,
+            properties.weight as _, properties.italic, size)
+            .ok_or(FontConstructionError::SysAPICallError("FcPatternBuild"))?;
+        self.fc.substitute_pattern(&mut pat);
+        pat.default_substitute();
+        let font = self.fc.match_font(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontMatch"))?;
+        let font_path = font.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
+        let face_index = font.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
+
+        Ok(Font(self.ftlib.new_face(font_path.as_ptr() as *const _, face_index as _), size))
+    }
+    #[cfg(not(feature = "use-fontconfig"))]
+    pub fn best_match(_: &str, _: &FontProperties, _: f32) -> Result<Font, FontConstructionError>
+    {
+        // no matching algorithm is available
+
+        Err(FontConstructionError::MatcherUnavailable)
+    }
+}
+#[cfg(feature = "use-freetype")]
+impl Font
+{
+    pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    /// Returns a scaled ascent metric value
+    pub fn ascent(&self) -> f32 { self.0.ascender() as f32 * self.scale_value() }
+
+    pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
+    {
+        Some(self.0.char_index(c))
+    }
+    pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
+    {
+        self.0.load_glyph(glyph)?;
+
+        Ok(self.0.glyph_advance().x as f32 * 64.0)
+    }
+    pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
+    {
+        self.0.load_glyph(glyph)?;
+        let m = self.0.glyph_metrics();
+        
+        Ok(Rect::new(
+            euclid::point2(m.horiBearingX as f32 * 64.0, m.horiBearingY as f32 * 64.0),
+            euclid::size2(m.width as f32 * 64.0, m.height as f32 * 64.0)
+        ))
+    }
+    pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
+    {
+        self.0.load_glyph(glyph)?;
+        self.0.decompose_outline(builder);
+
+        Ok(())
+    }
+
+    pub fn units_per_em(&self) -> u32 { self.0.units_per_em() as _ }
 }
