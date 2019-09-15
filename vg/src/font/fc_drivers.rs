@@ -24,7 +24,8 @@ impl Config
 	}
 	pub fn match_font(&self, pat: &Pattern) -> Option<Pattern>
 	{
-		let ptr = unsafe { FcFontMatch(self.ptr.as_ptr(), pat.ptr.as_ptr(), std::ptr::null_mut()) };
+		let mut _res = 0;
+		let ptr = unsafe { FcFontMatch(self.ptr.as_ptr(), pat.ptr.as_ptr(), &mut _res) };
 
 		NonNull::new(ptr).map(|ptr| Pattern { ptr })
 	}
@@ -39,14 +40,14 @@ impl Pattern
 	}*/
 	pub fn with_name_weight_style_size(name: *const u8, ot_weight: u32, italic: bool, size: f32) -> Option<Self>
 	{
-		let size_range = Range::new_double(size as _, size as _).expect("Failed to create SizeRange");
+		let size_range = Range::new_double(size as _, size as _).expect("Range creation failed");
 		let ptr = unsafe
 		{
 			FcPatternBuild(std::ptr::null_mut(),
-				FC_FAMILY, FcTypeString, name,
-				FC_WEIGHT, FcTypeInteger, FcWeightFromOpenType(ot_weight as _) as FcChar32,
-				FC_SLANT, FcTypeInteger, if italic { FC_SLANT_ITALIC } else { 0 } as FcChar32,
-				FC_SIZE, FcTypeRange, size_range.ptr,
+				FC_FAMILY.as_ptr(), FcTypeString, name,
+				FC_WEIGHT.as_ptr(), FcTypeInteger, FcWeightFromOpenType(ot_weight as _) as FcChar32,
+				FC_SLANT.as_ptr(), FcTypeInteger, if italic { FC_SLANT_ITALIC } else { 0 } as FcChar32,
+				FC_SIZE.as_ptr(), FcTypeRange, size_range.ptr.as_ptr(),
 				std::ptr::null::<FcChar8>())
 		};
 
@@ -58,8 +59,7 @@ impl Pattern
 	pub fn get_filepath(&self) -> Option<&CStr>
 	{
 		let mut file = MaybeUninit::uninit();
-		let fc_file = CString::new(FC_FILE).expect("invalid fc_file def");
-		let res = unsafe { FcPatternGetString(self.ptr.as_ptr(), fc_file.as_ptr(), 0, file.as_mut_ptr()) };
+		let res = unsafe { FcPatternGetString(self.ptr.as_ptr(), FC_FILE.as_ptr() as _, 0, file.as_mut_ptr()) };
 		if res == FcResultMatch
 		{
 			Some(unsafe { CStr::from_ptr(file.assume_init() as *const _) })
@@ -72,8 +72,7 @@ impl Pattern
 	pub fn get_face_index(&self) -> Option<u32>
 	{
 		let mut index = MaybeUninit::uninit();
-		let fc_index = CString::new(FC_INDEX).expect("invalid fc_index def");
-		let res = unsafe { FcPatternGetInteger(self.ptr.as_ptr(), fc_index.as_ptr(), 0, index.as_mut_ptr()) };
+		let res = unsafe { FcPatternGetInteger(self.ptr.as_ptr(), FC_INDEX.as_ptr() as _, 0, index.as_mut_ptr()) };
 		if res == FcResultMatch
 		{
 			Some(unsafe { index.assume_init() as _ })

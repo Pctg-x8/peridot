@@ -38,7 +38,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
     fn init(e: &peridot::Engine<Self, PL>) -> Self
     {
-        let font = pvg::Font::best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
+        let font_provider = pvg::FontProvider::new().expect("FontProvider initialization error");
+        let font = font_provider.best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
             .expect("No Fonts");
         let mut ctx = pvg::Context::new();
         ctx.text(&font, "Hello, World!|Opaque");

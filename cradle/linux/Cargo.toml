@@ -16,3 +16,4 @@ xcb = "0.8"
 
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
 peridot-vg = { path = "../../vg" }
+peridot_derive = { path = "../../derive" }
