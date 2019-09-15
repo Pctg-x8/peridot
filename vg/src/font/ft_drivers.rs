@@ -5,6 +5,8 @@ use freetype2::outline::*;
 use std::rc::Rc;
 use std::mem::MaybeUninit;
 use lyon_path::builder::{PathBuilder, FlatPathBuilder};
+use std::cell::{Cell, RefCell, Ref};
+use std::ffi::{CStr, CString};
 
 pub struct UniqueSystem { ptr: FT_Library }
 #[derive(Clone)]
@@ -33,6 +35,72 @@ impl System
 	pub fn new() -> Self { System(UniqueSystem::new().into()) }
 }
 
+pub enum FaceGroupEntry { Unloaded(CString, FT_Long), Loaded(Face) }
+impl FaceGroupEntry
+{
+	pub fn is_loaded(&self) -> bool { match self { Self::Loaded(_) => true, _ => false } }
+}
+pub struct FaceGroup
+{
+	parent: System,
+	faces: Vec<RefCell<FaceGroupEntry>>,
+	current_size: Cell<f32>
+}
+impl System
+{
+	pub fn new_face_group(&self, entries: &[(*const i8, FT_Long)]) -> FaceGroup
+	{
+		let faces = entries.iter()
+			.map(|&(p, x)| FaceGroupEntry::Unloaded(unsafe { CStr::from_ptr(p).to_owned() }, x).into())
+			.collect();
+		
+		FaceGroup { parent: self.clone(), faces, current_size: Cell::new(0.0) }
+	}
+}
+impl FaceGroup
+{
+	pub fn get(&self, index: usize) -> Ref<Face>
+	{
+		if !self.faces[index].borrow().is_loaded()
+		{
+			let new_face = if let FaceGroupEntry::Unloaded(p, x) = &*self.faces[index].borrow()
+			{
+				self.parent.new_face(p.as_ptr() as _, *x)
+			}
+			else { unreachable!() };
+			new_face.set_size(self.current_size.get());
+			let bm = &self.faces[index];
+			*bm.borrow_mut() = FaceGroupEntry::Loaded(new_face);
+		}
+
+		Ref::map(self.faces[index].borrow(), |f| if let FaceGroupEntry::Loaded(f) = f { f } else { unreachable!() })
+	}
+
+	pub fn set_size(&self, size: f32)
+	{
+		self.current_size.set(size);
+		for e in &self.faces
+		{
+			let eb = e.borrow();
+			if let &FaceGroupEntry::Loaded(ref f) = &*eb { f.set_size(size); }
+		}
+	}
+
+	pub fn units_per_em(&self) -> FT_UShort { self.get(0).units_per_em() }
+	pub fn ascender(&self) -> FT_Short { self.get(0).ascender() }
+
+	pub fn char_index(&self, c: char) -> Option<(usize, FT_UInt)>
+	{
+		for n in 0..self.faces.len()
+		{
+			let ci = self.get(n).char_index(c);
+			if ci != 0 { return Some((n, ci)); }
+		}
+		
+		None
+	}
+}
+
 pub struct Face { _parent: System, ptr: FT_Face }
 impl System
 {
@@ -56,10 +124,21 @@ impl Drop for Face
 
 impl Face
 {
+	pub fn select_unicode(&self)
+	{
+		unsafe { FT_Select_Charmap(self.ptr, FT_ENCODING_UNICODE) };
+	}
+	pub fn set_size(&self, size: f32)
+	{
+		unsafe { FT_Set_Char_Size(self.ptr, (size * 64.0) as _, (size * 64.0) as _, 100, 100) };
+	}
 	pub fn units_per_em(&self) -> FT_UShort { unsafe { (*self.ptr).units_per_em } }
 	pub fn ascender(&self) -> FT_Short { unsafe { (*self.ptr).ascender } }
 
-	pub fn char_index(&self, c: char) -> FT_UInt { unsafe { FT_Get_Char_Index(self.ptr, c as _) } }
+	pub fn char_index(&self, c: char) -> FT_UInt
+	{
+		unsafe { FT_Get_Char_Index(self.ptr, c as _) }
+	}
 	pub fn load_glyph(&self, g: u32) -> Result<(), FT_Error>
 	{
 		let r = unsafe { FT_Load_Glyph(self.ptr, g, FT_LOAD_DEFAULT) };
@@ -94,7 +173,7 @@ fn outline_decompose_moveto<B: FlatPathBuilder>(to: *const FT_Vector, context: *
 {
 	let builder = unsafe { &mut *(context as *mut B) };
 	let vector = unsafe { &*to };
-	builder.move_to(euclid::point2(vector.x as f32 * 64.0, vector.y as f32 * 64.0));
+	builder.move_to(euclid::point2(vector.x as f32 / 64.0, vector.y as f32 / 64.0));
 
 	return 0;
 }
@@ -103,7 +182,7 @@ fn outline_decompose_lineto<B: FlatPathBuilder>(to: *const FT_Vector, context: *
 {
 	let builder = unsafe { &mut *(context as *mut B) };
 	let vector = unsafe { &*to };
-	builder.line_to(euclid::point2(vector.x as f32 * 64.0, vector.y as f32 * 64.0));
+	builder.line_to(euclid::point2(vector.x as f32 / 64.0, vector.y as f32 / 64.0));
 
 	return 0;
 }
@@ -115,8 +194,8 @@ fn outline_decompose_conicto<B: PathBuilder>(control: *const FT_Vector, to: *con
 	let cv = unsafe { &*control };
 	let vector = unsafe { &*to };
 	builder.quadratic_bezier_to(
-		euclid::point2(cv.x as f32 * 64.0, cv.y as f32 * 64.0),
-		euclid::point2(vector.x as f32 * 64.0, vector.y as f32 * 64.0)
+		euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0),
+		euclid::point2(vector.x as f32 / 64.0, vector.y as f32 / 64.0)
 	);
 
 	return 0;
@@ -130,9 +209,9 @@ fn outline_decompose_cubicto<B: PathBuilder>(control: *const FT_Vector, control2
 	let cv2 = unsafe { &*control2 };
 	let vector = unsafe { &*to };
 	builder.cubic_bezier_to(
-		euclid::point2(cv.x as f32 * 64.0, cv.y as f32 * 64.0),
-		euclid::point2(cv2.x as f32 * 64.0, cv2.y as f32 * 64.0),
-		euclid::point2(vector.x as f32 * 64.0, vector.y as f32 * 64.0)
+		euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0),
+		euclid::point2(cv2.x as f32 / 64.0, cv2.y as f32 / 64.0),
+		euclid::point2(vector.x as f32 / 64.0, vector.y as f32 / 64.0)
 	);
 
 	return 0;

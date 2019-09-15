@@ -15,5 +15,5 @@ env_logger = "0.5"
 xcb = "0.8"
 
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
-peridot-vg = { path = "../../vg" }
+peridot-vg = { path = "../../vg", features = ["use-freetype", "use-fontconfig"] }
 peridot_derive = { path = "../../derive" }

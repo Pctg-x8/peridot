@@ -3,7 +3,7 @@
 use fontconfig::*;
 use std::ptr::NonNull;
 use std::mem::MaybeUninit;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 pub struct Config { ptr: NonNull<FcConfig> }
 impl Config
@@ -28,6 +28,44 @@ impl Config
 		let ptr = unsafe { FcFontMatch(self.ptr.as_ptr(), pat.ptr.as_ptr(), &mut _res) };
 
 		NonNull::new(ptr).map(|ptr| Pattern { ptr })
+	}
+	pub fn sort_fonts(&self, pat: &Pattern) -> Option<FontSet>
+	{
+		let mut _res = 0;
+		let ptr = unsafe { FcFontSort(self.ptr.as_ptr(), pat.ptr.as_ptr(), FcTrue, std::ptr::null_mut(), &mut _res) };
+
+		NonNull::new(ptr).map(|ptr| FontSet { ptr })
+	}
+}
+
+pub struct PatternRef { ptr: NonNull<FcPattern> }
+impl PatternRef
+{
+	pub fn get_filepath(&self) -> Option<&CStr>
+	{
+		let mut file = MaybeUninit::uninit();
+		let res = unsafe { FcPatternGetString(self.ptr.as_ptr(), FC_FILE.as_ptr() as _, 0, file.as_mut_ptr()) };
+		if res == FcResultMatch
+		{
+			Some(unsafe { CStr::from_ptr(file.assume_init() as *const _) })
+		}
+		else
+		{
+			None
+		}
+	}
+	pub fn get_face_index(&self) -> Option<u32>
+	{
+		let mut index = MaybeUninit::uninit();
+		let res = unsafe { FcPatternGetInteger(self.ptr.as_ptr(), FC_INDEX.as_ptr() as _, 0, index.as_mut_ptr()) };
+		if res == FcResultMatch
+		{
+			Some(unsafe { index.assume_init() as _ })
+		}
+		else
+		{
+			None
+		}
 	}
 }
 
@@ -56,38 +94,38 @@ impl Pattern
 
 	pub fn default_substitute(&mut self) { unsafe { FcDefaultSubstitute(self.ptr.as_ptr()); } }
 
-	pub fn get_filepath(&self) -> Option<&CStr>
-	{
-		let mut file = MaybeUninit::uninit();
-		let res = unsafe { FcPatternGetString(self.ptr.as_ptr(), FC_FILE.as_ptr() as _, 0, file.as_mut_ptr()) };
-		if res == FcResultMatch
-		{
-			Some(unsafe { CStr::from_ptr(file.assume_init() as *const _) })
-		}
-		else
-		{
-			None
-		}
-	}
-	pub fn get_face_index(&self) -> Option<u32>
-	{
-		let mut index = MaybeUninit::uninit();
-		let res = unsafe { FcPatternGetInteger(self.ptr.as_ptr(), FC_INDEX.as_ptr() as _, 0, index.as_mut_ptr()) };
-		if res == FcResultMatch
-		{
-			Some(unsafe { index.assume_init() as _ })
-		}
-		else
-		{
-			None
-		}
-	}
+	pub fn dump(&self) { unsafe { FcPatternPrint(self.ptr.as_ptr()); } }
 }
 impl Drop for Pattern
 {
 	fn drop(&mut self)
 	{
 		unsafe { FcPatternDestroy(self.ptr.as_ptr()); }
+	}
+}
+impl std::ops::Deref for Pattern
+{
+	type Target = PatternRef;
+	fn deref(&self) -> &PatternRef { unsafe { std::mem::transmute(self) } }
+}
+
+pub struct FontSet { ptr: NonNull<FcFontSet> }
+impl FontSet
+{
+	pub fn dump(&self) { unsafe { FcFontSetPrint(self.ptr.as_ptr()); } }
+
+	pub fn iter(&self) -> impl Iterator<Item = PatternRef>
+	{
+		let sliced = unsafe { std::slice::from_raw_parts(self.ptr.as_ref().fonts, self.ptr.as_ref().nfont as _) };
+
+		sliced.into_iter().map(|&p| unsafe { PatternRef { ptr: NonNull::new_unchecked(p) } })
+	}
+}
+impl Drop for FontSet
+{
+	fn drop(&mut self)
+	{
+		unsafe { FcFontSetDestroy(self.ptr.as_ptr()); }
 	}
 }
 

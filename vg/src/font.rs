@@ -1,6 +1,6 @@
 
 use euclid::Rect;
-use peridot::math::{Vector2, Vector2F32};
+use peridot::math::Vector2;
 use lyon_path::builder::PathBuilder;
 
 #[cfg(target_os = "macos")] use appkit::ObjcObjectBase;
@@ -91,7 +91,7 @@ impl FontProvider
 
 #[cfg(target_os = "macos")] type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
 #[cfg(target_os = "windows")] type UnderlyingHandle = comdrive::dwrite::FontFace;
-#[cfg(feature = "use-freetype")] type UnderlyingHandle = self::ft_drivers::Face;
+#[cfg(feature = "use-freetype")] type UnderlyingHandle = self::ft_drivers::FaceGroup;
 pub struct Font(UnderlyingHandle, f32);
 #[cfg(target_os = "macos")]
 impl FontProvider
@@ -262,11 +262,20 @@ impl FontProvider
             .ok_or(FontConstructionError::SysAPICallError("FcPatternBuild"))?;
         self.fc.substitute_pattern(&mut pat);
         pat.default_substitute();
-        let font = self.fc.match_font(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontMatch"))?;
-        let font_path = font.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
-        let face_index = font.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
+        let fonts = self.fc.sort_fonts(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
 
-        Ok(Font(self.ftlib.new_face(font_path.as_ptr() as *const _, face_index as _), size))
+        let group_desc: Vec<(*const i8, i64)> = fonts.iter().map(|f|
+        {
+            let font_path = f.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
+            let face_index = f.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
+
+            Ok((font_path.as_ptr(), face_index as _))
+        }).collect::<Result<_, FontConstructionError>>()?;
+        
+        let face = self.ftlib.new_face_group(&group_desc[..]);
+        face.set_size(size);
+
+        Ok(Font(face, size))
     }
     #[cfg(not(feature = "use-fontconfig"))]
     pub fn best_match(_: &str, _: &FontProperties, _: f32) -> Result<Font, FontConstructionError>
@@ -279,35 +288,36 @@ impl FontProvider
 #[cfg(feature = "use-freetype")]
 impl Font
 {
-    pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    pub fn set_em_size(&mut self, size: f32) { self.1 = size; self.0.set_size(size); }
     fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 { self.0.ascender() as f32 * self.scale_value() }
 
-    pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
+    pub(crate) fn glyph_id(&self, c: char) -> Option<(usize, u32)>
     {
-        Some(self.0.char_index(c))
+        self.0.char_index(c)
     }
-    pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
+    pub(crate) fn advance_h(&self, glyph: (usize, u32)) -> Result<f32, GlyphLoadingError>
     {
-        self.0.load_glyph(glyph)?;
+        self.0.get(glyph.0).load_glyph(glyph.1)?;
 
-        Ok(self.0.glyph_advance().x as f32 * 64.0)
+        Ok(self.0.get(glyph.0).glyph_advance().x as f32 / 64.0)
     }
-    pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
+    pub(crate) fn bounds(&self, glyph: (usize, u32)) -> Result<Rect<f32>, GlyphLoadingError>
     {
-        self.0.load_glyph(glyph)?;
-        let m = self.0.glyph_metrics();
+        let fnt = self.0.get(glyph.0);
+        fnt.load_glyph(glyph.1)?;
+        let m = fnt.glyph_metrics();
         
         Ok(Rect::new(
             euclid::point2(m.horiBearingX as f32 * 64.0, m.horiBearingY as f32 * 64.0),
             euclid::size2(m.width as f32 * 64.0, m.height as f32 * 64.0)
         ))
     }
-    pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
+    pub(crate) fn outline<B: PathBuilder>(&self, glyph: (usize, u32), builder: &mut B) -> Result<(), GlyphLoadingError>
     {
-        self.0.load_glyph(glyph)?;
-        self.0.decompose_outline(builder);
+        self.0.get(glyph.0).load_glyph(glyph.1)?;
+        self.0.get(glyph.0).decompose_outline(builder);
 
         Ok(())
     }

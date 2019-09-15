@@ -68,7 +68,7 @@ impl Context {
 
     pub fn text(&mut self, font: &Font, text: &str) -> Result<&mut Self, GlyphLoadingError>
     {
-        let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or(0));
+        let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or_default());
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
         for g in glyphs
         {
