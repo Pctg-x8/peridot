@@ -36,7 +36,7 @@ tolower($0) ~ /^\[package\]/ { inpkg=1; }
 inpkg==1 && match($0, /^[ \t]*name[ \t]*=[ \t]*"(.*)"/, m) { print m[1]; }' < $1
 }
 
-PACKAGE_NAME=`find_package_names $USERLIB_DIRECTORY/Cargo.toml`
+PACKAGE_NAME=`find_package_names $USERLIB_DIRECTORY/Cargo.toml | head -n 1`
 echo -e "\e[1;37m>\e[2;37m>\e[30m>\e[m Building Project \e[1;36m$PACKAGE_NAME\e[m for \e[33mLinux\e[m Deployment..."
 
 USERLIB_PATH=`realpath $USERLIB_DIRECTORY`
