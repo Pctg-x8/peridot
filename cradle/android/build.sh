@@ -2,9 +2,9 @@
 
 set -e
 
+AFTER_RUN=0
 SCRIPT_PATH=$(dirname $0)
 ENTRY_TY_NAME="Game"
-CARGO_SUBCOMMAND="build"
 unset PACKAGE_ID
 unset PERIDOT_EXTERNAL_ASSET_PATH
 while [ $# -gt 0 ]; do
@@ -14,7 +14,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--Run" | "-r")
-            CARGO_SUBCOMMAND="run"
+            AFTER_RUN=1
             shift
             ;;
         "-AssetDirectory" | "-a")
@@ -59,3 +59,10 @@ export LD=$ANDROID_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-
 (cd $SCRIPT_PATH; cargo build --features bedrock/VK_EXT_debug_report,bedrock/VK_KHR_android_surface,bedrock/DynamicLoaded --target aarch64-linux-android)
 [ ! -d $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a ] && mkdir -p $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a
 mv $SCRIPT_PATH/target/aarch64-linux-android/debug/libpegamelib.so $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a/
+
+echo -e "\e[1;37m>\e[2;37m>\e[30m>\e[m Building APK..."
+(cd $SCRIPT_PATH/apkbuild; ./gradlew assembleDebug)
+
+if [ $AFTER_RUN -ne 0 ]; then
+	(cd $SCRIPT_PATH/apkbuild; adb uninstall $PACKAGE_ID; adb install app/build/outputs/apk/debug/app-debug.apk && adb shell am start -n $PACKAGE_ID/android.app.NativeActivity)
+fi
