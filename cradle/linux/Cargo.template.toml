@@ -14,4 +14,4 @@ log = "0.4"
 env_logger = "0.5"
 xcb = "0.8"
 
-image-plane = { path = "/home/pctgx8/devel/peridot/examples/image-plane" }
+#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
