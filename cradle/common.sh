@@ -5,7 +5,12 @@ function find_package_names() {
 BEGIN { inpkg=0; }
 tolower($0) ~ /^\[package\]/ { inpkg=1; }
 /^\[/ && tolower($0) !~ /^\[package\]/ { inpkg=0; }
-inpkg==1 && match($0, /^[ \t]*name[ \t]*=[ \t]*"(.*)"/, m) { print m[1]; }' < $1
+inpkg==1 && $0 ~ /^[ \t]*name[ \t]*=[ \t]*/ {
+    split($0, parts, "=");
+    sub(/[ \t"]*$/, "", parts[2]);
+    sub(/^[ \t"]+/, "", parts[2]);
+    print parts[2];
+}' < $1
 }
 
 function gen_manifest() {
