@@ -9,3 +9,6 @@ peridot = { path = "../.." }
 peridot_derive = { path = "../../derive" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["VK_EXT_debug_report"] }
 log = "0.4"
+
+peridot-vg = { path = "../../vg" }
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
