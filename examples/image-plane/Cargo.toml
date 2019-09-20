@@ -8,3 +8,4 @@ edition = "2018"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
 peridot = { path = "../.." }
 peridot-math = { path = "../../math" }
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
