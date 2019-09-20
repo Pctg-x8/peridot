@@ -60,8 +60,10 @@ export LD=$ANDROID_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-
 [ ! -d $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a ] && mkdir -p $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a
 mv $SCRIPT_PATH/target/aarch64-linux-android/debug/libpegamelib.so $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a/
 
-echo -e "\e[1;37m>\e[2;37m>\e[30m>\e[m Building APK..."
+echo -e "🛠  Building APK..."
 (cd $SCRIPT_PATH/apkbuild; ./gradlew assembleDebug)
+
+echo -e "💠  $SCRIPT_PATH/apkbuild/app/build/outputs/apk/debug/app-debug.apk"
 
 if [ $AFTER_RUN -ne 0 ]; then
 	(cd $SCRIPT_PATH/apkbuild; adb uninstall $PACKAGE_ID; adb install app/build/outputs/apk/debug/app-debug.apk && adb shell am start -n $PACKAGE_ID/android.app.NativeActivity)
