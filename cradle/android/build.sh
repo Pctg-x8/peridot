@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
             export PERIDOT_EXTERNAL_ASSET_PATH=$(realpath $2)
             shift 2
             ;;
-        "-PackageID" | "-p")
+        "-AppPackageID" | "-p")
             export PACKAGE_ID=$2
             shift 2
             ;;
