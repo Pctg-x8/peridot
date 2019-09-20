@@ -33,7 +33,7 @@ if [ -z ${ASSET_PATH+x} ]; then echo "Error: AssetDirectory required"; exit 1; f
 . $SCRIPT_PATH/../common.sh
 
 PACKAGE_NAME=`find_package_names $USERLIB_DIRECTORY/Cargo.toml | head -n 1`
-echo -e "\x1b[1;37m>\x1b[2;37m>\x1b[30m>\x1b[m Building Project \x1b[1;36m$PACKAGE_NAME\x1b[m for \x1b[33mmacOS\x1b[m Deployment..."
+echo -e "🛠  Building Project \x1b[1;36m$PACKAGE_NAME\x1b[m for \x1b[33mmacOS\x1b[m Deployment..."
 
 USERLIB_PATH=`realpath $USERLIB_DIRECTORY`
 gen_manifest $PACKAGE_NAME $USERLIB_PATH $SCRIPT_PATH/Cargo.template.toml > $SCRIPT_PATH/Cargo.toml
@@ -45,6 +45,8 @@ $SCRIPT_PATH/../../target/release/peridot-archiver new $ASSET_PATH -o $SCRIPT_PA
 echo "Building GameCore >> App Bundle..."
 FEATURES="bedrock/VK_EXT_debug_report,bedrock/VK_MVK_macos_surface"
 (cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURES && xcodebuild -project peridot-cradle/peridot-cradle.xcodeproj -configuration Debug build)
+
+echo "💎  $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app"
 
 if [ $AFTER_RUN -ne 0 ]; then
     lldb $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app

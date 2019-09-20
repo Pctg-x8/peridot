@@ -38,7 +38,7 @@ export PERIDOT_WINDOWS_APPID=$APP_PACKAGE_ID
 . $SCRIPT_PATH/../common.sh
 
 PACKAGE_NAME=`find_package_names $USERLIB_DIRECTORY/Cargo.toml | head -n 1`
-echo -e "\x1b[1;37m>\x1b[2;37m>\x1b[30m>\x1b[m Building Project \x1b[1;36m$PACKAGE_NAME\x1b[m for \x1b[33mWin32\x1b[m Deployment..."
+echo -e "🛠  Building Project \x1b[1;36m$PACKAGE_NAME\x1b[m for \x1b[33mWin32\x1b[m Deployment..."
 
 USERLIB_PATH=`realpath $USERLIB_DIRECTORY`
 gen_manifest $PACKAGE_NAME $USERLIB_PATH $SCRIPT_PATH/Cargo.template.toml > $SCRIPT_PATH/Cargo.toml

@@ -31,7 +31,7 @@ if [[ ! -v USERLIB_DIRECTORY ]]; then echo "Error: User Game Project Directory r
 . $SCRIPT_PATH/../common.sh
 
 PACKAGE_NAME=`find_package_names $USERLIB_DIRECTORY/Cargo.toml | head -n 1`
-echo -e "\e[1;37m>\e[2;37m>\e[30m>\e[m Building Project \e[1;36m$PACKAGE_NAME\e[m for \e[33mLinux\e[m Deployment..."
+echo -e "🛠  Building Project \e[1;36m$PACKAGE_NAME\e[m for \e[33mLinux\e[m Deployment..."
 
 USERLIB_PATH=`realpath $USERLIB_DIRECTORY`
 gen_manifest $PACKAGE_NAME $USERLIB_PATH $SCRIPT_PATH/Cargo.template.toml > $SCRIPT_PATH/Cargo.toml
