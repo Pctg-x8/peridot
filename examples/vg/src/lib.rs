@@ -1,48 +1,57 @@
 
 use std::marker::PhantomData;
+#[macro_use] extern crate log;
+#[macro_use] extern crate peridot_derive;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules, vg, SpecConstantStorage};
+    SpecConstantStorage};
+use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot::math::Vector2;
 use std::rc::Rc;
 use std::borrow::Cow;
-use peridot::vg::{PathBuilder, FlatPathBuilder};
+use peridot_vg::{PathBuilder, FlatPathBuilder};
+use peridot_vg as pvg;
 
 #[derive(SpecConstantStorage)] #[repr(C)]
-pub struct VgRendererFragmentFixedColor {
+pub struct VgRendererFragmentFixedColor
+{
     r: f32, g: f32, b: f32, a: f32
 }
 
-pub struct Game<PL: peridot::NativeLinker> {
+pub struct Game<PL: peridot::NativeLinker>
+{
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle, buffer: Buffer,
     _bufview: br::BufferView, _bufview2: br::BufferView,
     _descriptors: (br::DescriptorSetLayout, br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
-    vg_renderer_params: peridot::VgRendererParams,
-    vg_renderer_params2: peridot::VgRendererParams,
-    vg_renderer_exinst: peridot::VgRendererExternalInstances,
-    vg_renderer_exinst2: peridot::VgRendererExternalInstances,
+    vg_renderer_params: pvg::RendererParams,
+    vg_renderer_params2: pvg::RendererParams,
+    vg_renderer_exinst: pvg::RendererExternalInstances,
+    vg_renderer_exinst2: pvg::RendererExternalInstances,
     ph: PhantomData<*const PL>
 }
-impl<PL: peridot::NativeLinker> Game<PL> {
+impl<PL: peridot::NativeLinker> Game<PL>
+{
     pub const NAME: &'static str = "Peridot Examples - VectorGraphics";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
-impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self {
-        let font = vg::Font::best_match(&[vg::FamilyName::SansSerif], &vg::FontProperties::new(), 12.0)
+impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
+{
+    fn init(e: &peridot::Engine<Self, PL>) -> Self
+    {
+        let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
             .expect("No Fonts");
-        let mut ctx = vg::Context::new();
+        let mut ctx = pvg::Context::new();
         ctx.text(&font, "Hello, World!|Opaque");
         {
-            let mut f0 = ctx.begin_figure(vg::FillRule::Winding);
+            let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
             f0.quadratic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -100.0).into());
             f0.end();
         }
         /*{
-            let mut f = ctx.begin_figure(vg::FillRule::Winding);
+            let mut f = ctx.begin_figure(pvg::FillRule::Winding);
             f.move_to(Vector2(200.0, -200.0 - 10.0).into());
             f.line_to(Vector2(200.0, -200.0 - 90.0).into());
             f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
@@ -54,9 +63,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
             f.close(); f.end();
         }*/
-        let mut ctx2 = vg::Context::new();
+        let mut ctx2 = pvg::Context::new();
         /*{
-            let mut f0 = ctx2.begin_figure(vg::FillRule::Winding);
+            let mut f0 = ctx2.begin_figure(pvg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
             /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
                 Vector2(100.0, -100.0).into());*/
@@ -67,7 +76,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f0.end();
         }*/
         /*{
-            let mut sp = vg::StrokePathBuilder::new(1.0);
+            let mut sp = pvg::StrokePathBuilder::new(1.0);
             sp.move_to(Vector2(200.0, -200.0 - 10.0).into());
             sp.line_to(Vector2(200.0, -200.0 - 90.0).into());
             sp.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
@@ -83,7 +92,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             f.end();
         }*/
         {
-            let mut f = ctx2.begin_figure(vg::FillRule::Winding);
+            let mut f = ctx2.begin_figure(pvg::FillRule::Winding);
             f.move_to(Vector2(200.0, -200.0 - 10.0).into());
             f.line_to(Vector2(200.0, -200.0 - 90.0).into());
             f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
@@ -103,11 +112,15 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
         
-        let buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer(buffer).expect("Mem Allocation");
-        let stg_buffer = MemoryBadget::new(&e.graphics()).alloc_with_buffer_host_visible(stg_buffer)
-            .expect("StgMem Allocation");
+        let mut mb = MemoryBadget::new(e.graphics());
+        let mut mb_stg = MemoryBadget::new(e.graphics());
+        mb.add(buffer);
+        mb_stg.add(stg_buffer);
+        let buffer = mb.alloc().expect("Mem Allocation").pop().expect("no objects?").unwrap_buffer();
+        let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("no objects?").unwrap_buffer();
         
-        let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(bp.total_size(), |m| {
+        let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(bp.total_size(), |m|
+        {
             let p0 = ctx.stage_data_into(m, vg_offs);
             let p1 = ctx2.stage_data_into(m, vg_offs2);
             return (p0, p1);
@@ -118,7 +131,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let bufview2 = buffer.create_view(br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
             vg_renderer_params2.transforms_byterange()).expect("Creating Transform BufferView 2");
 
-        e.submit_commands(|rec| {
+        e.submit_commands(|rec|
+        {
             let mut tfb = TransferBatch::new();
             tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, bp.total_size() as _);
             tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER.vertex_input(), &buffer,
@@ -134,7 +148,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
-        let dsl = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
+        let dsl = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings
+        {
             uniform_texel_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
             .. br::DSLBindings::empty()
         }).expect("DescriptorSetLayout Creation");
@@ -153,11 +168,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Loading PvpContainer")).expect("Creating Shader");
         let curve_shader = PvpShaderModules::new(&e.graphics(), e.load("shaders.curveColorFixed")
             .expect("Loading CurveShader")).expect("Creating CurveShader");
-        let vp = [br::vk::VkViewport {
+        let vp = [br::vk::VkViewport
+        {
             width: screen_size.0 as _, height: screen_size.1 as _, x: 0.0, y: 0.0,
             minDepth: 0.0, maxDepth: 1.0
         }];
-        let sc = [br::vk::VkRect2D {
+        let sc = [br::vk::VkRect2D
+        {
             offset: br::vk::VkOffset2D::default(),
             extent: br::vk::VkExtent2D { width: screen_size.0, height: screen_size.1 }
         }];
@@ -171,9 +188,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut interior_vertex_processing = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         let mut curve_vertex_processing = curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         interior_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         curve_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         
         interior_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
@@ -194,18 +211,21 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             Some(VgRendererFragmentFixedColor { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }.as_pair());
         let gp2_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Creating GraphicsPipeline2 for CurveRender"), &pl);
-        let vg_renderer_exinst = peridot::VgRendererExternalInstances {
+        let vg_renderer_exinst = pvg::RendererExternalInstances
+        {
             interior_pipeline: gp, curve_pipeline: gp_curve, transform_buffer_descriptor_set: descs[0],
             target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _)
         };
-        let vg_renderer_exinst2 = peridot::VgRendererExternalInstances {
+        let vg_renderer_exinst2 = pvg::RendererExternalInstances
+        {
             interior_pipeline: gp2, curve_pipeline: gp2_curve, transform_buffer_descriptor_set: descs[1],
             target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _)
         };
 
         let render_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffers.len())
             .expect("Creating RenderCB");
-        for (r, f) in render_cb.iter().zip(&framebuffers) {
+        for (r, f) in render_cb.iter().zip(&framebuffers)
+        {
             let mut cbr = r.begin().expect("Start Recoding CB");
             cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
             vg_renderer_params2.default_render_commands(e, &mut cbr, &buffer, &vg_renderer_exinst2);
@@ -213,37 +233,45 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             cbr.end_render_pass();
         }
 
-        Game {
+        Game
+        {
             ph: PhantomData, buffer, renderpass, framebuffers, _bufview: bufview, _bufview2: bufview2,
             _descriptors: (dsl, dp, descs), render_cb, vg_renderer_params, vg_renderer_exinst,
             vg_renderer_params2, vg_renderer_exinst2
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32)
-            -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        (None, br::SubmissionBatch {
+    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
+        -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
+    {
+        (None, br::SubmissionBatch
+        {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_backbuffer_resources(&mut self)
+    {
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>) {
+    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>)
+    {
         self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
-        for (r, f) in self.render_cb.iter().zip(&self.framebuffers) {
+        for (r, f) in self.render_cb.iter().zip(&self.framebuffers)
+        {
             let mut cbr = r.begin().expect("Start Recording CB");
             self.render_commands(e, &mut cbr, f);
         }
     }
 }
 
-impl<PL: peridot::NativeLinker> Game<PL> {
-    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer) {
+impl<PL: peridot::NativeLinker> Game<PL>
+{
+    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
+    {
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
         self.vg_renderer_params2.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst2);
         self.vg_renderer_params.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst);

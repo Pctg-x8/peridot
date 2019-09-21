@@ -5,7 +5,7 @@ use font_kit::{
 };
 pub use font_kit::{family_name::FamilyName, properties::Properties as FontProperties, hinting::HintingOptions};
 use euclid::Rect;
-use peridot_math::{Vector2, Vector2F32};
+use peridot::math::{Vector2, Vector2F32};
 use lyon_path::builder::PathBuilder;
 
 pub struct GlyphBound<T> { left: T, top: T, right: T, bottom: T }

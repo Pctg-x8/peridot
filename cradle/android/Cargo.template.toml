@@ -1,0 +1,19 @@
+[package]
+name = "peridot-cradle-android"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+name = "pegamelib"
+
+[dependencies]
+peridot = { path = "../.." }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Implements", "Presentation"] }
+android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
+log = "0.4"
+libc = "0.2"
+android_logger = "0.5"
+
+#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }

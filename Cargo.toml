@@ -12,17 +12,14 @@ libc = "*"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 num = "*"
 
-peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
-peridot-vg = { path = "vg" }
 
 image = "*"
 
 [workspace]
-exclude = ["extras/"]
+exclude = ["extras/", "cradle/"]
 members = [
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
-    "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
-    "tools/archiver"
+    "tools/shaderbuild", "tools/archiver"
 ]
