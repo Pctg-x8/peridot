@@ -3,7 +3,7 @@
 #[macro_use] extern crate log;
 extern crate libc;
 extern crate android_logger;
-extern crate bedrock; extern crate peridot_vertex_processing_pack;
+extern crate bedrock;
 extern crate android;
 
 use std::ptr::null_mut;

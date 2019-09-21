@@ -1,15 +1,15 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion = 25
+    compileSdkVersion = 28
     
     defaultConfig {
         applicationId = **APKAPPID**
         minSdkVersion 14
-        targetSdkVersion 21
+        targetSdkVersion 28
         buildToolsVersion "28.0.3"
         externalNativeBuild.cmake {
-            arguments '-DANDROID_STL=c++_static'
+            arguments '-DANDROID_STL=c++_shared'
         }
         ndk.abiFilters 'arm64-v8a'
     }
@@ -20,11 +20,11 @@ android {
     externalNativeBuild.cmake.path 'src/main/CMakeLists.txt'
     sourceSets.main {
         jniLibs.srcDir System.getenv("LocalAppData") + '/Android/Sdk/ndk-bundle/sources/third_party/vulkan/src/build-android/jniLibs'
-        assets.srcDir **ASSETDIR**
+        assets.srcDir '**ASSETDIR**'
     }
 }
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'com.android.support:appcompat-v7:25.4.0'
-    implementation 'com.android.support.constraint:constraint-layout:1.0.1'
+    implementation 'com.android.support:appcompat-v7:28.0.0'
+    implementation 'com.android.support.constraint:constraint-layout:1.1.3'
 }

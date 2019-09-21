@@ -18,9 +18,8 @@ peridot-math = { path = "math" }
 image = "*"
 
 [workspace]
-exclude = ["extras/"]
+exclude = ["extras/", "cradle/"]
 members = [
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
-    "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
-    "tools/archiver"
+    "tools/shaderbuild", "tools/archiver"
 ]
