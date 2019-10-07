@@ -22,6 +22,7 @@ pub use self::window::{PlatformRenderTarget, SurfaceInfo};
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
 pub mod utils; pub use self::utils::*;
+mod vkcommon; pub use self::vkcommon::*;
 
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
@@ -425,39 +426,6 @@ impl CommandBundle
         return Ok(CommandBundle(cp.alloc(count as _, true)?, cp));
     }
     pub fn reset(&self) -> br::Result<()> { self.1.reset(true) }
-}
-
-pub enum SubpassDependencyTemplates {}
-impl SubpassDependencyTemplates
-{
-    pub fn to_color_attachment_in(from_subpass: Option<u32>, occurence_subpass: u32, by_region: bool)
-        -> br::vk::VkSubpassDependency
-    {
-        br::vk::VkSubpassDependency
-        {
-            dstSubpass: occurence_subpass, srcSubpass: from_subpass.unwrap_or(br::vk::VK_SUBPASS_EXTERNAL),
-            dstStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
-            dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
-            dependencyFlags: if by_region { br::vk::VK_DEPENDENCY_BY_REGION_BIT } else { 0 },
-            srcStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
-            .. Default::default()
-        }
-    }
-}
-
-pub enum RenderPassTemplates {}
-impl RenderPassTemplates {
-    pub fn single_render(format: br::vk::VkFormat) -> br::RenderPassBuilder {
-        let mut b = br::RenderPassBuilder::new();
-        let adesc =
-            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
-            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
-        b.add_attachment(adesc);
-        b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
-        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
-
-        return b;
-    }
 }
 
 pub trait SpecConstantStorage {
