@@ -7,6 +7,3 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
 peridot = { path = ".." }
 peridot-serialization-utils = { path = "../serialization-utils" }
-
-[dependencies.bedrock]
-git = "https://github.com/Pctg-x8/bedrock"

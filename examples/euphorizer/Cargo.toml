@@ -7,5 +7,6 @@ edition = "2018"
 [dependencies]
 peridot = { path = "../../" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
+log = "0.4"
 
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }

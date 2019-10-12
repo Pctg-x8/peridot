@@ -3,13 +3,16 @@ use peridot::{Engine, EngineEvents, NativeLinker};
 use bedrock as br;
 use bedrock::traits::*;
 use peridot::{
-    PvpShaderModules, RenderPassTemplates, PixelFormat, CommandBundle, CBSubmissionType,
+    RenderPassTemplates, PixelFormat, CommandBundle, CBSubmissionType,
     math::{Vector2, Vector2F32}, Buffer, BufferPrealloc, BufferContent, MemoryBadget, TransferBatch,
     DescriptorSetUpdateBatch
 };
+use peridot_vertex_processing_pack::PvpShaderModules;
 use std::marker::PhantomData;
 use std::borrow::Cow;
 use std::time::Duration;
+
+#[macro_use] extern crate log;
 
 pub struct ShadingHeaders
 {
@@ -232,9 +235,10 @@ impl<NL: NativeLinker> Game<NL>
         rec.begin_render_pass(&sh_headers.renderpass, framebuffer, render_rect.clone(),
             &[br::ClearValue::Color([0.0; 4])], true);
         rec.bind_graphics_pipeline_pair(&shading.pipe, &sh_headers.layout);
+        info!("Rendering Viewport: {}x{}", frame_size.0, frame_size.1);
         rec.set_viewport(0, &[br::vk::VkViewport
         {
-            width: frame_size.0 as _, height: frame_size.1 as _, .. Default::default()
+            width: frame_size.0 as f32 * 0.5, height: frame_size.1 as f32 * 0.5, .. Default::default()
         }]);
         rec.set_scissor(0, &[render_rect.clone()]);
         rec.push_graphics_constant(br::ShaderStage::VERTEX, 0, &(frame_size.0 as f32 / frame_size.1 as f32));
