@@ -37,7 +37,7 @@ impl SurfaceInfo
         
         return Ok(SurfaceInfo { obj, fmt, pres_mode, available_composite_alpha });
     }
-    pub fn format(&self) -> br::vk::VkFormat { self.fmt.format }
+    pub fn format(&self) -> PixelFormat { unsafe { PixelFormat::coerce(self.fmt.format) } }
 }
 
 pub(super) struct WindowRenderTargets

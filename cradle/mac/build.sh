@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         *)
-            if [ -z ${USERLIB_DIRECTORY+x} ]; then USERLIB_DIRECTORY=$1; fi
+            if [ -z ${USERLIB_DIRECTORY+x} ]; then USERLIB_DIRECTORY=$(realpath $1); fi
             shift
             ;;
     esac
@@ -49,5 +49,5 @@ FEATURES="bedrock/VK_EXT_debug_report,bedrock/VK_MVK_macos_surface"
 echo "💎  $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app"
 
 if [ $AFTER_RUN -ne 0 ]; then
-    lldb $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app
+    lldb -o run $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app
 fi

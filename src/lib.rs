@@ -127,7 +127,7 @@ impl<E, PL> Engine<E, PL>
     pub fn graphics_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     // 将来的に分かれるかも？
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
-    pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
+    pub fn backbuffer_format(&self) -> PixelFormat { self.surface.format() }
     pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
     pub fn input(&self) -> &InputProcess { &self.ip }
     

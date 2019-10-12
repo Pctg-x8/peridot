@@ -315,6 +315,9 @@ impl PixelFormat {
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24
         }
     }
+
+    /// Coercing Native Format types into this type.
+    pub unsafe fn coerce(nf: br::vk::VkFormat) -> Self { std::mem::transmute(nf) }
 }
 
 pub struct Texture2D(br::ImageView, Image);
