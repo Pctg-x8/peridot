@@ -137,6 +137,57 @@ impl Primitive<math::Vector4F32>
 
 #[repr(C, align(16))]
 #[derive(Debug, Clone, PartialEq)]
+pub struct VertexUV2D
+{
+    pub pos: math::Vector2F32,
+    pub uv: math::Vector2F32
+}
+impl Primitive<VertexUV2D>
+{
+    /// 0.0 to size squared 2d plane with normalized uv, rendered as triangle strip
+    pub fn uv_plane(size: f32) -> Self
+    {
+        Primitive
+        {
+            vertices: vec![
+                VertexUV2D { pos: math::Vector2( 0.0,  0.0), uv: math::Vector2(0.0, 0.0) },
+                VertexUV2D { pos: math::Vector2( 0.0, size), uv: math::Vector2(0.0, 1.0) },
+                VertexUV2D { pos: math::Vector2(size,  0.0), uv: math::Vector2(1.0, 0.0) },
+                VertexUV2D { pos: math::Vector2(size, size), uv: math::Vector2(1.0, 1.0) }
+            ]
+        }
+    }
+    /// -size to size squared 2d plane with normalized uv, rendered as triangle strip
+    pub fn uv_plane_centric(size: f32) -> Self
+    {
+        Primitive
+        {
+            vertices: vec![
+                VertexUV2D { pos: math::Vector2(-size, -size), uv: math::Vector2(0.0, 0.0) },
+                VertexUV2D { pos: math::Vector2(-size,  size), uv: math::Vector2(0.0, 1.0) },
+                VertexUV2D { pos: math::Vector2( size, -size), uv: math::Vector2(1.0, 0.0) },
+                VertexUV2D { pos: math::Vector2( size,  size), uv: math::Vector2(1.0, 1.0) }
+            ]
+        }
+    }
+}
+impl IndexedPrimitive<VertexUV2D>
+{
+    /// 0.0 to size squared 2d plane with normalized uv,
+    /// vertices for rendered as triangle strip, indices for rendered as triangle list
+    pub fn uv_plane(size: f32) -> Self
+    {
+        Primitive::uv_plane(size).with_indices(vec![0, 1, 2, 1, 2, 3])
+    }
+    /// -size to size squared 2d plane with normalized uv,
+    /// vertices for rendered as triangle strip, indices for rendered as triangle list
+    pub fn uv_plane_centric(size: f32) -> Self
+    {
+        Primitive::uv_plane_centric(size).with_indices(vec![0, 1, 2, 1, 2, 3])
+    }
+}
+#[repr(C, align(16))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColoredVertex
 {
     pub pos: math::Vector4F32,
@@ -144,7 +195,7 @@ pub struct ColoredVertex
 }
 impl Primitive<ColoredVertex>
 {
-    /// colored coordinate axis and xz grid lines, rendered as line list
+    /// colored coordinate axis lines, rendered as line list
     pub fn limited_coordinate_axis(limit: u32) -> Self
     {
         Primitive
