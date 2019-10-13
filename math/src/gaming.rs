@@ -52,4 +52,15 @@ impl Camera {
     pub fn matrixes(&self) -> (Matrix4F32, Matrix4F32) {
         (self.view_matrix(), self.projection_matrix())
     }
+
+    /// Sets rotation of the camera to look at a point
+    pub fn look_at(&mut self, target: Vector3F32)
+    {
+        let eyedir = target - self.position.clone();
+        let basedir = Vector3(1.0f32, 0.0, 0.0);
+        
+        let axis = basedir.cross(&eyedir).normalize();
+        let angle = basedir.dot(&eyedir).acos();
+        self.rotation = Quaternion::new(angle, axis);
+    }
 }
