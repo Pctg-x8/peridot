@@ -89,13 +89,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
         
-        let cam = Camera
+        let mut cam = Camera
         {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
-            position: Vector3(-3.0, 0.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
+            position: Vector3(-4.0, -1.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
             // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
             depth_range: 1.0 .. 10.0
         };
+        cam.look_at(Vector3(0.0, 0.0, 0.0));
         buffers.mut_buffer.0.guard_map(buffers.mut_buffer.1, |m| unsafe
         {
             let (v, p) = cam.matrixes();

@@ -56,11 +56,12 @@ impl Camera {
     /// Sets rotation of the camera to look at a point
     pub fn look_at(&mut self, target: Vector3F32)
     {
-        let eyedir = target - self.position.clone();
-        let basedir = Vector3(1.0f32, 0.0, 0.0);
+        let eyedir = (target - self.position.clone()).normalize();
+        let basedir = Vector3(0.0f32, 0.0, 1.0);
         
         let axis = basedir.cross(&eyedir).normalize();
         let angle = basedir.dot(&eyedir).acos();
-        self.rotation = Quaternion::new(angle, axis);
+        println!("angle: {} axis: {:?}", angle, axis);
+        self.rotation = Quaternion::new(-angle, axis);
     }
 }
