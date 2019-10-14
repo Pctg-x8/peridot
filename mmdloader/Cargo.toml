@@ -8,3 +8,4 @@ edition = "2018"
 encoding = "*"
 log = "0.4"
 peridot-math = { path = "../math" }
+peridot = { path = ".." }

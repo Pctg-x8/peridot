@@ -1,5 +1,5 @@
 
-use std::io::{Read, Result as IOResult};
+use std::io::{Read, Result as IOResult, Error as IOError, Seek};
 use bedrock as br;
 use std::collections::BTreeMap;
 #[macro_use] extern crate serde_derive;
@@ -367,5 +367,72 @@ impl GLTFRenderableObject
     pub fn render_params(&self) -> &[(PBRMaterialData, Vec<(usize, Vec<MeshRenderingParam>)>)]
     {
         &self.rendering_groups
+    }
+}
+
+use peridot::{
+    Engine, EngineEvents, NativeLinker, BufferPrealloc, TextureInitializationGroup,
+    ModelData, LogicalAssetData, FromAsset, BufferContent
+};
+
+// Asset Impl //
+impl LogicalAssetData for GLTFRenderableObject { const EXT: &'static str = "glb"; }
+impl FromAsset for GLTFRenderableObject
+{
+    type Error = IOError;
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, mut asset: Asset) -> IOResult<Self>
+    {
+        let mut chunks = read_glb(&mut asset)?;
+        let info_chunk_data = chunks.next().expect("Info chunk needed")?.unwrap_json();
+        let info = deserialize_info_json(&info_chunk_data);
+        
+        Ok(GLTFRenderableObject::new(&info, chunks.map(|r| r.expect("IO Error"))))
+    }
+}
+
+// Rendering Impl //
+impl ModelData for GLTFRenderableObject
+{
+    type PreallocOffsetType = (Vec<usize>, Option<usize>);
+    type RendererParams = Vec<usize>;
+
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, _e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+        _: &mut TextureInitializationGroup) -> (Vec<usize>, Option<usize>)
+    {
+        let mut offsets = Vec::with_capacity(self.buffers().len());
+        for b in self.buffers()
+        {
+            offsets.push(alloc.add(BufferContent::RawPair(b.data.len() as _, 1, b.usage)) as _);
+        }
+        let wb_offs = self.u8_to_u16_buffer().map(|b|
+        {
+            alloc.add(BufferContent::RawPair((b.copied_bytes << 1) as u64, 2, b.usage)) as _
+        });
+        
+        (offsets, wb_offs)
+    }
+    fn stage_data_into(&self, mem: &br::MappedMemoryRange, (mut offsets, wbuf_offset): (Vec<usize>, Option<usize>))
+        -> Vec<usize>
+    {
+        for (&o, b) in offsets.iter().zip(self.buffers())
+        {
+            unsafe { mem.slice_mut(o, b.data.len()).copy_from_slice(&b.data); }
+        }
+        if let Some(wbuf_offs) = wbuf_offset
+        {
+            offsets.push(wbuf_offs);
+
+            let mut copied = 0;
+            for &(o, ref brange) in &self.u8_to_u16_buffer().expect("inconsistent state").buffer_slices
+            {
+                let slice = unsafe { mem.slice_mut::<u16>(wbuf_offs + copied, brange.len()) };
+                for (&b8, dest) in self.buffers()[o].data[brange.clone()].iter().zip(slice)
+                {
+                    *dest = b8 as u16;
+                }
+                copied += brange.len() << 1;
+            }
+        }
+        offsets
     }
 }

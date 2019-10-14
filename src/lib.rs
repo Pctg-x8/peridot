@@ -27,7 +27,6 @@ pub mod utils; pub use self::utils::*;
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 mod model; pub use self::model::*;
-pub use self::mmdloader::PolygonModelExtended;
 
 pub trait NativeLinker
 {
@@ -167,11 +166,13 @@ impl<E, PL> Engine<E, PL>
 }
 impl<E, PL: NativeLinker> Engine<E, PL>
 {
-    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
+    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>
+    {
+        A::from_asset(path, self.nativelink.asset_loader().get(path, A::EXT)?)
     }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error>
+    {
+        A::from_asset(path, self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
     }
 
     pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL> { AsyncAssetLoader(self.nativelink.asset_loader()) }
@@ -201,8 +202,9 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
 
         {
             let mut ulib = self.userlib_mut();
-            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, delta_time);
-            if let Some(mut cs) = copy_submission {
+            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, dt);
+            if let Some(mut cs) = copy_submission
+            {
                 // copy -> render
                 cs.signal_semaphores.to_mut().push(&self.g.buffer_ready);
                 fb_submission.wait_semaphores.to_mut().extend(vec![

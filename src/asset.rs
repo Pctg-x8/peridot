@@ -36,26 +36,6 @@ pub trait FromStreamingAsset: LogicalAssetData
     fn from_asset<Asset: Read + 'static>(path: &str, asset: Asset) -> Result<Self, Self::Error>;
 }
 
-impl LogicalAssetData for super::PolygonModelExtended { const EXT: &'static str = "pmx"; }
-impl FromAsset for super::PolygonModelExtended {
-    type Error = super::mmdloader::pmx::LoadingError;
-
-    fn from_asset<Asset: Read + Seek + 'static>(path: &str, asset: Asset) -> Result<Self, Self::Error> {
-        let mut base = path.split(".").map(|c| c.to_owned()).collect::<Vec<_>>(); base.pop();
-        super::PolygonModelExtended::load(base, BufReader::new(asset))
-    }
-}
-impl LogicalAssetData for super::mmdloader::vmd::MotionData { const EXT: &'static str = "vmd"; }
-impl FromAsset for super::mmdloader::vmd::MotionData
-{
-    type Error = super::mmdloader::vmd::LoadingError;
-
-    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, Self::Error>
-    {
-        super::mmdloader::vmd::MotionData::read(&mut BufReader::new(asset))
-    }
-}
-
 pub enum PixelFormatAlphaed<'d, T: 'd + IndexedParallelIterator<Item = [u8; 4]>> { Raw(&'d [u8]), Converted(T) }
 
 use image::{ImageDecoder, ImageResult, ImageError};
@@ -106,15 +86,6 @@ impl DecodedPixelData {
         {
             image::ColorType::RGBA(8) | image::ColorType::BGRA(8) => true,
             _ => false
-        }
-    }
-    pub fn format(&self) -> super::PixelFormat {
-        match self.color {
-            image::ColorType::RGBA(8) => super::PixelFormat::RGBA32,
-            image::ColorType::BGRA(8) => super::PixelFormat::BGRA32,
-            image::ColorType::RGB(8) => super::PixelFormat::RGB24,
-            image::ColorType::BGR(8) => super::PixelFormat::BGR24,
-            c => panic!("unsupported format: {:?}", c)
         }
     }
     pub fn format_alpha(&self) -> super::PixelFormat {
@@ -176,25 +147,4 @@ impl FromAsset for HDR {
 
         Ok(HDR { info: meta, pixels })
     }
-}
-
-pub struct GLTFBinary(gltf_loader::GLTFRenderableObject);
-impl LogicalAssetData for GLTFBinary { const EXT: &'static str = "glb"; }
-impl FromAsset for GLTFBinary
-{
-    type Error = IOError;
-    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, mut asset: Asset) -> IOResult<Self>
-    {
-        let mut chunks = gltf_loader::read_glb(&mut asset)?;
-        let info_chunk_data = chunks.next().expect("Info chunk needed")?.unwrap_json();
-        let info = gltf_loader::deserialize_info_json(&info_chunk_data);
-        let ro = gltf_loader::GLTFRenderableObject::new(&info, chunks.map(|r| r.expect("IO Error")));
-
-        Ok(GLTFBinary(ro))
-    }
-}
-impl Deref for GLTFBinary
-{
-    type Target = gltf_loader::GLTFRenderableObject;
-    fn deref(&self) -> &Self::Target { &self.0 }
 }
