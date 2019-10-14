@@ -280,42 +280,42 @@ impl<T: Mul + One + Copy> Mul<Vector3<T>> for Matrix4<T> where <T as Mul>::Outpu
 // Length Function and Normalization //
 impl Vector2<f32> {
     pub fn len(&self) -> f32 { self.len2().sqrt() }
-    pub fn normalize(self) -> Self {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector2(self.0 / l0, self.1 / l0)
     }
 }
 impl Vector2<f64> {
     pub fn len(&self) -> f64 { self.len2().sqrt() }
-    pub fn normalize(self) -> Self {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector2(self.0 / l0, self.1 / l0)
     }
 }
 impl Vector3<f32> {
     pub fn len(&self) -> f32 { self.len2().sqrt() }
-    pub fn normalize(self) -> Self {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector3(self.0 / l0, self.1 / l0, self.2 / l0)
     }
 }
 impl Vector3<f64> {
     pub fn len(&self) -> f64 { self.len2().sqrt() }
-    pub fn normalize(self) -> Self {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector3(self.0 / l0, self.1 / l0, self.2 / l0)
     }
 }
 impl Vector4<f32> {
     pub fn len(&self) -> f32 { self.len2().sqrt() }
-    pub fn normalize(self) -> Self {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector4(self.0 / l0, self.1 / l0, self.2 / l0, self.3 / l0)
     }
 }
 impl Vector4<f64> {
     pub fn len(&self) -> f64 { self.len2().sqrt() }
-    pub fn normalize(self) -> Self {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector4(self.0 / l0, self.1 / l0, self.2 / l0, self.3 / l0)
     }
@@ -426,9 +426,9 @@ macro_rules! VariadicElementOps {
             type Output = $e<<T as Neg>::Output>;
             fn neg(self) -> Self::Output { $e($(-self.$n),*) }
         }
-        impl<T: Mul<Output = T> + Add<Output = T>> $e<T> {
+        impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T> {
             /// Calculates an inner product between 2 vectors
-            pub fn dot(self, other: Self) -> T {
+            pub fn dot(&self, other: &Self) -> T {
                 CTSummation!($(self.$n * other.$n),*)
             }
         }
@@ -447,6 +447,26 @@ VariadicElementOps!(for Vector2 (0, 1));
 VariadicElementOps!(for Vector3 (0, 1, 2));
 VariadicElementOps!(for Vector4 (0, 1, 2, 3));
 
+impl<T> Vector2<T> where
+    T: Mul<Output = T> + Sub<Output = T> + Copy
+{
+    /// Cross product between 2d vectors
+    pub fn cross(&self, other: &Self) -> T { self.0 * other.1 - self.1 * other.0 }
+}
+impl<T> Vector3<T> where
+    T: Mul<T, Output = T> + Sub<T, Output = T> + Copy
+{
+    /// Cross product between 3d vectors
+    pub fn cross(&self, other: &Self) -> Self
+    {
+        let x = self.1 * other.2 - self.2 * other.1;
+        let y = self.2 * other.0 - self.0 * other.2;
+        let z = self.0 * other.1 - self.1 * other.0;
+
+        Vector3(x, y, z)
+    }
+}
+
 // Bedrock Interop //
 extern crate bedrock as br;
 impl<T: Into<u32> + Copy> br::ImageSize for Vector2<T> {
@@ -462,55 +482,61 @@ impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
     }
 }
 // euclid interops (for vg) //
-impl<T> Into<euclid::Point2D<T>> for Vector2<T> {
+impl<T> Into<euclid::Point2D<T>> for Vector2<T>
+{
     fn into(self) -> euclid::Point2D<T> { euclid::Point2D::new(self.0, self.1) }
 }
-impl<T> Into<euclid::Vector2D<T>> for Vector2<T> {
+impl<T> Into<euclid::Vector2D<T>> for Vector2<T>
+{
     fn into(self) -> euclid::Vector2D<T> { euclid::Vector2D::new(self.0, self.1) }
 }
 
-// cross product 2d //
-impl<T> Vector2<T> where T: Mul<Output = T> + Sub<Output = T> {
-    pub fn cross(self, other: Self) -> T { self.0 * other.1 - self.1 * other.0 }
-}
-
 #[cfg(test)]
-mod tests {
+mod tests
+{
     use super::*; use std;
 
-    #[test] fn vector_dimension_transform() {
+    #[test] fn vector_dimension_transform()
+    {
         assert_eq!(Vector3::from(Vector2(2, 3)), Vector3(2, 3, 1));
         assert_eq!(Vector4::from(Vector3(2.5, 3.0, 4.1)), Vector4(2.5, 3.0, 4.1, 1.0));
         assert_eq!(Vector3::from(Vector4(4, 6, 8, 2)), Vector3(2, 3, 4));
     }
-    #[test] fn matrix_multiplication_identity() {
+    #[test] fn matrix_multiplication_identity()
+    {
         assert_eq!(Matrix3::ONE * Vector3(1, 2, 3), Vector3(1, 2, 3));
         assert_eq!(Matrix2::ONE * Matrix2::scale(Vector2(2, 3)), Matrix2::scale(Vector2(2, 3)));
         assert_eq!(Matrix3::ONE * Matrix3::scale(Vector3(2, 3, 4)), Matrix3::scale(Vector3(2, 3, 4)));
         assert_eq!(Matrix4::ONE * Matrix4::scale(Vector4(2, 3, 4, 5)), Matrix4::scale(Vector4(2, 3, 4, 5)));
     }
-    #[test] fn matrix_transforming() {
+    #[test] fn matrix_transforming()
+    {
         assert_eq!(Matrix3([1, 0, 2], [0, 1, 3], [0, 0, 1]) * Vector2(0, 0), Vector3(2, 3, 1));
         assert_eq!(Matrix4([1, 0, 0, 2], [0, 1, 0, 3], [0, 0, 1, 4], [0, 0, 0, 1]) * Vector3(1, 2, 3),
             Vector4(3, 5, 7, 1));
         assert_eq!(Matrix2::scale(Vector2(2, 3)) * Vector2(1, 1), Vector2(2, 3));
     }
-    #[test] fn matrix_extension() {
+    #[test] fn matrix_extension()
+    {
         assert_eq!(Matrix3::from(Matrix2([0, 1], [1, 0])), Matrix3([0, 1, 0], [1, 0, 0], [0, 0, 1]));
         assert_eq!(Matrix4::from(Matrix3::from(Matrix2([0, 1], [2, 3]))),
             Matrix4([0, 1, 0, 0], [2, 3, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]));
     }
-    #[test] fn vector_ops() {
+    #[test] fn vector_ops()
+    {
         assert_eq!(Vector3(0, 1, 2) + Vector3(3, 4, 5), Vector3(3, 5, 7));
         assert_eq!(Vector3(6, 7, 8) - Vector3(3, 4, 5), Vector3(3, 3, 3));
         assert_eq!(Vector3(0, 2, 4) * 3, Vector3(0, 6, 12));
         assert_eq!(-Vector3(1, 2, -1), Vector3(-1, -2, 1));
-        assert_eq!(Vector3(2, 3, 4).dot(Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
-        assert_eq!(Vector2(0, 1).dot(Vector2(1, 0)), 0);
+        assert_eq!(Vector3(2, 3, 4).dot(&Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
+        assert_eq!(Vector2(0, 1).dot(&Vector2(1, 0)), 0);
         assert_eq!(Vector3(1, 2, 3).len2(), 1 * 1 + 2 * 2 + 3 * 3);
-        assert_eq!(Vector2(10, 3).cross(Vector2(4, 30)), 10 * 30 - 3 * 4);
+        assert_eq!(Vector2(10, 3).cross(&Vector2(4, 30)), 10 * 30 - 3 * 4);
+        assert_eq!(Vector3(2, 3, 4).cross(&Vector3(6, 7, 8)),
+            Vector3(3 * 8 - 4 * 7, 4 * 6 - 2 * 8, 2 * 7 - 6 * 3));
     }
-    #[test] fn inv_quaternion() {
+    #[test] fn inv_quaternion()
+    {
         let q = Quaternion(0.0, 1.0, 0.0, 3.0).normalize();
         let Quaternion(a, b, c, d) = q.clone() * -q;
         // approximate

@@ -1,16 +1,18 @@
 use super::*;
 use bedrock as br;
 
-use std::mem::{uninitialized, replace, forget};
+use std::mem::{replace, forget};
 
-pub trait PlatformRenderTarget {
+pub trait PlatformRenderTarget
+{
     fn surface_extension_name(&self) -> &'static str;
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
             -> br::Result<SurfaceInfo>;
     fn current_geometry_extent(&self) -> (usize, usize);
 }
 
-pub struct SurfaceInfo {
+pub struct SurfaceInfo
+{
     obj: br::Surface, fmt: br::vk::VkSurfaceFormatKHR, pres_mode: br::PresentMode,
     available_composite_alpha: br::CompositeAlpha
 }
@@ -41,7 +43,7 @@ impl SurfaceInfo
 
 pub(super) struct WindowRenderTargets
 {
-    chain: br::Swapchain, bb: Vec<br::ImageView>, command_completions_for_backbuffer: Vec<StateFence>
+    chain: br::Swapchain, bb: Vec<br::ImageView>
 }
 impl WindowRenderTargets
 {
@@ -63,14 +65,13 @@ impl WindowRenderTargets
         
         let isr_c0 = br::ImageSubresourceRange::color(0, 0);
         let images = chain.get_images()?;
-        let (mut bb, mut command_completions_for_backbuffer) =
-            (Vec::with_capacity(images.len()), Vec::with_capacity(images.len()));
-        for x in images {
+        let mut bb = Vec::with_capacity(images.len());
+        for x in images
+        {
             bb.push(x.create_view(None, None, &Default::default(), &isr_c0)?);
-            command_completions_for_backbuffer.push(StateFence::new(&g.device)?);
         }
 
-        return Ok(WindowRenderTargets { command_completions_for_backbuffer, bb, chain });
+        return Ok(WindowRenderTargets { bb, chain });
     }
 
     pub(super) fn emit_initialize_backbuffers_commands(&self, recorder: &mut br::CmdRecord) {
@@ -90,51 +91,34 @@ impl WindowRenderTargets
     pub fn present_on(&self, q: &br::Queue, index: u32, occurence_after: &[&br::Semaphore]) -> br::Result<()> {
         self.chain.queue_present(q, index, occurence_after)
     }
-    pub fn command_completion_for_backbuffer(&self, index: usize) -> &StateFence {
-        &self.command_completions_for_backbuffer[index]
-    }
-    pub fn command_completion_for_backbuffer_mut(&mut self, index: usize) -> &mut StateFence {
-        &mut self.command_completions_for_backbuffer[index]
-    }
-    pub fn wait_all_command_completion_for_backbuffer(&mut self) -> br::Result<()> {
-        {
-            let fences = self.command_completions_for_backbuffer.iter()
-                .filter(|x| x.is_signaled()).map(|x| x.object()).collect::<Vec<_>>();
-            if !fences.is_empty() { br::Fence::wait_multiple(&fences, true, None)?; }
-        }
-        for f in &mut self.command_completions_for_backbuffer { unsafe { f.unsignal(); } }
-        return Ok(());
-    }
-}
-impl Drop for WindowRenderTargets
-{
-    fn drop(&mut self)
-    {
-        for f in self.command_completions_for_backbuffer.iter_mut() { f.wait().expect("waiting completion fence"); }
-    }
 }
 
 pub enum StateFence { Signaled(br::Fence), Unsignaled(br::Fence) }
-impl StateFence {
+impl StateFence
+{
     pub fn new(d: &br::Device) -> br::Result<Self> { br::Fence::new(d, false).map(StateFence::Unsignaled) }
     /// must be coherent with background API
-    pub unsafe fn signal(&mut self) {
-        let unsafe_ = replace(self, uninitialized());
-        forget(replace(self, StateFence::Signaled(unsafe_.take_object())));
+    pub unsafe fn signal(&mut self)
+    {
+        let obj = std::ptr::read(match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _ });
+        forget(replace(self, StateFence::Signaled(obj)));
     }
     /// must be coherent with background API
-    unsafe fn unsignal(&mut self) {
-        let unsafe_ = replace(self, uninitialized());
-        forget(replace(self, StateFence::Unsignaled(unsafe_.take_object())));
+    unsafe fn unsignal(&mut self)
+    {
+        let obj = std::ptr::read(match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _ });
+        forget(replace(self, StateFence::Unsignaled(obj)));
     }
 
-    pub fn wait(&mut self) -> br::Result<()> {
+    pub fn wait(&mut self) -> br::Result<()>
+    {
         if let StateFence::Signaled(ref f) = *self { f.wait()?; f.reset()?; }
         unsafe { self.unsignal(); } return Ok(());
     }
     pub fn is_signaled(&self) -> bool { match *self { StateFence::Signaled(_) => true, _ => false } }
 
-    pub fn object(&self) -> &br::Fence {
+    pub fn object(&self) -> &br::Fence
+    {
         match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }
     }
     fn take_object(self) -> br::Fence { match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f } }

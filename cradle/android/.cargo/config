@@ -1,5 +1,0 @@
-[build]
-target = "aarch64-linux-android"
-
-[target.aarch64-linux-android]
-linker = "./android-build/bin/aarch64-linux-android-clang.cmd"

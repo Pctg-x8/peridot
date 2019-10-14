@@ -8,11 +8,7 @@ extern crate libc;
 extern crate pathfinder_partitioner;
 extern crate bedrock;
 pub extern crate peridot_math as math;
-pub extern crate peridot_vertex_processing_pack as vertex_processing_pack;
 pub extern crate peridot_archive as archive;
-pub extern crate peridot_vg as vg;
-pub extern crate peridot_mmdloader as mmdloader;
-extern crate peridot_gltf_loader as gltf_loader;
 
 use bedrock as br; use bedrock::traits::*;
 use std::ops::Deref;
@@ -33,7 +29,8 @@ mod input; pub use self::input::*;
 mod model; pub use self::model::*;
 pub use self::mmdloader::PolygonModelExtended;
 
-pub trait NativeLinker {
+pub trait NativeLinker
+{
     type AssetLoader: PlatformAssetLoader + Sync;
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
@@ -45,7 +42,8 @@ pub trait NativeLinker {
     fn rendering_precision(&self) -> f32 { 1.0 }
 }
 
-pub trait EngineEvents<PL: NativeLinker> : Sized {
+pub trait EngineEvents<PL: NativeLinker> : Sized
+{
     fn init(_e: &Engine<Self, PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
@@ -58,7 +56,8 @@ pub trait EngineEvents<PL: NativeLinker> : Sized {
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
     fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
 }
-impl<PL: NativeLinker> EngineEvents<PL> for () {
+impl<PL: NativeLinker> EngineEvents<PL> for ()
+{
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
 
@@ -86,22 +85,55 @@ impl<'d, NL: NativeLinker> AssetLoaderService for AsyncAssetLoader<'d, NL> {
     }
 }
 
-pub struct Engine<E: EngineEvents<PL>, PL: NativeLinker> {
-    nativelink: PL, surface: SurfaceInfo, wrt: Discardable<WindowRenderTargets>,
-    pub(self) g: Graphics, event_handler: Option<RefCell<E>>, ip: Rc<InputProcess>,
-    last_rendering_completion: StateFence, gametimer: Option<InstantTimer>
+pub trait FeatureRequests
+{
+    const ENABLE_GEOMETRY_SHADER: bool = false;
+    const ENABLE_TESSELLATION_SHADER: bool = false;
+    const USE_STORAGE_BUFFERS_IN_VERTEX_SHADER: bool = false;
+    
+    fn requested_features() -> br::vk::VkPhysicalDeviceFeatures
+    {
+        br::vk::VkPhysicalDeviceFeatures
+        {
+            geometryShader: Self::ENABLE_GEOMETRY_SHADER as _,
+            tessellationShader: Self::ENABLE_TESSELLATION_SHADER as _,
+            vertexPipelineStoresAndAtomics: Self::USE_STORAGE_BUFFERS_IN_VERTEX_SHADER as _,
+            .. Default::default()
+        }
+    }
 }
-impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
-    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self> {
-        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name())?;
+
+pub struct Engine<E, PL>
+{
+    nativelink: PL,
+    surface: SurfaceInfo,
+    wrt: Discardable<WindowRenderTargets>,
+    pub(self) g: Graphics,
+    event_handler: Option<RefCell<E>>,
+    ip: Rc<InputProcess>,
+    gametimer: GameTimer,
+    last_rendering_completion: StateFence
+}
+impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
+{
+    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self>
+    {
+        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name(),
+            E::requested_features())?;
         let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
             g.graphics_queue.family)?;
         trace!("Creating WindowRenderTargets...");
         let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
-        let mut this = Engine {
+        let mut this = Engine
+        {
+            event_handler: None,
+            ip: InputProcess::new().into(),
+            gametimer: GameTimer::new(),
             last_rendering_completion: StateFence::new(&g)?,
-            nativelink, g, surface, wrt, event_handler: None, ip: InputProcess::new().into(),
-            gametimer: None
+            nativelink,
+            g,
+            surface,
+            wrt
         };
         trace!("Initializing Game...");
         let eh = E::init(&this);
@@ -111,12 +143,11 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         this.nativelink.input_processor_mut().on_start_handle(&this.ip);
         return Ok(this);
     }
+}
+impl<E, PL> Engine<E, PL>
+{
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
-
-    pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL> { AsyncAssetLoader(self.nativelink.asset_loader()) }
-
-    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
@@ -133,26 +164,41 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
     pub fn submit_buffered_commands(&self, batches: &[br::SubmissionBatch], fence: &br::Fence) -> br::Result<()> {
         self.g.graphics_queue.q.submit(batches, Some(fence))
     }
+}
+impl<E, PL: NativeLinker> Engine<E, PL>
+{
+    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
+    }
+    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+    }
 
+    pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL> { AsyncAssetLoader(self.nativelink.asset_loader()) }
+    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
+}
+impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
+{
     pub fn do_update(&mut self)
     {
-        let delta_time = self.gametimer.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
-        self.gametimer = InstantTimer::now().into();
-
+        let dt = self.gametimer.delta_time();
+        
         let wait = br::CompletionHandler::Queue(&self.g.acquiring_backbuffer);
         let bb_index = self.wrt.get().acquire_next_backbuffer_index(None, wait);
-        match bb_index {
+        let bb_index = match bb_index
+        {
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize and do nothing
                 let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
                 self.do_resize_backbuffer(math::Vector2(w as _, h as _));
                 return;
-            }
-            _ => ()
+            },
+            e => e.expect("Acquiring available backbuffer index")
         };
-        let bb_index = bb_index.expect("Acquiring available backbuffer index");
-        self.last_rendering_completion.wait().expect("Waiting Last rendering completion");
+        self.last_rendering_completion.wait().expect("Waiting Last command completion");
+
         self.ip.prepare_for_frame();
+
         {
             let mut ulib = self.userlib_mut();
             let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, delta_time);
@@ -176,6 +222,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
             }
         }
         unsafe { self.last_rendering_completion.signal(); }
+
         let pr = self.wrt.get().present_on(&self.g.graphics_queue.q, bb_index, &[&self.g.present_ordering]);
         match pr {
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -187,8 +234,10 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
             v => v.expect("Present Submission")
         }
     }
-    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>) {
-        self.last_rendering_completion.wait().expect("Waiting Last rendering completion");
+
+    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>)
+    {
+        self.last_rendering_completion.wait().expect("Waiting Last command completion");
         self.userlib_mut_lw().discard_backbuffer_resources();
         self.wrt.discard_lw();
         self.wrt.set(
@@ -199,7 +248,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL> {
         self.userlib_mut().on_resize(self, new_size);
     }
 }
-impl<E: EngineEvents<PL>, PL: NativeLinker> Drop for Engine<E, PL> {
+impl<E, PL> Drop for Engine<E, PL> {
     fn drop(&mut self) {
         self.graphics().device.wait().expect("device error");
     }
@@ -241,7 +290,8 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str) -> br::Result<Self>
+    fn new(appname: &str, appversion: (u32, u32, u32), platform_surface_extension_name: &str,
+        features: br::vk::VkPhysicalDeviceFeatures) -> br::Result<Self>
     {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
@@ -270,8 +320,6 @@ impl Graphics
             warn!("Validation Layer is not found!");
         }
         let instance = ib.create()?;
-        unsafe { **std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr()) = 1; }
-        unsafe { *(*std::mem::transmute::<_, *mut *mut u8>(instance.native_ptr())).offset(8) = 1; }
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
@@ -283,6 +331,7 @@ impl Graphics
             let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extension("VK_KHR_swapchain").add_queue(qci);
             #[cfg(debug_assertions)] db.add_layer("VK_LAYER_LUNARG_standard_validation");
+            *db.mod_features() = features;
             db.create()?
         };
         
@@ -354,6 +403,19 @@ impl Graphics
 impl Deref for Graphics {
     type Target = br::Device;
     fn deref(&self) -> &br::Device { &self.device }
+}
+
+struct GameTimer(Option<InstantTimer>);
+impl GameTimer
+{
+    pub fn new() -> Self { GameTimer(None) }
+    pub fn delta_time(&mut self) -> Duration
+    {
+        let d = self.0.as_ref().map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
+        self.0 = InstantTimer::now().into();
+
+        return d;
+    }
 }
 
 struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
@@ -441,42 +503,6 @@ impl RenderPassTemplates {
         b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
 
         return b;
-    }
-}
-
-use std::ffi::CString;
-use vertex_processing_pack::PvpContainer;
-pub struct PvpShaderModules<'d> {
-    bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
-    vertex: br::ShaderModule, fragment: Option<br::ShaderModule>,
-    vertex_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
-    fragment_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
-}
-impl<'d> PvpShaderModules<'d> {
-    pub fn new(device: &br::Device, container: PvpContainer) -> br::Result<Self> {
-        Ok(PvpShaderModules {
-            vertex: br::ShaderModule::from_memory(device, &container.vertex_shader)?,
-            fragment: if let Some(b) = container.fragment_shader {
-                Some(br::ShaderModule::from_memory(device, &b)?)
-            }
-            else { None },
-            bindings: container.vertex_bindings, attributes: container.vertex_attributes,
-            vertex_spec_constants: None, fragment_spec_constants: None
-        })
-    }
-    pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d> {
-        let mut r = br::VertexProcessingStages::new(br::PipelineShader
-        {
-            module: &self.vertex, entry_name: CString::new("main").expect("unreachable"),
-            specinfo: self.vertex_spec_constants.clone()
-        }, &self.bindings, &self.attributes, primitive_topo);
-        if let Some(ref f) = self.fragment {
-            r.fragment_shader(br::PipelineShader {
-                module: f, entry_name: CString::new("main").expect("unreachable"),
-                specinfo: self.fragment_spec_constants.clone()
-            });
-        }
-        return r;
     }
 }
 

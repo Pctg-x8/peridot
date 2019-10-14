@@ -79,19 +79,23 @@ pub enum MouseInputMessage {
 impl InputMessage for MouseInputMessage {
     fn process(self, processor: &InputProcess) {
         match self {
-            MouseInputMessage::ButtonDown(x @ 0 ..= 4) => {
+            MouseInputMessage::ButtonDown(x @ 0 ..= 4) =>
+            {
                 processor.collected.borrow_mut().mouse_button[x] = true;
             },
             MouseInputMessage::ButtonDown(x) => trace!("MouseButton #{} Pressing", x),
-            MouseInputMessage::ButtonUp(x @ 0 ..= 4) => {
+            MouseInputMessage::ButtonUp(x @ 0 ..= 4) =>
+            {
                 processor.collected.borrow_mut().mouse_button[x] = false;
             },
             MouseInputMessage::ButtonUp(x) => trace!("MouseButton #{} Released", x),
-            MouseInputMessage::MoveRel(x, y) => {
+            MouseInputMessage::MoveRel(x, y) =>
+            {
                 processor.collected.borrow_mut().mouse_motion_x += x;
                 processor.collected.borrow_mut().mouse_motion_y += y;
             },
-            MouseInputMessage::Wheel(a) => {
+            MouseInputMessage::Wheel(a) =>
+            {
                 processor.collected.borrow_mut().mouse_wheel_motion += a;
             }
         }
