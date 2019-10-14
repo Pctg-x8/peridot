@@ -8,6 +8,7 @@ mod types; pub use self::types::*;
 mod reader; pub use self::reader::*;
 
 use std::io::Read;
+use std::mem::MaybeUninit;
 
 pub struct Header
 {
@@ -30,8 +31,13 @@ impl Header
     pub fn load<R: Read>(reader: &mut R) -> Result<Self, LoadingError>
     {
         #[repr(C)] struct FixedHeader { signature: [u8; 4], version: f32, globals_count: u8 }
-        let mut fixed_headers: FixedHeader = unsafe { std::mem::uninitialized() };
-        reader.read_exact(unsafe { &mut *(&mut fixed_headers as *mut _ as *mut [u8; 9]) })?;
+        let fixed_headers = unsafe
+        {
+            let mut b = MaybeUninit::<FixedHeader>::uninit();
+            reader.read_exact(&mut *(b.as_mut_ptr() as *mut [u8; 9]))?;
+
+            b.assume_init()
+        };
         if fixed_headers.signature != [0x50, 0x4d, 0x58, 0x20] { return Err(LoadingError::SignatureMismatch); }
         if fixed_headers.globals_count != 8 { return Err(LoadingError::MissingGlobals(fixed_headers.globals_count)); }
 

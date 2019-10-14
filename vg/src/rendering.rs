@@ -2,7 +2,7 @@
 
 use peridot::{
     LayoutedPipeline, ModelData, DefaultRenderCommands, Buffer, Engine, BufferPrealloc, BufferContent,
-    EngineEvents, NativeLinker
+    EngineEvents, NativeLinker, TextureInitializationGroup
 };
 use bedrock as br;
 use super::*;
@@ -46,7 +46,8 @@ impl ModelData for Context
     type PreallocOffsetType = ContextPreallocOffsets;
     type RendererParams = RendererParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> ContextPreallocOffsets
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, _e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+        _textures: &mut TextureInitializationGroup) -> ContextPreallocOffsets
     {
         let interior_positions_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_positions.len()).sum();
         let interior_indices_count = self.meshes().iter().map(|x| x.0.b_quad_vertex_interior_indices.len()).sum();

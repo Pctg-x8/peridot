@@ -9,3 +9,5 @@ encoding = "*"
 log = "0.4"
 peridot-math = { path = "../math" }
 peridot = { path = ".." }
+rayon = "1.0"
+bedrock = { git = "https://github.com/Pctg-x8/bedrock" }

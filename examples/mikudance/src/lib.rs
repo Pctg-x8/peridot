@@ -1,30 +1,37 @@
 
+#[macro_use] extern crate peridot_derive;
 use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    PvpShaderModules, vg, SpecConstantStorage, PolygonModelExtended, BufferContent,
-    DepthStencilTexture2D, TextureInitializationGroup, AssetLoaderService, Texture2D,
-    TextureInstantiatedGroup, GLTFBinary};
-use peridot::mmdloader::vmd::BoneMotionController;
+    SpecConstantStorage, BufferContent,
+    DepthStencilTexture2D, TextureInitializationGroup, Texture2D,
+    TextureInstantiatedGroup};
 use peridot::math::{Vector2, Vector3, Matrix4, Vector4, Camera, ProjectionMethod, Quaternion, One, Matrix4F32};
+use peridot_mmdloader::{vmd::BoneMotionController, PolygonModelExtended};
+use peridot_gltf_loader::GLTFRenderableObject;
+use peridot_vertex_processing_pack::PvpShaderModules;
 use std::rc::Rc;
 use std::borrow::Cow;
-use peridot::vg::FlatPathBuilder;
+use peridot_vg as vg;
+use peridot_vg::FlatPathBuilder;
 use peridot::Discardable;
 use std::time::Duration;
 use std::collections::HashMap;
 use std::cell::RefCell;
 
 #[derive(SpecConstantStorage)] #[repr(C)]
-pub struct VgRendererFragmentFixedColor {
+pub struct VgRendererFragmentFixedColor
+{
     r: f32, g: f32, b: f32, a: f32
 }
 
-#[repr(C)] pub struct WorldSettings {
+#[repr(C)] pub struct WorldSettings
+{
     vp: Matrix4<f32>, light_dir: Vector4<f32>
 }
-#[repr(C)] pub struct ObjectSettings {
+#[repr(C)] pub struct ObjectSettings
+{
     tf: Matrix4<f32>
 }
 
@@ -74,7 +81,7 @@ impl FixedMemoryBlock
     {
         FixedMemoryBlock
         {
-            textures: textures.into_textures_reversed(), buffer, frame_stg_buffer,
+            textures: textures.into_textures(), buffer, frame_stg_buffer,
             frame_update_bone_transforms
         }
     }
@@ -95,7 +102,7 @@ impl FixedMemoryBlock
 
 pub struct BoneMarker
 {
-    mesh: GLTFBinary, renderbufs: Vec<usize>, layout: br::PipelineLayout, pipelines: Vec<br::Pipeline>
+    mesh: GLTFRenderableObject, renderbufs: Vec<usize>, layout: br::PipelineLayout, pipelines: Vec<br::Pipeline>
 }
 impl BoneMarker
 {
@@ -162,9 +169,10 @@ pub struct Game<PL: peridot::NativeLinker>
         br::DescriptorPool, Vec<br::vk::VkDescriptorSet>),
     dsl_tex: br::DescriptorSetLayout,
     texture_descs: Vec<br::vk::VkDescriptorSet>,
-    vg_renderer_params: peridot::VgRendererParams,
-    vg_renderer_exinst: peridot::VgRendererExternalInstances,
-    gp_model: LayoutedPipeline, gp_model_tex: LayoutedPipeline, model_render_params: peridot::PMXRenderingParams,
+    vg_renderer_params: vg::RendererParams,
+    vg_renderer_exinst: vg::RendererExternalInstances,
+    gp_model: LayoutedPipeline, gp_model_tex: LayoutedPipeline,
+    model_render_params: peridot_mmdloader::PMXRenderingParams,
     current_secs: f32, moctrl_bone: BoneMotionController, bone_marker: BoneMarker,
     bone_index_map: HashMap<String, usize>, bone_transform_data: RefCell<Vec<BoneTransform>>,
     bone_update_cmd: CommandBundle,
@@ -173,6 +181,10 @@ pub struct Game<PL: peridot::NativeLinker>
 impl<PL: peridot::NativeLinker> Game<PL> {
     pub const NAME: &'static str = "Peridot Examples - MMD/VRM Loader";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
+}
+impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL>
+{
+    // empty
 }
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &peridot::Engine<Self, PL>) -> Self {
@@ -196,7 +208,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             rot: Quaternion::ONE
         }).collect();
 
-        let motion: peridot::mmdloader::vmd::MotionData =
+        let motion: peridot_mmdloader::vmd::MotionData =
             e.load("models.極楽浄土.極楽上半身2ボーンが長い用")
             .expect("Loading Motion");
         println!("MotionData:");
@@ -211,7 +223,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         println!("-- CameraFrameCount: {}", motion.camera_keyframes().len());
         let bone_ctrl = BoneMotionController::new(motion.bone_keyframes(), 30.0);
 
-        let bone_marker_mesh: GLTFBinary = e.load("icosphere").expect("Loading BoneMarker Model");
+        let bone_marker_mesh: GLTFRenderableObject = e.load("icosphere").expect("Loading BoneMarker Model");
         
         let cam = Camera
         {
@@ -415,9 +427,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut interior_vertex_processing = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         let mut curve_vertex_processing = curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         interior_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&vg::renderer_pivot::LEFT_TOP)));
         curve_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&peridot::vg::renderer_pivot::LEFT_TOP)));
+            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&vg::renderer_pivot::LEFT_TOP)));
         let text_color = VgRendererFragmentFixedColor { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
         interior_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
             Some(text_color.as_pair());
@@ -432,7 +444,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         gpb.vertex_processing(curve_vertex_processing);
         let gp_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Create GraphicsPipeline of CurveRender"), &pl);
-        let vg_renderer_exinst = peridot::VgRendererExternalInstances {
+        let vg_renderer_exinst = vg::RendererExternalInstances
+        {
             interior_pipeline: gp, curve_pipeline: gp_curve, transform_buffer_descriptor_set: descs[0],
             target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _)
         };

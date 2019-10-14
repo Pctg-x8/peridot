@@ -5,8 +5,14 @@
 extern crate encoding;
 
 use std::fs::File;
-use std::io::{Read, BufReader};
+use std::io::{Read, BufReader, Seek};
 use std::path::{Path, PathBuf};
+use std::ops::Range;
+use std::sync::RwLock;
+use rayon::prelude::*;
+use bedrock as br;
+
+#[macro_use] extern crate log;
 
 pub mod pmx;
 pub mod vmd;
@@ -56,7 +62,8 @@ impl PolygonModelExtended
     }
 }
 /// Exports
-impl PolygonModelExtended {
+impl PolygonModelExtended
+{
     /// Name of the model, in Japanese.
     pub fn name_jp(&self) -> &str { &self.header.model_name.jp }
     /// Name of the model
@@ -67,28 +74,30 @@ impl PolygonModelExtended {
 impl peridot::LogicalAssetData for PolygonModelExtended { const EXT: &'static str = "pmx"; }
 impl peridot::FromAsset for PolygonModelExtended
 {
-    type Error = super::mmdloader::pmx::LoadingError;
+    type Error = pmx::LoadingError;
 
     fn from_asset<Asset: Read + Seek + 'static>(path: &str, asset: Asset) -> Result<Self, Self::Error>
     {
         let mut base = path.split(".").map(|c| c.to_owned()).collect::<Vec<_>>(); base.pop();
-        super::PolygonModelExtended::load(base, BufReader::new(asset))
+        PolygonModelExtended::load(base, BufReader::new(asset))
     }
 }
-impl peridot::LogicalAssetData for mmdloader::vmd::MotionData { const EXT: &'static str = "vmd"; }
-impl peridot::FromAsset for mmdloader::vmd::MotionData
+impl peridot::LogicalAssetData for vmd::MotionData { const EXT: &'static str = "vmd"; }
+impl peridot::FromAsset for vmd::MotionData
 {
-    type Error = super::mmdloader::vmd::LoadingError;
+    type Error = vmd::LoadingError;
 
     fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> Result<Self, Self::Error>
     {
-        super::mmdloader::vmd::MotionData::read(&mut BufReader::new(asset))
+        vmd::MotionData::read(&mut BufReader::new(asset))
     }
 }
 
 use peridot::{
-    Engine, EngineEvents, NativeLinker, BufferPrealloc, TextureInitializationGroup
+    Engine, EngineEvents, NativeLinker, BufferPrealloc, TextureInitializationGroup, BufferContent,
+    BMP, PNG, TIFF, TGA, WebP, AssetLoaderService, Buffer
 };
+use peridot::math::{Vector4F32, Vector2F32, Vector4, Vector2};
 
 // Rendering Impl //
 pub struct PMXDataPlacementOffsets
@@ -114,7 +123,7 @@ impl peridot::ModelData for PolygonModelExtended
         let vbuf_suballoc_positions = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len())) as _;
         let vbuf_suballoc_normals = alloc.add(BufferContent::vertices::<Vector4F32>(self.vertices.len())) as _;
         let vbuf_suballoc_uvs = alloc.add(BufferContent::vertices::<Vector2F32>(self.vertices.len())) as _;
-        let ibuf_offset = if self.header.index_sizes.vertex == mmdloader::pmx::IndexSize::Long
+        let ibuf_offset = if self.header.index_sizes.vertex == pmx::IndexSize::Long
         {
             // use 32bit
             alloc.add(BufferContent::indices::<u32>(self.surfaces.len() * 3)) as _
@@ -191,24 +200,28 @@ impl peridot::ModelData for PolygonModelExtended
 
         let index_size = match self.surfaces
         {
-            mmdloader::pmx::SurfaceSection::Long(ref lv) => unsafe
+            pmx::SurfaceSection::Long(ref lv) => unsafe
             {
                 // 32bit indices
                 mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).clone_from_slice(&lv);
+
                 br::IndexType::U32
             },
-            mmdloader::pmx::SurfaceSection::Short(ref lv) => unsafe
+            pmx::SurfaceSection::Short(ref lv) => unsafe
             {
                 // 16bit indices
                 mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).clone_from_slice(&lv);
+
                 br::IndexType::U16
             },
-            mmdloader::pmx::SurfaceSection::Byte(ref lv) => unsafe
+            pmx::SurfaceSection::Byte(ref lv) => unsafe
             {
                 // 16bit indices with extending
-                for (d, s) in mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).iter_mut().zip(lv) {
+                for (d, s) in mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).iter_mut().zip(lv)
+                {
                     *d = [s[0] as u16, s[1] as u16, s[2] as u16];
                 }
+
                 br::IndexType::U16
             }
         };
