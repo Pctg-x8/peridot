@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
-    SpecConstantStorage, BufferContent,
+    SpecConstantStorage, BufferContent, Engine,
     DepthStencilTexture2D, TextureInitializationGroup, Texture2D,
     TextureInstantiatedGroup};
 use peridot::math::{Vector2, Vector3, Matrix4, Vector4, Camera, ProjectionMethod, Quaternion, One, Matrix4F32};
@@ -158,7 +158,7 @@ impl BoneTransform
     }
 }
 
-pub struct Game<PL: peridot::NativeLinker>
+pub struct Game<PL>
 {
     model: PolygonModelExtended,
     renderpass: br::RenderPass, framebuffers: Vec<br::Framebuffer>, render_cb: CommandBundle,
@@ -178,16 +178,19 @@ pub struct Game<PL: peridot::NativeLinker>
     bone_update_cmd: CommandBundle,
     ph: PhantomData<*const PL>
 }
-impl<PL: peridot::NativeLinker> Game<PL> {
+impl<PL> Game<PL>
+{
     pub const NAME: &'static str = "Peridot Examples - MMD/VRM Loader";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
-impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL>
+impl<PL> peridot::FeatureRequests for Game<PL>
 {
     // empty
 }
-impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self {
+impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
+{
+    fn init(e: &Engine<Self, PL>) -> Self
+    {
         let model: PolygonModelExtended =
             // e.load("models.SiroDanceWinterCostume_white_v1_1.siro_dance_wintercostume_white_v1_1")
             // e.load("models.サーバル.サーバル")
@@ -523,7 +526,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, delta_time: Duration)
+    fn update(&mut self, _e: &Engine<Self, PL>, on_backbuffer_of: u32, delta_time: Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         let dt_fractional = delta_time.as_secs() as f32 + (delta_time.subsec_nanos() as f32 / 1_000_000_000.0);
@@ -575,23 +578,25 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         })
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_backbuffer_resources(&mut self)
+    {
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
         self.depth_buffer.discard_lw();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>) {
+    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, _new_size: Vector2<usize>)
+    {
         let &br::Extent3D(w, h, _) = e.backbuffers()[0].size();
         
-        let depth_buffer = DepthStencilTexture2D::init(&e.graphics(), &Vector2(w, h),
-            peridot::PixelFormat::D24S8)
+        let depth_buffer = DepthStencilTexture2D::init(&e.graphics(), &Vector2(w, h), peridot::PixelFormat::D24S8)
             .expect("Init DepthStencilTexture2D");
         let mut mb_scrbuf = MemoryBadget::new(&e.graphics());
         mb_scrbuf.add(depth_buffer);
         self.depth_buffer.set_lw(DepthStencilTexture2D::new(
             mb_scrbuf.alloc().expect("ScreenBuffer Memory Allocation").pop().expect("No objects?").unwrap_image()
         ).expect("Creating DepthStencilTexture2D"));
-        e.submit_commands(|rec| {
+        e.submit_commands(|rec|
+        {
             rec.pipeline_barrier(br::PipelineStageFlags::TOP_OF_PIPE, br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
                 false, &[], &[], &[
                     br::ImageMemoryBarrier::new_raw(&self.depth_buffer.get(),
@@ -603,7 +608,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.framebuffers = e.backbuffers().iter()
             .map(|v| br::Framebuffer::new(&self.renderpass, &[v, &self.depth_buffer.get()], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
-        for (r, f) in self.render_cb.iter().zip(&self.framebuffers) {
+        for (r, f) in self.render_cb.iter().zip(&self.framebuffers)
+        {
             let mut cbr = r.begin().expect("Start Recording CB");
             self.render_commands(e, &mut cbr, f);
         }

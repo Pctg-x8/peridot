@@ -30,6 +30,7 @@ impl RigidBody
             v => return Err(LoadingError::UnknownPhysicsMode(v))
         };
 
+        #[allow(clippy::cast_ptr_alignment)]
         Ok(RigidBody
         {
             name, related_bone_index: IndexValue::from_bytes(&bytes, header.index_sizes.bone),

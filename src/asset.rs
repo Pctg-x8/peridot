@@ -1,11 +1,11 @@
 
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek};
-use std::ops::Deref;
 use rayon::prelude::*;
 use super::PixelFormat;
 
-pub trait PlatformAssetLoader {
+pub trait PlatformAssetLoader
+{
     type Asset: Read + Seek + 'static;
     type StreamingAsset: Read + 'static;
 
@@ -40,11 +40,13 @@ pub enum PixelFormatAlphaed<'d, T: 'd + IndexedParallelIterator<Item = [u8; 4]>>
 
 use image::{ImageDecoder, ImageResult, ImageError};
 use image::hdr::{HDRDecoder, HDRMetadata, RGBE8Pixel};
-pub struct DecodedPixelData {
+pub struct DecodedPixelData
+{
     pub pixels: Vec<u8>, pub size: math::Vector2<u32>,
     pub color: image::ColorType, pub stride: usize
 }
-impl DecodedPixelData {
+impl DecodedPixelData
+{
     pub fn new<'d, D>(decoder: D) -> ImageResult<Self> where D: ImageDecoder<'d>
     {
         let color = decoder.colortype();
@@ -88,8 +90,10 @@ impl DecodedPixelData {
             _ => false
         }
     }
-    pub fn format_alpha(&self) -> super::PixelFormat {
-        match self.color {
+    pub fn format_alpha(&self) -> super::PixelFormat
+    {
+        match self.color
+        {
             image::ColorType::RGBA(8) | image::ColorType::RGB(8) => super::PixelFormat::RGBA32,
             image::ColorType::BGRA(8) | image::ColorType::BGR(8) => super::PixelFormat::BGRA32,
             c => panic!("unsupported format: {:?}", c)

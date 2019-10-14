@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![feature(async_await)]
 
 // extern crate font_kit;
 #[macro_use] extern crate log;

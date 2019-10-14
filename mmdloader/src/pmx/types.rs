@@ -19,6 +19,7 @@ impl IndexValue
 {
     pub(crate) fn from_bytes(bytes: &[u8], size: IndexSize) -> Option<Self>
     {
+        #[allow(clippy::cast_ptr_alignment)]
         match size
         {
             IndexSize::Byte => unsafe
@@ -28,12 +29,12 @@ impl IndexValue
             },
             IndexSize::Short => unsafe
             {
-                let v = *(bytes.as_ptr() as *const i16);
+                let v = std::ptr::read_unaligned(bytes.as_ptr() as *const i16);
                 if v < 0 { None } else { IndexValue::Short(v).into() }
             },
             IndexSize::Long => unsafe
             {
-                let v = *(bytes.as_ptr() as *const i32);
+                let v = std::ptr::read_unaligned(bytes.as_ptr() as *const i32);
                 if v < 0 { None } else { IndexValue::Long(v).into() }
             }
         }
@@ -142,6 +143,7 @@ pub struct Vec2(pub f32, pub f32);
 pub struct Vec3(pub f32, pub f32, pub f32);
 #[repr(C)] #[derive(Clone, Debug)]
 pub struct Vec4(pub f32, pub f32, pub f32, pub f32);
+#[allow(clippy::cast_ptr_alignment)]
 impl TypedReader for Vec2
 {
     fn from_bytes(bytes: &[u8]) -> Self { unsafe { Clone::clone(&*(bytes.as_ptr() as *const Self)) } }
@@ -150,6 +152,7 @@ impl TypedReader for Vec2
         reader.read_exact(&mut bytes).map(move |_| unsafe { transmute(bytes) })
     }
 }
+#[allow(clippy::cast_ptr_alignment)]
 impl TypedReader for Vec3
 {
     fn from_bytes(bytes: &[u8]) -> Self { unsafe { Clone::clone(&*(bytes.as_ptr() as *const Self)) } }
@@ -158,6 +161,7 @@ impl TypedReader for Vec3
         reader.read_exact(&mut bytes).map(move |_| unsafe { transmute(bytes) })
     }
 }
+#[allow(clippy::cast_ptr_alignment)]
 impl TypedReader for Vec4
 {
     fn from_bytes(bytes: &[u8]) -> Self { unsafe { Clone::clone(&*(bytes.as_ptr() as *const Self)) } }

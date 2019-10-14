@@ -3,7 +3,6 @@ use super::*;
 use std::ops::{Deref, Range};
 use std::mem::{size_of, transmute, align_of};
 use num::Integer;
-use rayon::prelude::*;
 
 fn common_alignment(flags: br::BufferUsage, mut align: u64, a: &br::PhysicalDevice) -> u64
 {

@@ -78,7 +78,7 @@ impl peridot::FromAsset for PolygonModelExtended
 
     fn from_asset<Asset: Read + Seek + 'static>(path: &str, asset: Asset) -> Result<Self, Self::Error>
     {
-        let mut base = path.split(".").map(|c| c.to_owned()).collect::<Vec<_>>(); base.pop();
+        let mut base = path.split('.').map(|c| c.to_owned()).collect::<Vec<_>>(); base.pop();
         PolygonModelExtended::load(base, BufReader::new(asset))
     }
 }
@@ -108,7 +108,8 @@ pub struct PMXDataPlacementOffsets
 }
 pub struct PMXRenderingParams
 {
-    index_size: br::IndexType, offsets: PMXDataPlacementOffsets, index_count: u32,
+    index_size: br::IndexType, offsets: PMXDataPlacementOffsets,
+    index_count: u32,
     textured_surface_ranges: Vec<(usize, Range<u32>)>,
     untextured_surface_ranges: Vec<(usize, Range<u32>)>
 }
@@ -135,7 +136,7 @@ impl peridot::ModelData for PolygonModelExtended
         let al_ref = e.async_asset_loader();
         let mut texture_slot_numbers = Vec::with_capacity(self.textures.len());
         let textures_ref = RwLock::new(textures);
-        let ref cmp = self.base_components;
+        let cmp = &self.base_components;
         let loaded_textures = self.textures.par_iter().map(|tex|
         {
             let mut asset_components = cmp.iter().map(|x| x as _).collect::<Vec<&str>>();
@@ -217,6 +218,7 @@ impl peridot::ModelData for PolygonModelExtended
             pmx::SurfaceSection::Byte(ref lv) => unsafe
             {
                 // 16bit indices with extending
+                #[allow(clippy::cast_lossless)]
                 for (d, s) in mem.slice_mut(offsets.ibuf_offset, self.surfaces.len()).iter_mut().zip(lv)
                 {
                     *d = [s[0] as u16, s[1] as u16, s[2] as u16];
@@ -274,11 +276,12 @@ impl PMXRenderingParams
         texture_descs: &[br::vk::VkDescriptorSet])
     {
         let index_multiplier = if self.index_size == br::IndexType::U16 { 1 } else { 2 };
-        for &(nmat, ref sr) in &self.textured_surface_ranges {
+        for &(nmat, ref sr) in &self.textured_surface_ranges
+        {
             let texture_slot_index = self.offsets.texture_slot_numbers[
                 model.materials[nmat].texture_index.as_ref().expect("No Texture?").as_index() as usize];
             cmd.push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &model.materials[nmat].diffuse_color);
-            cmd.bind_graphics_descriptor_sets(2, &texture_descs[texture_slot_index .. texture_slot_index + 1], &[]);
+            cmd.bind_graphics_descriptor_sets(2, &texture_descs[texture_slot_index ..= texture_slot_index], &[]);
             cmd.bind_index_buffer(buffer,
                 self.offsets.ibuf_offset + ((sr.start as usize) << index_multiplier),
                 self.index_size);
