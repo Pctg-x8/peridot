@@ -196,7 +196,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             // e.load("models.サーバル.サーバル")
             e.load("models.SiroDanceMagatsuCostume_PMXv2_0_v1_1.siro")
             .expect("Loading Model");
-        for (n, tp) in model.textures.iter().enumerate() {
+        for (n, tp) in model.textures.iter().enumerate()
+        {
             println!("ModelTexture #{}: {}", n, tp.display());
         }
         println!("Vertex #0 Deformation: {:?}", model.vertices[0].deform);
@@ -304,7 +305,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let bufview = fmb_init.buffer.0.create_view(br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
             vg_renderer_params.transforms_byterange()).expect("Creating Transform BufferView");
 
-        e.submit_commands(|rec| {
+        e.submit_commands(|rec|
+        {
             let mut tfb = TransferBatch::new();
             tfb.add_mirroring_buffer(&fmb_init.stg_buffer.0, &fmb_init.buffer.0, 0, fmb_init.stg_buffer.1 as _);
             tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER.vertex_input(),
@@ -407,11 +409,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .expect("Loading defaultMMDShader with Texture")).expect("Creating defaultMMDShader_tex");
         let gltf_shader = PvpShaderModules::new(&e.graphics(), e.load("shaders.cheapGLTFShader")
             .expect("Loading cheapGLTFShader")).expect("Creating cheapGLTFShader");
-        let vp = [br::vk::VkViewport {
+        let vp = [br::vk::VkViewport
+        {
             width: screen_size.0 as _, height: screen_size.1 as _, x: 0.0, y: 0.0,
             minDepth: 0.0, maxDepth: 1.0
         }];
-        let sc = [br::vk::VkRect2D {
+        let sc = [br::vk::VkRect2D
+        {
             offset: br::vk::VkOffset2D::default(),
             extent: br::vk::VkExtent2D { width: screen_size.0, height: screen_size.1 }
         }];
@@ -494,7 +498,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
         let render_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, framebuffers.len())
             .expect("Creating RenderCB");
-        for (r, f) in render_cb.iter().zip(&framebuffers) {
+        for (r, f) in render_cb.iter().zip(&framebuffers)
+        {
             let mut cbr = r.begin().expect("Start Recoding CB");
             cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[
                 br::ClearValue::Color([0.0, 0.1, 0.2, 1.0]), br::ClearValue::DepthStencil(1.0, 0)
@@ -516,7 +521,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             cbr.end_render_pass();
         }
 
-        Game {
+        Game
+        {
             ph: PhantomData, renderpass, framebuffers, _bufview: bufview, memblock,
             _descriptors: (dsl, dsl_model, dsl_ssbo, dp, descs), render_cb, vg_renderer_params, vg_renderer_exinst,
             gp_model, model_render_params, depth_buffer: Discardable::from(depth_buffer),
@@ -616,8 +622,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     }
 }
 
-impl<PL: peridot::NativeLinker> Game<PL> {
-    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer) {
+impl<PL: peridot::NativeLinker> Game<PL>
+{
+    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
+    {
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[
             br::ClearValue::Color([0.0, 0.1, 0.2, 1.0]), br::ClearValue::DepthStencil(1.0, 0)
         ], true);
