@@ -48,6 +48,16 @@ impl IndexValue
             IndexValue::Long(v) => v as _
         }
     }
+    /// Returns `None` if negated index
+    pub fn as_uindex(&self) -> Option<usize>
+    {
+        match *self
+        {
+            IndexValue::Byte(v) => if v < 0 { None } else { Some(v as _) },
+            IndexValue::Short(v) => if v < 0 { None } else { Some(v as _) },
+            IndexValue::Long(v) => if v < 0 { None } else { Some(v as _) }
+        }
+    }
 
     /// Returns `None` if value less than 0
     pub fn read1<R: Read>(reader: &mut R, size: IndexSize) -> IOResult<Option<Self>>

@@ -7,7 +7,7 @@ use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBad
     SpecConstantStorage, BufferContent, Engine,
     DepthStencilTexture2D, TextureInitializationGroup, Texture2D,
     TextureInstantiatedGroup};
-use peridot::math::{Vector2, Vector3, Matrix4, Vector4, Camera, ProjectionMethod, Quaternion, One, Matrix4F32};
+use peridot::math::{Vector2, Vector3, Matrix4, Vector4, Camera, ProjectionMethod, Quaternion, One, Zero, Matrix4F32};
 use peridot_mmdloader::{vmd::BoneMotionController, PolygonModelExtended};
 use peridot_gltf_loader::GLTFRenderableObject;
 use peridot_vertex_processing_pack::PvpShaderModules;
@@ -150,13 +150,27 @@ impl BoneMarker
 }
 pub struct BoneTransform
 {
-    pos: Vector3<f32>, rot: Quaternion<f32>
+    pos: Vector3<f32>, rot: Quaternion<f32>,
+    parent_index: Option<usize>,
+    children: Vec<usize>
 }
 impl BoneTransform
 {
     pub fn matrix(&self) -> Matrix4<f32>
     {
         Matrix4::translation(self.pos.clone()) * Matrix4::from(self.rot.clone())
+    }
+}
+impl Default for BoneTransform
+{
+    fn default() -> Self
+    {
+        BoneTransform
+        {
+            pos: Vector3::ZERO, rot: Quaternion::ONE,
+            parent_index: None,
+            children: Vec::new()
+        }
     }
 }
 
@@ -208,11 +222,32 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         // println!("Display Frames: {:#?}", model.display_frames);
         let bone_index_map = model.bones.iter().enumerate().map(|(a, b)| (b.name.jp.clone(), a))
             .collect::<HashMap<_, _>>();
-        let bone_transform_data = model.bones.iter().map(|b| BoneTransform
+        let mut bone_transform_data: Vec<BoneTransform> = Vec::with_capacity(model.bones.len());
+        for (n, b) in model.bones.iter().enumerate()
         {
-            pos: Vector3(-0.7 + b.position.0, -0.5 + b.position.1, 0.3 + b.position.2),
-            rot: Quaternion::ONE
-        }).collect();
+            let parent_index = b.parent_index.as_ref().and_then(|p| p.as_uindex());
+
+            if let Some(bb) = bone_transform_data.get_mut(n)
+            {
+                bb.pos = Vector3(-0.7 + b.position.0, -0.5 * b.position.1, 0.3 + b.position.2);
+                bb.parent_index = parent_index;
+            }
+            else
+            {
+                bone_transform_data.push(BoneTransform
+                {
+                    pos: Vector3(-0.7 + b.position.0, -0.5 + b.position.1, 0.3 + b.position.2),
+                    parent_index,
+                    .. Default::default()
+                });
+            }
+
+            if let Some(pi) = parent_index
+            {
+                while bone_transform_data.len() < pi { bone_transform_data.push(Default::default()); }
+                bone_transform_data[pi].children.push(n);
+            }
+        }
 
         let motion: peridot_mmdloader::vmd::MotionData =
             e.load("models.極楽浄土.極楽上半身2ボーンが長い用")
