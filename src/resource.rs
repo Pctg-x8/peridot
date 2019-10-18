@@ -3,6 +3,7 @@ use super::*;
 use std::ops::{Deref, Range};
 use std::mem::{size_of, transmute, align_of};
 use num::Integer;
+use rayon::prelude::*;
 
 fn common_alignment(flags: br::BufferUsage, mut align: u64, a: &br::PhysicalDevice) -> u64
 {
@@ -121,6 +122,7 @@ impl<'g> BufferPrealloc<'g>
     {
         BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0, common_align: 1 }
     }
+    pub(crate) fn physical_device(&self) -> &br::PhysicalDevice { &self.g.adapter }
     pub fn build(&self) -> br::Result<br::Buffer>
     {
         br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
@@ -340,6 +342,21 @@ impl PixelFormat
             PixelFormat::D16 => 16
         }
     }
+    pub fn can_use_for(self, usage: br::ImageUsage, pd: &br::PhysicalDevice) -> bool
+    {
+        pd.image_format_properties(self as _,
+            br::vk::VK_IMAGE_TYPE_2D, br::vk::VK_IMAGE_TILING_OPTIMAL,
+            usage, br::ImageFlags::EMPTY).is_ok()
+    }
+    pub fn alphaed_format(self) -> Self
+    {
+        match self
+        {
+            PixelFormat::RGB24 => PixelFormat::RGBA32,
+            PixelFormat::BGR24 => PixelFormat::BGRA32,
+            e => e
+        }
+    }
 }
 
 pub struct Texture2D(br::ImageView, Image);
@@ -422,9 +439,9 @@ impl LDRImageAsset for WebP { fn into_pixel_data_info(self) -> DecodedPixelData 
 /// Stg1. Group what textures are being initialized
 pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<DecodedPixelData>);
 /// Stg2. Describes where textures are being staged
-pub struct TexturePreallocatedGroup(Vec<(DecodedPixelData, u64)>, Vec<br::Image>);
+pub struct TexturePreallocatedGroup(Vec<(DecodedPixelData, bool, u64)>, Vec<br::Image>);
 /// Stg3. Describes where textures are being staged, allocated and bound their memory
-pub struct TextureInstantiatedGroup(Vec<(DecodedPixelData, u64)>, Vec<Texture2D>);
+pub struct TextureInstantiatedGroup(Vec<(DecodedPixelData, bool, u64)>, Vec<Texture2D>);
 
 impl<'g> TextureInitializationGroup<'g>
 {
@@ -440,8 +457,12 @@ impl<'g> TextureInitializationGroup<'g>
         let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
         for pd in self.1
         {
-            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
-            images.push(o); stage_info.push((pd, offs));
+            let require_alphaed = !pd.format().can_use_for(br::ImageUsage::SAMPLED.transfer_dest(),
+                prealloc.physical_device());
+            let (o, offs) = Texture2D::init(self.0, &pd.size,
+                if require_alphaed { pd.format().alphaed_format() } else { pd.format() },
+                prealloc)?;
+            images.push(o); stage_info.push((pd, require_alphaed, offs));
         }
         return Ok(TexturePreallocatedGroup(stage_info, images));
     }
@@ -466,19 +487,32 @@ impl TextureInstantiatedGroup
     pub fn stage_data(&self, mr: &br::MappedMemoryRange)
     {
         trace!("Staging Texture Data...");
-        for &(ref pd, offs) in &self.0
+        for &(ref pd, require_alphaed, offs) in &self.0
         {
+            let fmt = if require_alphaed { pd.format().alphaed_format() } else { pd.format() };
             let s = unsafe
             {
-                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
+                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (fmt.bpp() >> 3) as usize)
             };
-            s.copy_from_slice(pd.u8_pixels());
+            if require_alphaed
+            {
+                match pd.u8_pixels_alphaed()
+                {
+                    PixelFormatAlphaed::Raw(r) => s.copy_from_slice(r),
+                    PixelFormatAlphaed::Converted(iter) =>
+                        s.par_chunks_mut(4).zip(iter).for_each(|(d, s)| d.copy_from_slice(&s))
+                }
+            }
+            else
+            {
+                s.copy_from_slice(pd.u8_pixels());
+            }
         }
     }
     /// Push transferring operations into a batcher.
     pub fn copy_from_stage_batches(&self, tb: &mut TransferBatch, stgbuf: &Buffer)
     {
-        for (t, &(_, offs)) in self.1.iter().zip(self.0.iter())
+        for (t, &(_, _, offs)) in self.1.iter().zip(self.0.iter())
         {
             tb.init_image_from(t.image(), (stgbuf, offs));
             tb.add_image_graphics_ready(br::PipelineStageFlags::FRAGMENT_SHADER, t.image(),

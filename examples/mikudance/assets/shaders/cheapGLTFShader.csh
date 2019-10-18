@@ -3,9 +3,15 @@ VertexInput {
     Binding 1 [PerVertex] { normal: vec3; }
 }
 Uniform[VertexShader](0, 0) WorldSettings { mat4 vp; vec4 light_dir; }
-Storage[VertexShader](1, 0) ObjectSettings { mat4 tf[INSTANCES]; }
 PushConstant[FragmentShader] MaterialData { vec4 albedo; float metallic, roughness; }
 SpecConstant[VertexShader](0) INSTANCES: uint = 1;
+
+Header[VertexShader] {
+    layout(set = 1, binding = 0) readonly buffer ObjectSettings
+    {
+        mat4 tf[INSTANCES];
+    };
+}
 
 VertexShader {
     RasterPosition = transpose(vp) * transpose(tf[gl_InstanceIndex]) * vec4(ipos, 1.0);

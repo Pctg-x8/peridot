@@ -51,23 +51,25 @@ impl FixedMemoryBlock
     pub fn init<'g>(g: &peridot::Graphics, mut prealloc: BufferPrealloc<'g>, textures: TextureInitializationGroup,
         prealloc_frame: BufferPrealloc<'g>) -> br::Result<FixedMemoryBlockInitialized>
     {
-        let texture_prealloc = textures.prealloc(&mut prealloc)?;
-        let stg_buffer = prealloc.build_upload()?;
-        let frame_stg_buffer = prealloc_frame.build_upload()?;
+        let texture_prealloc = textures.prealloc(&mut prealloc).expect("texture preallocation failed");
+        let stg_buffer = prealloc.build_upload().expect("build_upload failed");
+        let frame_stg_buffer = prealloc_frame.build_upload().expect("build_frame_stg_buffer failed");
         let stg_buffer_size = prealloc.total_size();
         let buffer_frame_updated_offset = prealloc.merge(&prealloc_frame);
-        let buffer = prealloc.build_transferred()?;
+        let buffer = prealloc.build_transferred().expect("build_transferred failed");
 
         let (mut mb, mut mb_stg) = (MemoryBadget::new(g), MemoryBadget::new(g));
         mb.add(buffer);
         mb_stg.add(stg_buffer);
-        let (textures, mut res) = texture_prealloc.alloc_and_instantiate(mb)?;
+        let (textures, mut res) = texture_prealloc.alloc_and_instantiate(mb).expect("textures alloc failed");
         let buffer = res.pop().expect("No objects?").unwrap_buffer();
-        let stg_buffer = mb_stg.alloc_upload()?.pop().expect("No objects?").unwrap_buffer();
+        let stg_buffer = mb_stg.alloc_upload().expect("stg_buffer alloc failed")
+            .pop().expect("No objects?").unwrap_buffer();
 
         let mut mb_stg_frame = MemoryBadget::new(g);
         mb_stg_frame.add(frame_stg_buffer);
-        let frame_stg_buffer = mb_stg_frame.alloc_upload()?.pop().expect("No objects?").unwrap_buffer();
+        let frame_stg_buffer = mb_stg_frame.alloc_upload().expect("frame_stg_buffer alloc failed")
+            .pop().expect("No objects?").unwrap_buffer();
 
         Ok(FixedMemoryBlockInitialized
         {
@@ -86,7 +88,7 @@ impl FixedMemoryBlock
         }
     }
 
-    pub fn iter_textures(&self) -> impl Iterator<Item = &Texture2D> { self.textures.iter().rev() }
+    pub fn iter_textures(&self) -> impl Iterator<Item = &Texture2D> { self.textures.iter() }
     pub fn update_frame_stg_buffer<F: FnOnce(&mut [Matrix4F32]) -> R, R>(&self, updater: F) -> br::Result<R>
     {
         self.frame_stg_buffer.0.guard_map(self.frame_stg_buffer.1, |m|
