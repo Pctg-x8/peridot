@@ -46,7 +46,9 @@ impl PvpContainer {
     }
 }
 
+#[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for PvpContainer { const EXT: &'static str = "pvp"; }
+#[cfg(feature = "with-loader-impl")]
 impl peridot::FromAsset for PvpContainer
 {
     type Error = IOError;
@@ -55,6 +57,7 @@ impl peridot::FromAsset for PvpContainer
         PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
     }
 }
+
 pub struct PvpShaderModules<'d>
 {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
