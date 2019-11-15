@@ -6,10 +6,11 @@ use peridot::math::{
 };
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
-    SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
+    SubpassDependencyTemplates, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
     FixedMemory, FixedBufferInitializer, AssetLoaderService
 };
+use peridot_vertex_processing_pack::PvpShaderModules;
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
@@ -58,6 +59,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
     pub const NAME: &'static str = "Peridot Examples - ImagePlane";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
+impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
     fn init(e: &peridot::Engine<Self, PL>) -> Self
@@ -87,13 +89,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
         
-        let cam = Camera
+        let mut cam = Camera
         {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
-            position: Vector3(-3.0, 0.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
+            position: Vector3(-4.0, -1.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
             // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
             depth_range: 1.0 .. 10.0
         };
+        cam.look_at(Vector3(0.0, 0.0, 0.0));
         buffers.mut_buffer.0.guard_map(buffers.mut_buffer.1, |m| unsafe
         {
             let (v, p) = cam.matrixes();
@@ -245,7 +248,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
     }
 }
 
-#[derive(Clone)] #[repr(C)]
+#[derive(Clone)] #[repr(C, align(4))]
 struct UVVert { pos: Vector3F32, uv: Vector2F32 }
 
 #[repr(C)] struct Uniform { camera: Matrix4F32, object: Matrix4F32 }

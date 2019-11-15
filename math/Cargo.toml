@@ -5,4 +5,4 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
-euclid = "*"
+euclid = "0.19"

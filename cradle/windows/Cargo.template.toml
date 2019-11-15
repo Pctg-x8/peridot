@@ -13,6 +13,7 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
 peridot = { path = "../.." }
 log = "0.4"
 env_logger = "0.5"
+#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
 
 [dependencies.winapi]
 version = "0.3"
