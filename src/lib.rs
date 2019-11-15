@@ -124,14 +124,6 @@ impl<E, PL> Engine<E, PL>
     fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
     fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
 
-    /// Retrieves an AssetLoaderService object for asynchronous asset loading.
-    pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL::AssetLoader>
-    {
-        AsyncAssetLoader(self.nativelink.asset_loader())
-    }
-
-    pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
-
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
     pub fn graphics_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
@@ -155,6 +147,11 @@ impl<E, PL: NativeLinker> Engine<E, PL>
     }
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+    }
+    /// Retrieves an AssetLoaderService object for asynchronous asset loading.
+    pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL::AssetLoader>
+    {
+        AsyncAssetLoader(self.nativelink.asset_loader())
     }
     
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
