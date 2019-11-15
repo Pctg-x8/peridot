@@ -26,13 +26,13 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         *)
-            if [[ ! -v USERLIB_DIRECTORY ]]; then USERLIB_DIRECTORY=$1; fi
+            if [ -z ${USERLIB_DIRECTORY+x} ]; then USERLIB_DIRECTORY=$1; fi
             shift
             ;;
     esac
 done
-if [[ ! -v USERLIB_DIRECTORY ]]; then echo "Error: User Game Project Directory required"; exit 1; fi
-if [[ ! -v PACKAGE_ID ]]; then echo "Error: Apk Package ID required"; exit 1; fi
+if [ -z ${USERLIB_DIRECTORY+x} ]; then echo "Error: User Game Project Directory required"; exit 1; fi
+if [ -z ${PACKAGE_ID+x} ]; then echo "Error: Apk Package ID required"; exit 1; fi
 
 . $SCRIPT_PATH/../common.sh
 function gen_android_files() {
