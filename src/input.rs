@@ -22,7 +22,8 @@ pub trait InputProcessPlugin
 {
     fn on_start_handle(&mut self, processor: &Rc<InputProcess>);
 }
-impl InputProcess {
+impl InputProcess
+{
     pub fn new() -> Self
     {
         let cd = AsyncCollectedData
@@ -45,7 +46,8 @@ impl InputProcess {
         fd.mouse_motion_x = replace(&mut cd.mouse_motion_x, 0);
         fd.mouse_motion_y = replace(&mut cd.mouse_motion_y, 0);
         fd.mouse_wheel_motion = replace(&mut cd.mouse_wheel_motion, 0);
-        for n in 0 .. 5 {
+        for n in 0 .. 5
+        {
             fd.mouse_up_inframe[n] = fd.mouse_pressing[n] && !cd.mouse_button[n];
             fd.mouse_down_inframe[n] = !fd.mouse_pressing[n] && cd.mouse_button[n];
             fd.mouse_pressing[n] = cd.mouse_button[n];
@@ -58,7 +60,7 @@ impl InputProcess {
         self.frame.borrow().mouse_down_inframe[0]
     }
     pub fn plane_touching(&self) -> bool
-{
+    {
         self.frame.borrow().mouse_pressing[0]
     }
     pub fn plane_delta_move(&self) -> (isize, isize)
@@ -99,22 +101,22 @@ impl InputMessage for MouseInputMessage
     {
         match self
         {
-            MouseInputMessage::ButtonDown(x @ 0 ..= 4) =>
+            Self::ButtonDown(x @ 0 ..= 4) =>
             {
                 processor.collected.borrow_mut().mouse_button[x] = true;
             },
-            MouseInputMessage::ButtonDown(x) => trace!("MouseButton #{} Pressing", x),
-            MouseInputMessage::ButtonUp(x @ 0 ..= 4) =>
+            Self::ButtonDown(x) => trace!("MouseButton #{} Pressing", x),
+            Self::ButtonUp(x @ 0 ..= 4) =>
             {
                 processor.collected.borrow_mut().mouse_button[x] = false;
             },
-            MouseInputMessage::ButtonUp(x) => trace!("MouseButton #{} Released", x),
-            MouseInputMessage::MoveRel(x, y) =>
+            Self::ButtonUp(x) => trace!("MouseButton #{} Released", x),
+            Self::MoveRel(x, y) =>
             {
                 processor.collected.borrow_mut().mouse_motion_x += x;
                 processor.collected.borrow_mut().mouse_motion_y += y;
             },
-            MouseInputMessage::Wheel(a) =>
+            Self::Wheel(a) =>
             {
                 processor.collected.borrow_mut().mouse_wheel_motion += a;
             }
