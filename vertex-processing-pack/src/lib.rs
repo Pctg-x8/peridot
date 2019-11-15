@@ -5,10 +5,13 @@ extern crate peridot_serialization_utils; use peridot_serialization_utils::*;
 
 use bedrock as br;
 use std::io::{
-    Read, Write, BufRead, BufReader, Seek, SeekFrom, Result as IOResult, Error as IOError, ErrorKind, Cursor
+    Write, BufRead, BufReader, Seek, SeekFrom, Result as IOResult, Error as IOError, ErrorKind, Cursor
 };
+#[cfg(feature = "with-loader-impl")]
+use std::io::Read;
 use std::fs::File;
 use std::path::Path;
+#[cfg(feature = "with-loader-impl")]
 use std::ffi::CString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +61,7 @@ impl peridot::FromAsset for PvpContainer
     }
 }
 
+#[cfg(feature = "with-loader-impl")]
 pub struct PvpShaderModules<'d>
 {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>, attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
@@ -65,6 +69,7 @@ pub struct PvpShaderModules<'d>
     vertex_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
     fragment_spec_constants: Option<(Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell<'d>)>,
 }
+#[cfg(feature = "with-loader-impl")]
 impl<'d> PvpShaderModules<'d>
 {
     pub fn new(device: &br::Device, container: PvpContainer) -> br::Result<Self>
