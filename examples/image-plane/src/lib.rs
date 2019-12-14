@@ -8,7 +8,8 @@ use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
-    FixedMemory, FixedBufferInitializer
+    FixedMemory, FixedBufferInitializer,
+    SpvBinary
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::borrow::Cow;
@@ -163,6 +164,27 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         ]));
         dsub.submit(&e.graphics());
 
+        let shadermod = e.load::<SpvBinary>("shaders.prim").expect("Loading prim")
+            .build_module(&e.graphics()).expect("Building ShaderModule failed");
+        let vsh_entry_name = std::ffi::CString::new("vsMain").expect("unfail");
+        let fsh_entry_name = std::ffi::CString::new("fsMain").expect("unfail");
+        let vbind = [
+            br::vk::VkVertexInputBindingDescription
+            { 
+                binding: 0, stride: std::mem::size_of::<UVVert>() as _,
+                inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX
+            }
+        ];
+        let vattr = [
+            br::vk::VkVertexInputAttributeDescription { location: 0, binding: 0, offset: 0, format: br::vk::VK_FORMAT_R32G32B32_SFLOAT },
+            br::vk::VkVertexInputAttributeDescription { location: 1, binding: 0, offset: 12, format: br::vk::VK_FORMAT_R32G32_SFLOAT }
+        ];
+        let mut vps = br::VertexProcessingStages::new(
+            br::PipelineShader { module: &shadermod, entry_name: vsh_entry_name, specinfo: None },
+            &vbind, &vattr, br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
+        );
+        vps.fragment_shader(br::PipelineShader { module: &shadermod, entry_name: fsh_entry_name, specinfo: None });
+
         let shaderfile = e.load("shaders.prim").expect("Loading prim");
         let shader = PvpShaderModules::new(&e.graphics(), shaderfile).expect("Create ShaderModules");
         let vp = [br::vk::VkViewport {
@@ -176,7 +198,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&descriptor_layout], &[])
             .expect("Create PipelineLayout").into();
         let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
-            .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
+            .vertex_processing(vps)
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(&e.graphics(), None).expect("Create GraphicsPipeline");
