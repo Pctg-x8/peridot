@@ -41,7 +41,7 @@ impl LogicalAssetData for SpvBinary { const EXT: &'static str = "spv"; }
 impl FromAsset for SpvBinary
 {
     type Error = IOError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>
+    fn from_asset<Asset: Read + Seek + 'static>(mut asset: Asset) -> Result<Self, Self::Error>
     {
         let mut b = Vec::new();
         asset.read_to_end(&mut b).map(|_| SpvBinary(b))
@@ -49,7 +49,7 @@ impl FromAsset for SpvBinary
 }
 impl SpvBinary
 {
-    fn build_module(&self, device: &br::Device) -> br::Result<br::ShaderModule>
+    pub fn build_module(&self, device: &br::Device) -> br::Result<br::ShaderModule>
     {
         br::ShaderModule::from_memory(device, &self.0)
     }
