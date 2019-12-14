@@ -2,6 +2,7 @@
 use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
 use std::io::prelude::{Read, Seek};
 use super::PixelFormat;
+use bedrock as br;
 
 pub trait PlatformAssetLoader {
     type Asset: Read + Seek + 'static;
@@ -32,6 +33,26 @@ pub trait FromStreamingAsset: LogicalAssetData
 {
     type Error: From<IOError>;
     fn from_asset<Asset: Read + 'static>(asset: Asset) -> Result<Self, Self::Error>;
+}
+
+/// Contains SPIR-V Binary
+pub struct SpvBinary(Vec<u8>);
+impl LogicalAssetData for SpvBinary { const EXT: &'static str = "spv"; }
+impl FromAsset for SpvBinary
+{
+    type Error = IOError;
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>
+    {
+        let mut b = Vec::new();
+        asset.read_to_end(&mut b).map(|_| SpvBinary(b))
+    }
+}
+impl SpvBinary
+{
+    fn build_module(&self, device: &br::Device) -> br::Result<br::ShaderModule>
+    {
+        br::ShaderModule::from_memory(device, &self.0)
+    }
 }
 
 use image::{ImageDecoder, ImageResult, ImageError};
