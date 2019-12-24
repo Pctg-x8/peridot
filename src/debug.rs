@@ -18,7 +18,8 @@ impl DebugReport
         message: *const c_char, _: *mut c_void) -> br::vk::VkBool32
     {
         let msg = unsafe { CStr::from_ptr(message).to_str().unwrap_or("msg has illegal character") };
-        let layer_prefix = unsafe {
+        let layer_prefix = unsafe
+        {
             CStr::from_ptr(layer_prefix).to_str().unwrap_or("layer_prefix has illegal character")
         };
 
