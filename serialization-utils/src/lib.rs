@@ -53,13 +53,14 @@ pub struct PascalStr<'s>(pub &'s str);
 impl PascalString
 {
     pub fn write<W: Write>(&self, writer: &mut W) -> IOResult<usize> { PascalStr(&self.0).write(writer) }
-    
+
     pub fn read<R: BufRead>(reader: &mut R) -> IOResult<Self>
     {
         let VariableUInt(bytelength) = VariableUInt::read(reader)?;
         let mut bytes = Vec::with_capacity(bytelength as _); unsafe { bytes.set_len(bytelength as _); }
         reader.read_exact(&mut bytes).map(drop)?;
-        return from_utf8(&bytes[..]).map(|s| PascalString(s.to_owned())).map_err(|e| IOError::new(ErrorKind::Other, e));
+        
+        from_utf8(&bytes[..]).map(|s| PascalString(s.to_owned())).map_err(|e| IOError::new(ErrorKind::Other, e))
     }
 }
 impl<'s> PascalStr<'s>
