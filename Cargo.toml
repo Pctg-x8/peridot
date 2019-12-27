@@ -17,6 +17,9 @@ peridot-math = { path = "math" }
 
 image = "*"
 
+[target.'cfg(debug_assertions)'.dependencies]
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements", "VK_EXT_debug_report"] }
+
 [workspace]
 exclude = ["extras/", "cradle/"]
 members = [
