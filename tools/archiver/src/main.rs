@@ -6,29 +6,30 @@ use std::io::prelude::Write;
 use std::io::Result as IOResult;
 extern crate peridot_archive as par;
 
-fn extract(args: &ArgMatches) {
+fn extract(args: &ArgMatches)
+{
     let mut archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),
         args.is_present("check")).expect("reading archive error");
 
-    if let Some(apath) = args.value_of("apath") {
-        if let Some(b) = archive.read_bin(apath).expect("readbin") {
+    if let Some(apath) = args.value_of("apath")
+    {
+        if let Some(b) = archive.read_bin(apath).expect("readbin")
+        {
             let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
             NativeOfstream::from_stream_ptr(foptr).expect("open stream").write_all(&b[..]).expect("writing");
         }
-        else {
-            panic!("Entry not found in archive: {}", apath);
-        }
+        else { panic!("Entry not found in archive: {}", apath); }
     }
 }
-fn list(args: &ArgMatches) {
+fn list(args: &ArgMatches)
+{
     let archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),
         args.is_present("check")).expect("check not found");
 
-    for n in archive.entry_names() {
-        println!("{}", n);
-    }
+    for n in archive.entry_names() { println!("{}", n); }
 }
-fn main() {
+fn main()
+{
     let extract_matcher = App::new("extract").version("0.1").author("S.Percentage <Syn.Tri.Naga@gmail.com>")
         .arg(Arg::with_name("arc").value_name("FILE").required(true).help("Archive file"))
         .arg(Arg::with_name("apath").value_name("ASSET_PATH").help("An Asset Path (Optional)"))
@@ -53,14 +54,20 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("extract") { extract(matches); }
 }
 
-fn new(args: &ArgMatches) {
-    let directory_walker = args.values_of("ifiled").expect("noargs: ifiled")
-        .flat_map(|f| if cfg!(windows) && f.contains('*') {
-            Box::new(glob::glob(f).expect("glob match")
-                .flat_map(|f| extract_directory(&f.expect("filename decode err"))))
-        }
-        else { extract_directory(Path::new(f)) });
-    let compression_method = args.value_of("cmethod").map(|s| match s {
+fn new(args: &ArgMatches)
+{
+    let ifiled = args.values_of("ifiled").expect("noargs: ifiled");
+    #[cfg(windows)]
+    let directory_walker = ifiled.flat_map(|f| if f.contains('*')
+    {
+        let glb = glob::glob(f).expect("glob match");
+        Box::new(glb.flat_map(|f| extract_directory(&f.expect("filename decode err"))))
+    } else { extract_directory(Path::new(f)) });
+    #[cfg(not(windows))]
+    let directory_walker = ifiled.flat_map(|f| extract_directory(Path::new(f)));
+    
+    let compression_method = args.value_of("cmethod").map(|s| match s
+    {
         "lz4" => par::CompressionMethod::Lz4(0),
         "zlib" => par::CompressionMethod::Zlib(0),
         "zstd11" => par::CompressionMethod::Zstd11(0),
@@ -69,19 +76,23 @@ fn new(args: &ArgMatches) {
     let basedir = args.value_of("basedir").unwrap_or_default();
     println!("EntryName CommonPrefix={}", basedir);
     let mut archive = par::ArchiveWrite::new(compression_method);
-    for f in directory_walker {
+    for f in directory_walker
+    {
         println!("Archiver input <<= {}", f.display());
         let fstr = f.to_str().expect("nullchar");
         let ename = if fstr.starts_with(&basedir) { &fstr[basedir.len()..] } else { &fstr };
         if fstr.is_empty() { eprintln!("Warn: empty entry name. wont be written"); }
-        if !archive.add(ename.to_owned(), read(&f).expect("file io error")) {
+        if !archive.add(ename.to_owned(), read(&f).expect("file io error"))
+        {
             eprintln!("Warn: {:?} has already been added", fstr);
         }
     }
-    if let Some(ofpath) = args.value_of("ofile") {
+    if let Some(ofpath) = args.value_of("ofile")
+    {
         archive.write(&mut File::create(ofpath).expect("file open error"))
     }
-    else {
+    else
+    {
         let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
         archive.write(&mut NativeOfstream::from_stream_ptr(foptr).expect("fstream open error"))
     }.expect("fileio write error")
@@ -89,34 +100,43 @@ fn new(args: &ArgMatches) {
 
 use std::ptr::NonNull;
 struct NativeOfstream(NonNull<libc::FILE>);
-impl NativeOfstream {
-    pub fn from_stream_ptr(p: *mut libc::FILE) -> Option<Self> {
+impl NativeOfstream
+{
+    pub fn from_stream_ptr(p: *mut libc::FILE) -> Option<Self>
+    {
         NonNull::new(p).map(NativeOfstream)
     }
 }
-impl Drop for NativeOfstream {
-    fn drop(&mut self) {
-        unsafe { libc::fclose(self.0.as_ptr()); }
-    }
+impl Drop for NativeOfstream
+{
+    fn drop(&mut self) { unsafe { libc::fclose(self.0.as_ptr()); } }
 }
-impl Write for NativeOfstream {
-    fn write(&mut self, buf: &[u8]) -> IOResult<usize> {
+impl Write for NativeOfstream
+{
+    fn write(&mut self, buf: &[u8]) -> IOResult<usize>
+    {
         let written = unsafe { libc::fwrite(buf.as_ptr() as *const _, 1, buf.len() as _, self.0.as_ptr()) };
         return Ok(written);
     }
-    fn flush(&mut self) -> IOResult<()> {
+    fn flush(&mut self) -> IOResult<()>
+    {
         let code = unsafe { libc::fflush(self.0.as_ptr()) };
         if code == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
     }
 }
 
 use std::path::{Path, PathBuf}; use std::borrow::ToOwned;
-fn extract_directory(p: &Path) -> Box<Iterator<Item = PathBuf>> {
-    if metadata(p).expect("metadata fetch failed").is_dir() {
-        Box::new(read_dir(p).expect("reading dir error")
-            .flat_map(|f| extract_directory(f.expect("nopath").path().as_path())))
+fn extract_directory(p: &Path) -> Box<dyn Iterator<Item = PathBuf>>
+{
+    if metadata(p).expect("metadata fetch failed").is_dir()
+    {
+        let walk = read_dir(p).expect("reading dir error")
+            .flat_map(|f| extract_directory(f.expect("nopath").path().as_path()));
+        
+        Box::new(walk)
     }
-    else {
+    else
+    {
         Box::new(Some(p.to_owned()).into_iter())
     }
 }
