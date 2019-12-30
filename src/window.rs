@@ -114,11 +114,9 @@ impl StateFence
         if let StateFence::Signaled(ref f) = *self { f.wait()?; f.reset()?; }
         unsafe { self.unsignal(); } return Ok(());
     }
-    pub fn is_signaled(&self) -> bool { match *self { StateFence::Signaled(_) => true, _ => false } }
 
     pub fn object(&self) -> &br::Fence
     {
         match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }
     }
-    fn take_object(self) -> br::Fence { match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f } }
 }

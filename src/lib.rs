@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 // extern crate font_kit;
 #[macro_use] extern crate log;
