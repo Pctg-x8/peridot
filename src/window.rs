@@ -24,7 +24,8 @@ impl SurfaceInfo
         let fmt = pd.surface_formats(&obj)?.into_iter().find(|sf| fmq.satisfy(sf.format))
             .expect("No suitable format found");
         let pres_modes = pd.surface_present_modes(&obj)?;
-        let &pres_mode = pres_modes.iter().find(|&&m| m == br::PresentMode::FIFO || m == br::PresentMode::Mailbox)
+        let &pres_mode = pres_modes.iter().find(|&&m| m == br::PresentMode::FIFO)
+            .or_else(|| pres_modes.iter().find(|&&m| m == br::PresentMode::Mailbox))
             .unwrap_or(&pres_modes[0]);
         
         let caps = pd.surface_capabilities(&obj)?;

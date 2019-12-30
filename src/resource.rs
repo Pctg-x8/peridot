@@ -3,12 +3,14 @@ use super::*;
 use std::ops::{Deref, Range};
 use std::mem::{size_of, transmute, align_of};
 use num::Integer;
+use rayon::prelude::*;
 
 /// (size, align)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferContent
 {
-    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64)
+    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64),
+    RawPair(u64, u64, br::BufferUsage), Storage(u64, u64)
 }
 impl BufferContent
 {
@@ -22,7 +24,9 @@ impl BufferContent
             Index(_, _) => src.index_buffer(),
             Uniform(_, _) => src.uniform_buffer(),
             Raw(_, _) => src,
-            UniformTexel(_, _) => src.uniform_texel_buffer()
+            UniformTexel(_, _) => src.uniform_texel_buffer(),
+            Storage(_, _) => src.storage_buffer(),
+            RawPair(_, _, v) => src | v
         }
     }
     fn alignment(&self, pd: &br::PhysicalDevice) -> u64
@@ -34,6 +38,13 @@ impl BufferContent
             Vertex(_, a) | Index(_, a) | Raw(_, a) => a,
             Uniform(_, a) | UniformTexel(_, a) =>
                 u64::lcm(&pd.properties().limits.minUniformBufferOffsetAlignment as _, &a),
+            Storage(_, a) =>
+                u64::lcm(&pd.properties().limits.minStorageBufferOffsetAlignment as _, &a),
+            RawPair(_, a, v) => if v.is_uniform()
+            {
+                u64::lcm(&pd.properties().limits.minUniformBufferOffsetAlignment as _, &a)
+            }
+            else { a }
         }
     }
     fn size(&self) -> u64
@@ -42,7 +53,8 @@ impl BufferContent
 
         match *self
         {
-            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) => v
+            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) |
+            RawPair(v, _, _) | Storage(v, _) => v
         }
     }
 
@@ -71,6 +83,14 @@ impl BufferContent
     {
         BufferContent::Uniform(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
     }
+    pub fn storage<T>() -> Self
+    {
+        BufferContent::Storage(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn storage_dynarray<T>(count: usize) -> Self
+    {
+        BufferContent::Storage(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
+    }
     pub fn uniform_texel<T>() -> Self
     {
         BufferContent::UniformTexel(size_of::<T>() as _, align_of::<T>() as _)
@@ -94,6 +114,7 @@ impl<'g> BufferPrealloc<'g>
     {
         BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0, common_align: 1 }
     }
+    pub(crate) fn physical_device(&self) -> &br::PhysicalDevice { &self.g.adapter }
     pub fn build(&self) -> br::Result<br::Buffer>
     {
         br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
@@ -207,6 +228,7 @@ impl<'g> MemoryBadget<'g>
         info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
+        trace!(target: "peridot", "Binding Memory Regions to Resources...");
 
         self.entries.into_iter().map(|(x, o)| match x
         {
@@ -291,20 +313,40 @@ impl br::VkHandle for Image {
 }
 
 #[derive(Clone, Copy)] #[repr(i32)]
-pub enum PixelFormat {
+pub enum PixelFormat
+{
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
     BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM,
     RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
-    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM
+    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
+    D24S8 = br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+    D16 = br::vk::VK_FORMAT_D16_UNORM
 }
-impl PixelFormat {
+impl PixelFormat
+{
     /// Bits per pixel for each format enums
     pub fn bpp(self) -> usize
     {
         match self
         {
-            PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
-            PixelFormat::RGB24 | PixelFormat::BGR24 => 24
+            PixelFormat::RGBA32 | PixelFormat::BGRA32 | PixelFormat::D24S8 => 32,
+            PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
+            PixelFormat::D16 => 16
+        }
+    }
+    pub fn can_use_for(self, usage: br::ImageUsage, pd: &br::PhysicalDevice) -> bool
+    {
+        pd.image_format_properties(self as _,
+            br::vk::VK_IMAGE_TYPE_2D, br::vk::VK_IMAGE_TILING_OPTIMAL,
+            usage, br::ImageFlags::EMPTY).is_ok()
+    }
+    pub fn alphaed_format(self) -> Self
+    {
+        match self
+        {
+            PixelFormat::RGB24 => PixelFormat::RGBA32,
+            PixelFormat::BGR24 => PixelFormat::BGRA32,
+            e => e
         }
     }
 }
@@ -345,13 +387,37 @@ impl Texture2D
     }
 
     pub fn image(&self) -> &Image { &self.1 }
+    pub fn view(&self) -> &br::ImageView { &self.0 }
 }
 impl Deref for Texture2D {
     type Target = br::ImageView;
     fn deref(&self) -> &br::ImageView { &self.0 }
 }
 
-/// Low Dynamic Range(8bit colors) image asset
+pub struct DepthStencilTexture2D(br::ImageView, Image);
+impl DepthStencilTexture2D
+{
+    pub fn init(g: &br::Device, size: &math::Vector2<u32>, format: PixelFormat) -> br::Result<br::Image>
+    {
+        let idesc = br::ImageDesc::new(size, format as _, br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            br::ImageLayout::Undefined);
+        return idesc.create(g);
+    }
+    pub fn new(img: Image) -> br::Result<Self>
+    {
+        return img.create_view(None, None, &br::ComponentMapping::default(),
+            &br::ImageSubresourceRange::depth_stencil(0, 0))
+            .map(|v| DepthStencilTexture2D(v, img))
+    }
+
+    pub fn image(&self) -> &Image { &self.1 }
+}
+impl Deref for DepthStencilTexture2D
+{
+    type Target = br::ImageView;
+    fn deref(&self) -> &br::ImageView { &self.0 }
+}
+
 pub trait LDRImageAsset
 {
     fn into_pixel_data_info(self) -> DecodedPixelData;
@@ -365,9 +431,9 @@ impl LDRImageAsset for WebP { fn into_pixel_data_info(self) -> DecodedPixelData 
 /// Stg1. Group what textures are being initialized
 pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<DecodedPixelData>);
 /// Stg2. Describes where textures are being staged
-pub struct TexturePreallocatedGroup(Vec<(DecodedPixelData, u64)>, Vec<br::Image>);
+pub struct TexturePreallocatedGroup(Vec<(DecodedPixelData, bool, u64)>, Vec<br::Image>);
 /// Stg3. Describes where textures are being staged, allocated and bound their memory
-pub struct TextureInstantiatedGroup(Vec<(DecodedPixelData, u64)>, Vec<Texture2D>);
+pub struct TextureInstantiatedGroup(Vec<(DecodedPixelData, bool, u64)>, Vec<Texture2D>);
 
 impl<'g> TextureInitializationGroup<'g>
 {
@@ -381,9 +447,14 @@ impl<'g> TextureInitializationGroup<'g>
     pub fn prealloc(self, prealloc: &mut BufferPrealloc) -> br::Result<TexturePreallocatedGroup>
     {
         let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
-        for pd in self.1 {
-            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
-            images.push(o); stage_info.push((pd, offs));
+        for pd in self.1
+        {
+            let require_alphaed = !pd.format().can_use_for(br::ImageUsage::SAMPLED.transfer_dest(),
+                prealloc.physical_device());
+            let (o, offs) = Texture2D::init(self.0, &pd.size,
+                if require_alphaed { pd.format().alphaed_format() } else { pd.format() },
+                prealloc)?;
+            images.push(o); stage_info.push((pd, require_alphaed, offs));
         }
         return Ok(TexturePreallocatedGroup(stage_info, images));
     }
@@ -408,19 +479,32 @@ impl TextureInstantiatedGroup
     pub fn stage_data(&self, mr: &br::MappedMemoryRange)
     {
         trace!("Staging Texture Data...");
-        for &(ref pd, offs) in &self.0
+        for &(ref pd, require_alphaed, offs) in &self.0
         {
+            let fmt = if require_alphaed { pd.format().alphaed_format() } else { pd.format() };
             let s = unsafe
             {
-                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
+                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (fmt.bpp() >> 3) as usize)
             };
-            s.copy_from_slice(pd.u8_pixels());
+            if require_alphaed
+            {
+                match pd.u8_pixels_alphaed()
+                {
+                    PixelFormatAlphaed::Raw(r) => s.copy_from_slice(r),
+                    PixelFormatAlphaed::Converted(iter) =>
+                        s.par_chunks_mut(4).zip(iter).for_each(|(d, s)| d.copy_from_slice(&s))
+                }
+            }
+            else
+            {
+                s.copy_from_slice(pd.u8_pixels());
+            }
         }
     }
     /// Push transferring operations into a batcher.
     pub fn copy_from_stage_batches(&self, tb: &mut TransferBatch, stgbuf: &Buffer)
     {
-        for (t, &(_, offs)) in self.1.iter().zip(self.0.iter())
+        for (t, &(_, _, offs)) in self.1.iter().zip(self.0.iter())
         {
             tb.init_image_from(t.image(), (stgbuf, offs));
             tb.add_image_graphics_ready(br::PipelineStageFlags::FRAGMENT_SHADER, t.image(),

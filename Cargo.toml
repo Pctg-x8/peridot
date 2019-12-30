@@ -9,8 +9,10 @@ edition = "2018"
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 log = "*"
 libc = "*"
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
-num = "*"
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements", "Multithreaded"] }
+rayon = "1.0"
+num = "0.2"
+# futures-preview = "0.3.0-alpha.4"
 
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
@@ -18,8 +20,8 @@ peridot-math = { path = "math" }
 image = "*"
 
 [workspace]
-exclude = ["extras/", "cradle/"]
+exclude = ["extras/", "cradle/", "examples/"]
 members = [
-    "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
+    "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive", "mmdloader", "gltf-loader",
     "tools/shaderbuild", "tools/archiver"
 ]

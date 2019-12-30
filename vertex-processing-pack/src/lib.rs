@@ -56,7 +56,7 @@ impl peridot::FromAsset for PvpContainer
 {
     type Error = IOError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> IOResult<Self> {
+    fn from_asset<Asset: Read + Seek + 'static>(_path: &str, asset: Asset) -> IOResult<Self> {
         PvpContainerReader::new(BufReader::new(asset)).and_then(PvpContainerReader::into_container)
     }
 }

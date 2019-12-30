@@ -29,7 +29,7 @@ mod model; pub use self::model::*;
 
 pub trait NativeLinker
 {
-    type AssetLoader: PlatformAssetLoader;
+    type AssetLoader: PlatformAssetLoader + Sync;
     type RenderTargetProvider: PlatformRenderTarget;
     type InputProcessor: InputProcessPlugin;
 
@@ -58,6 +58,31 @@ impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
     fn init(_e: &Engine<Self, PL>) -> Self { () }
 }
+
+pub trait AssetLoaderService {
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>;
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error>;
+}
+impl<E: EngineEvents<NL>, NL: NativeLinker> AssetLoaderService for Engine<E, NL> {
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.nativelink.asset_loader().get(path, A::EXT).map_err(From::from)
+            .and_then(|r| A::from_asset(path, r))
+    }
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.nativelink.asset_loader().get_streaming(path, A::EXT).map_err(From::from)
+            .and_then(|r| A::from_asset(path, r))
+    }
+}
+pub struct AsyncAssetLoader<'d, NL: NativeLinker>(&'d NL::AssetLoader);
+impl<'d, NL: NativeLinker> AssetLoaderService for AsyncAssetLoader<'d, NL> {
+    fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.0.get(path, A::EXT).map_err(From::from).and_then(|r| A::from_asset(path, r))
+    }
+    fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+        self.0.get_streaming(path, A::EXT).map_err(From::from).and_then(|r| A::from_asset(path, r))
+    }
+}
+
 pub trait FeatureRequests
 {
     const ENABLE_GEOMETRY_SHADER: bool = false;
@@ -140,13 +165,16 @@ impl<E, PL> Engine<E, PL>
 }
 impl<E, PL: NativeLinker> Engine<E, PL>
 {
-    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
+    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>
+    {
+        A::from_asset(path, self.nativelink.asset_loader().get(path, A::EXT)?)
     }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error>
+    {
+        A::from_asset(path, self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
     }
-    
+
+    pub fn async_asset_loader(&self) -> AsyncAssetLoader<PL> { AsyncAssetLoader(self.nativelink.asset_loader()) }
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 }
 impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
@@ -174,7 +202,8 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
         {
             let mut ulib = self.userlib_mut();
             let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, dt);
-            if let Some(mut cs) = copy_submission {
+            if let Some(mut cs) = copy_submission
+            {
                 // copy -> render
                 cs.signal_semaphores.to_mut().push(&self.g.buffer_ready);
                 fb_submission.wait_semaphores.to_mut().extend(vec![
@@ -459,6 +488,24 @@ impl RenderPassTemplates {
 
         return b;
     }
+    /// Note: Depth is not preserved
+    pub fn single_render_with_depth(format: br::vk::VkFormat, depth_format: br::vk::VkFormat) -> br::RenderPassBuilder {
+        let mut b = br::RenderPassBuilder::new();
+        let adesc =
+            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        let adesc_d =
+            br::AttachmentDescription::new(depth_format,
+                br::ImageLayout::DepthStencilAttachmentOpt, br::ImageLayout::DepthStencilAttachmentOpt)
+            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::DontCare);
+        b.add_attachment(adesc).add_attachment(adesc_d);
+        b.add_subpass(br::SubpassDescription::new()
+            .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
+            .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt));
+        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
+
+        return b;
+    }
 }
 
 pub trait SpecConstantStorage {
@@ -525,7 +572,8 @@ pub struct TransferBatch {
     org_layout_dst: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
     copy_buffers: HashMap<(ResourceKey<Buffer>, ResourceKey<Buffer>), Vec<VkBufferCopy>>,
     init_images: BTreeMap<ResourceKey<Image>, (Buffer, u64)>,
-    ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
+    ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>,
+    undefined_to_ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
 }
 impl TransferBatch {
     pub fn new() -> Self {
@@ -533,7 +581,8 @@ impl TransferBatch {
             barrier_range_src: BTreeMap::new(), barrier_range_dst: BTreeMap::new(),
             org_layout_src: BTreeMap::new(), org_layout_dst: BTreeMap::new(),
             copy_buffers: HashMap::new(), init_images: BTreeMap::new(),
-            ready_barriers: BTreeMap::new()
+            ready_barriers: BTreeMap::new(),
+            undefined_to_ready_barriers: BTreeMap::new()
         }
     }
     pub fn add_copying_buffer(&mut self, src: (&Buffer, u64), dst: (&Buffer, u64), bytes: u64) {

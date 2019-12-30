@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclarationOps {
-    VertexInput, VertexShader, FragmentShader, Varyings, SpecConstant, Uniform, PushConstant, Header,
+    VertexInput, VertexShader, FragmentShader, Varyings, SpecConstant, Uniform, Storage, PushConstant, Header,
     SamplerBuffer, Sampler(usize)
 }
 impl DeclarationOps {
@@ -25,6 +25,7 @@ impl DeclarationOps {
             Some("Sampler3D") => Some(DeclarationOps::Sampler(3)),
             Some("Varyings") => Some(DeclarationOps::Varyings),
             Some("Uniform") => Some(DeclarationOps::Uniform),
+            Some("Storage") => Some(DeclarationOps::Storage),
             Some("Header") => Some(DeclarationOps::Header),
             _ => None
         }
@@ -264,6 +265,7 @@ pub enum ToplevelBlock<'s> {
     Varying(br::ShaderStage, br::ShaderStage, Vec<Variable<'s>>),
     SpecConstant(br::ShaderStage, usize, &'s str, &'s str, &'s str),
     Uniform(br::ShaderStage, usize, usize, &'s str, &'s str),
+    Storage(br::ShaderStage, usize, usize, &'s str, &'s str),
     SamplerBuffer(br::ShaderStage, usize, usize, &'s str),
     Sampler(br::ShaderStage, usize, usize, usize, &'s str),
     PushConstant(br::ShaderStage, &'s str, &'s str),
@@ -323,6 +325,13 @@ impl<'s> Tokenizer<'s> {
         let code = self.codeblock().expect("GLSL CodeBlock required");
         return ToplevelBlock::Uniform(stg, set, binding, id, code);
     }
+    pub fn storage(&mut self) -> ToplevelBlock<'s> {
+        let (stg, set, binding) = self.resource_header_rest()
+            .expect("ShaderStage then pair of descriptor set and binding indices are required");
+        let id = self.strip_ignores().strip_ident().expect("Identifier for GLSL TypeName required");
+        let code = self.codeblock().expect("GLSL CodeBlock required");
+        return ToplevelBlock::Storage(stg, set, binding, id, code);
+    }
     pub fn sampler_buffer(&mut self) -> ToplevelBlock<'s> {
         let (stg, set, binding) = self.resource_header_rest()
             .expect("ShaderStage then pair of descriptor set and binding indices required");
@@ -367,6 +376,7 @@ impl<'s> Tokenizer<'s> {
             },
             DeclarationOps::SpecConstant => self.spec_constant(),
             DeclarationOps::Uniform => self.uniform(),
+            DeclarationOps::Storage => self.storage(),
             DeclarationOps::PushConstant => self.push_constant(),
             DeclarationOps::Header => self.rawcode_header(),
             DeclarationOps::SamplerBuffer => self.sampler_buffer(),
@@ -386,6 +396,7 @@ pub type GlslType<'s> = &'s str;
 #[derive(Debug, Clone)]
 pub enum DescriptorBoundResource<'s> {
     Uniform { struct_name: &'s str, member_code: &'s str },
+    Storage { struct_name: &'s str, member_code: &'s str },
     SamplerBuffer(&'s str), Sampler(usize, &'s str)
 }
 #[derive(Debug, Clone)]
@@ -435,6 +446,15 @@ impl<'s> CombinedShader<'s> {
                         panic!("Multiple Definitions of the Resource for same (set, binding) in same stage");
                     }
                     storage.insert((set, binding), DescriptorBoundResource::Uniform {
+                        struct_name: name, member_code: init
+                    });
+                },
+                ToplevelBlock::Storage(stg, set, binding, name, init) => {
+                    let storage = cs.resources_per_stage.entry(stg).or_insert_with(BTreeMap::new);
+                    if storage.contains_key(&(set, binding)) {
+                        panic!("Multiple Definitions of the Resource for same (set, binding) in same stage");
+                    }
+                    storage.insert((set, binding), DescriptorBoundResource::Storage {
                         struct_name: name, member_code: init
                     });
                 },
@@ -566,6 +586,9 @@ impl<'s> CombinedShader<'s> {
                 match d {
                     DescriptorBoundResource::Uniform { struct_name, member_code } => {
                         *code += &format!("uniform {} {{{}}};\n", struct_name, member_code);
+                    },
+                    DescriptorBoundResource::Storage { struct_name, member_code } => {
+                        *code += &format!("buffer {} {{{}}};\n", struct_name, member_code);
                     },
                     DescriptorBoundResource::SamplerBuffer(name) => {
                         *code += &format!("uniform samplerBuffer {};\n", name);

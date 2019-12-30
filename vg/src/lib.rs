@@ -57,22 +57,24 @@ impl Context {
         FigureContext { ctx: self, partitioner: Partitioner::new(), fill_rule }
     }
 
-    pub fn text(&mut self, font: &Font, text: &str) -> Result<&mut Self, GlyphLoadingError> {
+    /// Returns last origin left(=width of the text) in pixels
+    pub fn text(&mut self, font: &Font, text: &str) -> Result<f32, GlyphLoadingError> {
         let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or(0));
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
         for g in glyphs {
             let (adv, size) = (font.advance(g)?, font.bounds(g)?);
             let mut g0 = Partitioner::new();
-            let tf = self.current_transform.post_translate(Vector2D::new(left_offs, -font.ascent()))
-                .post_scale(font.scale_value(), font.scale_value());
-            font.outline(g, HintingOptions::None, g0.builder_mut())?;
+            let tf = self.current_transform
+                .pre_scale(font.scale_value(), font.scale_value())
+                .pre_translate(Vector2D::new(left_offs, -font.ascent()));
+            font.outline(g, HintingOptions::Full(font.em_size()), g0.builder_mut())?;
             g0.partition(FillRule::Winding);
             g0.builder_mut().build_and_reset();
             let (st, ext) = tfconv_st_ext(tf);
             self.meshes.push((g0.into_mesh(), st, ext));
             left_offs += adv.x(); max_height = max_height.max(size.size.height);
         }
-        return Ok(self);
+        return Ok(left_offs * font.scale_value());
     }
 }
 /*type V2F32 = euclid::Vector2D<f32>;

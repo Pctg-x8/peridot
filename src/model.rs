@@ -9,8 +9,10 @@ pub trait ModelData
     type PreallocOffsetType;
     type RendererParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
-    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: Self::PreallocOffsetType) -> Self::RendererParams;
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+        textures: &mut TextureInitializationGroup) -> Self::PreallocOffsetType;
+    fn stage_data_into(&self, mem: &br::MappedMemoryRange, offsets: Self::PreallocOffsetType)
+        -> Self::RendererParams;
 }
 pub trait DefaultRenderCommands
 {
@@ -30,7 +32,8 @@ impl<VT: Clone> ModelData for Primitive<VT>
     type PreallocOffsetType = u64;
     type RendererParams = ();
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> u64
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, _e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+        _textures: &mut TextureInitializationGroup) -> u64
     {
         alloc.add(BufferContent::vertices::<VT>(self.vertices.len()))
     }
@@ -52,7 +55,8 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT>
     type PreallocOffsetType = (u64, u64);
     type RendererParams = ();
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> (u64, u64)
+    fn prealloc<EH: EngineEvents<NL>, NL: NativeLinker>(&self, _e: &Engine<EH, NL>, alloc: &mut BufferPrealloc,
+        _textures: &mut TextureInitializationGroup) -> (u64, u64)
     {
         let v = alloc.add(BufferContent::vertices::<VT>(self.vertices.len()));
         let i = alloc.add(BufferContent::indices::<u16>(self.indices.len()));
