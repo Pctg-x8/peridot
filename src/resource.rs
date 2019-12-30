@@ -4,14 +4,6 @@ use std::ops::{Deref, Range};
 use std::mem::{size_of, transmute, align_of};
 use num::Integer;
 
-fn common_alignment(flags: br::BufferUsage, mut align: u64, a: &br::PhysicalDevice) -> u64
-{
-    if flags.is_uniform() { align = align.lcm(&a.properties().limits.minUniformBufferOffsetAlignment); }
-    if flags.is_storage() { align = align.lcm(&a.properties().limits.minStorageBufferOffsetAlignment); }
-
-    return align;
-}
-
 /// (size, align)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferContent
