@@ -80,3 +80,4 @@ local.properties
 
 # Peridot auto-generated files
 app/build.gradle
+app/src/main/AndroidManifest.xml
