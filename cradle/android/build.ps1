@@ -84,7 +84,7 @@ $template = $template.Replace("**APKAPPID**", "$AppPackageID")
 $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml -Encoding UTF8
 
 # Build Userlib
-$features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
+$features = "bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
 $BinRoot = "$Env:ANDROID_NDK\toolchains\llvm\prebuilt\windows-x86_64"
 New-Item -ItemType Directory $ScriptPath/.cargo -ErrorAction SilentlyContinue | Out-Null
 $CfgTemplate = "[target.aarch64-linux-android]

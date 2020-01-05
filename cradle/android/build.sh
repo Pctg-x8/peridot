@@ -56,7 +56,7 @@ export CXXFLAGS="-target aarch64-linux-android$ANDROID_NDK_PLATFORM_TARGET"
 export AR=$ANDROID_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-ar
 export LD=$ANDROID_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-ld
 [ -d $SCRIPT_PATH/target/arm64-v8a-linux-android ] && mv $SCRIPT_PATH/target/arm64-v8a-linux-android $SCRIPT_PATH/target/aarch64-linux-android
-(cd $SCRIPT_PATH; cargo build --features bedrock/VK_EXT_debug_report,bedrock/VK_KHR_android_surface,bedrock/DynamicLoaded --target aarch64-linux-android)
+(cd $SCRIPT_PATH; cargo build --features bedrock/VK_KHR_android_surface,bedrock/DynamicLoaded --target aarch64-linux-android)
 [ ! -d $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a ] && mkdir -p $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a
 mv $SCRIPT_PATH/target/aarch64-linux-android/debug/libpegamelib.so $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a/
 

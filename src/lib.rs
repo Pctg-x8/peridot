@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 // extern crate font_kit;
 #[macro_use] extern crate log;
@@ -16,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::cell::{Ref, RefMut, RefCell};
 use std::time::{Instant as InstantTimer, Duration};
+use std::ffi::CStr;
 
 mod window; use self::window::{WindowRenderTargets, StateFence};
 pub use self::window::{PlatformRenderTarget, SurfaceInfo};
@@ -281,9 +281,10 @@ impl Graphics
         let mut validation_layer_available = false;
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties")
         {
-            let name = unsafe { ::std::ffi::CStr::from_ptr(l.layerName.as_ptr()) };
-            info!("* {} :: {}/{}", name.to_string_lossy(), l.specVersion, l.implementationVersion);
-            if !validation_layer_available && name.to_str() == Ok("VK_LAYER_LUNARG_standard_validation")
+            let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
+            let name_str = name.to_str().expect("unexpected invalid sequence in layer name");
+            info!("* {} :: {}/{}", name_str, l.specVersion, l.implementationVersion);
+            if name_str == "VK_LAYER_KHRONOS_validation"
             {
                 validation_layer_available = true;
             }
@@ -295,7 +296,7 @@ impl Graphics
         if validation_layer_available
         {
             #[cfg(all(debug_assertions, not(target_os = "android")))]
-            ib.add_layer("VK_LAYER_LUNARG_standard_validation");
+            ib.add_layer("VK_LAYER_KHRONOS_validation");
             #[cfg(all(debug_assertions, target_os = "android"))] ib
                 .add_layer("VK_LAYER_LUNARG_parameter_validation")
                 .add_layer("VK_LAYER_LUNARG_core_validation")

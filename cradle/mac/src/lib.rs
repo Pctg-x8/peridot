@@ -161,7 +161,6 @@ extern "C" {
     fn nsscreen_backing_scale_factor() -> f32;
 }
 
-#[allow(dead_code)]
 pub struct GameRun(Engine);
 #[no_mangle]
 pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameRun {
