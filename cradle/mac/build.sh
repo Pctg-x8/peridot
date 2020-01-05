@@ -43,7 +43,7 @@ echo "Packaging Assets..."
 $SCRIPT_PATH/../../target/release/peridot-archiver new $ASSET_PATH -o $SCRIPT_PATH/peridot-cradle/assets.par -b $ASSET_PATH/
 
 echo "Building GameCore >> App Bundle..."
-FEATURES="bedrock/VK_EXT_debug_report,bedrock/VK_MVK_macos_surface"
+FEATURES="bedrock/VK_MVK_macos_surface"
 (cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURES && xcodebuild -project peridot-cradle/peridot-cradle.xcodeproj -configuration Debug build)
 
 echo "💎  $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app"
