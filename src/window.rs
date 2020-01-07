@@ -7,7 +7,7 @@ pub trait PlatformRenderTarget
 {
     fn surface_extension_name(&self) -> &'static str;
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-            -> br::Result<SurfaceInfo>;
+        -> br::Result<SurfaceInfo>;
     fn current_geometry_extent(&self) -> (usize, usize);
 }
 
@@ -18,7 +18,8 @@ pub struct SurfaceInfo
 }
 impl SurfaceInfo
 {
-    pub fn gather_info(pd: &br::PhysicalDevice, obj: br::Surface) -> br::Result<Self> {
+    pub fn gather_info(pd: &br::PhysicalDevice, obj: br::Surface) -> br::Result<Self>
+    {
         let mut fmq = br::FormatQueryPred::default();
         fmq.bit(32).components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
         let fmt = pd.surface_formats(&obj)?.into_iter().find(|sf| fmq.satisfy(sf.format))
@@ -28,12 +29,11 @@ impl SurfaceInfo
             .unwrap_or(&pres_modes[0]);
         
         let caps = pd.surface_capabilities(&obj)?;
-        let available_composite_alpha = if (caps.supportedCompositeAlpha & (br::CompositeAlpha::Inherit as u32)) != 0 {
+        let available_composite_alpha = if (caps.supportedCompositeAlpha & (br::CompositeAlpha::Inherit as u32)) != 0
+        {
             br::CompositeAlpha::Inherit
         }
-        else {
-            br::CompositeAlpha::Opaque
-        };
+        else { br::CompositeAlpha::Opaque };
         
         return Ok(SurfaceInfo { obj, fmt, pres_mode, available_composite_alpha });
     }
@@ -73,7 +73,8 @@ impl WindowRenderTargets
         return Ok(WindowRenderTargets { bb, chain });
     }
 
-    pub(super) fn emit_initialize_backbuffers_commands(&self, recorder: &mut br::CmdRecord) {
+    pub(super) fn emit_initialize_backbuffers_commands(&self, recorder: &mut br::CmdRecord)
+    {
         let image_barriers: Vec<_> = self.bb.iter()
             .map(|v| br::ImageSubref::color(v, 0, 0))
             .map(|s| br::ImageMemoryBarrier::new(&s, br::ImageLayout::Undefined, br::ImageLayout::PresentSrc))
@@ -84,10 +85,12 @@ impl WindowRenderTargets
 
     pub fn backbuffers(&self) -> &[br::ImageView] { &self.bb }
     pub fn acquire_next_backbuffer_index(&self, timeout: Option<u64>, completion_handler: br::CompletionHandler)
-            -> br::Result<u32> {
+        -> br::Result<u32>
+    {
         self.chain.acquire_next(timeout, completion_handler)
     }
-    pub fn present_on(&self, q: &br::Queue, index: u32, occurence_after: &[&br::Semaphore]) -> br::Result<()> {
+    pub fn present_on(&self, q: &br::Queue, index: u32, occurence_after: &[&br::Semaphore]) -> br::Result<()>
+    {
         self.chain.queue_present(q, index, occurence_after)
     }
 }

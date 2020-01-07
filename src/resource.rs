@@ -145,10 +145,12 @@ pub struct MemoryBadget<'g>
 }
 pub enum MemoryBadgetEntry { Buffer(br::Buffer), Image(br::Image) }
 pub enum MemoryBoundResource { Buffer(Buffer), Image(Image) }
-impl From<br::Buffer> for MemoryBadgetEntry {
+impl From<br::Buffer> for MemoryBadgetEntry
+{
     fn from(v: br::Buffer) -> Self { MemoryBadgetEntry::Buffer(v) }
 }
-impl From<br::Image> for MemoryBadgetEntry {
+impl From<br::Image> for MemoryBadgetEntry
+{
     fn from(v: br::Image) -> Self { MemoryBadgetEntry::Image(v) }
 }
 impl MemoryBadgetEntry
@@ -188,12 +190,13 @@ impl<'g> MemoryBadget<'g>
         let req = v.requirements();
         let new_offset = align2!(self.total_size, req.alignment);
         let entry = v.into();
-        let new_offset =
-            if self.last_resource_tiling.map_or(false, |t| t.is_additional_alignment_required(entry.tiling()))
-            {
-                align2!(new_offset, self.g.adapter.properties().limits.bufferImageGranularity)
-            }
-            else { new_offset };
+        let align_required = self.last_resource_tiling
+            .map_or(false, |t| t.is_additional_alignment_required(entry.tiling()));
+        let new_offset = if align_required
+        {
+            align2!(new_offset, self.g.adapter.properties().limits.bufferImageGranularity)
+        }
+        else { new_offset };
         self.last_resource_tiling = Some(entry.tiling());
         self.entries.push((entry, new_offset));
         self.total_size = new_offset + req.size;
@@ -232,12 +235,17 @@ impl<'g> MemoryBadget<'g>
 
 use std::mem::ManuallyDrop;
 pub struct AutocloseMappedMemoryRange<'m>(&'m br::DeviceMemory, ManuallyDrop<br::MappedMemoryRange<'m>>);
-impl<'m> Deref for AutocloseMappedMemoryRange<'m> {
+impl<'m> Deref for AutocloseMappedMemoryRange<'m>
+{
     type Target = br::MappedMemoryRange<'m>; fn deref(&self) -> &Self::Target { &self.1 }
 }
-impl<'m> Drop for AutocloseMappedMemoryRange<'m> {
-    fn drop(&mut self) {
-        unsafe {
+impl<'m> Drop for AutocloseMappedMemoryRange<'m>
+{
+    fn drop(&mut self)
+    {
+        unsafe
+        {
+            // 1を確実に先に破棄したいのでManuallyDropで殺す
             ManuallyDrop::drop(&mut self.1);
             self.0.unmap();
         }
@@ -253,23 +261,29 @@ pub struct Buffer(Rc<br::Buffer>, Memory, u64);
 /// A refcounted image object bound with a memory object.
 #[derive(Clone)]
 pub struct Image(Rc<br::Image>, Memory, u64);
-impl Buffer {
-    pub fn bound(b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self> {
+impl Buffer
+{
+    pub fn bound(b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self>
+    {
         b.bind(mem, offset as _).map(|_| Buffer(b.into(), mem.clone(), offset))
     }
     /// Reference to a memory object bound with this object.
     pub fn memory(&self) -> &Memory { &self.1 }
 
-    pub fn map(&self, size: u64) -> br::Result<br::MappedMemoryRange> {
+    pub fn map(&self, size: u64) -> br::Result<br::MappedMemoryRange>
+    {
         self.1.map(self.2 as _ .. (self.2 + size) as _)
     }
     pub unsafe fn unmap(&self) { self.1.unmap() }
-    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, size: u64, f: F) -> br::Result<R> {
+    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, size: u64, f: F) -> br::Result<R>
+    {
         Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(size)?))))
     }
 }
-impl Image {
-    pub fn bound(r: br::Image, mem: &Memory, offset: u64) -> br::Result<Self> {
+impl Image
+{
+    pub fn bound(r: br::Image, mem: &Memory, offset: u64) -> br::Result<Self>
+    {
         r.bind(mem, offset as _).map(|_| Image(r.into(), mem.clone(), offset))
     }
     /// Reference to a memory object bound with this object.
@@ -277,27 +291,35 @@ impl Image {
 
     pub fn format(&self) -> PixelFormat { unsafe { transmute(self.0.format()) } }
 }
-impl Deref for Buffer {
+impl Deref for Buffer
+{
     type Target = br::Buffer; fn deref(&self) -> &br::Buffer { &self.0 }
 }
-impl Deref for Image {
+impl Deref for Image
+{
     type Target = br::Image; fn deref(&self) -> &br::Image { &self.0 }
 }
-impl br::VkHandle for Buffer {
-    type Handle = <br::Buffer as br::VkHandle>::Handle; fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
+impl br::VkHandle for Buffer
+{
+    type Handle = <br::Buffer as br::VkHandle>::Handle;
+    fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }
-impl br::VkHandle for Image {
-    type Handle = <br::Image as br::VkHandle>::Handle; fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
+impl br::VkHandle for Image
+{
+    type Handle = <br::Image as br::VkHandle>::Handle;
+    fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }
 
 #[derive(Clone, Copy)] #[repr(i32)]
-pub enum PixelFormat {
+pub enum PixelFormat
+{
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
     BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM,
     RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
     BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM
 }
-impl PixelFormat {
+impl PixelFormat
+{
     /// Bits per pixel for each format enums
     pub fn bpp(self) -> usize
     {
@@ -346,7 +368,8 @@ impl Texture2D
 
     pub fn image(&self) -> &Image { &self.1 }
 }
-impl Deref for Texture2D {
+impl Deref for Texture2D
+{
     type Target = br::ImageView;
     fn deref(&self) -> &br::ImageView { &self.0 }
 }
@@ -381,7 +404,8 @@ impl<'g> TextureInitializationGroup<'g>
     pub fn prealloc(self, prealloc: &mut BufferPrealloc) -> br::Result<TexturePreallocatedGroup>
     {
         let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
-        for pd in self.1 {
+        for pd in self.1
+        {
             let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
             images.push(o); stage_info.push((pd, offs));
         }
