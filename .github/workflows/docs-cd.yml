@@ -17,4 +17,4 @@ jobs:
       - name: Deployment to Firebase Hosting(for dev)
         uses: ./.github/actions/deployment-dev
         env:
-          FIREBASE_TOKEN: ${{ secret.DOC_HOST_FIREBASE_TOKEN }}
+          FIREBASE_TOKEN: ${{ secrets.DOC_HOST_FIREBASE_TOKEN }}
