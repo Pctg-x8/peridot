@@ -14,10 +14,10 @@ use peridot;
 use self::userlib::Game;
 use std::rc::Rc;
 
-struct MainWindow { e: Option<EngineA> }
+struct MainWindow { e: Option<EngineA>, stopping_render: bool }
 impl MainWindow {
     fn new() -> Self {
-        MainWindow { e: None }
+        MainWindow { e: None, stopping_render: true }
     }
     fn init(&mut self, app: &android::App) {
         let am = unsafe { AssetManager::from_ptr((*app.activity).asset_manager).expect("null assetmanager") };
@@ -26,9 +26,18 @@ impl MainWindow {
             input: PlatformInputProcessPlugin::new()
         };
         self.e = EngineA::launch(GameA::NAME, GameA::VERSION, nl).expect("Failed to initialize the engine").into();
+        self.stopping_render = false;
     }
+    fn destroy(&mut self)
+    {
+        self.e = None;
+        self.stopping_render = true;
+    }
+    fn stop_render(&mut self) { self.stopping_render = true; }
     fn render(&mut self)
     {
+        if self.stopping_render { return; }
+
         if let Some(e) = self.e.as_mut() { e.do_update(); }
     }
 }
@@ -137,6 +146,12 @@ pub extern "C" fn appcmd_callback(app: *mut android::App, cmd: i32) {
         },
         android::APP_CMD_TERM_WINDOW => {
             trace!("Terminating Window...");
+            mw.stop_render();
+        },
+        android::APP_CMD_DESTROY => {
+            trace!("Destroying App...");
+            mw.destroy();
+            trace!("App Destroyed");
         },
         e => trace!("Unknown Event: {}", e)
     }
