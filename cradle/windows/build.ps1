@@ -75,7 +75,7 @@ $ExternCrateName = $PackageName.Replace("-", "_")
 pub use $ExternCrateName::$EntryTyName as Game;" | Out-File $ScriptPath\src\userlib.rs -Encoding UTF8
 
 $CargoSubcommand = if ($Run) { "run" } else { "build" }
-$Features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_win32_surface"
+$Features = @("bedrock/VK_KHR_win32_surface")
 $OptFlags = if ($Release) { "--release" } else { "" }
 if ($AssetDirectory) {
     $Env:PERIDOT_EXTERNAL_ASSET_PATH = $(Resolve-Path $AssetDirectory).Path

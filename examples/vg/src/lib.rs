@@ -43,7 +43,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
             .expect("No Fonts");
         let mut ctx = pvg::Context::new();
-        ctx.text(&font, "Hello, World!|Opaque");
+        ctx.text(&font, "Hello, World!|Opaque").expect("Text Rendering failed");
         {
             let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
@@ -241,7 +241,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
+    fn update(&mut self, _e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         (None, br::SubmissionBatch
@@ -256,7 +256,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>)
+    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, _new_size: Vector2<usize>)
     {
         self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");

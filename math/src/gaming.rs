@@ -3,7 +3,11 @@
 use linarg::*;
 use std::ops::Range;
 
-pub enum ProjectionMethod { Orthographic { size: f32 }, Perspective { fov: f32 } }
+pub enum ProjectionMethod
+{
+    Orthographic { size: f32 },
+    Perspective { fov: f32 }
+}
 /// A camera
 /// ## Examples
 /// 
@@ -17,16 +21,21 @@ pub enum ProjectionMethod { Orthographic { size: f32 }, Perspective { fov: f32 }
 /// assert_eq!(mv.clone() * Vector3(5.0, 0.0, 1.0), Vector4(5.0, 0.0, 1.0, 1.0));
 /// assert_eq!(mp * mv * Vector3(5.0, 0.0, 1.0), Vector4(1.0, 0.0, 0.0, 1.0));
 /// ```
-pub struct Camera {
+pub struct Camera
+{
     pub projection: ProjectionMethod, pub position: Vector3F32, pub rotation: QuaternionF32,
     pub depth_range: Range<f32>
 }
 
-impl Camera {
+impl Camera
+{
     /// calculates the camera projection matrix
-    pub fn projection_matrix(&self) -> Matrix4F32 {
-        match self.projection {
-            ProjectionMethod::Perspective { fov } => {
+    pub fn projection_matrix(&self) -> Matrix4F32
+    {
+        match self.projection
+        {
+            ProjectionMethod::Perspective { fov } =>
+            {
                 let scaling = (fov / 2.0).tan().recip();
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let zscale = (self.depth_range.end / zdiff,
@@ -35,7 +44,8 @@ impl Camera {
                 Matrix4([scaling, 0.0, 0.0, 0.0], [0.0, scaling, 0.0, 0.0],
                     [0.0, 0.0, zscale.0, zscale.1], [0.0, 0.0, 1.0, 0.0])
             },
-            ProjectionMethod::Orthographic { size } => {
+            ProjectionMethod::Orthographic { size } =>
+            {
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let t = Matrix4::translation(Vector3(0.0, 0.0, -self.depth_range.start));
                 let s = Matrix4::scale(Vector4(size.recip(), size.recip(), zdiff.recip(), 1.0));
@@ -45,11 +55,13 @@ impl Camera {
         }
     }
     /// calculates the camera view matrix
-    pub fn view_matrix(&self) -> Matrix4F32 {
+    pub fn view_matrix(&self) -> Matrix4F32
+    {
         Matrix4F32::from(-self.rotation.clone()) * Matrix4F32::translation(-self.position.clone())
     }
     /// calculates the camera view matrix and the projection matrix(returns in this order)
-    pub fn matrixes(&self) -> (Matrix4F32, Matrix4F32) {
+    pub fn matrixes(&self) -> (Matrix4F32, Matrix4F32)
+    {
         (self.view_matrix(), self.projection_matrix())
     }
 
@@ -61,7 +73,6 @@ impl Camera {
         
         let axis = basedir.cross(&eyedir).normalize();
         let angle = basedir.dot(&eyedir).acos();
-        println!("angle: {} axis: {:?}", angle, axis);
         self.rotation = Quaternion::new(-angle, axis);
     }
 }
