@@ -42,7 +42,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     {
         let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
             .expect("No Fonts");
-        let mut ctx = pvg::Context::new();
+        let mut ctx = pvg::Context::new(2.0);
         ctx.text(&font, "Hello, World!|Opaque").expect("Text Rendering failed");
         {
             let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
@@ -63,7 +63,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
             f.close(); f.end();
         }*/
-        let mut ctx2 = pvg::Context::new();
+        let mut ctx2 = pvg::Context::new(2.0);
         /*{
             let mut f0 = ctx2.begin_figure(pvg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
