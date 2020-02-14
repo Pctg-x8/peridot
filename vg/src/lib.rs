@@ -77,7 +77,8 @@ impl Context
     {
         let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or(0));
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
-        for g in glyphs {
+        for g in glyphs
+        {
             let (adv, size) = (font.advance(g)?, font.bounds(g)?);
             let mut g0 = Partitioner::new();
             let tf = self.current_transform.post_translate(Vector2D::new(left_offs, -font.ascent()))
