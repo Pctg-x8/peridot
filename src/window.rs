@@ -49,7 +49,6 @@ impl WindowRenderTargets
     pub(super) fn new<PRT: PlatformRenderTarget>(g: &Graphics, s: &SurfaceInfo, prt: &PRT) -> br::Result<Self>
     {
         let si = g.adapter.surface_capabilities(&s.obj)?;
-        dbg!(&si);
         let ew =
             if si.currentExtent.width == 0xffff_ffff { prt.current_geometry_extent().0 as _ }
             else { si.currentExtent.width };
