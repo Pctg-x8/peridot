@@ -476,11 +476,13 @@ impl<'c> PathBuilder for FigureContext<'c>
     }
     fn cubic_bezier_to(&mut self, c1: Point2D<f32>, c2: Point2D<f32>, to: Point2D<f32>)
     {
-        self.partitioner.builder_mut().cubic_bezier_to(c1 * self.ctx.screen_scaling, c2 * self.ctx.screen_scaling, to * self.ctx.screen_scaling)
+        self.partitioner.builder_mut()
+            .cubic_bezier_to(c1 * self.ctx.screen_scaling, c2 * self.ctx.screen_scaling, to * self.ctx.screen_scaling)
     }
     fn arc(&mut self, center: Point2D<f32>, rad: Vector2D<f32>, sweeping_angle: Angle<f32>, x_rot: Angle<f32>)
     {
-        self.partitioner.builder_mut().arc(center * self.ctx.screen_scaling, rad * self.ctx.screen_scaling, sweeping_angle, x_rot)
+        self.partitioner.builder_mut()
+            .arc(center * self.ctx.screen_scaling, rad * self.ctx.screen_scaling, sweeping_angle, x_rot)
     }
 }
 
