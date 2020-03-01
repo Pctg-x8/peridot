@@ -143,12 +143,13 @@ impl<E, PL> Engine<E, PL>
 }
 impl<E, PL: NativeLinker> Engine<E, PL>
 {
-    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>
+    pub async fn load<A: Asset>(&self, path: &str) -> Result<A, A::Error>
     {
-        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
+        self.nativelink.asset_loader().get_binary(path, A::EXT).await.map_err(A::Error::from).and_then(A::from_binary)
     }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error>
+    pub fn streaming<A: StreamingAsset>(&self, path: &str) -> Result<A, A::Error>
     {
+        // TODO: how we can handle the streaming decoded assets?
         A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
     }
     

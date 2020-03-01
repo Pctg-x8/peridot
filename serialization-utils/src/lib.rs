@@ -1,7 +1,6 @@
 use async_std::io::prelude::{BufRead, Write, ReadExt, WriteExt};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::str::from_utf8;
-use std::pin::Pin;
 
 struct FragmentIterator(u32, bool);
 impl From<u32> for FragmentIterator

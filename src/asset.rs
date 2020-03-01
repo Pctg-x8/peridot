@@ -1,5 +1,5 @@
 
-use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor};
+use std::io::{Result as IOResult, Error as IOError};
 use std::io::prelude::{Read, Seek};
 use super::PixelFormat;
 
@@ -7,29 +7,22 @@ pub trait PlatformAssetLoader
 {
     type Asset: Read + Seek + 'static;
     type StreamingAsset: Read + 'static;
+    type Future: std::future::Future<Output = IOResult<Vec<u8>>>;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
+    fn get_binary(&self, path: &str, ext: &str) -> Self::Future;
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
 }
 pub trait LogicalAssetData: Sized
 {
     const EXT: &'static str;
 }
-pub trait FromAsset: LogicalAssetData
+pub trait Asset: LogicalAssetData
 {
     type Error: From<IOError>;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>;
-    
-    fn from_archive(reader: &mut archive::ArchiveRead, path: &str) -> Result<Self, Self::Error>
-    {
-        match reader.read_bin(path)?
-        {
-            None => Err(IOError::new(ErrorKind::NotFound, "No Entry in primary asset package").into()),
-            Some(b) => Self::from_asset(Cursor::new(b))
-        }
-    }
+    fn from_binary(content: Vec<u8>) -> Result<Self, Self::Error>;
 }
-pub trait FromStreamingAsset: LogicalAssetData
+/// TODO: make Streaming Decoding/Reading interface
+pub trait StreamingAsset: LogicalAssetData
 {
     type Error: From<IOError>;
     fn from_asset<Asset: Read + 'static>(asset: Asset) -> Result<Self, Self::Error>;
@@ -81,52 +74,52 @@ impl LogicalAssetData for TIFF { const EXT: &'static str = "tiff"; }
 impl LogicalAssetData for WebP { const EXT: &'static str = "webp"; }
 impl LogicalAssetData for BMP { const EXT: &'static str = "bmp"; }
 impl LogicalAssetData for HDR { const EXT: &'static str = "hdr"; }
-impl FromAsset for PNG
+impl Asset for PNG
 {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError>
+    fn from_binary(content: Vec<u8>) -> Result<Self, ImageError>
     {
-        image::png::PngDecoder::new(asset).and_then(DecodedPixelData::new).map(PNG)
+        image::png::PngDecoder::new(std::io::Cursor::new(content)).and_then(DecodedPixelData::new).map(PNG)
     }
 }
-impl FromAsset for TGA
+impl Asset for TGA
 {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError>
+    fn from_binary(content: Vec<u8>) -> Result<Self, ImageError>
     {
-        image::tga::TgaDecoder::new(asset).and_then(DecodedPixelData::new).map(TGA)
+        image::tga::TgaDecoder::new(std::io::Cursor::new(content)).and_then(DecodedPixelData::new).map(TGA)
     }
 }
-impl FromAsset for TIFF
+impl Asset for TIFF
 {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError>
+    fn from_binary(content: Vec<u8>) -> Result<Self, ImageError>
     {
-        image::tiff::TiffDecoder::new(asset).and_then(DecodedPixelData::new).map(TIFF)
+        image::tiff::TiffDecoder::new(std::io::Cursor::new(content)).and_then(DecodedPixelData::new).map(TIFF)
     }
 }
-impl FromAsset for WebP
+impl Asset for WebP
 {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError>
+    fn from_binary(content: Vec<u8>) -> Result<Self, ImageError>
     {
-        image::webp::WebPDecoder::new(asset).and_then(DecodedPixelData::new).map(WebP)
+        image::webp::WebPDecoder::new(std::io::Cursor::new(content)).and_then(DecodedPixelData::new).map(WebP)
     }
 }
-impl FromAsset for BMP
+impl Asset for BMP
 {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError>
+    fn from_binary(content: Vec<u8>) -> Result<Self, ImageError>
     {
-        image::bmp::BmpDecoder::new(asset).and_then(DecodedPixelData::new).map(BMP)
+        image::bmp::BmpDecoder::new(std::io::Cursor::new(content)).and_then(DecodedPixelData::new).map(BMP)
     }
 }
-impl FromAsset for HDR
+impl Asset for HDR
 {
     type Error = ImageError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError>
+    fn from_binary(content: Vec<u8>) -> Result<Self, ImageError>
     {
-        let ireader = HdrDecoder::new(BufReader::new(asset))?;
+        let ireader = HdrDecoder::new(std::io::Cursor::new(content))?;
         let meta = ireader.metadata();
         let pixels = ireader.read_image_native()?;
 
