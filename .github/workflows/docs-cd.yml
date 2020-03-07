@@ -1,0 +1,20 @@
+name: Document Continuous Deployment(for dev)
+on:
+  push:
+    branches:
+      - dev
+jobs:
+  doc-gen-deploy:
+    name: Doc Generate and Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checking out
+        uses: actions/checkout@v2
+        with:
+          ref: dev
+      - name: Build docs
+        uses: ./.github/actions/build-doc
+      - name: Deployment to Firebase Hosting(for dev)
+        uses: ./.github/actions/deployment-dev
+        env:
+          FIREBASE_TOKEN: ${{ secrets.DOC_HOST_FIREBASE_TOKEN }}

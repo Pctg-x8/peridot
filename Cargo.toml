@@ -17,10 +17,13 @@ peridot-math = { path = "math" }
 
 image = "*"
 
+[target.'cfg(debug_assertions)'.dependencies.bedrock]
+git = "https://github.com/Pctg-x8/bedrock"
+features = ["Presentation", "Implements", "VK_EXT_debug_report"]
+
 [workspace]
-exclude = ["extras/"]
+exclude = ["extras/", "cradle/"]
 members = [
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
-    "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
-    "tools/archiver"
+    "tools/shaderbuild", "tools/archiver"
 ]
