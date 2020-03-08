@@ -14,7 +14,7 @@ jobs:
         uses: ./.github/actions/checkbuild-baselayer
       - name: Uploading Build Artifacts
         uses: actions/upload-artifact@v1
-        if: succeeded()
+        if: success()
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
@@ -50,7 +50,7 @@ jobs:
         uses: ./.github/actions/checkbuild-subdirs-rs
       - name: Uploading Build Artifacts
         uses: actions/upload-artifact@v1
-        if: succeeded()
+        if: success()
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
