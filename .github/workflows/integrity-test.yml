@@ -6,6 +6,7 @@ on:
 jobs:
   check-baselayer:
     name: "Integrity Check: Base Layer"
+    runs-on: ubuntu-latest
     steps:
       - name: Checking out
         uses: actions/checkout@v2
@@ -19,6 +20,7 @@ jobs:
           path: .buildcache
   check-tools:
     name: "Integrity Check: Tools"
+    runs-on: ubuntu-latest
     needs: check-baselayer
     steps:
       - name: Checking out
@@ -34,6 +36,7 @@ jobs:
           path: tools
   check-modules:
     name: "Integrity Check: Modules"
+    runs-on: ubuntu-latest
     needs: check-baselayer
     steps:
       - name: Checking out
@@ -53,6 +56,7 @@ jobs:
           path: .buildcache
   check-examples:
     name: "Integrity Check: Examples"
+    runs-on: ubuntu-latest
     needs: check-modules
     steps:
       - name: Checking out
