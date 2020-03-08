@@ -2,7 +2,6 @@ name: Integrity Test
 on:
   pull_request:
     types: ["opened", "synchronize"]
-    branches-ignore: ["dev"]
     paths: ["**.rs", "**.toml"]
 jobs:
   check-baselayer:
