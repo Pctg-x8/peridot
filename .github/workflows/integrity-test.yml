@@ -1,0 +1,69 @@
+name: Integrity Test
+on:
+  pull_request:
+    types: ["opened", "synchronize"]
+    branches-ignore: ["dev"]
+    paths: ["**.rs", "**.toml"]
+jobs:
+  check-baselayer:
+    name: "Integrity Check: Base Layer"
+    steps:
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-baselayer
+      - name: Uploading Build Artifacts
+        uses: actions/upload-artifact@v1
+        if: succeeded()
+        with:
+          name: "Peridot IntegrityCheck BuildCache"
+          path: .buildcache
+  check-tools:
+    name: "Integrity Check: Tools"
+    needs: check-baselayer
+    steps:
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Downloading last Build Artifacts
+        uses: actions/download-artifact@v1
+        with:
+          name: "Peridot IntegityCheck BuildCache"
+          path: .buildcache
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-subdirs-rs
+        with:
+          path: tools
+  check-modules:
+    name: "Integrity Check: Modules"
+    needs: check-baselayer
+    steps:
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Downloading last Build Artifacts
+        uses: actions/download-artifact@v1
+        with:
+          name: "Peridot IntegrityCheck BuildCache"
+          path: .buildcache
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-subdirs-rs
+      - name: Uploading Build Artifacts
+        uses: actions/upload-artifact@v1
+        if: succeeded()
+        with:
+          name: "Peridot IntegrityCheck BuildCache"
+          path: .buildcache
+  check-examples:
+    name: "Integrity Check: Examples"
+    needs: check-modules
+    steps:
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Downloading last Build Artifacts
+        uses: actions/download-artifact@v1
+        with:
+          name: "Peridot IntegrityCheck BuildCache"
+          path: .buildcache
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-subdir
+        with:
+          path: examples
