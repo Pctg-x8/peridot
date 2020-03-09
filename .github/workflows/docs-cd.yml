@@ -4,8 +4,8 @@ on:
     branches:
       - dev
     paths:
-      - **.rs
-      - **.toml
+      - "**.rs"
+      - "**.toml"
 jobs:
   doc-gen-deploy:
     name: Doc Generate and Deploy
