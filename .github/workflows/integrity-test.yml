@@ -15,6 +15,7 @@ jobs:
       - name: Correct package permission for upload-artifact
         run: |
           sudo chmod -R o+r .buildcache/registry/src/github.com-*/unicode-xid-*
+          sudo chmod -R o+r .buildcache/target
       - name: Uploading Build Artifacts
         uses: actions/upload-artifact@v1
         if: success()
