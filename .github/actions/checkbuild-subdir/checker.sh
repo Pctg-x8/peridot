@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -xe
 
 cd $INPUT_PATH
 
