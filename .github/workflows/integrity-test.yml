@@ -14,7 +14,7 @@ jobs:
         uses: ./.github/actions/checkbuild-baselayer
       - name: Correct package permission for upload-artifact
         run: |
-          chmod o+r .buildcache/registry/src/github.com-*/unicode-xid-*
+          sudo chmod o+r .buildcache/registry/src/github.com-*/unicode-xid-*
       - name: Uploading Build Artifacts
         uses: actions/upload-artifact@v1
         if: success()
