@@ -12,10 +12,9 @@ jobs:
         uses: actions/checkout@v2
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-baselayer
-      - name: test-ls
+      - name: Correct package permission for upload-artifact
         run: |
-          ls -l .buildcache/registry/src/github.com-*/unicode-xid-0.2.0
-          ls -l .buildcache/registry/src/github.com-*/rayon-1.3.0
+          chmod o+r .buildcache/registry/src/github.com-*/unicode-xid-*
       - name: Uploading Build Artifacts
         uses: actions/upload-artifact@v1
         if: success()
