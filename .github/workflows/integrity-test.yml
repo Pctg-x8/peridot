@@ -13,7 +13,9 @@ jobs:
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-baselayer
       - name: test-ls
-        run: ls -l .buildcache/registry/src/github.com-*/unicode-xid-0.2.0
+        run: |
+          ls -l .buildcache/registry/src/github.com-*/unicode-xid-0.2.0
+          ls -l .buildcache/registry/src/github.com-*/rayon-1.3.0
       - name: Uploading Build Artifacts
         uses: actions/upload-artifact@v1
         if: success()
