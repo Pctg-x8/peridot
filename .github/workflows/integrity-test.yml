@@ -13,6 +13,8 @@ jobs:
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-baselayer
       - name: dump GITHUB_CONTEXT
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
         run: echo $GITHUB_CONTEXT
       - name: Correct package permission for upload-artifact
         if: success()
