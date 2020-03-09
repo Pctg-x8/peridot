@@ -32,10 +32,10 @@ jobs:
       - name: Downloading last Build Artifacts
         uses: actions/download-artifact@v1
         with:
-          name: "Peridot IntegityCheck BuildCache"
+          name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
       - name: Building as Checking
-        uses: ./.github/actions/checkbuild-subdirs-rs
+        uses: ./.github/actions/checkbuild-subdir
         with:
           path: tools
   check-modules:
@@ -51,7 +51,9 @@ jobs:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
       - name: Building as Checking
-        uses: ./.github/actions/checkbuild-subdirs-rs
+        uses: ./.github/actions/checkbuild-subdir
+        with:
+          path: .
       - name: Uploading Build Artifacts
         uses: actions/upload-artifact@v1
         if: success()
