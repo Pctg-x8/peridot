@@ -10,6 +10,10 @@ jobs:
     steps:
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-baselayer
       - name: Correct package permission for upload-artifact
@@ -39,6 +43,10 @@ jobs:
     steps:
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Downloading last Build Artifacts
         uses: actions/download-artifact@v1
         with:
@@ -64,6 +72,10 @@ jobs:
     steps:
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Downloading last Build Artifacts
         uses: actions/download-artifact@v1
         with:
@@ -95,6 +107,10 @@ jobs:
     steps:
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Downloading last Build Artifacts
         uses: actions/download-artifact@v1
         with:
