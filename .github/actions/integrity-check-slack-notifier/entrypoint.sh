@@ -4,6 +4,7 @@
 BUILD_TIME_SECS=0
 
 # build commit info
+git log --format=%cn\t%B -n 1 $INPUT_HEAD_SHA
 git log --format=%cn\t%B -n 1 $INPUT_HEAD_SHA | read COMMITTER_NAME COMMIT_MESSAGE
 COMMIT_INFO="{\"committer\": \"$COMMITTER_NAME\", \"message\": \"$COMMIT_MESSAGE\", \"sha\": \"$INPUT_HEAD_SHA\"}"
 
