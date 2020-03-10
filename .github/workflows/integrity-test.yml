@@ -12,10 +12,6 @@ jobs:
         uses: actions/checkout@v2
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-baselayer
-      - name: dump GITHUB_CONTEXT
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-        run: echo "$GITHUB_CONTEXT"
       - name: Correct package permission for upload-artifact
         if: success()
         run: |
@@ -27,6 +23,15 @@ jobs:
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        with:
+          status: failure
+          failure_step: check-baselayer
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
   check-tools:
     name: "Integrity Check: Tools"
     runs-on: ubuntu-latest
@@ -43,6 +48,15 @@ jobs:
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: tools
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        with:
+          status: failure
+          failure_step: check-tools
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
   check-modules:
     name: "Integrity Check: Modules"
     runs-on: ubuntu-latest
@@ -65,6 +79,15 @@ jobs:
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        with:
+          status: failure
+          failure_step: check-modules
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
   check-examples:
     name: "Integrity Check: Examples"
     runs-on: ubuntu-latest
@@ -81,3 +104,19 @@ jobs:
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: examples
+      - name: Notify as Success
+        uses: ./.github/actions/integrity-check-slack-notifier
+        with:
+          status: success
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        with:
+          status: failure
+          failure_step: check-examples
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
