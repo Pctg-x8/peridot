@@ -99,6 +99,7 @@ jobs:
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
+          path: .
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
@@ -136,6 +137,7 @@ jobs:
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
+          path: .
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
@@ -179,6 +181,7 @@ jobs:
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
+          path: .
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
@@ -188,6 +191,8 @@ jobs:
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: examples
+      - name: test
+        run: ls -l .
       - name: Notify as Success
         uses: ./.github/actions/integrity-check-slack-notifier
         env:
