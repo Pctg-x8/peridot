@@ -9,7 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Getting begintime
-        run: date +%s > .begintime
+        run: |
+          date +%s > .begintime
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
@@ -42,7 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Getting begintime
-        run: date +%s > .begintime
+        run: |
+          date +%s > .begintime
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
