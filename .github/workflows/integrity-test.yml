@@ -56,6 +56,10 @@ jobs:
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
+      - name: peeking buildcache
+        run: |
+          ls -l .buildcache
+          ls -l .buildcache/target/debug/build/byteorder-*/
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-subdir
         with:
