@@ -56,10 +56,9 @@ jobs:
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
-      - name: peeking buildcache
+      - name: Resetting buildcache owner
         run: |
-          ls -l .buildcache
-          ls -l .buildcache/target/debug/build/byteorder-*/
+          sudo chown -hR root:root .buildcache
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-subdir
         with:
@@ -93,6 +92,9 @@ jobs:
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
+      - name: Resetting buildcache owner
+        run: |
+          sudo chown -hR root:root .buildcache
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-subdir
         with:
@@ -132,6 +134,9 @@ jobs:
         with:
           name: "Peridot IntegrityCheck BuildCache"
           path: .buildcache
+      - name: Resetting buildcache owner
+        run: |
+          sudo chown -hR root:root .buildcache
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-subdir
         with:
