@@ -94,7 +94,11 @@ jobs:
           path: .buildcache
       - name: Resetting buildcache owner
         run: |
+          ls -l .buildcache
+          ls -l .buildcache/target/debug/build/crc32fast-*
           sudo chown -hR root:root .buildcache
+          ls -l .buildcache
+          ls -l .buildcache/target/debug/build/crc32fast-*
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-subdir
         with:
