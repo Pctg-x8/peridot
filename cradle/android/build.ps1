@@ -84,22 +84,10 @@ $template = $template.Replace("**APKAPPID**", "$AppPackageID")
 $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml -Encoding UTF8
 
 # Build Userlib
-$features = "bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
-$BinRoot = "$Env:ANDROID_NDK\toolchains\llvm\prebuilt\windows-x86_64"
-New-Item -ItemType Directory $ScriptPath/.cargo -ErrorAction SilentlyContinue | Out-Null
-$CfgTemplate = "[target.aarch64-linux-android]
-linker = ""$BinRoot\aarch64-linux-android\bin\ld.exe""
-rustflags = [""-C"", ""link-arg=--sysroot=$Env:ANDROID_NDK\platforms\android-$Env:ANDROID_NDK_PLATFORM_TARGET\arch-arm64"", ""-C"", ""link-arg=-L$BinRoot\lib\gcc\aarch64-linux-android\4.9.x""]"
-$CfgTemplate.Replace("\", "\\") | Set-Content $ScriptPath/.cargo/config -Encoding UTF8
+$features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
 try {
     Push-Location; Set-Location $ScriptPath
-    $Env:CC="$BinRoot\bin\clang"
-    $Env:CXX="$BinRoot\bin\clang++"
-    $Env:CFLAGS="-target aarch64-linux-android$Env:ANDROID_NDK_PLATFORM_TARGET"
-    $Env:CXXFLAGS="-target aarch64-linux-android$Env:ANDROID_NDK_PLATFORM_TARGET"
-    $Env:AR="$BinRoot\aarch64-linux-android\bin\ar.exe"
-    $Env:LD="$BinRoot\aarch64-linux-android\bin\ld.exe"
-    cargo build --features $($features -join ",") --target=aarch64-linux-android
+    cargo ndk --target aarch64-linux-android --android-platform $Env:NDK_PLATFORM_TARGET -- build --features $($features -join ",")
     if ($LASTEXITCODE -ne 0) { throw """cargo build"" failed with code $LASTEXITCODE" }
 }
 finally {

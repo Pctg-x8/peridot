@@ -1,11 +1,18 @@
 How to build Peridot for Android deployment
 ---
 
+## 必要なもの
+
+- cargo-ndk
+  - `cargo install cargo-ndk` でインストールする
+
 ## 環境変数
 
-- `ANDROID_HOME`: Android SDKのホーム(platform-toolsなどのフォルダがある場所)
-- `ANDROID_NDK`: Android NDK r20のホーム(toolchainsなどのフォルダがある場所)
-- `ANDROID_NDK_PLATFORM_TARGET`: build.gradleのcompileSdkVersionに合わせる。今は28
+- `NDK_HOME`: Android NDK r20のホーム(toolchainsなどのフォルダがある場所)
+- `NDK_PLATFORM_TARGET`: build.gradleのcompileSdkVersionに合わせる。今は28
+- `ANDROID_HOME`: Android SDKのホーム
+  - エラーメッセージ `Task 'assembleDebug' not found in root project 'apkbuild'.` が出た場合は、この変数が設定されていない可能性があるので改めて設定する
+  - https://stackoverflow.com/questions/49187670/assembledebug-task-not-found-while-running-from-jenkins
 
 ## コマンドライン
 
