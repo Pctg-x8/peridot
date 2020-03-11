@@ -22,4 +22,4 @@ PAYLOAD="{$PAYLOAD_STATUS_HEADER, \"build_url\": \"$BUILD_URL\", \"number\": \"$
 aws lambda invoke --function-name PeridotIntegrityTestNotificationGHA --invocation-type Event --payload "$PAYLOAD" out.log
 
 # propagate failure status
-[ $INPUT_STATUS == "failure" ] && exit 1
+[ $INPUT_STATUS == "success" ]
