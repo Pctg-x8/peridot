@@ -1,7 +1,8 @@
 #!/bin/bash -xe
 
-# todo: 算出方法を考える
-BUILD_TIME_SECS=0
+BEGINTIME=$(cat .begintime)
+ENDTIME=$(date +%s)
+BUILD_TIME_SECS=$(expr $ENDTIME - $BEGINTIME)
 
 # build commit info
 read COMMITTER_NAME COMMIT_MESSAGE < <(git log --format=%cn%x09%B -n 1 $INPUT_HEAD_SHA)
