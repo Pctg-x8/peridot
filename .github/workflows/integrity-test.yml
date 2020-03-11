@@ -10,13 +10,16 @@ jobs:
     steps:
       - name: Getting begintime
         run: |
-          date +%s > .begintime
+          echo "::set-env name=BEGINTIME::$(date +%s)"
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Saving begintime
+        run:
+          echo $BEGINTIME > .begintime
       - name: "Running Check: LineWidth"
         uses: ./.github/actions/codeform-checker
         with:
@@ -44,13 +47,16 @@ jobs:
     steps:
       - name: Getting begintime
         run: |
-          date +%s > .begintime
+          echo "::set-env name=BEGINTIME::$(date +%s)"
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Saving begintime
+        run:
+          echo $BEGINTIME > .begintime
       - name: Building as Checking
         uses: ./.github/actions/checkbuild-baselayer
       # - name: Uploading Build Artifacts
@@ -83,17 +89,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: check-baselayer
     steps:
-      - name: Downloading BeginTimer
-        uses: actions/download-artifact@v1
-        with:
-          name: WorkflowBeginTimestamp
-          path: .begintime
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Downloading BeginTimer
+        uses: actions/download-artifact@v1
+        with:
+          name: WorkflowBeginTimestamp
+          path: .begintime
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
@@ -121,17 +127,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: check-baselayer
     steps:
-      - name: Downloading BeginTimer
-        uses: actions/download-artifact@v1
-        with:
-          name: WorkflowBeginTimestamp
-          path: .begintime
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Downloading BeginTimer
+        uses: actions/download-artifact@v1
+        with:
+          name: WorkflowBeginTimestamp
+          path: .begintime
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
@@ -165,17 +171,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: check-modules
     steps:
-      - name: Downloading BeginTimer
-        uses: actions/download-artifact@v1
-        with:
-          name: WorkflowBeginTimestamp
-          path: .begintime
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
+      - name: Downloading BeginTimer
+        uses: actions/download-artifact@v1
+        with:
+          name: WorkflowBeginTimestamp
+          path: .begintime
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
