@@ -4,6 +4,37 @@ on:
     types: ["opened", "synchronize"]
     paths: ["**.rs", "**.toml"]
 jobs:
+  check-formats:
+    name: "Code Formats"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: "Running Check: LineWidth"
+        uses: ./.github/actions/codeform-checker
+        with:
+          script: codeform_check
+      - name: "Running Check: Vulnerabilities"
+        uses: ./.github/actions/codeform-checker
+        with:
+          script: vulnerabilities_elliminator
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_SECRET }}
+          AWS_DEFAULT_REGION: "ap-northeast-1"
+        with:
+          status: failure
+          failure_step: check-formats
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
   check-baselayer:
     name: "Base Layer"
     runs-on: ubuntu-latest
