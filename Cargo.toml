@@ -25,7 +25,7 @@ git = "https://github.com/Pctg-x8/bedrock"
 features = ["Presentation", "Implements", "VK_EXT_debug_report"]
 
 [workspace]
-exclude = ["extras/", "cradle/"]
+exclude = ["extras/", "cradle/", "examples/"]
 members = [
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
     "tools/shaderbuild", "tools/archiver"
