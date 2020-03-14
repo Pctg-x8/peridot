@@ -1,4 +1,4 @@
-name: Integrity Check
+name: "Integrity Check (Weekly)"
 on:
   schedule:
     - cron: "0 12 * * wed"
