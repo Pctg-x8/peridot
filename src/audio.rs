@@ -215,7 +215,7 @@ impl<'d> WaveSamplesRefMut<'d>
 pub enum PlayableAudioState { Ready, Playing, EndOfBuffer }
 
 use std::collections::BTreeMap;
-fn fourcc(cc: &[u8; 4]) -> u32 { u32::from_be_bytes(*cc) }
+fn fourcc(cc: &[u8; 4]) -> u32 { u32::from_le_bytes(*cc) }
 pub struct RIFFLoader<F: Read + Seek>
 {
     file: F, riff_chunk_start: u64, riff_subchunk_offsets: BTreeMap<u32, (u64, u32)>
