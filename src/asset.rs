@@ -3,10 +3,12 @@ use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor
 use std::io::prelude::{Read, Seek};
 use super::PixelFormat;
 
-pub trait InputStream: Read {
+pub trait InputStream: Read
+{
     fn skip(&mut self, amount: u64) -> IOResult<u64>;
 }
-impl<T> InputStream for T where T: Seek + Read {
+impl<T> InputStream for T where T: Seek + Read
+{
     fn skip(&mut self, amount: u64) -> IOResult<u64> { self.seek(SeekFrom::Current(amount as _)) }
 }
 
