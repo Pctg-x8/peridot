@@ -29,18 +29,20 @@ unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
 unsafe impl<T> Send for UniqueRawSliceMut<T> {}
 
 struct BoxedInputStream(Box<dyn InputStream>);
-impl BoxedInputStream {
+impl BoxedInputStream
+{
     fn new<S: InputStream + 'static>(stream: S) -> Self { BoxedInputStream(Box::new(stream)) }
 }
-impl InputStream for BoxedInputStream {
+impl InputStream for BoxedInputStream
+{
     fn skip(&mut self, fwd: u64) -> IOResult<u64> { self.0.skip(fwd) }
 }
-impl Read for BoxedInputStream {
+impl Read for BoxedInputStream
+{
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> { self.0.read(buf) }
 }
 unsafe impl Sync for BoxedInputStream {}
 unsafe impl Send for BoxedInputStream {}
-
 
 pub struct Mixer
 {
@@ -91,6 +93,17 @@ impl Mixer
             }
         }).collect::<Vec<_>>();
     }
+    fn combine_all_subprocess_buffers(&self, buf: &mut [f32])
+    {
+        let buflen = buf.len();
+        for sp in &self.subprocess_buffers_refs
+        {
+            for (b, sp) in buf.iter_mut().zip(unsafe { sp.as_slice()[..buflen].iter() })
+            {
+                *b += sp * self.master_amp;
+            }
+        }
+    }
     /// return true if silence
     pub fn process(&mut self, buf: &mut [f32]) -> bool
     {
@@ -100,22 +113,16 @@ impl Mixer
         }
         for b in &mut self.subprocess_buffers { *b = 0.0; }
 
+        let buflen = buf.len();
         self.subprocess_pool.install(|| for ps in self.processes.chunks(self.parallelize as _)
         {
             ps.par_iter().enumerate().for_each(|(i, p)| unsafe
             {
                 let slice = self.subprocess_buffers_refs[i].as_slice_mut();
-                p.write().expect("WriteLocking").process(&mut slice[..buf.len()]);
+                p.write().expect("WriteLocking").process(&mut slice[..buflen]);
             });
         });
-        for sp in &self.subprocess_buffers_refs
-        {
-            let buflen = buf.len();
-            for (b, sp) in buf.iter_mut().zip(unsafe { sp.as_slice()[..buflen].iter() })
-            {
-                *b += sp * self.master_amp;
-            }
-        }
+        self.combine_all_subprocess_buffers(buf);
 
         return self.processes.is_empty();
     }
