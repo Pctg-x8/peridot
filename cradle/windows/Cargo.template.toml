@@ -15,6 +15,7 @@ log = "0.4"
 env_logger = "0.5"
 rayon = "1.0"
 num_cpus = "1.0"
+#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
 
 [dependencies.winapi]
 version = "0.3"

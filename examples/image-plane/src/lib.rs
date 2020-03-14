@@ -6,17 +6,19 @@ use peridot::math::{
 };
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
-    SubpassDependencyTemplates, PvpShaderModules, DescriptorSetUpdateBatch, LayoutedPipeline,
+    SubpassDependencyTemplates, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
     FixedMemory, FixedBufferInitializer,
     audio::StreamingPlayableWav
 };
+use peridot_vertex_processing_pack::PvpShaderModules;
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::mem::size_of;
 use std::ops::Range;
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
+use log::*;
 
 pub struct IPFixedBufferInitializer
 {
@@ -69,9 +71,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;
 
         let image_data: peridot::PNG = e.load("images.example").expect("No image found");
-        println!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
-        println!("ImageColor: {:?}", image_data.0.color);
-        println!("ImageStride: {} bytes", image_data.0.stride);
+        debug!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
+        debug!("ImageColor: {:?}", image_data.0.color);
+        debug!("ImageStride: {} bytes", image_data.0.stride);
 
         let bgm = Arc::new(RwLock::new(e.streaming::<StreamingPlayableWav>("bgm").expect("Loading BGM")));
         e.audio_mixer().write().expect("Adding AudioProcess").add_process(bgm.clone());
@@ -93,13 +95,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
         
-        let cam = Camera
+        let mut cam = Camera
         {
             projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
-            position: Vector3(-3.0, 0.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
+            position: Vector3(-4.0, -1.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
             // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
             depth_range: 1.0 .. 10.0
         };
+        cam.look_at(Vector3(0.0, 0.0, 0.0));
         buffers.mut_buffer.0.guard_map(buffers.mut_buffer.1, |m| unsafe
         {
             let (v, p) = cam.matrixes();
@@ -128,8 +131,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             tfb.sink_graphics_ready_commands(r);
         }).expect("Failure in transferring initial data");
         
-        let update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
-            .expect("Alloc UpdateCB");
+        let update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1).expect("Alloc UpdateCB");
         {
             let mut rec = update_cb[0].begin().expect("Begin UpdateCmdRec");
             tfb_mut.sink_transfer_commands(&mut rec);
@@ -142,12 +144,15 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let renderpass = br::RenderPassBuilder::new().add_attachment(attdesc)
             .add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None))
             .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true))
-            .create(&e.graphics()).expect("Create RenderPass");
+            .create(&e.graphics())
+            .expect("Create RenderPass");
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], v.size(), 1))
-            .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Bind Framebuffer");
         
         let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
-        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings {
+        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings
+        {
             uniform_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
             combined_image_sampler: Some((1, 1, br::ShaderStage::FRAGMENT, vec![smp.native_ptr()])),
             .. br::DSLBindings::empty()
@@ -168,26 +173,31 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
         let shaderfile = e.load("shaders.prim").expect("Loading prim");
         let shader = PvpShaderModules::new(&e.graphics(), shaderfile).expect("Create ShaderModules");
-        let vp = [br::vk::VkViewport {
+        let vp = [br::vk::VkViewport
+        {
             width: screen_size.0 as _, height: screen_size.1 as _, x: 0.0, y: 0.0,
             minDepth: 0.0, maxDepth: 1.0
         }];
-        let sc = [br::vk::VkRect2D {
+        let sc = [br::vk::VkRect2D
+        {
             offset: br::vk::VkOffset2D::default(),
             extent: br::vk::VkExtent2D { width: screen_size.0, height: screen_size.1 }
         }];
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&descriptor_layout], &[])
-            .expect("Create PipelineLayout").into();
+            .expect("Create PipelineLayout")
+            .into();
         let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
             .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
             .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-            .create(&e.graphics(), None).expect("Create GraphicsPipeline");
+            .create(&e.graphics(), None)
+            .expect("Create GraphicsPipeline");
         let gp = LayoutedPipeline::combine(gp, &pl);
 
         let render_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, e.backbuffers().len())
             .expect("Alloc RenderCB");
-        for (cb, fb) in render_cb.iter().zip(&framebuffers) {
+        for (cb, fb) in render_cb.iter().zip(&framebuffers)
+        {
             let mut cr = cb.begin().expect("Begin CmdRecord");
             cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
             gp.bind(&mut cr);
@@ -199,7 +209,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
         bgm.write().expect("Starting BGM").play();
 
-        Game {
+        Game
+        {
             render_cb, renderpass, framebuffers,
             descriptor: (descriptor_layout, descriptor_pool, descriptor_main), gp_main: gp,
             rot: 0.0, vertices_offset, _sampler: smp,
@@ -208,7 +219,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }
     }
 
-    fn update(&mut self, e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, delta_time: Duration)
+    fn update(&mut self, _e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, delta_time: Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
@@ -219,28 +230,35 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
                 = Quaternion::new(self.rot, Vector3F32::up()).into();
         }).expect("Update DynamicStgBuffer");
 
-        (Some(br::SubmissionBatch {
+        (Some(br::SubmissionBatch
+        {
             command_buffers: Cow::Borrowed(&self.update_cb[..]),
             .. Default::default()
-        }), br::SubmissionBatch {
+        }), br::SubmissionBatch
+        {
             command_buffers: Cow::Borrowed(&self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1]),
             .. Default::default()
         })
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_backbuffer_resources(&mut self)
+    {
         self.framebuffers.clear();
         self.render_cb.reset().expect("Resetting RenderCB");
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, new_size: Vector2<usize>) {
+    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, _new_size: Vector2<usize>)
+    {
         self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         self.populate_render_commands();
     }
 }
-impl<PL: peridot::NativeLinker> Game<PL> {
-    fn populate_render_commands(&mut self) {
-        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
+impl<PL: peridot::NativeLinker> Game<PL>
+{
+    fn populate_render_commands(&mut self)
+    {
+        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers)
+        {
             let mut cr = cb.begin().expect("Begin CmdRecord");
             cr.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
                 &[br::ClearValue::Color([0.0; 4])], true);

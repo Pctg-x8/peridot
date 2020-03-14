@@ -1,20 +1,25 @@
 [package]
-name = "peridot-cradle-mac"
+name = "peridot-cradle-windows"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-build = "build.rs"
 edition = "2018"
+build = "build.rs"
 
 [lib]
 crate-type = ["staticlib"]
 name = "pegamelib"
 
+[features]
+UseExternalAssetPath = []
+
 [dependencies]
+bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+peridot = { path = "../.." }
+log = "0.4"
+env_logger = "0.5"
 objc = "*"
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 appkit-derive = { git = "https://github.com/Pctg-x8/appkit-rs" }
-peridot = { path = "../../" }
-peridot_derive = { path = "../../derive" }
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Implements", "Presentation", "VK_MVK_macos_surface"] }
-log = "0.4"
 libc = "0.2"
+#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
+

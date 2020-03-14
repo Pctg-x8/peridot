@@ -14,17 +14,18 @@ num_cpus = "1.0"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
 num = "*"
 
-peridot-vertex-processing-pack = { path = "vertex-processing-pack" }
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
-peridot-vg = { path = "vg" }
 
 image = "*"
 
+[target.'cfg(debug_assertions)'.dependencies.bedrock]
+git = "https://github.com/Pctg-x8/bedrock"
+features = ["Presentation", "Implements", "VK_EXT_debug_report"]
+
 [workspace]
-exclude = ["extras/"]
+exclude = ["extras/", "cradle/", "examples/"]
 members = [
     "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
-    "cradle/android", "tools/shaderbuild", "cradle/linux", "cradle/windows", "cradle/mac",
-    "tools/archiver"
+    "tools/shaderbuild", "tools/archiver"
 ]
