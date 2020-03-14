@@ -1,7 +1,8 @@
 #!/bin/bash -xe
 
-# todo: 算出方法を考える
-BUILD_TIME_SECS=0
+BEGINTIME=$(cat .begintime)
+ENDTIME=$(date +%s)
+BUILD_TIME_SECS=$(expr $ENDTIME - $BEGINTIME)
 
 # build commit info
 read COMMITTER_NAME COMMIT_MESSAGE < <(git log --format=%cn%x09%B -n 1 $INPUT_HEAD_SHA)
@@ -22,4 +23,4 @@ PAYLOAD="{$PAYLOAD_STATUS_HEADER, \"build_url\": \"$BUILD_URL\", \"number\": \"$
 aws lambda invoke --function-name PeridotIntegrityTestNotificationGHA --invocation-type Event --payload "$PAYLOAD" out.log
 
 # propagate failure status
-[ $INPUT_STATUS == "failure" ] && exit 1
+[ $INPUT_STATUS == "success" ]
