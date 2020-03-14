@@ -94,7 +94,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>>
     {
-        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).expect("Failed to read primary archive");
+        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)
+            .expect("Failed to read primary archive");
         let b = arc.read_bin(&format!("{}.{}", path.replace(".", "/"), ext))?;
         match b
         {
@@ -104,7 +105,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>>
     {
-        let arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).expect("Failed to read primary archive");
+        let arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)
+            .expect("Failed to read primary archive");
         let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
         match e
         {
