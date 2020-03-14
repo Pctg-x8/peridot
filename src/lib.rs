@@ -235,8 +235,10 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
         self.userlib_mut().on_resize(self, new_size);
     }
 
-    pub fn sound_backend_callback(&self, output_buffer: &mut [f32]) {
-        for (n, r) in output_buffer.iter_mut().enumerate() {
+    pub fn sound_backend_callback(&self, output_buffer: &mut [f32])
+{
+        for (n, r) in output_buffer.iter_mut().enumerate()
+        {
             *r = (440.0 * n as f32 / 44100.0).to_radians().sin() * 0.1;
         }
     }

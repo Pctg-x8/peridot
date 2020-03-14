@@ -46,7 +46,8 @@ pub struct Mixer
 {
     processes: Vec<Arc<RwLock<dyn Processor + Sync + Send>>>,
     subprocess_pool: ThreadPool, parallelize: u32,
-    subprocess_buffers: Vec<f32>, subprocess_buffers_refs: Vec<UniqueRawSliceMut<f32>>
+    subprocess_buffers: Vec<f32>, subprocess_buffers_refs: Vec<UniqueRawSliceMut<f32>>,
+    master_amp: f32
 }
 impl Mixer
 {
@@ -60,7 +61,8 @@ impl Mixer
         Mixer
         {
             parallelize, subprocess_pool, subprocess_buffers: Vec::new(), subprocess_buffers_refs: Vec::new(),
-            processes: Vec::new()
+            processes: Vec::new(),
+            master_amp: 1.0
         }
     }
     pub fn set_sample_rate(&mut self, samples_per_sec: f32)
@@ -70,14 +72,20 @@ impl Mixer
             p.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec);
         }
     }
+    pub fn set_master_volume(&mut self, vol: f32)
+    {
+        self.master_amp = vol;
+    }
     fn setup_process_frames(&mut self, frames: u32)
     {
         let frames_dup = frames << 1;
         self.subprocess_buffers = Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
         unsafe { self.subprocess_buffers.set_len(frames_dup as usize * self.parallelize as usize); }
-        self.subprocess_buffers_refs = (0..self.parallelize).map(|i| unsafe {
+        self.subprocess_buffers_refs = (0..self.parallelize).map(|i| unsafe
+        {
             let ofs = i * frames_dup;
-            UniqueRawSliceMut {
+            UniqueRawSliceMut
+            {
                 ptr: self.subprocess_buffers.as_mut_ptr().offset(ofs as isize),
                 length: frames_dup as usize
             }
@@ -105,7 +113,7 @@ impl Mixer
             let buflen = buf.len();
             for (b, sp) in buf.iter_mut().zip(unsafe { sp.as_slice()[..buflen].iter() })
             {
-                *b += sp;
+                *b += sp * self.master_amp;
             }
         }
 

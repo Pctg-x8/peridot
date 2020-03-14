@@ -77,6 +77,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
         let bgm = Arc::new(RwLock::new(e.streaming::<StreamingPlayableWav>("bgm").expect("Loading BGM")));
         e.audio_mixer().write().expect("Adding AudioProcess").add_process(bgm.clone());
+        e.audio_mixer().write().expect("Setting MasterVolume").set_master_volume(0.5);
 
         let mut bp = BufferPrealloc::new(e.graphics());
         let vertices_offset = bp.add(BufferContent::vertex::<[UVVert; 4]>());
