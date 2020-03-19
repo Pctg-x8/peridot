@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/sh -e
 
 PR_URL="https://api.github.com/repos/$GITHUB_REPOSITORY/pulls"
 
