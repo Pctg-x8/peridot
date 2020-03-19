@@ -9,7 +9,7 @@ for DEST in $TARGETS; do
     if [ $(echo $CHANGELOG_LIST | wc -l) == "0" ]; then
         echo "No diffs between $HEAD_NAME and $DEST. skipping"
     else
-        POST_DATA="{\"title\": \"🚚[CHANGELOG-AUTO-DELIVERY]$HEAD_NAME → $DEST🚚\", \"body\": \"## ChangeLogs\\n\\n$CHANGELOG_LIST\", \"base\": \"$DEST\", \"head\": \"$HEAD_NAME\"}"
+        POST_DATA="{\"title\": \"🚚[CHANGELOG-AUTO-DELIVERY]$HEAD_NAME → $DEST🚚\", \"base\": \"$DEST\", \"head\": \"$HEAD_NAME\"}"
         curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $INPUT_TOKEN" -d "$POST_DATA" $PR_URL
     fi
 done
