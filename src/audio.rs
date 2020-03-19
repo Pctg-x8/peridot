@@ -418,22 +418,22 @@ impl<F: Read + Seek> RIFFLoader<F>
             (2, 64, 0x01) => ReadWaveData!(self, [0i64; 2]).map(WaveSamplesInFile::Stereo64),
             (2, 32, 0x03) => ReadWaveData!(self, [0f32; 2]).map(WaveSamplesInFile::StereoF32),
             (2, 64, 0x03) => ReadWaveData!(self, [0f64; 2]).map(WaveSamplesInFile::StereoF64),
-            (1, 24, 0x01) => {
+            (1, 24, 0x01) =>
+            {
                 let b = self.read_data()?;
                 Ok(WaveSamplesInFile::Mono24(b.chunks(3).map(slice_i24_value).collect()))
             },
-            (2, 24, 0x01) => {
+            (2, 24, 0x01) =>
+            {
                 let b = self.read_data()?;
-                Ok(WaveSamplesInFile::Stereo24(b.chunks(3 * 2).map(|bs| [
-                    slice_i24_value(&bs[..3]), slice_i24_value(&bs[3..])
-                ]).collect()))
+                Ok(WaveSamplesInFile::Stereo24(b.chunks(3 * 2)
+                    .map(|bs| [slice_i24_value(&bs[..3]), slice_i24_value(&bs[3..])])
+                    .collect()))
             },
-            (ch, bits, 0x01) => self.read_data().map(|bytes| WaveSamplesInFile::Unknown {
-                bytes, channels: ch as _, bits: bits as _
-            }),
-            (ch, bits, 0x03) => self.read_data().map(|bytes| WaveSamplesInFile::UnknownF {
-                bytes, channels: ch as _, bits: bits as _
-            }),
+            (ch, bits, 0x01) => self.read_data()
+                .map(|bytes| WaveSamplesInFile::Unknown { bytes, channels: ch as _, bits: bits as _ }),
+            (ch, bits, 0x03) => self.read_data()
+                .map(|bytes| WaveSamplesInFile::UnknownF { bytes, channels: ch as _, bits: bits as _ }),
             (ch, b, f) => unimplemented!("unhandleable triple: ch={} bits={} fmt={}", ch, b, f)
         }
     }
