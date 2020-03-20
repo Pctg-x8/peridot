@@ -1,0 +1,219 @@
+name: Integrity Check
+on:
+  pull_request:
+    types: ["opened", "synchronize"]
+    paths: ["**.rs", "**.toml"]
+jobs:
+  check-formats:
+    name: "Code Formats"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Getting begintime
+        run: |
+          echo "::set-env name=BEGINTIME::$(date +%s)"
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Saving begintime
+        run:
+          echo $BEGINTIME > .begintime
+      - name: "Running Check: LineWidth"
+        uses: ./.github/actions/codeform-checker
+        with:
+          script: codeform_check
+      - name: "Running Check: Vulnerabilities"
+        uses: ./.github/actions/codeform-checker
+        with:
+          script: vulnerabilities_elliminator
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_SECRET }}
+          AWS_DEFAULT_REGION: "ap-northeast-1"
+        with:
+          status: failure
+          failure_step: check-formats
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
+  check-baselayer:
+    name: "Base Layer"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Getting begintime
+        run: |
+          echo "::set-env name=BEGINTIME::$(date +%s)"
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Saving begintime
+        run:
+          echo $BEGINTIME > .begintime
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-baselayer
+      # - name: Uploading Build Artifacts
+      #   uses: actions/upload-artifact@v1
+      #   if: success()
+      #   with:
+      #     name: "Peridot IntegrityCheck BuildCache"
+      #     path: .buildcache
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_SECRET }}
+          AWS_DEFAULT_REGION: "ap-northeast-1"
+        with:
+          status: failure
+          failure_step: check-baselayer
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
+      - name: Uploading BeginTimer
+        uses: actions/upload-artifact@v1
+        if: success()
+        with:
+          name: WorkflowBeginTimestamp
+          path: .begintime
+  check-tools:
+    name: "Tools"
+    runs-on: ubuntu-latest
+    needs: check-baselayer
+    steps:
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Downloading BeginTimer
+        uses: actions/download-artifact@v1
+        with:
+          name: WorkflowBeginTimestamp
+          path: .
+      # - name: Downloading last Build Artifacts
+      #   uses: actions/download-artifact@v1
+      #   with:
+      #     name: "Peridot IntegrityCheck BuildCache"
+      #     path: .buildcache
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-subdir
+        with:
+          path: tools
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_SECRET }}
+          AWS_DEFAULT_REGION: "ap-northeast-1"
+        with:
+          status: failure
+          failure_step: check-tools
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
+  check-modules:
+    name: "Modules"
+    runs-on: ubuntu-latest
+    needs: check-baselayer
+    steps:
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Downloading BeginTimer
+        uses: actions/download-artifact@v1
+        with:
+          name: WorkflowBeginTimestamp
+          path: .
+      # - name: Downloading last Build Artifacts
+      #   uses: actions/download-artifact@v1
+      #   with:
+      #     name: "Peridot IntegrityCheck BuildCache"
+      #     path: .buildcache
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-subdir
+        with:
+          path: .
+      # - name: Uploading Build Artifacts
+      #   uses: actions/upload-artifact@v1
+      #   if: success()
+      #   with:
+      #     name: "Peridot IntegrityCheck BuildCache"
+      #     path: .buildcache
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_SECRET }}
+          AWS_DEFAULT_REGION: "ap-northeast-1"
+        with:
+          status: failure
+          failure_step: check-modules
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
+  check-examples:
+    name: "Examples"
+    runs-on: ubuntu-latest
+    needs: check-modules
+    steps:
+      - name: Checking out(HEAD commit)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checking out
+        uses: actions/checkout@v2
+      - name: Downloading BeginTimer
+        uses: actions/download-artifact@v1
+        with:
+          name: WorkflowBeginTimestamp
+          path: .
+      # - name: Downloading last Build Artifacts
+      #   uses: actions/download-artifact@v1
+      #   with:
+      #     name: "Peridot IntegrityCheck BuildCache"
+      #     path: .buildcache
+      - name: Building as Checking
+        uses: ./.github/actions/checkbuild-subdir
+        with:
+          path: examples
+      - name: test
+        run: ls -l .
+      - name: Notify as Success
+        uses: ./.github/actions/integrity-check-slack-notifier
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_SECRET }}
+          AWS_DEFAULT_REGION: "ap-northeast-1"
+        with:
+          status: success
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
+      - name: Notify as Failure
+        uses: ./.github/actions/integrity-check-slack-notifier
+        if: failure()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_SECRET }}
+          AWS_DEFAULT_REGION: "ap-northeast-1"
+        with:
+          status: failure
+          failure_step: check-examples
+          head_sha: ${{ github.event.pull_request.head.sha }}
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          pr_number: ${{ github.event.number }}
