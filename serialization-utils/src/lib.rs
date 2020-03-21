@@ -2,6 +2,27 @@ use std::io::prelude::{BufRead, Write};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::str::from_utf8;
 
+/// u32 to break apart into bytes
+pub struct UIntFragmentIterator(Option<u32>);
+impl From<u32> for UIntFragmentIterator
+{
+    fn from(v: u32) -> Self { UIntFragmentIterator(Some(v)) }
+}
+impl Iterator for UIntFragmentIterator
+{
+    type Item = u8;
+    fn next(&mut self) -> Option<u8>
+    {
+        self.0.map(|v|
+        {
+            let (n7, nr) = ((v & 0x7f) as u8, v >> 7);
+            let rv = n7 | if nr != 0 { 0x80 } else { 0 };
+            self.0 = if nr != 0 { Some(nr) } else { None };
+            rv
+        })
+    }
+}
+
 /// octet variadic unsigned integer
 pub struct VariableUInt(pub u32);
 impl VariableUInt
@@ -9,14 +30,13 @@ impl VariableUInt
     pub fn write<W: Write>(&self, writer: &mut W) -> IOResult<usize>
     {
         let mut iteration_count = 0;
-        Self::iter_fragment(self.0, |v| { iteration_count += 1; writer.write_all(&[v]) }).map(|_| iteration_count)
-    }
-    /// u32 to break apart into bytes, and calls closure with fragment
-    fn iter_fragment<CB: FnMut(u8) -> IOResult<()>>(v: u32, mut callback: CB) -> IOResult<()>
-    {
-        let (n7, nr) = ((v & 0x7f) as u8, v >> 7);
-        callback(n7 | if nr != 0 { 0x80 } else { 0 })?;
-        if nr != 0 { Self::iter_fragment(nr, callback) } else { Ok(()) }
+        for v in UIntFragmentIterator::from(self.0)
+        {
+            iteration_count += 1;
+            writer.write_all(&[v])?;
+        }
+
+        Ok(iteration_count)
     }
     pub fn read<R: BufRead>(reader: &mut R) -> IOResult<Self>
     {
