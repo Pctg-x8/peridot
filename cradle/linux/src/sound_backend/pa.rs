@@ -52,8 +52,11 @@ impl NativeAudioEngine
 			.expect("Failed to initialize playback stream");
 		let mut writer = Box::pin(AudioDataWriter(mixer.clone()));
 		stream.set_write_request_callback(writer.as_mut());
-		stream.connect_playback(None, None, pa::stream::AUTO_TIMING_UPDATE, None, None)
-			.expect("Failed to connect playback stream");
+		let flags = pa::stream::AUTO_TIMING_UPDATE |
+			pa::stream::FIX_FORMAT |
+			pa::stream::FIX_RATE |
+			pa::stream::FIX_CHANNELS;
+		stream.connect_playback(None, None, flags, None, None).expect("Failed to connect playback stream");
 		stream.await_state_until(pa::stream::State::Ready).await;
 		info!("PulseAudio Sink Device = {}", stream.device_name());
 
