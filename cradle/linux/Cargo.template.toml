@@ -13,5 +13,9 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["VK_KHR_xcb_
 log = "0.4"
 env_logger = "0.5"
 xcb = "0.8"
+pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 
 #%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
+
+[dependencies.async-std]
+version = "1.0"

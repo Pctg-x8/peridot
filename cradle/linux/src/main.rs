@@ -7,6 +7,7 @@ use std::io::Result as IOResult;
 use std::rc::Rc;
 use bedrock as br;
 
+mod sound_backend; use sound_backend::NativeAudioEngine;
 mod userlib;
 
 pub struct PlatformAssetLoader { basedir: PathBuf }
@@ -158,6 +159,7 @@ fn main()
         ip: PlatformInputHandler::new()
     };
     let mut e = Engine::launch(Game::NAME, Game::VERSION, n).expect("Launching Game");
+    let _snd = async_std::task::block_on(NativeAudioEngine::new(e.audio_mixer()));
 
     x11.show();
     while x11.process_all_events() { e.do_update(); }
