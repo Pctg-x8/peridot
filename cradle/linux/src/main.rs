@@ -159,9 +159,9 @@ fn main()
         ip: PlatformInputHandler::new()
     };
     let mut e = Engine::launch(Game::NAME, Game::VERSION, n).expect("Launching Game");
-    let _snd = async_std::task::block_on(NativeAudioEngine::new(e.audio_mixer()));
-
     x11.show();
+    let _snd = async_std::task::block_on(NativeAudioEngine::new(e.audio_mixer()));
+    
     while x11.process_all_events() { e.do_update(); }
     println!("Terminating Program...");
 }
