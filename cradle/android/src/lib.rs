@@ -197,7 +197,9 @@ mod audio_backend;
 struct Generator(Arc<RwLock<peridot::audio::Mixer>>);
 impl audio_backend::aaudio::DataCallback for Generator
 {
-    fn callback(&mut self, stream_ptr: *mut audio_backend::aaudio::native::AAudioStream, buf: *mut libc::c_void, frames: usize) -> audio_backend::aaudio::CallbackResult
+    fn callback(&mut self, stream_ptr: *mut audio_backend::aaudio::native::AAudioStream,
+        buf: *mut libc::c_void, frames: usize)
+        -> audio_backend::aaudio::CallbackResult
     {
         let bufslice = unsafe { std::slice::from_raw_parts_mut(buf as *mut f32, frames << 1) };
         for b in bufslice.iter_mut() { *b = 0.0; }

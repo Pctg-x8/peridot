@@ -66,7 +66,8 @@ pub const AAUDIO_CALLBACK_RESULT_STOP: aaudio_data_callback_result_t = 1;
 pub enum AAudioStream {}
 pub enum AAudioStreamBuilder {}
 
-pub type AAudioStream_dataCallback = extern "C" fn(stream: *mut AAudioStream, userData: *mut c_void, audioData: *mut c_void, numFrames: i32) -> aaudio_data_callback_result_t;
+pub type AAudioStream_dataCallback = extern "C" fn(stream: *mut AAudioStream,
+    userData: *mut c_void, audioData: *mut c_void, numFrames: i32) -> aaudio_data_callback_result_t;
 
 pub type PFN_AAudio_convertResultToText = extern "C" fn(code: aaudio_result_t) -> *const c_char;
 pub type PFN_AAudio_convertStreamStateToText = extern "C" fn(state: aaudio_stream_state_t) -> *const c_char;
@@ -75,11 +76,16 @@ pub type PFN_AAudio_createStreamBuilder = extern "C" fn(builder: *mut *mut AAudi
 pub type PFN_AAudioStreamBuilder_setSampleRate = extern "C" fn(builder: *mut AAudioStreamBuilder, sampleRate: i32);
 pub type PFN_AAudioStreamBuilder_setChannelCount = extern "C" fn(builder: *mut AAudioStreamBuilder, channelCount: i32);
 pub type PFN_AAudioStreamBuilder_setFormat = extern "C" fn(builder: *mut AAudioStreamBuilder, format: aaudio_format_t);
-pub type PFN_AAudioStreamBuilder_setSharingMode = extern "C" fn(builder: *mut AAudioStreamBuilder, sharingMode: aaudio_sharing_mode_t);
-pub type PFN_AAudioStreamBuilder_setDirection = extern "C" fn(builder: *mut AAudioStreamBuilder, direction: aaudio_direction_t);
-pub type PFN_AAudioStreamBuilder_setPerformanceMode = extern "C" fn(builder: *mut AAudioStreamBuilder, mode: aaudio_performance_mode_t);
-pub type PFN_AAudioStreamBuilder_setDataCallback = extern "C" fn(builder: *mut AAudioStreamBuilder, callback: AAudioStream_dataCallback, userData: *mut c_void);
-pub type PFN_AAudioStreamBuilder_openStream = extern "C" fn(builder: *mut AAudioStreamBuilder, stream: *mut *mut AAudioStream) -> aaudio_result_t;
+pub type PFN_AAudioStreamBuilder_setSharingMode =
+    extern "C" fn(builder: *mut AAudioStreamBuilder, sharingMode: aaudio_sharing_mode_t);
+pub type PFN_AAudioStreamBuilder_setDirection =
+    extern "C" fn(builder: *mut AAudioStreamBuilder, direction: aaudio_direction_t);
+pub type PFN_AAudioStreamBuilder_setPerformanceMode =
+    extern "C" fn(builder: *mut AAudioStreamBuilder, mode: aaudio_performance_mode_t);
+pub type PFN_AAudioStreamBuilder_setDataCallback =
+    extern "C" fn(builder: *mut AAudioStreamBuilder, callback: AAudioStream_dataCallback, userData: *mut c_void);
+pub type PFN_AAudioStreamBuilder_openStream =
+    extern "C" fn(builder: *mut AAudioStreamBuilder, stream: *mut *mut AAudioStream) -> aaudio_result_t;
 pub type PFN_AAudioStreamBuilder_delete = extern "C" fn(builder: *mut AAudioStreamBuilder) -> aaudio_result_t;
 
 pub type PFN_AAudioStream_close = extern "C" fn(stream: *mut AAudioStream) -> aaudio_result_t;
@@ -88,4 +94,6 @@ pub type PFN_AAudioStream_requestPause = extern "C" fn(stream: *mut AAudioStream
 pub type PFN_AAudioStream_requestFlush = extern "C" fn(stream: *mut AAudioStream) -> aaudio_result_t;
 pub type PFN_AAudioStream_requestStop = extern "C" fn(stream: *mut AAudioStream) -> aaudio_result_t;
 pub type PFN_AAudioStream_getState = extern "C" fn(stream: *mut AAudioStream) -> aaudio_stream_state_t;
-pub type PFN_AAudioStream_waitForStateChange = extern "C" fn(stream: *mut AAudioStream, inputState: aaudio_stream_state_t, nextState: *mut aaudio_stream_state_t, timeoutNanoseconds: i64) -> aaudio_result_t;
+pub type PFN_AAudioStream_waitForStateChange = extern "C" fn(stream: *mut AAudioStream,
+    inputState: aaudio_stream_state_t, nextState: *mut aaudio_stream_state_t, timeoutNanoseconds: i64)
+    -> aaudio_result_t;
