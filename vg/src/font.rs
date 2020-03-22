@@ -9,9 +9,11 @@ use peridot::math::{Vector2, Vector2F32};
 use lyon_path::builder::PathBuilder;
 
 pub struct GlyphBound<T> { left: T, top: T, right: T, bottom: T }
-impl<T: Copy> GlyphBound<T> {
+impl<T: Copy> GlyphBound<T>
+{
     pub fn offset(&self) -> Vector2<T> { Vector2(self.left, self.top) }
-    pub fn size(&self) -> Vector2<T> where T: std::ops::Sub<Output = T> {
+    pub fn size(&self) -> Vector2<T> where T: std::ops::Sub<Output = T>
+    {
         Vector2(self.right - self.left, self.bottom - self.top)
     }
 }
@@ -20,16 +22,19 @@ pub(crate) struct GlyphTransform { pub st: [f32; 4], pub ext: [f32; 2], pub pad:
 
 #[derive(Debug)]
 pub enum FontConstructionError { Selection(SelectionError), Loading(FontLoadingError) }
-impl From<SelectionError> for FontConstructionError {
+impl From<SelectionError> for FontConstructionError
+{
     fn from(v: SelectionError) -> Self { FontConstructionError::Selection(v) }
 }
-impl From<FontLoadingError> for FontConstructionError {
+impl From<FontLoadingError> for FontConstructionError
+{
     fn from(v: FontLoadingError) -> Self { FontConstructionError::Loading(v) }
 }
 pub struct Font(UnderlyingHandle, f32);
 impl Font {
     pub fn best_match(family_names: &[FamilyName], properties: &FontProperties, units_per_em: f32)
-            -> Result<Self, FontConstructionError> {
+        -> Result<Self, FontConstructionError>
+    {
         SystemSource::new().select_best_match(family_names, properties)?
             .load().map(|x| Font(x, units_per_em)).map_err(From::from)
     }
@@ -47,7 +52,8 @@ impl Font {
         Ok(Rect::new(r.origin, r.size))
     }
     pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, hint_opts: HintingOptions, builder: &mut B)
-            -> Result<(), GlyphLoadingError> {
+        -> Result<(), GlyphLoadingError>
+    {
         self.0.outline(glyph, hint_opts, builder)
     }
     pub fn units_per_em(&self) -> u32 { self.0.metrics().units_per_em }
