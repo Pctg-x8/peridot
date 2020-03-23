@@ -60,5 +60,5 @@ echo -e "🛠  Building APK..."
 echo -e "💠  $SCRIPT_PATH/apkbuild/app/build/outputs/apk/debug/app-debug.apk"
 
 if [ $AFTER_RUN -ne 0 ]; then
-	(cd $SCRIPT_PATH/apkbuild; adb uninstall $PACKAGE_ID; adb install app/build/outputs/apk/debug/app-debug.apk && adb shell am start -n $PACKAGE_ID/android.app.NativeActivity)
+	(cd $SCRIPT_PATH/apkbuild; adb uninstall $PACKAGE_ID; adb install app/build/outputs/apk/debug/app-debug.apk && adb shell am start -n $PACKAGE_ID/com.cterm2.peridot.NativeActivity)
 fi
