@@ -44,29 +44,37 @@ impl MainWindow {
 
 use bedrock as br;
 struct PlatformWindowHandler(*mut android::ANativeWindow);
-impl peridot::PlatformRenderTarget for PlatformWindowHandler {
+impl peridot::PlatformRenderTarget for PlatformWindowHandler
+{
     fn surface_extension_name(&self) -> &'static str { "VK_KHR_android_surface" }
     fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-            -> br::Result<peridot::SurfaceInfo> {
+            -> br::Result<peridot::SurfaceInfo>
+    {
         let obj = br::Surface::new_android(vi, self.0)?;
-        if !pd.surface_support(renderer_queue_family, &obj)? {
+        if !pd.surface_support(renderer_queue_family, &obj)?
+        {
             panic!("Vulkan Surface is not supported by this adapter");
         }
         return peridot::SurfaceInfo::gather_info(&pd, obj);
     }
-    fn current_geometry_extent(&self) -> (usize, usize) {
+    fn current_geometry_extent(&self) -> (usize, usize)
+    {
         unsafe { ((*self.0).width() as _, (*self.0).height() as _) }
     }
 }
 
 struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
-impl PlatformInputProcessPlugin {
-    fn new() -> Self {
+impl PlatformInputProcessPlugin
+{
+    fn new() -> Self
+    {
         PlatformInputProcessPlugin { processor: None }
     }
 }
-impl peridot::InputProcessPlugin for PlatformInputProcessPlugin {
-    fn on_start_handle(&mut self, ip: &Rc<peridot::InputProcess>) {
+impl peridot::InputProcessPlugin for PlatformInputProcessPlugin
+{
+    fn on_start_handle(&mut self, ip: &Rc<peridot::InputProcess>)
+    {
         self.processor = Some(ip.clone());
         info!("Started Handling Inputs...");
     }
@@ -76,10 +84,12 @@ use android::{AssetManager, Asset, AASSET_MODE_STREAMING, AASSET_MODE_RANDOM};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::ffi::CString;
 struct PlatformAssetLoader { amgr: AssetManager }
-impl PlatformAssetLoader {
+impl PlatformAssetLoader
+{
     fn new(amgr: AssetManager) -> Self { PlatformAssetLoader { amgr } }
 }
-impl peridot::PlatformAssetLoader for PlatformAssetLoader {
+impl peridot::PlatformAssetLoader for PlatformAssetLoader
+{
     type Asset = Asset;
     type StreamingAsset = Asset;
 
@@ -94,10 +104,12 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_STREAMING).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
 }
-struct NativeLink {
+struct NativeLink
+{
     al: PlatformAssetLoader, prt: PlatformWindowHandler, input: PlatformInputProcessPlugin
 }
-impl peridot::NativeLinker for NativeLink {
+impl peridot::NativeLinker for NativeLink
+{
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = PlatformWindowHandler;
     type InputProcessor = PlatformInputProcessPlugin;
@@ -109,6 +121,50 @@ impl peridot::NativeLinker for NativeLink {
 type GameA = Game<NativeLink>;
 type EngineA = peridot::Engine<GameA, NativeLink>;
 
+// JNI Exports //
+
+use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}};
+
+pub struct EngineInstances
+{
+    e: EngineA
+}
+#[no_mangle]
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(env: JNIEnv<'e>, _: JClass, surface: JObject, asset_manager: JObject) -> JByteBuffer<'e>
+{
+    android_logger::init_once(
+        android_logger::Filter::default().with_min_level(log::Level::Trace)
+    );
+    info!("Initializing NativeGameEngine...");
+    
+    let window = unsafe { android::ANativeWindow_fromSurface(env.clone(), surface) };
+    let am = unsafe { AssetManager::from_java(env.clone(), asset_manager).expect("null assetmanager") };
+    let nl = NativeLink
+    {
+        al: PlatformAssetLoader::new(am),
+        prt: PlatformWindowHandler(window),
+        input: PlatformInputProcessPlugin::new()
+    };
+    let e = EngineA::launch(GameA::NAME, GameA::VERSION, nl).expect("Failed to initialize the engine");
+    let instances = Box::new(EngineInstances
+    {
+        e
+    });
+
+    let ptr = Box::into_raw(instances);
+    env.new_direct_byte_buffer(unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, 0) }).expect("Creating DirectByteBuffer failed")
+}
+#[no_mangle]
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer)
+{
+    info!("Finalizing NativeGameEngine...");
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let e = unsafe { Box::from_raw(std::mem::transmute::<_, *mut EngineInstances>(bytes.as_ptr())) };
+    
+    drop(e);
+}
+
+/*
 #[no_mangle]
 pub extern "C" fn android_main(app: *mut android::App) {
     let app = unsafe { app.as_mut().expect("null app") };
@@ -156,3 +212,4 @@ pub extern "C" fn appcmd_callback(app: *mut android::App, cmd: i32) {
         e => trace!("Unknown Event: {}", e)
     }
 }
+*/

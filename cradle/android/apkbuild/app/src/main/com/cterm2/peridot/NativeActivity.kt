@@ -10,12 +10,6 @@ import android.view.SurfaceView
 import android.view.View
 
 class NativeActivity : AppCompatActivity() {
-    companion object {
-        init {
-            System.loadLibrary("ntv")
-        }
-    }
-
     val nativeEngine: NativeEngine by lazy {
         val factory = ViewModelProvider.NewInstanceFactory()
         ViewModelProvider(this, factory).get(NativeEngine::class.java)
