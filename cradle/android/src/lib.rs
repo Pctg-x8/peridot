@@ -130,7 +130,9 @@ pub struct EngineInstances
     e: EngineA
 }
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(env: JNIEnv<'e>, _: JClass, surface: JObject, asset_manager: JObject) -> JByteBuffer<'e>
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
+    env: JNIEnv<'e>, _: JClass,
+    surface: JObject, asset_manager: JObject) -> JByteBuffer<'e>
 {
     android_logger::init_once(
         android_logger::Filter::default().with_min_level(log::Level::Trace)
@@ -152,7 +154,8 @@ pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(env: JNIEn
     });
 
     let ptr = Box::into_raw(instances);
-    env.new_direct_byte_buffer(unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, 0) }).expect("Creating DirectByteBuffer failed")
+    env.new_direct_byte_buffer(unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, 0) })
+        .expect("Creating DirectByteBuffer failed")
 }
 #[no_mangle]
 pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer)
