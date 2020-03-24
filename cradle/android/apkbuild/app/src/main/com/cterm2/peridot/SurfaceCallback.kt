@@ -11,6 +11,7 @@ import java.nio.ByteBuffer
 final class NativeLibLink {
     external fun init(surface: Surface, am: AssetManager): ByteBuffer
     external fun fin(o: ByteBuffer)
+    external fun update(o: ByteBuffer)
 
     init {
         System.loadLibrary("ntv")
@@ -32,6 +33,10 @@ final class NativeEngine : ViewModel() {
             ntvlink.fin(it)
         }
         this.internalPtr = null
+    }
+
+    fun update() {
+        this.internalPtr?.let { this.ntvlink.update(it) }
     }
 }
 

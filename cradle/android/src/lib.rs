@@ -163,6 +163,14 @@ pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: J
     
     drop(e);
 }
+#[no_mangle]
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer)
+{
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let e = unsafe { (bytes.as_ptr() as *mut EngineInstances).as_mut().expect("null ptr?") };
+
+    e.e.do_update();
+}
 
 /*
 #[no_mangle]
