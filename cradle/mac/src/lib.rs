@@ -9,6 +9,7 @@ extern crate bedrock as br;
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::Cursor;
 use std::rc::Rc;
+use async_std::sync::{Arc, RwLock};
 
 struct NSLogger;
 impl log::Log for NSLogger
@@ -70,7 +71,11 @@ impl<R: Read + Seek> Seek for ReaderView<R>
         return self.inner.seek(pos_translated);
     }
 }
-pub struct PlatformAssetLoader { par_path: CocoaObject<NSString> }
+pub struct PlatformAssetLoader
+{
+    par_path: CocoaObject<NSString>,
+    par: RwLock<Option<Arc<peridot::archive::ArchiveRead>>>
+}
 impl PlatformAssetLoader
 {
     fn new() -> Self
@@ -83,6 +88,18 @@ impl PlatformAssetLoader
         };
 
         PlatformAssetLoader { par_path }
+    }
+
+    async fn acquire_primary_archive(&self) -> Arc<peridot::archive::ArchiveRead>
+    {
+        if let Some(ref a) = self.par.read().await { return a.clone(); }
+
+        let w = self.par.write().await;
+        if let Some(ref a) = w { return a.clone(); }
+        let obj = Arc::new(peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).await
+            .expect("Reading Primary Archive failed!"));
+        *w = Some(obj.clone());
+        obj
     }
 }
 use peridot::archive as par;

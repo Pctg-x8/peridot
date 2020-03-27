@@ -2,14 +2,15 @@
 use std::io::{Result as IOResult, Error as IOError};
 use std::io::prelude::{Read, Seek};
 use super::PixelFormat;
+use std::task::{Poll, Context};
+use std::pin::Pin;
 
 pub trait PlatformAssetLoader
 {
     type Asset: Read + Seek + 'static;
     type StreamingAsset: Read + 'static;
-    type Future: std::future::Future<Output = IOResult<Vec<u8>>>;
 
-    fn get_binary(&self, path: &str, ext: &str) -> Self::Future;
+    fn poll_get_binary(self: Pin<&mut Self>, cx: &mut Context, path: &str, ext: &str) -> Poll<IOResult<Vec<u8>>>;
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
 }
 pub trait LogicalAssetData: Sized

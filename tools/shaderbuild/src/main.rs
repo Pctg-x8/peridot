@@ -7,12 +7,13 @@ extern crate env_logger;
 
 mod decombiner; use decombiner::*;
 use peridot_vertex_processing_pack::*;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::{Stdio, Command};
-use std::path::{Path, PathBuf};
+use async_std::path::{Path, PathBuf};
 use std::borrow::Cow;
 
-fn main()
+#[async_std::main]
+async fn main()
 {
     env_logger::init();
 
@@ -30,17 +31,15 @@ fn main()
         let ofile = fp_pair.next().map_or_else(|| {
             let mut pb = PathBuf::from(ifile); pb.set_extension("pvp"); return Cow::Owned(pb);
         }, |s| Cow::Borrowed(Path::new(s)));
-        process(ifile, &ofile);
+        process(ifile, &ofile).await;
     }
 }
 
-fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O)
+async fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O)
 {
     println!("Loading/Decomposing \"{}\"...", infile_path.as_ref().display());
 
-    let content = std::fs::File::open(infile_path)
-        .and_then(|mut fp| { let mut s = String::new(); fp.read_to_string(&mut s).map(|_| s) })
-        .expect("reading source");
+    let content = async_std::fs::read_to_string(infile_path).await.expect("reading source");
     let mut tok = Tokenizer::new(&content);
     let comsh = CombinedShader::from_parsed_blocks(tok.toplevel_blocks());
     let compile_vs = run_compiler_process("vertex", &comsh.emit_vertex_shader())
@@ -87,8 +86,8 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O)
         vertex_shader, fragment_shader
     };
     // println!("!Container: {:?}", container);
-    let mut fp_out = std::fs::File::create(outfile_path).expect("Failed to create output file");
-    container.write(&mut fp_out).expect("Failed to write Peridot Vertex Processing file");
+    let mut fp_out = async_std::fs::File::create(outfile_path).await.expect("Failed to create output file");
+    container.write(&mut fp_out).await.expect("Failed to write Peridot Vertex Processing file");
 }
 fn run_compiler_process(shader_stage: &str, stdin_bytes: &str) -> std::io::Result<std::process::Child>
 {
