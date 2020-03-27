@@ -330,6 +330,7 @@ impl NativeAudioEngine
         self.amixer = Some(unsafe { Box::from_raw(bptr) });
         self.output.set_render_callback(Self::render as _, bptr as *mut _);
         self.output.start();
+        self.amixer.as_ref().expect("no audio?").write().expect("Poisoning Audio").start();
     }
 
     extern "C" fn render(in_ref_con: *mut c_void,

@@ -49,7 +49,8 @@ pub struct Mixer
     processes: Vec<Arc<RwLock<dyn Processor + Sync + Send>>>,
     subprocess_pool: ThreadPool, parallelize: u32,
     subprocess_buffers: Vec<f32>, subprocess_buffers_refs: Vec<UniqueRawSliceMut<f32>>,
-    master_amp: f32
+    master_amp: f32,
+    running: bool, last_sample: [f32; 2]
 }
 impl Mixer
 {
@@ -64,7 +65,8 @@ impl Mixer
         {
             parallelize, subprocess_pool, subprocess_buffers: Vec::new(), subprocess_buffers_refs: Vec::new(),
             processes: Vec::new(),
-            master_amp: 1.0
+            master_amp: 1.0,
+            running: false, last_sample: [0.0; 2]
         }
     }
     pub fn set_sample_rate(&mut self, samples_per_sec: f32)
@@ -104,9 +106,23 @@ impl Mixer
             }
         }
     }
+    pub fn start(&mut self) { self.running = true; }
+    pub fn stop(&mut self) { self.running = false; }
     /// return true if silence
     pub fn process(&mut self, buf: &mut [f32]) -> bool
     {
+        if !self.running
+        {
+            if self.last_sample.iter().any(|&s| s != 0.0)
+            {
+                // 停止時のノイズ除去(gentle mute)
+                buf[..2].copy_from_slice(&self.last_sample);
+                self.last_sample = [0.0; 2];
+                return false;
+            }
+            return true;
+        }
+
         if buf.len() > self.subprocess_buffers_refs.first().map(|s| s.length).unwrap_or(0)
         {
             self.setup_process_frames(buf.len() as _);
@@ -123,6 +139,8 @@ impl Mixer
             });
         });
         self.combine_all_subprocess_buffers(buf);
+        self.last_sample[0] = buf[buf.len() - 2];
+        self.last_sample[1] = buf[buf.len() - 1];
 
         return self.processes.is_empty();
     }
