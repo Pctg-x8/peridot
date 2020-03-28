@@ -93,12 +93,14 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
     type Asset = Asset;
     type StreamingAsset = Asset;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Asset> {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Asset>
+    {
         let mut path_str = path.replace(".", "/"); path_str.push('.'); path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_RANDOM).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset> {
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset>
+    {
         let mut path_str = path.replace(".", "/"); path_str.push('.'); path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_STREAMING).ok_or(IOError::new(ErrorKind::NotFound, ""))
@@ -174,53 +176,3 @@ pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_update(e: JNIEnv, _
 
     e.e.do_update();
 }
-
-/*
-#[no_mangle]
-pub extern "C" fn android_main(app: *mut android::App) {
-    let app = unsafe { app.as_mut().expect("null app") };
-    app.on_app_cmd = Some(appcmd_callback);
-    let mut mw = MainWindow::new();
-    app.user_data = unsafe { std::mem::transmute(&mut mw) };
-
-    android_logger::init_once(
-        android_logger::Filter::default()
-            .with_min_level(log::Level::Trace)
-    );
-    info!("Launching NativeActivity: {:p}", app);
-    std::panic::set_hook(Box::new(|p| {
-        error!("Panicking in app: {}", p);
-    }));
-
-    'alp: loop {
-        let (mut _outfd, mut events, mut source) = (0, 0, null_mut::<android::PollSource>());
-        while android::Looper::poll_all(0, &mut _outfd, &mut events, unsafe { std::mem::transmute(&mut source) }) >= 0 {
-            if let Some(sref) = unsafe { source.as_mut() } { sref.process(app); }
-            if app.destroy_requested != 0 { break 'alp; }
-        }
-        mw.render();
-    }
-}
-
-pub extern "C" fn appcmd_callback(app: *mut android::App, cmd: i32) {
-    let app = unsafe { app.as_mut().expect("null app") };
-    let mw = unsafe { std::mem::transmute::<_, *mut MainWindow>(app.user_data).as_mut().expect("null window") };
-
-    match cmd {
-        android::APP_CMD_INIT_WINDOW => {
-            trace!("Initializing Window...");
-            mw.init(app);
-        },
-        android::APP_CMD_TERM_WINDOW => {
-            trace!("Terminating Window...");
-            mw.stop_render();
-        },
-        android::APP_CMD_DESTROY => {
-            trace!("Destroying App...");
-            mw.destroy();
-            trace!("App Destroyed");
-        },
-        e => trace!("Unknown Event: {}", e)
-    }
-}
-*/
