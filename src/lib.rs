@@ -42,9 +42,9 @@ pub trait NativeLinker
 
 pub trait EngineEvents<PL: NativeLinker> : Sized
 {
-    fn init(_e: &Engine<Self, PL>) -> Self;
+    fn init(_e: &Engine<PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<Self, PL>, _on_backbuffer_of: u32, _delta_time: Duration)
+    fn update(&mut self, _e: &Engine<PL>, _on_backbuffer_of: u32, _delta_time: Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         (None, br::SubmissionBatch::default())
@@ -53,11 +53,19 @@ pub trait EngineEvents<PL: NativeLinker> : Sized
     fn discard_backbuffer_resources(&mut self) {}
     /// Called when backbuffer has resized
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
-    fn on_resize(&mut self, _e: &Engine<Self, PL>, _new_size: math::Vector2<usize>) {}
+    fn on_resize(&mut self, _e: &Engine<PL>, _new_size: math::Vector2<usize>) {}
+
+    // Render Resource Persistency(Recovering) //
+
+    /// Storing recovered render resources for discarding
+    fn store_render_resources(&mut self, _e: &Engine<PL>) {}
+
+    /// Recovering render resources
+    fn recover_render_resources(&mut self, _e: &Engine<PL>) {}
 }
 impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
-    fn init(_e: &Engine<Self, PL>) -> Self { () }
+    fn init(_e: &Engine<PL>) -> Self { () }
 }
 pub trait FeatureRequests
 {
@@ -77,52 +85,58 @@ pub trait FeatureRequests
     }
 }
 
-pub struct Engine<E, PL>
+pub struct Engine<PL>
 {
     nativelink: PL,
     surface: SurfaceInfo,
     wrt: Discardable<WindowRenderTargets>,
     pub(self) g: Graphics,
-    event_handler: Option<RefCell<E>>,
     ip: Rc<InputProcess>,
     gametimer: GameTimer,
     last_rendering_completion: StateFence
 }
-impl<E: EngineEvents<PL> + FeatureRequests, PL: NativeLinker> Engine<E, PL>
+impl<PL: NativeLinker> Engine<PL>
 {
-    pub fn launch(name: &str, version: (u32, u32, u32), nativelink: PL) -> br::Result<Self>
+    pub fn new(
+        name: &str, version: (u32, u32, u32),
+        nativelink: PL,
+        requested_features: br::vk::VkPhysicalDeviceFeatures) -> Self
     {
-        let g = Graphics::new(name, version, nativelink.render_target_provider().surface_extension_name(),
-            E::requested_features())?;
-        let surface = nativelink.render_target_provider().create_surface(&g.instance, &g.adapter,
-            g.graphics_queue.family)?;
+        let g = Graphics::new(
+            name, version,
+            nativelink.render_target_provider().surface_extension_name(),
+            requested_features
+        ).expect("Failed to initialize Graphics Base Driver");
+        let surface = nativelink.render_target_provider()
+            .create_surface(&g.instance, &g.adapter, g.graphics_queue.family)
+            .expect("Failed to create Surface");
         trace!("Creating WindowRenderTargets...");
-        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())?.into();
-        let mut this = Engine
+        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())
+            .expect("Failed to initialize Window Render Target Driver")
+            .into();
+
+        Engine
         {
-            event_handler: None,
             ip: InputProcess::new().into(),
             gametimer: GameTimer::new(),
-            last_rendering_completion: StateFence::new(&g)?,
+            last_rendering_completion: StateFence::new(&g).expect("Failed to create State Fence"),
             nativelink,
             g,
             surface,
             wrt
-        };
-        trace!("Initializing Game...");
-        let eh = E::init(&this);
-        this.submit_commands(|r| this.wrt.get().emit_initialize_backbuffers_commands(r))
+        }
+    }
+
+    pub fn postinit(&mut self)
+    {
+        trace!("PostInit BaseEngine...");
+        self.submit_commands(|r| self.wrt.get().emit_initialize_backbuffers_commands(r))
             .expect("Initializing Backbuffers");
-        this.event_handler = Some(eh.into());
-        this.nativelink.input_processor_mut().on_start_handle(&this.ip);
-        return Ok(this);
+        self.nativelink.input_processor_mut().on_start_handle(&self.ip);
     }
 }
-impl<E, PL> Engine<E, PL>
+impl<PL> Engine<PL>
 {
-    fn userlib_mut(&self) -> RefMut<E> { self.event_handler.as_ref().expect("uninitialized userlib").borrow_mut() }
-    fn userlib_mut_lw(&mut self) -> &mut E { self.event_handler.as_mut().expect("uninitialized userlib").get_mut() }
-
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
     pub fn graphics_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
@@ -141,7 +155,7 @@ impl<E, PL> Engine<E, PL>
         self.g.graphics_queue.q.submit(batches, Some(fence))
     }
 }
-impl<E, PL: NativeLinker> Engine<E, PL>
+impl<PL: NativeLinker> Engine<PL>
 {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error>
     {
@@ -154,9 +168,9 @@ impl<E, PL: NativeLinker> Engine<E, PL>
     
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 }
-impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
+impl<PL: NativeLinker> Engine<PL>
 {
-    pub fn do_update(&mut self)
+    pub fn do_update<EH: EngineEvents<PL>>(&mut self, userlib: &mut EH)
     {
         let dt = self.gametimer.delta_time();
         
@@ -167,7 +181,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
             Err(ref v) if v.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize and do nothing
                 let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
-                self.do_resize_backbuffer(math::Vector2(w as _, h as _));
+                self.do_resize_backbuffer(math::Vector2(w as _, h as _), userlib);
                 return;
             },
             e => e.expect("Acquiring available backbuffer index")
@@ -177,8 +191,7 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
         self.ip.prepare_for_frame();
 
         {
-            let mut ulib = self.userlib_mut();
-            let (copy_submission, mut fb_submission) = ulib.update(self, bb_index, dt);
+            let (copy_submission, mut fb_submission) = userlib.update(self, bb_index, dt);
             if let Some(mut cs) = copy_submission
             {
                 // copy -> render
@@ -209,27 +222,27 @@ impl<E: EngineEvents<PL>, PL: NativeLinker> Engine<E, PL>
             {
                 // Fire resize
                 let (w, h) = self.nativelink.render_target_provider().current_geometry_extent();
-                self.do_resize_backbuffer(math::Vector2(w as _, h as _));
+                self.do_resize_backbuffer(math::Vector2(w as _, h as _), userlib);
                 return;
             },
             v => v.expect("Present Submission")
         }
     }
 
-    pub fn do_resize_backbuffer(&mut self, new_size: math::Vector2<usize>)
+    pub fn do_resize_backbuffer<EH: EngineEvents<PL>>(&mut self, new_size: math::Vector2<usize>, userlib: &mut EH)
     {
         self.last_rendering_completion.wait().expect("Waiting Last command completion");
-        self.userlib_mut_lw().discard_backbuffer_resources();
+        userlib.discard_backbuffer_resources();
         self.wrt.discard_lw();
         let newrt = WindowRenderTargets::new(self.graphics(), &self.surface, self.nativelink.render_target_provider())
             .expect("Recreating WindowRenderTargets");
         self.wrt.set(newrt);
         self.submit_commands(|r| self.wrt.get().emit_initialize_backbuffers_commands(r))
             .expect("Initializing Backbuffers");
-        self.userlib_mut().on_resize(self, new_size);
+        userlib.on_resize(self, new_size);
     }
 }
-impl<E, PL> Drop for Engine<E, PL>
+impl<PL> Drop for Engine<PL>
 {
     fn drop(&mut self)
     {

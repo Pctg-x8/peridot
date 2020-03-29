@@ -13,10 +13,49 @@ use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD
 use std::mem::MaybeUninit;
 #[macro_use] extern crate log;
 mod userlib;
+use peridot::{EngineEvents, FeatureRequests};
 
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
 fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
+
+pub struct GameDriver
+{
+    base: peridot::Engine<NativeLink>,
+    usercode: userlib::Game<NativeLink>
+}
+impl GameDriver
+{
+    fn new(window: HWND) -> Self
+    {
+        let nl = NativeLink
+        {
+            al: AssetProvider::new(),
+            prt: RenderTargetProvider(window),
+            input: InputHandler::new()
+        };
+        let mut base = peridot::Engine::new(
+            userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
+            nl, userlib::Game::<NativeLink>::requested_features()
+        );
+        let usercode = userlib::Game::init(&base);
+        base.postinit();
+
+        GameDriver
+        {
+            base, usercode
+        }
+    }
+
+    fn update(&mut self)
+    {
+        self.base.do_update(&mut self.usercode);
+    }
+    fn resize(&mut self, size: peridot::math::Vector2<usize>)
+    {
+        self.base.do_resize_backbuffer(size, &mut self.usercode);
+    }
+}
 
 fn main()
 {
@@ -35,7 +74,11 @@ fn main()
     let wcatom = unsafe { RegisterClassExA(&wca) };
     if wcatom <= 0 { panic!("Register Class Failed!"); }
 
-    let wname = format!("{} v{}.{}.{}", GameW::NAME, GameW::VERSION.0, GameW::VERSION.1, GameW::VERSION.2);
+    let wname = format!("{} v{}.{}.{}",
+        userlib::Game::<NativeLink>::NAME,
+        userlib::Game::<NativeLink>::VERSION.0,
+        userlib::Game::<NativeLink>::VERSION.1,
+        userlib::Game::<NativeLink>::VERSION.2);
     let wname_c = std::ffi::CString::new(wname).expect("Unable to generate a c-style string");
 
     let style = WS_OVERLAPPEDWINDOW;
@@ -48,18 +91,12 @@ fn main()
             std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
     };
     if w.is_null() { panic!("Create Window Failed!"); }
-
-    let nl = NativeLink
-    {
-        al: AssetProvider::new(), prt: RenderTargetProvider(w),
-        input: InputHandler::new()
-    };
-    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
     
-    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, std::mem::transmute(&mut e)); }
+    let mut driver = Box::pin(GameDriver::new(w));
+    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, &mut *driver as *mut GameDriver as _); }
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
 
-    while process_message_all() { e.do_update(); }
+    while process_message_all() { driver.update(); }
 }
 extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT
 {
@@ -68,11 +105,12 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
         WM_DESTROY => unsafe { PostQuitMessage(0); return 0; },
         WM_SIZE => unsafe
         {
-            let ep: *mut EngineW = std::mem::transmute(GetWindowLongPtrA(w, GWLP_USERDATA));
-            if let Some(ep) = ep.as_mut()
+            let p = GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver;
+            if let Some(driver) = p.as_mut()
             {
                 let (w, h) = (LOWORD(lparam as _), HIWORD(lparam as _));
-                ep.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); ep.do_update();
+                driver.resize(peridot::math::Vector2(w as _, h as _));
+                driver.update();
             }
             return 0;
         },
@@ -91,9 +129,6 @@ fn process_message_all() -> bool
     
     true
 }
-
-type GameW = userlib::Game<NativeLink>;
-type EngineW = peridot::Engine<GameW, NativeLink>;
 
 use std::rc::Rc;
 use bedrock as br;

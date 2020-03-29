@@ -63,7 +63,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self
+    fn init(e: &peridot::Engine<PL>) -> Self
     {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
         let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;
@@ -212,7 +212,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }
     }
 
-    fn update(&mut self, _e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, delta_time: Duration)
+    fn update(&mut self, _e: &peridot::Engine<PL>, on_backbuffer_of: u32, delta_time: Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
@@ -239,7 +239,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         self.framebuffers.clear();
         self.render_cb.reset().expect("Resetting RenderCB");
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, _new_size: Vector2<usize>)
+    fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
         self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
