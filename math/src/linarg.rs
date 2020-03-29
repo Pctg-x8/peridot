@@ -531,20 +531,40 @@ macro_rules! VariadicElementOps
             type Output = $e<<T as Add>::Output>;
             fn add(self, other: Self) -> Self::Output { $e($(self.$n + other.$n),*) }
         }
+        impl<'v, T> Add for &'v $e<T> where &'v T: Add
+        {
+            type Output = $e<<&'v T as Add>::Output>;
+            fn add(self, other: Self) -> Self::Output { $e($(&self.$n + &other.$n),*) }
+        }
         impl<T: Sub> Sub for $e<T>
         {
             type Output = $e<<T as Sub>::Output>;
             fn sub(self, other: Self) -> Self::Output { $e($(self.$n - other.$n),*) }
+        }
+        impl<'v, T> Sub for &'v $e<T> where &'v T: Sub
+        {
+            type Output = $e<<&'v T as Sub>::Output>;
+            fn sub(self, other: Self) -> Self::Output { $e($(&self.$n - &other.$n),*) }
         }
         impl<T: Mul + Copy> Mul<T> for $e<T>
         {
             type Output = $e<<T as Mul>::Output>;
             fn mul(self, other: T) -> Self::Output { $e($(self.$n * other),*) }
         }
+        impl<'v, T> Mul for &'v $e<T> where &'v T: Mul
+        {
+            type Output = $e<<&'v T as Mul>::Output>;
+            fn mul(self, other: Self) -> Self::Output { $e($(&self.$n * &other.$n),*) }
+        }
         impl<T: Neg> Neg for $e<T>
         {
             type Output = $e<<T as Neg>::Output>;
             fn neg(self) -> Self::Output { $e($(-self.$n),*) }
+        }
+        impl<'v, T> Neg for &'v $e<T> where &'v T: Neg
+        {
+            type Output = $e<<&'v T as Neg>::Output>;
+            fn neg(self) -> Self::Output { $e($(-&self.$n),*) }
         }
         impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T>
         {
