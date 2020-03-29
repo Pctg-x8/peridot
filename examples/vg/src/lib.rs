@@ -270,7 +270,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
 impl<PL: peridot::NativeLinker> Game<PL>
 {
-    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
+    fn render_commands(&self, e: &peridot::Engine<PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
     {
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
         self.vg_renderer_params2.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst2);
