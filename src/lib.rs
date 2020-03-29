@@ -111,9 +111,11 @@ impl<PL: NativeLinker> Engine<PL>
             .create_surface(&g.instance, &g.adapter, g.graphics_queue.family)
             .expect("Failed to create Surface");
         trace!("Creating WindowRenderTargets...");
-        let wrt = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())
+        let wrt: Discardable<_> = WindowRenderTargets::new(&g, &surface, nativelink.render_target_provider())
             .expect("Failed to initialize Window Render Target Driver")
             .into();
+        g.submit_commands(|r| wrt.get().emit_initialize_backbuffers_commands(r))
+            .expect("Initializing Backbuffers");
 
         Engine
         {
@@ -130,8 +132,6 @@ impl<PL: NativeLinker> Engine<PL>
     pub fn postinit(&mut self)
     {
         trace!("PostInit BaseEngine...");
-        self.submit_commands(|r| self.wrt.get().emit_initialize_backbuffers_commands(r))
-            .expect("Initializing Backbuffers");
         self.nativelink.input_processor_mut().on_start_handle(&self.ip);
     }
 }
