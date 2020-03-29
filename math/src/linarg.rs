@@ -601,6 +601,30 @@ impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T>
         br::vk::VkExtent3D { width: self.0.into(), height: self.1.into(), depth: self.2.into() }
     }
 }
+impl<T: Into<u32>> From<Vector2<T>> for br::Extent2D
+{
+    fn from(v: Vector2<T>) -> Self { br::Extent2D(v.0.into(), v.1.into()) }
+}
+impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::Extent2D
+{
+    fn from(v: &Vector2<T>) -> Self { br::Extent2D(v.0.into(), v.1.into()) }
+}
+impl<T: Into<u32>> From<Vector3<T>> for br::Extent3D
+{
+    fn from(v: Vector3<T>) -> Self { br::Extent3D(v.0.into(), v.1.into(), v.2.into()) }
+}
+impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::Extent3D
+{
+    fn from(v: &Vector3<T>) -> Self { br::Extent3D(v.0.into(), v.1.into(), v.2.into()) }
+}
+impl<T: Into<u32>> From<Vector4<T>> for br::Extent4D
+{
+    fn from(v: Vector4<T>) -> Self { br::Extent4D(v.0.into(), v.1.into(), v.2.into(), v.3.into()) }
+}
+impl<T: Into<u32> + Copy> From<&'_ Vector4<T>> for br::Extent4D
+{
+    fn from(v: &Vector4<T>) -> Self { br::Extent4D(v.0.into(), v.1.into(), v.2.into(), v.3.into()) }
+}
 // euclid interops (for vg) //
 impl<T> Into<euclid::Point2D<T>> for Vector2<T>
 {
