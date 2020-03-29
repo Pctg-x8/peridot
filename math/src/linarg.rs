@@ -1,6 +1,6 @@
 //! PeridotExtendedMathematics: Vector/Matrix
 
-use numtraits::{One, Zero};
+use crate::numtraits::{One, Zero};
 use std::ops::{Mul, Div, Add, Sub, Neg};
 use std::mem::transmute;
 
@@ -113,29 +113,36 @@ impl<T: Zero + One> Vector3<T>
 }
 
 // Extending/Shrinking Vector Types //
+/// Vector2(x, y) -> Vector3(x, y, 1)
 impl<T: One> From<Vector2<T>> for Vector3<T>
 {
     fn from(Vector2(x, y): Vector2<T>) -> Self { Vector3(x, y, T::ONE) }
 }
+/// Vector3(x, y, z) -> Vector4(x, y, z, 1)
 impl<T: One> From<Vector3<T>> for Vector4<T>
 {
     fn from(Vector3(x, y, z): Vector3<T>) -> Self { Vector4(x, y, z, T::ONE) }
 }
+/// Vector4(x, y, z, w) -> Vector3(x / w, y / w, z / w)
+/// panic occured when w == 0
 impl<T: Div<T> + Copy> From<Vector4<T>> for Vector3<<T as Div>::Output>
 {
     fn from(Vector4(x, y, z, w): Vector4<T>) -> Self { Vector3(x / w, y / w, z / w) }
 }
 
 // Vector as Fixed Arrays //
+#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
 impl<T> Into<[T; 2]> for Vector2<T> { fn into(self) -> [T; 2] { [self.0, self.1] } }
+#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
 impl<T> Into<[T; 3]> for Vector3<T> { fn into(self) -> [T; 3] { [self.0, self.1, self.2] } }
+#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
 impl<T> Into<[T; 4]> for Vector4<T> { fn into(self) -> [T; 4] { [self.0, self.1, self.2, self.3] } }
 
-// Safe Transmuting (only for f32 because safety) //
-impl AsRef<[f32; 2]> for Vector2<f32> { fn as_ref(&self) -> &[f32; 2] { unsafe { transmute(self) } } }
-impl AsRef<[f32; 3]> for Vector3<f32> { fn as_ref(&self) -> &[f32; 3] { unsafe { transmute(self) } } }
-impl AsRef<[f32; 4]> for Vector4<f32> { fn as_ref(&self) -> &[f32; 4] { unsafe { transmute(self) } } }
-impl AsRef<[f32; 4]> for Quaternion<f32> { fn as_ref(&self) -> &[f32; 4] { unsafe { transmute(self) } } }
+// Safe Transmuting as Slice //
+impl<T> AsRef<[T; 2]> for Vector2<T> { fn as_ref(&self) -> &[T; 2] { unsafe { transmute(self) } } }
+impl<T> AsRef<[T; 3]> for Vector3<T> { fn as_ref(&self) -> &[T; 3] { unsafe { transmute(self) } } }
+impl<T> AsRef<[T; 4]> for Vector4<T> { fn as_ref(&self) -> &[T; 4] { unsafe { transmute(self) } } }
+impl<T> AsRef<[T; 4]> for Quaternion<T> { fn as_ref(&self) -> &[T; 4] { unsafe { transmute(self) } } }
 
 // Identities(for Multiplication) //
 impl<T: Zero + One> One for Matrix2<T>
@@ -524,20 +531,40 @@ macro_rules! VariadicElementOps
             type Output = $e<<T as Add>::Output>;
             fn add(self, other: Self) -> Self::Output { $e($(self.$n + other.$n),*) }
         }
+        impl<'v, T> Add for &'v $e<T> where &'v T: Add
+        {
+            type Output = $e<<&'v T as Add>::Output>;
+            fn add(self, other: Self) -> Self::Output { $e($(&self.$n + &other.$n),*) }
+        }
         impl<T: Sub> Sub for $e<T>
         {
             type Output = $e<<T as Sub>::Output>;
             fn sub(self, other: Self) -> Self::Output { $e($(self.$n - other.$n),*) }
+        }
+        impl<'v, T> Sub for &'v $e<T> where &'v T: Sub
+        {
+            type Output = $e<<&'v T as Sub>::Output>;
+            fn sub(self, other: Self) -> Self::Output { $e($(&self.$n - &other.$n),*) }
         }
         impl<T: Mul + Copy> Mul<T> for $e<T>
         {
             type Output = $e<<T as Mul>::Output>;
             fn mul(self, other: T) -> Self::Output { $e($(self.$n * other),*) }
         }
+        impl<'v, T> Mul for &'v $e<T> where &'v T: Mul
+        {
+            type Output = $e<<&'v T as Mul>::Output>;
+            fn mul(self, other: Self) -> Self::Output { $e($(&self.$n * &other.$n),*) }
+        }
         impl<T: Neg> Neg for $e<T>
         {
             type Output = $e<<T as Neg>::Output>;
             fn neg(self) -> Self::Output { $e($(-self.$n),*) }
+        }
+        impl<'v, T> Neg for &'v $e<T> where &'v T: Neg
+        {
+            type Output = $e<<&'v T as Neg>::Output>;
+            fn neg(self) -> Self::Output { $e($(-&self.$n),*) }
         }
         impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T>
         {
@@ -600,6 +627,30 @@ impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T>
     {
         br::vk::VkExtent3D { width: self.0.into(), height: self.1.into(), depth: self.2.into() }
     }
+}
+impl<T: Into<u32>> From<Vector2<T>> for br::Extent2D
+{
+    fn from(v: Vector2<T>) -> Self { br::Extent2D(v.0.into(), v.1.into()) }
+}
+impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::Extent2D
+{
+    fn from(v: &Vector2<T>) -> Self { br::Extent2D(v.0.into(), v.1.into()) }
+}
+impl<T: Into<u32>> From<Vector3<T>> for br::Extent3D
+{
+    fn from(v: Vector3<T>) -> Self { br::Extent3D(v.0.into(), v.1.into(), v.2.into()) }
+}
+impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::Extent3D
+{
+    fn from(v: &Vector3<T>) -> Self { br::Extent3D(v.0.into(), v.1.into(), v.2.into()) }
+}
+impl<T: Into<u32>> From<Vector4<T>> for br::Extent4D
+{
+    fn from(v: Vector4<T>) -> Self { br::Extent4D(v.0.into(), v.1.into(), v.2.into(), v.3.into()) }
+}
+impl<T: Into<u32> + Copy> From<&'_ Vector4<T>> for br::Extent4D
+{
+    fn from(v: &Vector4<T>) -> Self { br::Extent4D(v.0.into(), v.1.into(), v.2.into(), v.3.into()) }
 }
 // euclid interops (for vg) //
 impl<T> Into<euclid::Point2D<T>> for Vector2<T>
