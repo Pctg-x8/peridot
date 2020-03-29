@@ -1,6 +1,6 @@
 //! Peridot Extended Mathematics: Gaming Utils(Camera, ModelMatrix)
 
-use linarg::*;
+use crate::linarg::*;
 use std::ops::Range;
 
 pub enum ProjectionMethod
