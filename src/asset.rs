@@ -136,9 +136,11 @@ impl FromAsset for HDR
 
 // Shader Blob //
 
+/// An shader blob representation as Asset
 pub struct SpirvShaderBlob(Vec<u8>);
 impl SpirvShaderBlob
 {
+    /// Instantiates the Shader Binary as a VkShaderModule
     pub fn instantiate(&self, dev: &br::Device) -> br::Result<br::ShaderModule>
     {
         br::ShaderModule::from_memory(dev, &self.0)
