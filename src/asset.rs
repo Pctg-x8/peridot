@@ -135,6 +135,7 @@ impl FromAsset for HDR
 }
 
 // Shader Blob //
+use bedrock as br;
 
 /// An shader blob representation as Asset
 pub struct SpirvShaderBlob(Vec<u8>);
@@ -153,9 +154,9 @@ impl LogicalAssetData for SpirvShaderBlob
 impl FromAsset for SpirvShaderBlob
 {
     type Error = IOError;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, IOError>
+    fn from_asset<Asset: Read + Seek + 'static>(mut asset: Asset) -> Result<Self, IOError>
     {
         let mut buf = Vec::new();
-        asset.read_to_end(&mut buf).map(move || SpirvShaderBlob(buf))
+        asset.read_to_end(&mut buf).map(move |_| SpirvShaderBlob(buf))
     }
 }
