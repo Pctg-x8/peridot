@@ -133,3 +133,27 @@ impl FromAsset for HDR
         Ok(HDR { info: meta, pixels })
     }
 }
+
+// Shader Blob //
+
+pub struct SpirvShaderBlob(Vec<u8>);
+impl SpirvShaderBlob
+{
+    pub fn instantiate(&self, dev: &br::Device) -> br::Result<br::ShaderModule>
+    {
+        br::ShaderModule::from_memory(dev, &self.0)
+    }
+}
+impl LogicalAssetData for SpirvShaderBlob
+{
+    const EXT: &'static str = "spv";
+}
+impl FromAsset for SpirvShaderBlob
+{
+    type Error = IOError;
+    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, IOError>
+    {
+        let mut buf = Vec::new();
+        asset.read_to_end(&mut buf).map(move || SpirvShaderBlob(buf))
+    }
+}
