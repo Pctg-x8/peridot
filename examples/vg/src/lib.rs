@@ -185,26 +185,26 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         ];
         let mut interior_vertex_processing = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         let mut curve_vertex_processing = curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        interior_vertex_processing.mod_vertex_shader().specinfo =
+        interior_vertex_processing.vertex_shader_mut().specinfo =
             Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
-        curve_vertex_processing.mod_vertex_shader().specinfo =
+        curve_vertex_processing.vertex_shader_mut().specinfo =
             Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         
-        interior_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
+        interior_vertex_processing.fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
-        curve_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
+        curve_vertex_processing.fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
         let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), interior_vertex_processing);
         gpb.viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
         let gp = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Create GraphicsPipeline"), &pl);
-        gpb.vertex_processing_mut().mod_fragment_shader().expect("Fragment shader not exist?").specinfo =
+        gpb.vertex_processing_mut().fragment_shader_mut().expect("Fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }.as_pair());
         let gp2 = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Creating GraphicsPipeline2"), &pl);
         gpb.vertex_processing(curve_vertex_processing);
         let gp_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Create GraphicsPipeline of CurveRender"), &pl);
-        gpb.vertex_processing_mut().mod_fragment_shader().expect("fragment shader not exist?").specinfo =
+        gpb.vertex_processing_mut().fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }.as_pair());
         let gp2_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Creating GraphicsPipeline2 for CurveRender"), &pl);
