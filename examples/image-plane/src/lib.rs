@@ -146,12 +146,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .expect("Bind Framebuffer");
         
         let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
-        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings
-        {
-            uniform_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
-            combined_image_sampler: Some((1, 1, br::ShaderStage::FRAGMENT, vec![smp.native_ptr()])),
-            .. br::DSLBindings::empty()
-        }).expect("Create DescriptorSetLayout");
+        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &[
+            br::DescriptorSetLayoutBinding::UniformBuffer(1, br::ShaderStage::VERTEX),
+            br::DescriptorSetLayoutBinding::CombinedImageSampler(1, br::ShaderStage::FRAGMENT, &[smp.native_ptr()])
+        ]).expect("Create DescriptorSetLayout");
         let descriptor_pool = br::DescriptorPool::new(&e.graphics(), 1, &[
             br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1),
             br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 1)
@@ -181,9 +179,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&descriptor_layout], &[])
             .expect("Create PipelineLayout")
             .into();
-        let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0))
-            .vertex_processing(shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
-            .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
+        let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+        let gp = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps)
+            .viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(&e.graphics(), None)
             .expect("Create GraphicsPipeline");
