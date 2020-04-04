@@ -509,7 +509,8 @@ impl DeviceWorkingTextureAllocator
     }
 
     /// Add new DeviceWorkingTexture2D allocation
-    pub fn new2d(&mut self, size: math::Vector2<u32>, format: PixelFormat, usage: br::ImageUsage) -> DeviceWorkingTexture2DRef
+    pub fn new2d(&mut self, size: math::Vector2<u32>, format: PixelFormat, usage: br::ImageUsage)
+        -> DeviceWorkingTexture2DRef
     {
         self.planes.push(br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized));
         DeviceWorkingTexture2DRef(self.planes.len() - 1)
