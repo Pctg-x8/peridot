@@ -179,16 +179,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         debug!("ScreenSize: {:?}", screen_size);
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&dsl], &[(br::ShaderStage::VERTEX, 0 .. 4 * 4)])
             .expect("Create PipelineLayout").into();
-        let spc_map = vec![
+        let spc_map = &[
             br::vk::VkSpecializationMapEntry { constantID: 0, offset: 0, size: 4 },
             br::vk::VkSpecializationMapEntry { constantID: 1, offset: 4, size: 4 }
         ];
         let mut interior_vertex_processing = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         let mut curve_vertex_processing = curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         interior_vertex_processing.vertex_shader_mut().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
+            Some((Cow::Borrowed(spc_map), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         curve_vertex_processing.vertex_shader_mut().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
+            Some((Cow::Borrowed(spc_map), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         
         interior_vertex_processing.fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
