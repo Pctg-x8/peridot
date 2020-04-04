@@ -148,11 +148,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
-        let dsl = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings
-        {
-            uniform_texel_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
-            .. br::DSLBindings::empty()
-        }).expect("DescriptorSetLayout Creation");
+        let dsl = br::DescriptorSetLayout::new(&e.graphics(), &[
+            br::DescriptorSetLayoutBinding::UniformTexelBuffer(1, br::ShaderStage::VERTEX)
+        ]).expect("DescriptorSetLayout Creation");
         let dp = br::DescriptorPool::new(&e.graphics(), 2,
             &[br::DescriptorPoolSize(br::DescriptorType::UniformTexelBuffer, 2)],
             false

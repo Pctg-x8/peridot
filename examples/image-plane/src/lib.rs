@@ -146,12 +146,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .expect("Bind Framebuffer");
         
         let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
-        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings
-        {
-            uniform_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
-            combined_image_sampler: Some((1, 1, br::ShaderStage::FRAGMENT, vec![smp.native_ptr()])),
-            .. br::DSLBindings::empty()
-        }).expect("Create DescriptorSetLayout");
+        let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &[
+            br::DescriptorSetLayoutBinding::UniformBuffer(1, br::ShaderStage::VERTEX),
+            br::DescriptorSetLayoutBinding::CombinedImageSampler(1, br::ShaderStge::FRAGMENT, &[smp.native_ptr()])
+        ]).expect("Create DescriptorSetLayout");
         let descriptor_pool = br::DescriptorPool::new(&e.graphics(), 1, &[
             br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1),
             br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 1)
