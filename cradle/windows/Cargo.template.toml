@@ -9,7 +9,7 @@ build = "build.rs"
 UseExternalAssetPath = []
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = "../.." }
 log = "0.4"
 env_logger = "0.5"

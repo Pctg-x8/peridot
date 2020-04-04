@@ -10,7 +10,7 @@ name = "pegamelib"
 
 [dependencies]
 peridot = { path = "../.." }
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Implements", "Presentation"] }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Implements", "Presentation"] }
 android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
 log = "0.4"
 libc = "0.2"
