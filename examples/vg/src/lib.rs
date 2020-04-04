@@ -194,9 +194,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
         curve_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
-        let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0));
-        gpb.vertex_processing(interior_vertex_processing)
-            .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
+        let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), interior_vertex_processing);
+        gpb.viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
         let gp = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Create GraphicsPipeline"), &pl);
         gpb.vertex_processing_mut().mod_fragment_shader().expect("Fragment shader not exist?").specinfo =
