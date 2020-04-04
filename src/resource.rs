@@ -461,6 +461,117 @@ impl Deref for TextureInstantiatedGroup
     fn deref(&self) -> &[Texture2D] { &self.1 }
 }
 
+/// RenderTexture2D without Readback to CPU
+pub struct DeviceWorkingTexture2D
+{
+    size: math::Vector2<u32>,
+    format: PixelFormat,
+    res: Image,
+    view: br::ImageView
+}
+impl DeviceWorkingTexture2D
+{
+    /// Size of this texture
+    pub fn size(&self) -> &math::Vector2<u32> { &self.size }
+    /// Width of this texture
+    pub fn width(&self) -> u32 { self.size.0 }
+    /// Height of this texture
+    pub fn height(&self) -> u32 { self.size.1 }
+    /// Format of this texture
+    pub fn format(&self) -> PixelFormat { self.format }
+
+    /// Gets underlying resource object
+    pub fn underlying(&self) -> &Image { &self.res }
+}
+impl Deref for DeviceWorkingTexture2D
+{
+    type Target = br::ImageView;
+    fn deref(&self) -> &br::ImageView { &self.view }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct DeviceWorkingTexture2DRef(usize);
+/// DeviceWorkingTexture Management Arena
+pub struct DeviceWorkingTextureAllocator
+{
+    pub planes: Vec<br::ImageDesc>
+}
+impl DeviceWorkingTextureAllocator
+{
+    /// Initializes the allocator
+    pub fn new() -> Self
+    {
+        DeviceWorkingTextureAllocator
+        {
+            planes: Vec::new()
+        }
+    }
+
+    /// Add new DeviceWorkingTexture2D allocation
+    pub fn new2d(&mut self, size: math::Vector2<u32>, format: PixelFormat, usage: br::ImageUsage)
+        -> DeviceWorkingTexture2DRef
+    {
+        self.planes.push(br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized));
+        DeviceWorkingTexture2DRef(self.planes.len() - 1)
+    }
+
+    /// Allocates all of added textures
+    pub fn alloc(self, g: &Graphics) -> br::Result<DeviceWorkingTextureStore>
+    {
+        let images: Vec<_> = self.planes.iter().map(|d| d.create(g)).collect::<Result<_, _>>()?;
+        let mut mb = MemoryBadget::new(g);
+        for img in images { mb.add(img); }
+        let bound_images = mb.alloc()?;
+        
+        Ok(DeviceWorkingTextureStore
+        {
+            planes: self.planes.into_iter().zip(bound_images.into_iter()).map(|(d, res)|
+            {
+                let res = res.unwrap_image();
+                let view = res.create_view(
+                    None, None, &br::ComponentMapping::default(),
+                    &br::ImageSubresourceRange::color(0..1, 0..1)
+                )?; 
+
+                Ok(DeviceWorkingTexture2D
+                {
+                    size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
+                    format: unsafe { std::mem::transmute(d.as_ref().format) },
+                    view,
+                    res
+                })
+            }).collect::<Result<_, _>>()?
+        })
+    }
+}
+/// Allocated DeviceWorkingTexture Arena
+pub struct DeviceWorkingTextureStore
+{
+    pub planes: Vec<DeviceWorkingTexture2D>
+}
+/// DeviceWorkingTexture Reference
+pub trait DeviceWorkingTextureRef
+{
+    /// Type of the Texture that this reference referring to
+    type TextureT;
+    /// Gets texture object from the store
+    fn get(self, store: &DeviceWorkingTextureStore) -> &Self::TextureT;
+}
+impl DeviceWorkingTextureStore
+{
+    /// Gets texture object by References
+    pub fn get<R: DeviceWorkingTextureRef>(&self, r: R) -> &<R as DeviceWorkingTextureRef>::TextureT
+    {
+        r.get(self)
+    }
+}
+impl DeviceWorkingTextureRef for DeviceWorkingTexture2DRef
+{
+    type TextureT = DeviceWorkingTexture2D;
+    fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingTexture2D { &store.planes[self.0] }
+}
+
 /// Describing the type that can be used as initializer of `FixedBuffer`s
 pub trait FixedBufferInitializer
 {
