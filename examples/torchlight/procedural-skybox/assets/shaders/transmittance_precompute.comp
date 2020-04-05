@@ -61,7 +61,7 @@ bool intersection(vec2 p, vec2 v, out vec2 pa)
 
 void main()
 {
-    const vec2 uv = gl_GlobalInvocationID.xy / vec2(128.0, 32.0);
+    const vec2 uv = gl_GlobalInvocationID.xy / vec2(imageSize(transmittanceLUT));
     // Inverse Parameterization
     const float observerHeight = pow(uv.y, 2.0) * H_ATM;
     const float sunZenithCos = tan((2.0 * uv.x - 1.0 + 0.26) * 0.75) / tan(1.26 * 0.75);
