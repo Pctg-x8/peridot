@@ -316,7 +316,8 @@ pub enum PixelFormat
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
     BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM,
     RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
-    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM
+    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
+    RGBA64F = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT
 }
 impl PixelFormat
 {
@@ -326,7 +327,8 @@ impl PixelFormat
         match self
         {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
-            PixelFormat::RGB24 | PixelFormat::BGR24 => 24
+            PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
+            PixelFormat::RGBA64F => 64
         }
     }
 }

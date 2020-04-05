@@ -3,7 +3,99 @@
 use peridot::{NativeLinker, Engine, EngineEvents, FeatureRequests};
 use peridot_vertex_processing_pack::PvpShaderModules;
 use bedrock as br;
+use br::VkHandle;
 use std::rc::Rc;
+
+#[repr(C, align(4))]
+pub struct RGBA32(u8, u8, u8, u8);
+
+pub struct SkyboxPrecomputedTextures
+{
+    transmittance: peridot::DeviceWorkingTexture2DRef
+}
+impl SkyboxPrecomputedTextures
+{
+    const TRANSMITTANCE_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(128, 32);
+
+    pub fn prealloc(dwt_alloc: &mut peridot::DeviceWorkingTextureAllocator) -> Self
+    {
+        SkyboxPrecomputedTextures
+        {
+            transmittance: dwt_alloc.new2d(Self::TRANSMITTANCE_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled())
+        }
+    }
+    pub fn init<NL: NativeLinker>(&self, e: &Engine<Game<NL>, NL>, dwt: &peridot::DeviceWorkingTextureStore)
+    {
+        let tex1_layout = br::DescriptorSetLayout::new(e.graphics(), &[
+            br::DescriptorSetLayoutBinding::StorageImage(1, br::ShaderStage::COMPUTE)
+        ]).expect("failed to create tex1_layout");
+        let dp = br::DescriptorPool::new(
+            e.graphics(),
+            1,
+            &[
+                br::DescriptorPoolSize(br::DescriptorType::StorageImage, 1)
+            ],
+            false
+        ).expect("failed to create DescriptorPool");
+        let transmittance_precompute_set = dp.alloc(&[&tex1_layout])
+            .expect("failed to allocate DescriptorSet for Transmittance Precomputation")[0];
+        e.graphics().update_descriptor_sets(&[
+            br::DescriptorSetWriteInfo(
+                transmittance_precompute_set, 0, 0,
+                br::DescriptorUpdateInfo::StorageImage(vec![
+                    (None, dwt.get(self.transmittance).native_ptr(), br::ImageLayout::General)
+                ])
+            )
+        ], &[]);
+
+        let inputonly_layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&tex1_layout], &[])
+            .expect("inputonly_layout creating failed").into();
+        let transmittance_compute = e.load::<peridot::SpirvShaderBlob>("shaders.precompute.transmittance")
+            .expect("Failed to precompute shader for transmittance")
+            .instantiate(e.graphics())
+            .expect("Compute Shader Instantiation failed");
+        let transmittance_compute_pipeline = br::ComputePipelineBuilder::new(&inputonly_layout, br::PipelineShader
+        {
+            module: &transmittance_compute,
+            entry_name: std::ffi::CString::new("main").expect("cstring failed"),
+            specinfo: None
+        }).create(e.graphics(), None).expect("Failed to create transmittance precomputation pipeline");
+        
+        e.submit_commands(|rec|
+        {
+            let transmittance_tex_area = br::ImageSubref::color(dwt.get(self.transmittance).underlying(), 0..1, 0..1);
+            let ib_init = [
+                br::ImageMemoryBarrier::new(
+                    &transmittance_tex_area,
+                    br::ImageLayout::Preinitialized,
+                    br::ImageLayout::General
+                ).dest_access_mask(br::AccessFlags::SHADER.write)
+            ];
+            let ib_fin = [
+                br::ImageMemoryBarrier::new(
+                    &transmittance_tex_area,
+                    br::ImageLayout::General,
+                    br::ImageLayout::ShaderReadOnlyOpt
+                ).src_access_mask(br::AccessFlags::SHADER.write)
+            ];
+
+            rec.pipeline_barrier(
+                br::PipelineStageFlags::TOP_OF_PIPE,
+                br::PipelineStageFlags::COMPUTE_SHADER,
+                false,
+                &[], &[], &ib_init
+            ).bind_compute_pipeline_pair(&transmittance_compute_pipeline, &inputonly_layout)
+            .bind_compute_descriptor_sets(0, &[transmittance_precompute_set], &[])
+            .dispatch(Self::TRANSMITTANCE_SIZE.0 / 32, Self::TRANSMITTANCE_SIZE.1 / 32, 1)
+            .pipeline_barrier(
+                br::PipelineStageFlags::COMPUTE_SHADER,
+                br::PipelineStageFlags::FRAGMENT_SHADER,
+                false,
+                &[], &[], &ib_fin
+            );
+        }).expect("Dispatch Precomputation failed");
+    }
+}
 
 pub struct SkyboxRenderer
 {
@@ -26,11 +118,13 @@ impl SkyboxRenderer
         let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(backbuffer_size.0, backbuffer_size.1))];
         let full_viewports = [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0 .. 1.0).into_inner()];
 
-        let pipeline = br::GraphicsPipelineBuilder::new(&empty_layout, (&drt.rp, 0))
-            .vertex_processing(main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
-            .fixed_viewport_scissors(
+        let main_vps = main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+        let mp = br::MultisampleState::new();
+        let pipeline = br::GraphicsPipelineBuilder::new(&empty_layout, (&drt.rp, 0), main_vps)
+            .viewport_scissors(
                 br::DynamicArrayState::Static(&full_viewports),
                 br::DynamicArrayState::Static(&full_scissors))
+            .multisample_state(Some(mp))
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(e.graphics(), None)
             .expect("Creating GraphicsPipeline failed");
@@ -48,11 +142,13 @@ impl SkyboxRenderer
         let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(backbuffer_size.0, backbuffer_size.1))];
         let full_viewports = [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0 .. 1.0).into_inner()];
 
-        let pipeline = br::GraphicsPipelineBuilder::new(self.pipeline.layout(), (&drt.rp, 0))
-            .vertex_processing(self.main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
-            .fixed_viewport_scissors(
+        let main_vps = self.main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+        let mp = br::MultisampleState::new();
+        let pipeline = br::GraphicsPipelineBuilder::new(self.pipeline.layout(), (&drt.rp, 0), main_vps)
+            .viewport_scissors(
                 br::DynamicArrayState::Static(&full_viewports),
                 br::DynamicArrayState::Static(&full_scissors))
+            .multisample_state(Some(mp))
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(e.graphics(), None)
             .expect("Creating GraphicsPipeline failed");
@@ -189,9 +285,11 @@ impl RenderCommands
 pub struct Game<NL>
 {
     rt: DetailedRenderTargets,
+    skybox_precomputed: SkyboxPrecomputedTextures,
     skybox: SkyboxRenderer,
     buf: peridot::FixedMemory,
     buf_offsets: FixedBufferOffsets,
+    _precompute_textures: peridot::DeviceWorkingTextureStore,
     cmds: RenderCommands,
     ph: std::marker::PhantomData<*const NL>
 }
@@ -207,6 +305,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
     {
         let rt = DetailedRenderTargets::new(e);
         let skybox = SkyboxRenderer::new(e, &rt);
+
+        let mut precompute_textures = peridot::DeviceWorkingTextureAllocator::new();
+        let skybox_precomputed = SkyboxPrecomputedTextures::prealloc(&mut precompute_textures);
+        let precompute_textures = precompute_textures.alloc(e.graphics())
+            .expect("Allocating Precomputed Textures failed");
 
         let mut bp = peridot::BufferPrealloc::new(e.graphics());
         let fill_plane = peridot::Primitive::uv_plane_centric(1.0);
@@ -231,6 +334,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         ).expect("Failed to initialize fixed buffers");
         let buf_offsets = FixedBufferOffsets::from(fb_data);
 
+        skybox_precomputed.init(e, &precompute_textures);
         let cmds = RenderCommands::new(e);
 
         e.submit_commands(|r|
@@ -242,9 +346,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         Game
         {
             rt,
+            skybox_precomputed,
             skybox,
             buf,
             buf_offsets,
+            _precompute_textures: precompute_textures,
             cmds,
             ph: std::marker::PhantomData
         }

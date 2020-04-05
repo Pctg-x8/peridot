@@ -1,0 +1,96 @@
+//! impl 4.4
+
+#version 450
+
+layout(local_size_x = 32, local_size_y = 32) in;
+
+layout(set = 0, binding = 0, rgba16f) writeonly uniform image2D transmittanceLUT;
+
+const uint IntegrationSteps = 128;
+const float H_ATM = 80000;
+const float R_EARTH = 6371000;
+const vec3 RayleighCoeffs = vec3(6.55e-6, 1.73e-5, 2.30e-5);
+const vec3 MieCoeffs = vec3(2e-6, 2e-6, 2e-6);
+
+// unit: m
+const float RayleighScaleHeight = 8000;
+const float MieScaleHeight = 1200;
+float density(float h, float scale)
+{
+    return exp(-h / scale);
+}
+float getRayleighDensity(float h) { return density(h, RayleighScaleHeight); }
+float getMieDensity(float h) { return density(h, MieScaleHeight); }
+
+float height(vec2 p) { return length(p) - R_EARTH; }
+// true if intersects with ground of the earth
+bool intersection(vec2 p, vec2 v, out vec2 pa)
+{
+    // length(p + v * t) = R_EARTH
+    // sqrt(dot(p.xy + v.xy * t, p.xy + v.xy * t)) = R_EARTH
+    // sqrt((p.x + v.x * t)^2 + (p.y + v.y * t)^2) = R_EARTH
+    // sqrt((p.x + v.x * t)^2 + (p.y + v.y * t)^2) = sqrt((a + bt)^2 + (c + dt)^2) = sqrt(a^2 + 2abt + (bt)^2 + c^2 + 2cdt + (dt)^2)
+    // = sqrt(a^2 + c^2 + 2t(ab + cd) + (bt^2) + (dt)^2) = sqrt(a^2 + c^2 + 2t(ab + cd) + (t^2)(b^2 + d^2))
+    // (t^2)(b^2 + d^2) + 2t(ab + cd) + a^2 + c^2 - R_EARTH^2 = 0
+    // xt^2 + yt + z = 0 where x = dot(v, v), y = 2*dot(p, v), z = dot(p, p) - R_EARTH^2
+    // t = (-y + sqrt(y^2 - 4xz)) / 2x | (-y - sqrt(y^2 - 4xz)) / 2x
+
+    const float x = dot(v, v);
+    const float y = 2 * dot(p, v);
+    const float zAtmos = dot(p, p) - pow(R_EARTH + H_ATM, 2);
+    const float zGround = dot(p, p) - pow(R_EARTH, 2);
+    const float tAtmosPos = (-y + sqrt(y * y - 4.0 * x * zAtmos)) / (2.0 * x);
+    const float tAtmosNeg = (-y - sqrt(y * y - 4.0 * x * zAtmos)) / (2.0 * x);
+    const float tAtmos = tAtmosPos >= 0 ? (tAtmosNeg >= 0 ? min(tAtmosPos, tAtmosNeg) : tAtmosPos) : tAtmosNeg;
+
+    const float tGroundDiscriminant = y * y - 4.0 * x * zGround;
+    if (tGroundDiscriminant < 0)
+    {
+        pa = p + v * tAtmos;
+        return false;
+    }
+    else
+    {
+        const float tPos = (-y + sqrt(tGroundDiscriminant)) / (2.0 * x);
+        const float tNeg = (-y - sqrt(tGroundDiscriminant)) / (2.0 * x);
+        const float t = tPos >= 0 ? (tNeg >= 0 ? min(tPos, tNeg) : tPos) : tNeg;
+        pa = p + v * (t >= 0.0 ? t : tAtmos);
+        return t >= 0.0;
+    }
+}
+
+void main()
+{
+    const vec2 uv = gl_GlobalInvocationID.xy / vec2(128.0, 32.0);
+    // Inverse Parameterization
+    const float observerHeight = pow(uv.y, 2.0) * H_ATM;
+    const float sunZenithCos = tan((2.0 * uv.x - 1.0 + 0.26) * 0.75) / tan(1.26 * 0.75);
+
+    const vec3 transmittanceMieCoeffs = MieCoeffs / 0.9;
+    const vec2 observerPos = vec2(0.0f, R_EARTH + observerHeight);
+    // sin^2 + cos^2 = 1
+    // sin^2 = 1 - cos^2
+    // sin = sqrt(1 - cos^2)
+    const vec2 dir = vec2(sqrt(1.0 - pow(sunZenithCos, 2.0)), sunZenithCos);
+    vec2 pBound;
+    const bool hasGroundIntersection = intersection(observerPos, dir, pBound);
+
+    const float stepSize = length(pBound - observerPos) / float(IntegrationSteps);
+    float lastDensityMie = getMieDensity(observerPos.y);
+    float lastDensityRayleigh = getRayleighDensity(observerPos.y);
+    float totalDensityMie = 0.0;
+    float totalDensityRayleigh = 0.0;
+    for (uint i = 0; i < IntegrationSteps; i++)
+    {
+        const vec2 s = observerPos + dir * (stepSize * i);
+        const float currentDensityMie = getMieDensity(height(s));
+        const float currentDensityRayleigh = getRayleighDensity(height(s));
+        totalDensityMie += (currentDensityMie + lastDensityMie) * 0.5 * stepSize;
+        totalDensityRayleigh += (currentDensityRayleigh + lastDensityRayleigh) * 0.5 * stepSize;
+        lastDensityMie = currentDensityMie;
+        lastDensityRayleigh = currentDensityRayleigh;
+    }
+    const vec3 transmittance = exp(-(totalDensityRayleigh * RayleighCoeffs + totalDensityMie * transmittanceMieCoeffs));
+
+    imageStore(transmittanceLUT, ivec2(gl_GlobalInvocationID.xy), hasGroundIntersection ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(transmittance, 1.0));
+}
