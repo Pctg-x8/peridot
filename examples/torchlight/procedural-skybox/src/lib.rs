@@ -11,69 +11,127 @@ pub struct RGBA32(u8, u8, u8, u8);
 
 pub struct SkyboxPrecomputedTextures
 {
-    transmittance: peridot::DeviceWorkingTexture2DRef
+    transmittance: peridot::DeviceWorkingTexture2DRef,
+    single_scatter: peridot::DeviceWorkingTexture3DRef
 }
 impl SkyboxPrecomputedTextures
 {
     const TRANSMITTANCE_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(128, 32);
+    const SINGLE_SCATTER_SIZE: peridot::math::Vector3<u32> = peridot::math::Vector3(32, 64, 32);
 
     pub fn prealloc(dwt_alloc: &mut peridot::DeviceWorkingTextureAllocator) -> Self
     {
         SkyboxPrecomputedTextures
         {
-            transmittance: dwt_alloc.new2d(Self::TRANSMITTANCE_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled())
+            transmittance: dwt_alloc.new2d(Self::TRANSMITTANCE_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()),
+            single_scatter: dwt_alloc.new3d(Self::SINGLE_SCATTER_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled())
         }
     }
     pub fn init<NL: NativeLinker>(&self, e: &Engine<Game<NL>, NL>, dwt: &peridot::DeviceWorkingTextureStore)
     {
+        let linear_sampler = br::SamplerBuilder::default()
+            .addressing(
+                br::AddressingMode::ClampToEdge,
+                br::AddressingMode::ClampToEdge,
+                br::AddressingMode::ClampToEdge
+            )
+            .create(e.graphics())
+            .expect("Failed to create linear_sampler");
         let tex1_layout = br::DescriptorSetLayout::new(e.graphics(), &[
             br::DescriptorSetLayoutBinding::StorageImage(1, br::ShaderStage::COMPUTE)
         ]).expect("failed to create tex1_layout");
+        let tex_r1w1_layout = br::DescriptorSetLayout::new(e.graphics(), &[
+            br::DescriptorSetLayoutBinding::CombinedImageSampler(
+                1, br::ShaderStage::COMPUTE, &[linear_sampler.native_ptr()]
+            ),
+            br::DescriptorSetLayoutBinding::StorageImage(1, br::ShaderStage::COMPUTE)
+        ]).expect("failed to create tex_r1w1_layout");
         let dp = br::DescriptorPool::new(
             e.graphics(),
-            1,
+            2,
             &[
-                br::DescriptorPoolSize(br::DescriptorType::StorageImage, 1)
+                br::DescriptorPoolSize(br::DescriptorType::StorageImage, 2),
+                br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 1)
             ],
             false
         ).expect("failed to create DescriptorPool");
-        let transmittance_precompute_set = dp.alloc(&[&tex1_layout])
-            .expect("failed to allocate DescriptorSet for Transmittance Precomputation")[0];
+        let precompute_sets = dp.alloc(&[&tex1_layout, &tex_r1w1_layout])
+            .expect("failed to allocate DescriptorSets for Precomputation");
         e.graphics().update_descriptor_sets(&[
             br::DescriptorSetWriteInfo(
-                transmittance_precompute_set, 0, 0,
+                precompute_sets[0], 0, 0,
                 br::DescriptorUpdateInfo::StorageImage(vec![
                     (None, dwt.get(self.transmittance).native_ptr(), br::ImageLayout::General)
+                ])
+            ),
+            br::DescriptorSetWriteInfo(
+                precompute_sets[1], 0, 0,
+                br::DescriptorUpdateInfo::CombinedImageSampler(vec![
+                    (None, dwt.get(self.transmittance).native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)
+                ])
+            ),
+            br::DescriptorSetWriteInfo(
+                precompute_sets[1], 1, 0,
+                br::DescriptorUpdateInfo::StorageImage(vec![
+                    (None, dwt.get(self.single_scatter).native_ptr(), br::ImageLayout::General)
                 ])
             )
         ], &[]);
 
         let inputonly_layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&tex1_layout], &[])
             .expect("inputonly_layout creating failed").into();
+        let texio_layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&tex_r1w1_layout], &[])
+            .expect("texio_layout creating failed").into();
         let transmittance_compute = e.load::<peridot::SpirvShaderBlob>("shaders.precompute.transmittance")
-            .expect("Failed to precompute shader for transmittance")
+            .expect("Failed to load precompute shader for transmittance")
             .instantiate(e.graphics())
             .expect("Compute Shader Instantiation failed");
+        let single_scatter_compute = e.load::<peridot::SpirvShaderBlob>("shaders.precompute.single_scatter")
+            .expect("Failed to load precompute shader for single scatter")
+            .instantiate(e.graphics())
+            .expect("Compute shader Instantiation failed");
         let transmittance_compute_pipeline = br::ComputePipelineBuilder::new(&inputonly_layout, br::PipelineShader
         {
             module: &transmittance_compute,
             entry_name: std::ffi::CString::new("main").expect("cstring failed"),
             specinfo: None
-        }).create(e.graphics(), None).expect("Failed to create transmittance precomputation pipeline");
+        });
+        let single_scatter_compute_pipeline = br::ComputePipelineBuilder::new(&texio_layout, br::PipelineShader
+        {
+            module: &single_scatter_compute,
+            entry_name: std::ffi::CString::new("main").expect("cstring failed"),
+            specinfo: None
+        });
+        let compute_pipelines = e.graphics()
+            .create_compute_pipelines(&[transmittance_compute_pipeline, single_scatter_compute_pipeline], None)
+            .expect("Failed to create precomputation pipelines");
         
         e.submit_commands(|rec|
         {
             let transmittance_tex_area = br::ImageSubref::color(dwt.get(self.transmittance).underlying(), 0..1, 0..1);
+            let single_scatter_tex_area = br::ImageSubref::color(dwt.get(self.single_scatter).underlying(), 0..1, 0..1);
             let ib_init = [
                 br::ImageMemoryBarrier::new(
                     &transmittance_tex_area,
                     br::ImageLayout::Preinitialized,
                     br::ImageLayout::General
+                ).dest_access_mask(br::AccessFlags::SHADER.write),
+                br::ImageMemoryBarrier::new(
+                    &single_scatter_tex_area,
+                    br::ImageLayout::Preinitialized,
+                    br::ImageLayout::General
                 ).dest_access_mask(br::AccessFlags::SHADER.write)
             ];
-            let ib_fin = [
+            let transmittance_fin = [
                 br::ImageMemoryBarrier::new(
                     &transmittance_tex_area,
+                    br::ImageLayout::General,
+                    br::ImageLayout::ShaderReadOnlyOpt
+                ).src_access_mask(br::AccessFlags::SHADER.write)
+            ];
+            let single_scatter_fin = [
+                br::ImageMemoryBarrier::new(
+                    &single_scatter_tex_area,
                     br::ImageLayout::General,
                     br::ImageLayout::ShaderReadOnlyOpt
                 ).src_access_mask(br::AccessFlags::SHADER.write)
@@ -84,14 +142,23 @@ impl SkyboxPrecomputedTextures
                 br::PipelineStageFlags::COMPUTE_SHADER,
                 false,
                 &[], &[], &ib_init
-            ).bind_compute_pipeline_pair(&transmittance_compute_pipeline, &inputonly_layout)
-            .bind_compute_descriptor_sets(0, &[transmittance_precompute_set], &[])
+            ).bind_compute_pipeline_pair(&compute_pipelines[0], &inputonly_layout)
+            .bind_compute_descriptor_sets(0, &[precompute_sets[0]], &[])
             .dispatch(Self::TRANSMITTANCE_SIZE.0 / 32, Self::TRANSMITTANCE_SIZE.1 / 32, 1)
+            .pipeline_barrier(
+                br::PipelineStageFlags::COMPUTE_SHADER,
+                br::PipelineStageFlags::COMPUTE_SHADER,
+                false,
+                &[], &[], &transmittance_fin
+            )
+            .bind_compute_pipeline_pair(&compute_pipelines[1], &texio_layout)
+            .bind_compute_descriptor_sets(0, &[precompute_sets[1]], &[])
+            .dispatch(Self::SINGLE_SCATTER_SIZE.0 / 8, Self::SINGLE_SCATTER_SIZE.1 / 8, Self::SINGLE_SCATTER_SIZE.2 / 8)
             .pipeline_barrier(
                 br::PipelineStageFlags::COMPUTE_SHADER,
                 br::PipelineStageFlags::FRAGMENT_SHADER,
                 false,
-                &[], &[], &ib_fin
+                &[], &[], &single_scatter_fin
             );
         }).expect("Dispatch Precomputation failed");
     }

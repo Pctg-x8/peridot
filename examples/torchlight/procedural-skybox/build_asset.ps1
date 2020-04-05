@@ -10,5 +10,6 @@ try {
     }
     Write-Host "Compiling Precomputation Shaders......"
     & glslc shaders/transmittance_precompute.comp -o shaders/precompute/transmittance.spv
+    & glslc shaders/single_scatter_precompute.comp -o shaders/precompute/single_scatter.spv
 }
 finally { Pop-Location }
