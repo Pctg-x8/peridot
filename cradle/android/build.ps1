@@ -83,6 +83,10 @@ $template = Get-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest-templa
 $template = $template.Replace("**APKAPPID**", "$AppPackageID")
 $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml -Encoding UTF8
 
+# Make Default Structure then mirrors the user-defined structure, results an user-customizable resource structure
+robocopy $ScriptPath\apkbuild\app\src\main\res-default $ScriptPath\apkbuild\app\src\main\res /IS /E
+robocopy $UserlibDirectory\android-res $ScriptPath\apkbuild\app\src\main\res /IS /E
+
 # Build Userlib
 $features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
 try {
