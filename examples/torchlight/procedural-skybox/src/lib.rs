@@ -826,7 +826,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         let skybox = SkyboxRenderer::new(e, &rt, &skybox_precomputed, &precompute_textures, &buf, &buf_offsets);
 
         skybox_precomputed.init(e, &precompute_textures);
-        let cmds = RenderCommands::new(e);
+        let mut cmds = RenderCommands::new(e);
+        cmds.generate_commands(e, &skybox, &rt, &buf, &buf_offsets);
 
         e.submit_commands(|r|
         {
