@@ -20,8 +20,8 @@ float calcViewZenithCosFromParam(float uv, float h)
 }
 float calcSunZenithCosFromParam(float us)
 {
-   // return tan((2.0 * us - 1.0 + 0.26) * 0.75) / tan(1.26 * 0.75);
-   return tan((2.0 * us - 1.0 + 0.26) * 1.1) / tan(1.26 * 1.1);
+   return tan((2.0 * us - 1.0 + 0.26) * 0.75) / tan(1.26 * 0.75);
+   // return tan((2.0 * us - 1.0 + 0.26) * 1.1) / tan(1.26 * 1.1);
 }
 
 const float MieAsymmetryFactor = 0.3;
@@ -41,7 +41,7 @@ float parameterizeViewZenithCos(float cv, float h)
 }
 float parameterizeSunZenithCos(float cs)
 {
-    return 0.5 * ((1.0 - 0.26) + (atan(max(cs, -0.1975) * tan(1.26 * 1.1)) / 1.1));
+    return 0.5 * ((1.0 - 0.26) + (atan(max(cs, -0.1975) * tan(1.26 * 0.75)) / 0.75));
 }
 
 // unit: m

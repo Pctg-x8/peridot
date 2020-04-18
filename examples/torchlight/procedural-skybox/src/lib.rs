@@ -856,7 +856,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         {
             *m.get_mut(self.buf_offsets.mut_uniform_offset as _) = Uniform
             {
-                eye_height: 100.0 + (self.total_time * 0.0).cos() * 1000.0,
+                eye_height: 10.0 + (self.total_time * 0.0).sin() * 1000.0,
                 view_zenith_angle: 90.0 - 30.0 + (self.total_time * 4.0).sin() * 20.0
             };
         }).expect("Staging MutBuffer failed");

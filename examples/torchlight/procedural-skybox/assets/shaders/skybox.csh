@@ -35,10 +35,10 @@ Header[FragmentShader] {
     }
     float parameterizeSunZenithCos(float cs)
     {
-        return 0.5 * ((1.0 - 0.26) + (atan(max(cs, -0.1975) * tan(1.26 * 1.1)) / 1.1));
+        return 0.5 * ((1.0 - 0.26) + (atan(max(cs, -0.1975) * tan(1.26 * 0.75)) / 0.75));
     }
 
-    const float MieAsymmetryFactor = 0.3;
+    const float MieAsymmetryFactor = 0.93;
     float phaseRayleigh(float cv) { return 8.0 * (7.0 / 5.0 + 0.5 * cv) / 10.0; }
     float phaseMie(float cv)
     {
@@ -54,22 +54,49 @@ Header[FragmentShader] {
     {
         return scatterLight.xyz * (scatterLight.w / scatterLight.x) * (RayleighCoeffs.x / MieCoeffs.x) * (MieCoeffs / RayleighCoeffs);
     }
-    vec4 lookupTransmittance(float height, vec2 dir)
+    vec4 lookupTransmittance(float height, float cvs)
     {
-        return texture(transmittance, vec2(parameterizeSunZenithCos(dir.y), parameterizeHeight(height)));
+        return texture(transmittance, vec2(cvs, parameterizeHeight(height)));
+    }
+
+    // ACES tonemapper //
+    // https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
+    const mat3 INPUT_MATRIX = mat3(
+        vec3(0.59719, 0.35458, 0.04823),
+        vec3(0.07600, 0.90834, 0.01566),
+        vec3(0.02840, 0.13383, 0.83777)
+    );
+    const mat3 OUTPUT_MATRIX = mat3(
+        vec3( 1.60475, -0.53108, -0.07367),
+        vec3(-0.10208,  1.10813, -0.00605),
+        vec3(-0.00327, -0.07276,  1.07602)
+    );
+    vec3 fit(vec3 v)
+    {
+        const vec3 a = v * (v + 0.0245786) - 0.000090537;
+        const vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
+        
+        return a / b;
+    }
+
+    vec4 tonemap(vec4 i)
+    {
+        vec3 c = fit(i.xyz * INPUT_MATRIX) * OUTPUT_MATRIX;
+        return vec4(clamp(c, 0.0, 1.0), i.w);
     }
 }
 
 FragmentShader {
-    const float thView = (viewZenithAngleIn + (2.0 * uv.y - 1.0) * 35.0) * 3.1415926 / 180.0;
-    const float cv = cos(thView);
+    const float aspect = 4.0 / 3.0;
+    const float zd = 1.0 / tan(35.0 * 3.1415926 / 180.0);
+    const vec3 viewvec = normalize(vec3((2.0 * uv.x - 1.0) * aspect, -(2.0 * uv.y - 1.0), zd));
+    const float cv = dot(viewvec, vec3(0.0, 1.0, 0.0));
     const float camHeight = eyeHeight;
-    const vec2 incidentLightDir = normalize(vec2(0.5, -1.0));
-    const float vs_cos = dot(incidentLightDir, -vec2(sqrt(1.0 - pow(cv, 2.0)), cv));
+    const vec3 incidentLightDir = normalize(vec3(0.0, -0.2, -0.8));
+    const float cs = dot(-incidentLightDir, vec3(0.0, 1.0, 0.0));
+    const float vs_cos = dot(incidentLightDir, -viewvec);
 
-    const vec4 scatter = getScatterLight(camHeight, cv, -incidentLightDir.y);
+    const vec4 scatter = getScatterLight(camHeight, cv, cs);
     const vec3 mieRgb = phaseMie(vs_cos) * estimateMieRgb(scatter);
-
-    Target[0] = vec4(20.0 * (phaseRayleigh(vs_cos) * scatter.xyz + mieRgb), 1.0);
-    // Target[0] = vec4(parameterizeHeight(camHeight), parameterizeViewZenithCos(cv, camHeight), parameterizeSunZenithCos(incidentLightDir.y), 1.0);
+    Target[0] = tonemap(vec4(10.0 * (/*lookupTransmittance(eyeHeight, cs).xyz + */phaseRayleigh(vs_cos) * scatter.xyz + mieRgb), 1.0));
 }
