@@ -1,0 +1,24 @@
+//! impl 4.6 algorithm 3
+
+#version 450
+
+#include "precompute_common.comp"
+
+const uint IntegrationSteps = 64;
+layout(set = 0, binding = 0) uniform sampler3D lastScatterLUT;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D gatheredLUT;
+
+layout(local_size_x = 32, local_size_y = 32) in;
+void main()
+{
+    const vec2 uv = (gl_GlobalInvocationID.xy * 0.9 + 0.5) / vec2(imageSize(gatheredLUT));
+    const float height = calcHeightFromParam(uv.y);
+
+    vec4 gathered = vec4(0.0);
+    for (float th = 0; th < 8.0 * atan(1.0); th += (8.0 * atan(1.0) / IntegrationSteps))
+    {
+        const float cv = cos(th);
+        gathered += texture(lastScatterLUT, vec3(uv.y, parameterizeViewZenithCos(cv, height), uv.x));
+    }
+    imageStore(gatheredLUT, ivec2(gl_GlobalInvocationID.xy), gathered * (16.0 * atan(1.0) / IntegrationSteps));
+}

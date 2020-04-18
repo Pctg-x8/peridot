@@ -11,7 +11,7 @@ layout(set = 0, binding = 0, rgba16f) writeonly uniform image2D transmittanceLUT
 
 void main()
 {
-    const vec2 uv = gl_GlobalInvocationID.xy / vec2(imageSize(transmittanceLUT));
+    const vec2 uv = (gl_GlobalInvocationID.xy * 0.9 + 0.5) / vec2(imageSize(transmittanceLUT));
     // Inverse Parameterization
     const float observerHeight = calcHeightFromParam(uv.y);
     const float sunZenithCos = calcSunZenithCosFromParam(uv.x);
@@ -25,21 +25,16 @@ void main()
     const bool hasGroundIntersection = intersection(observerPos, dir, pBound);
 
     const float stepSize = length(pBound - observerPos) / float(IntegrationSteps);
-    float lastDensityMie = getMieDensity(observerPos.y);
-    float lastDensityRayleigh = getRayleighDensity(observerPos.y);
-    float totalDensityMie = 0.0;
-    float totalDensityRayleigh = 0.0;
+    vec2 lastDensity = vec2(0.0);
+    vec2 totalDensity = vec2(0.0);
     for (uint i = 0; i < IntegrationSteps; i++)
     {
-        const vec2 s = observerPos + dir * (stepSize * i);
-        const float currentDensityMie = getMieDensity(height(s));
-        const float currentDensityRayleigh = getRayleighDensity(height(s));
-        totalDensityMie += (currentDensityMie + lastDensityMie) * 0.5 * stepSize;
-        totalDensityRayleigh += (currentDensityRayleigh + lastDensityRayleigh) * 0.5 * stepSize;
-        lastDensityMie = currentDensityMie;
-        lastDensityRayleigh = currentDensityRayleigh;
+        const vec2 s = observerPos + dir * (stepSize * float(i));
+        const vec2 currentDensity = vec2(getMieDensity(height(s)), getRayleighDensity(height(s)));
+        totalDensity += (currentDensity + lastDensity) * 0.5 * stepSize;
+        lastDensity = currentDensity;
     }
-    const vec3 transmittance = calcTransmittanceFromDensities(totalDensityMie, totalDensityRayleigh);
+    const vec3 transmittance = calcTransmittanceFromDensities(totalDensity.x, totalDensity.y);
 
     imageStore(transmittanceLUT, ivec2(gl_GlobalInvocationID.xy), hasGroundIntersection ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(transmittance, 1.0));
 }

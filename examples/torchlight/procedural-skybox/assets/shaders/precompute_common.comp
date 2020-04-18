@@ -2,7 +2,7 @@
 const float H_ATM = 80000;
 const float R_EARTH = 6371000;
 const vec3 RayleighCoeffs = vec3(6.55e-6, 1.73e-5, 2.30e-5);
-const vec3 MieCoeffs = vec3(2e-6, 2e-6, 2e-6);
+const vec3 MieCoeffs = vec3(2.0e-6, 2.0e-6, 2.0e-6);
 const vec3 TransmittanceMieCoeffs = MieCoeffs / 0.9;
 
 vec3 calcTransmittanceFromDensities(float mieDensity, float rayleighDensity)
@@ -15,11 +15,21 @@ float calcHeightFromParam(float uh) { return pow(uh, 2.0) * H_ATM; }
 float calcViewZenithCosFromParam(float uv, float h)
 {
     const float ch = -sqrt(h * (2.0 * R_EARTH + h)) / (R_EARTH + h);
-    return uv > 0.5f ? (ch + pow(uv - 0.5, 5.0) * (1.0 - ch)) : (ch - pow(uv, 5) * (1.0 + ch));
+    // return uv > 0.5f ? (ch + pow(uv - 0.5, 5.0) * (1.0 - ch)) : (ch - pow(uv, 5.0) * (1.0 + ch));
+    return uv > 0.5 ? (pow((uv - 0.5) * 2.0, 5.0) * (1.0 - ch) + ch) : (ch - pow(uv * 2.0, 5.0) * (1.0 + ch));
 }
 float calcSunZenithCosFromParam(float us)
 {
-    return tan((2.0 * us - 1.0 + 0.26) * 0.75) / tan(1.26 * 0.75);
+   // return tan((2.0 * us - 1.0 + 0.26) * 0.75) / tan(1.26 * 0.75);
+   return tan((2.0 * us - 1.0 + 0.26) * 1.1) / tan(1.26 * 1.1);
+}
+
+const float MieAsymmetryFactor = 0.3;
+float phaseRayleigh(float cv) { return 8.0 * (7.0 / 5.0 + 0.5 * cv) / 10.0; }
+float phaseMie(float cv)
+{
+    const float v = (3.0 * (1.0 - pow(MieAsymmetryFactor, 2.0))) / (2.0 * (2.0 + pow(MieAsymmetryFactor, 2.0)));
+    return v * (1.0 + pow(cv, 2.0)) / pow(1.0 + pow(MieAsymmetryFactor, 2.0) - 2.0 * MieAsymmetryFactor * pow(cv, 2.0), 3.0 / 2.0);
 }
 
 // Parameterizations //
@@ -59,14 +69,14 @@ bool intersection(vec2 p, vec2 v, out vec2 pa)
 
     const float x = dot(v, v);
     const float y = 2 * dot(p, v);
-    const float zAtmos = dot(p, p) - pow(R_EARTH + H_ATM, 2);
-    const float zGround = dot(p, p) - pow(R_EARTH, 2);
+    const float zAtmos = dot(p, p) - pow(R_EARTH + H_ATM, 2.0);
+    const float zGround = dot(p, p) - pow(R_EARTH, 2.0);
     const float tAtmosPos = (-y + sqrt(y * y - 4.0 * x * zAtmos)) / (2.0 * x);
     const float tAtmosNeg = (-y - sqrt(y * y - 4.0 * x * zAtmos)) / (2.0 * x);
     const float tAtmos = tAtmosPos >= 0 ? (tAtmosNeg >= 0 ? min(tAtmosPos, tAtmosNeg) : tAtmosPos) : tAtmosNeg;
 
     const float tGroundDiscriminant = y * y - 4.0 * x * zGround;
-    if (tGroundDiscriminant < 0)
+    if (tGroundDiscriminant <= 0)
     {
         pa = p + v * tAtmos;
         return false;
@@ -75,8 +85,8 @@ bool intersection(vec2 p, vec2 v, out vec2 pa)
     {
         const float tPos = (-y + sqrt(tGroundDiscriminant)) / (2.0 * x);
         const float tNeg = (-y - sqrt(tGroundDiscriminant)) / (2.0 * x);
-        const float t = tPos >= 0 ? (tNeg >= 0 ? min(tPos, tNeg) : tPos) : tNeg;
-        pa = p + v * (t >= 0.0 ? t : tAtmos);
-        return t >= 0.0;
+        const float t = tPos > 0 ? (tNeg > 0 ? min(tPos, tNeg) : tPos) : tNeg;
+        pa = p + v * (t > 0.0 ? min(t, tAtmos) : tAtmos);
+        return t > 0.0 && t < tAtmos;
     }
 }
