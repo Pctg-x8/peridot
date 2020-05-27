@@ -230,6 +230,7 @@ impl NativeAudioEngine
             .open_stream()
             .expect("Failed to open playback stream");
         stream.request_start().expect("Failed to start playback stream");
+        generator.0.write().expect("AudioEngine Poisoned").start();
         
         NativeAudioEngine
         {
@@ -240,13 +241,21 @@ impl NativeAudioEngine
 
     pub fn pause(&mut self)
     {
+        self.generator.0.write().expect("AudioEngine Poisoning").stop();
         self.stream.request_pause().expect("Failed to pause stream");
+        let mut st = self.stream.state();
+        while st != audio_backend::aaudio::native::AAUDIO_STREAM_STATE_PAUSED
+        {
+            self.stream.wait_for_state_change(st, &mut st, None).expect("Waiting StreamStateChange failed");
+        }
+        self.stream.request_flush().expect("Failed to pause stream");
     }
 }
 impl Drop for NativeAudioEngine
 {
     fn drop(&mut self)
     {
+        self.generator.0.write().expect("AudioEngine Poisoning").stop();
         self.stream.request_stop();
         trace!("NativeAudioEngine end");
     }
