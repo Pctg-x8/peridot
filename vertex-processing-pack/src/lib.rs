@@ -13,6 +13,8 @@ use std::fs::File;
 use std::path::Path;
 #[cfg(feature = "with-loader-impl")]
 use std::ffi::CString;
+#[cfg(feature = "with-loader-impl")]
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PvpContainer {
@@ -88,14 +90,14 @@ impl<'d> PvpShaderModules<'d>
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
             module: &self.vertex, entry_name: CString::new("main").expect("unreachable"),
-            specinfo: self.vertex_spec_constants.clone()
+            specinfo: self.vertex_spec_constants.as_ref().map(|(e, d)| (Cow::Borrowed(&e[..]), d.clone()))
         }, &self.bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment
         {
             r.fragment_shader(br::PipelineShader
             {
                 module: f, entry_name: CString::new("main").expect("unreachable"),
-                specinfo: self.fragment_spec_constants.clone()
+                specinfo: self.fragment_spec_constants.as_ref().map(|(e, d)| (Cow::Borrowed(&e[..]), d.clone()))
             });
         }
         return r;

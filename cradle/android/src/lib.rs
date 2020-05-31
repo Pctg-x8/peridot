@@ -140,6 +140,8 @@ pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
         android_logger::Filter::default().with_min_level(log::Level::Trace)
     );
     info!("Initializing NativeGameEngine...");
+
+    std::panic::set_hook(Box::new(|p| { error!("Panicking in app! {}", p); }));
     
     let window = unsafe { android::ANativeWindow_fromSurface(env.clone(), surface) };
     let am = unsafe { AssetManager::from_java(env.clone(), asset_manager).expect("null assetmanager") };

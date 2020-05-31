@@ -29,7 +29,7 @@ pub fn spec_constant_storage_impl(tok: TokenStream) -> TokenStream
                     constantID: #ids as _,
                     offset: unsafe
                     {
-                        std::mem::transmute::<_, usize>(&std::mem::transmute::<_, &Self>(0usize).#idents) as _
+                        std::mem::transmute::<_, usize>(&std::mem::transmute::<_, &#name>(0usize).#idents) as _
                     },
                     size: std::mem::size_of::<#tys>() as _
                 }),*]
@@ -45,7 +45,7 @@ pub fn spec_constant_storage_impl(tok: TokenStream) -> TokenStream
                 {
                     constantID: #ids2 as _,
                     offset: unsafe {
-                        std::mem::transmute::<_, usize>(&std::mem::transmute::<_, &Self>(0usize).#ids) as _
+                        std::mem::transmute::<_, usize>(&std::mem::transmute::<_, &#name>(0usize).#ids) as _
                     },
                     size: std::mem::size_of::<#tys>() as _
                 }),*]
@@ -57,9 +57,9 @@ pub fn spec_constant_storage_impl(tok: TokenStream) -> TokenStream
     TokenStream::from(quote! {
         impl SpecConstantStorage for #name
         {
-            fn as_pair(&self) -> (Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell)
+            fn as_pair(&self) -> (std::borrow::Cow<[br::vk::VkSpecializationMapEntry]>, br::DynamicDataCell)
             {
-                (#map_entry, br::DynamicDataCell::from(self))
+                (std::borrow::Cow::Owned(#map_entry), br::DynamicDataCell::from(self))
             }
         }
     })
