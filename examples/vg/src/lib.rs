@@ -43,7 +43,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let font_provider = pvg::FontProvider::new().expect("FontProvider initialization error");
         let font = font_provider.best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
             .expect("No Fonts");
-        let mut ctx = pvg::Context::new();
+        let mut ctx = pvg::Context::new(1.0);
         ctx.text(&font, "Hello, World!|Opaque").expect("Text Rendering failed");
         {
             let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
@@ -64,7 +64,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
             f.close(); f.end();
         }*/
-        let mut ctx2 = pvg::Context::new();
+        let mut ctx2 = pvg::Context::new(1.0);
         /*{
             let mut f0 = ctx2.begin_figure(pvg::FillRule::Winding);
             f0.move_to(Vector2(10.0, -10.0).into());
@@ -149,11 +149,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
-        let dsl = br::DescriptorSetLayout::new(&e.graphics(), &br::DSLBindings
-        {
-            uniform_texel_buffer: Some((0, 1, br::ShaderStage::VERTEX)),
-            .. br::DSLBindings::empty()
-        }).expect("DescriptorSetLayout Creation");
+        let dsl = br::DescriptorSetLayout::new(&e.graphics(), &[
+            br::DescriptorSetLayoutBinding::UniformTexelBuffer(1, br::ShaderStage::VERTEX)
+        ]).expect("DescriptorSetLayout Creation");
         let dp = br::DescriptorPool::new(&e.graphics(), 2,
             &[br::DescriptorPoolSize(br::DescriptorType::UniformTexelBuffer, 2)],
             false
@@ -182,33 +180,32 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         debug!("ScreenSize: {:?}", screen_size);
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&dsl], &[(br::ShaderStage::VERTEX, 0 .. 4 * 4)])
             .expect("Create PipelineLayout").into();
-        let spc_map = vec![
+        let spc_map = &[
             br::vk::VkSpecializationMapEntry { constantID: 0, offset: 0, size: 4 },
             br::vk::VkSpecializationMapEntry { constantID: 1, offset: 4, size: 4 }
         ];
         let mut interior_vertex_processing = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         let mut curve_vertex_processing = curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        interior_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
-        curve_vertex_processing.mod_vertex_shader().specinfo =
-            Some((spc_map.clone(), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
+        interior_vertex_processing.vertex_shader_mut().specinfo =
+            Some((Cow::Borrowed(spc_map), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
+        curve_vertex_processing.vertex_shader_mut().specinfo =
+            Some((Cow::Borrowed(spc_map), br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP)));
         
-        interior_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
+        interior_vertex_processing.fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
-        curve_vertex_processing.mod_fragment_shader().expect("fragment shader not exist?").specinfo =
+        curve_vertex_processing.fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
-        let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0));
-        gpb.vertex_processing(interior_vertex_processing)
-            .fixed_viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
+        let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), interior_vertex_processing);
+        gpb.viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
         let gp = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Create GraphicsPipeline"), &pl);
-        gpb.vertex_processing_mut().mod_fragment_shader().expect("Fragment shader not exist?").specinfo =
+        gpb.vertex_processing_mut().fragment_shader_mut().expect("Fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }.as_pair());
         let gp2 = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Creating GraphicsPipeline2"), &pl);
         gpb.vertex_processing(curve_vertex_processing);
         let gp_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Create GraphicsPipeline of CurveRender"), &pl);
-        gpb.vertex_processing_mut().mod_fragment_shader().expect("fragment shader not exist?").specinfo =
+        gpb.vertex_processing_mut().fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }.as_pair());
         let gp2_curve = LayoutedPipeline::combine(gpb.create(&e.graphics(), None)
             .expect("Creating GraphicsPipeline2 for CurveRender"), &pl);

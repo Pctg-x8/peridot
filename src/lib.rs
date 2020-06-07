@@ -387,6 +387,7 @@ impl Graphics
     {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
+        #[cfg(debug_assertions)]
         for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties")
         {
             let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
@@ -401,17 +402,7 @@ impl Graphics
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
         ib.add_extensions(vec!["VK_KHR_surface", platform_surface_extension_name]);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
-        if validation_layer_available
-        {
-            #[cfg(all(debug_assertions, not(target_os = "android")))]
-            ib.add_layer("VK_LAYER_KHRONOS_validation");
-            #[cfg(all(debug_assertions, target_os = "android"))] ib
-                .add_layer("VK_LAYER_LUNARG_parameter_validation")
-                .add_layer("VK_LAYER_LUNARG_core_validation")
-                .add_layer("VK_LAYER_LUNARG_object_tracker")
-                .add_layer("VK_LAYER_GOOGLE_unique_objects")
-                .add_layer("VK_LAYER_GOOGLE_threading");
-        }
+        if validation_layer_available { ib.add_layer("VK_LAYER_KHRONOS_validation"); }
         else { warn!("Validation Layer is not found!"); }
         let instance = ib.create()?;
 
@@ -428,7 +419,7 @@ impl Graphics
         {
             let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extension("VK_KHR_swapchain").add_queue(qci);
-            #[cfg(debug_assertions)] db.add_layer("VK_LAYER_LUNARG_standard_validation");
+            if validation_layer_available { db.add_layer("VK_LAYER_KHRONOS_validation"); }
             *db.mod_features() = features;
             db.create()?
         };
@@ -551,7 +542,7 @@ impl RenderPassTemplates
 
 pub trait SpecConstantStorage
 {
-    fn as_pair(&self) -> (Vec<br::vk::VkSpecializationMapEntry>, br::DynamicDataCell);
+    fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, br::DynamicDataCell);
 }
 
 pub struct LayoutedPipeline(br::Pipeline, Rc<br::PipelineLayout>);
@@ -562,7 +553,7 @@ impl LayoutedPipeline
         LayoutedPipeline(p, layout.clone())
     }
     pub fn pipeline(&self) -> &br::Pipeline { &self.0 }
-    pub fn layout(&self) -> &br::PipelineLayout { &self.1 }
+    pub fn layout(&self) -> &Rc<br::PipelineLayout> { &self.1 }
     pub fn bind(&self, rec: &mut br::CmdRecord) { rec.bind_graphics_pipeline_pair(&self.0, &self.1); }
 }
 

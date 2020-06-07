@@ -2,7 +2,8 @@
 name = "peridot-math"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 euclid = "0.19"

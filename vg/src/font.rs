@@ -41,11 +41,20 @@ impl FontProperties
 #[derive(Debug)]
 pub enum FontConstructionError
 {
-    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error)
+    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error),
+    Selection(SelectionError), Loading(FontLoadingError)
 }
 impl From<std::io::Error> for FontConstructionError
 {
     fn from(v: std::io::Error) -> Self { FontConstructionError::IO(v) }
+}
+impl From<SelectionError> for FontConstructionError
+{
+    fn from(v: SelectionError) -> Self { FontConstructionError::Selection(v) }
+}
+impl From<FontLoadingError> for FontConstructionError
+{
+    fn from(v: FontLoadingError) -> Self { FontConstructionError::Loading(v) }
 }
 #[derive(Debug)]
 pub enum GlyphLoadingError

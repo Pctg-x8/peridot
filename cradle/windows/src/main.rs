@@ -4,8 +4,9 @@ use winapi::um::winuser::{
     PostQuitMessage, PM_REMOVE,
     LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
 };
+use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
-use winapi::um::libloaderapi::{GetModuleHandleA};
+use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
 
@@ -21,6 +22,8 @@ fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } 
 fn main()
 {
     env_logger::init();
+
+    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
 
     let wca = WNDCLASSEXA
     {
