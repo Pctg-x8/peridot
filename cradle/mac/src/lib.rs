@@ -15,7 +15,7 @@ impl log::Log for NSLogger
 {
     fn log(&self, record: &log::Record)
     {
-        // if self.enabled(record.metadata())
+        if self.enabled(record.metadata())
         {
             unsafe
             {

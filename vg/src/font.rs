@@ -96,6 +96,8 @@ pub struct Font(UnderlyingHandle, f32);
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 impl FontProvider
 {
+    const CTFONT_DEFAULT_SIZE: f32 = 12.0;
+
     pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
         -> Result<Font, FontConstructionError>
     {
@@ -117,7 +119,7 @@ impl FontProvider
 
         let fd = appkit::CTFontDescriptor::with_attributes(AsRef::as_ref(&**attrs))
             .map_err(|_| FontConstructionError::SysAPICallError("CTFontDescriptor::with_attributes"))?;
-        appkit::CTFont::from_font_descriptor(&fd, size as _, None)
+        appkit::CTFont::from_font_descriptor(&fd, Self::CTFONT_DEFAULT_SIZE as _, None)
             .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
             .map(|x| Font(x, size))
     }
@@ -126,8 +128,7 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
-    /// Returns a scaled ascent metric value
+    pub(crate) fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
     pub fn ascent(&self) -> f32 { self.0.ascent() as _ }
 
     pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
