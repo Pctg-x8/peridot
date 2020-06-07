@@ -3,9 +3,9 @@ use euclid::Rect;
 use peridot::math::Vector2;
 use lyon_path::builder::PathBuilder;
 
-#[cfg(target_os = "macos")] use appkit::ObjcObjectBase;
-#[cfg(target_os = "windows")] mod dwrite_driver;
-#[cfg(target_os = "windows")] use self::dwrite_driver::*;
+#[cfg(all(target_os = "macos", not(feature = "use-freetype")))] use appkit::ObjcObjectBase;
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))] mod dwrite_driver;
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))] use self::dwrite_driver::*;
 #[cfg(feature = "use-freetype")] mod ft_drivers;
 #[cfg(feature = "use-fontconfig")] mod fc_drivers;
 
@@ -98,11 +98,11 @@ impl FontProvider
     }
 }
 
-#[cfg(target_os = "macos")] type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
-#[cfg(target_os = "windows")] type UnderlyingHandle = comdrive::dwrite::FontFace;
+#[cfg(all(target_os = "macos", not(feature = "use-freetype")))] type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))] type UnderlyingHandle = comdrive::dwrite::FontFace;
 #[cfg(feature = "use-freetype")] type UnderlyingHandle = self::ft_drivers::FaceGroup;
 pub struct Font(UnderlyingHandle, f32);
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 impl FontProvider
 {
     pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
@@ -131,7 +131,7 @@ impl FontProvider
             .map(|x| Font(x, size))
     }
 }
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
@@ -194,7 +194,7 @@ impl Font
     pub fn units_per_em(&self) -> u32 { self.0.units_per_em() }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 impl FontProvider
 {
     pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
@@ -217,7 +217,7 @@ impl FontProvider
         font.new_font_face().map(|x| Font(x, size)).map_err(From::from)
     }
 }
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
