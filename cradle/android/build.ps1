@@ -85,7 +85,9 @@ $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml -E
 
 # Make Default Structure then mirrors the user-defined structure, results an user-customizable resource structure
 robocopy $ScriptPath\apkbuild\app\src\main\res-default $ScriptPath\apkbuild\app\src\main\res /MIR
-robocopy $UserlibDirectory\android-res $ScriptPath\apkbuild\app\src\main\res /IS /E
+if (Test-Path $UserlibDirectory\android-res) {
+    robocopy $UserlibDirectory\android-res $ScriptPath\apkbuild\app\src\main\res /IS /E
+}
 
 # Build Userlib
 $features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
