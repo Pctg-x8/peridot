@@ -1,19 +1,6 @@
 //! Peridot Vector Graphics Dept. powered by Pathfinder 2(lyon)
 
-extern crate bedrock;
-extern crate peridot;
-extern crate pathfinder_partitioner;
-extern crate lyon_path; extern crate euclid;
-
-#[cfg(target_os="macos")]
-extern crate appkit;
-#[cfg(target_os = "windows")]
-extern crate comdrive;
-#[cfg(target_os = "windows")]
-extern crate winapi;
-#[cfg(target_os = "windows")]
-extern crate libc;
-#[macro_use] extern crate log;
+use log::*;
 
 mod font; pub use font::*;
 

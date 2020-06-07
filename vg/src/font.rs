@@ -41,20 +41,11 @@ impl FontProperties
 #[derive(Debug)]
 pub enum FontConstructionError
 {
-    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error),
-    Selection(SelectionError), Loading(FontLoadingError)
+    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error)
 }
 impl From<std::io::Error> for FontConstructionError
 {
     fn from(v: std::io::Error) -> Self { FontConstructionError::IO(v) }
-}
-impl From<SelectionError> for FontConstructionError
-{
-    fn from(v: SelectionError) -> Self { FontConstructionError::Selection(v) }
-}
-impl From<FontLoadingError> for FontConstructionError
-{
-    fn from(v: FontLoadingError) -> Self { FontConstructionError::Loading(v) }
 }
 #[derive(Debug)]
 pub enum GlyphLoadingError
@@ -289,7 +280,7 @@ impl FontProvider
     #[cfg(not(feature = "use-fontconfig"))]
     pub fn best_match(_: &str, _: &FontProperties, _: f32) -> Result<Font, FontConstructionError>
     {
-        // no matching algorithm is available
+        // no matching algorithm is available!
 
         Err(FontConstructionError::MatcherUnavailable)
     }
@@ -298,9 +289,8 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; self.0.set_size(size); }
-    fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
-    /// Returns a scaled ascent metric value
-    pub fn ascent(&self) -> f32 { self.0.ascender() as f32 * self.scale_value() }
+    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub fn ascent(&self) -> f32 { self.0.ascender() as _ }
 
     pub(crate) fn glyph_id(&self, c: char) -> Option<(usize, u32)>
     {
