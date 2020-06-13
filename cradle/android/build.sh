@@ -54,7 +54,7 @@ rsync -auz $SCRIPT_PATH/apkbuild/app/src/main/res-default/* $SCRIPT_PATH/apkbuil
 [ -d $USERLIB_DIRECTORY/android-res ] && rsync -a $USERLIB_DIRECTORY/android-res/* $SCRIPT_PATH/apkbuild/app/src/main/res
 
 [ -d $SCRIPT_PATH/target/arm64-v8a-linux-android ] && mv $SCRIPT_PATH/target/arm64-v8a-linux-android $SCRIPT_PATH/target/aarch64-linux-android
-(cd $SCRIPT_PATH; cargo ndk --target aarch64-linux-android --android-platform $NDK_PLATFORM_TARGET -- build --features bedrock/VK_EXT_debug_report,bedrock/VK_KHR_android_surface,bedrock/DynamicLoaded)
+(cd $SCRIPT_PATH; cargo ndk --target aarch64-linux-android --android-platform $NDK_PLATFORM_TARGET -- build --features bedrock/VK_EXT_debug_report,bedrock/DynamicLoaded)
 [ ! -d $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a ] && mkdir -p $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a
 mv $SCRIPT_PATH/target/aarch64-linux-android/debug/libpegamelib.so $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a/
 
