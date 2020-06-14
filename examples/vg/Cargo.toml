@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
+[features]
+default = []
+test-feature = []
+
 [dependencies]
 peridot = { path = "../.." }
 peridot_derive = { path = "../../derive" }
