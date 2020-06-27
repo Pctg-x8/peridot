@@ -8,6 +8,6 @@ default = ["with-loader-impl"]
 with-loader-impl = ["peridot"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = "..", optional = true }
 peridot-serialization-utils = { path = "../serialization-utils" }
