@@ -216,7 +216,9 @@ impl From<ArchiveReadError> for IOError {
             ArchiveReadError::IO(e) => e,
             ArchiveReadError::IntegrityCheckFailed => IOError::new(ErrorKind::Other, "Archive Integrity check failed"),
             ArchiveReadError::SignatureMismatch => IOError::new(ErrorKind::Other, "Archive Signature Mismatch"),
-            ArchiveReadError::Lz4DecompressError(e) => IOError::new(ErrorKind::Other, format!("Lz4DecompressError: {:?}", e))
+            ArchiveReadError::Lz4DecompressError(e) => IOError::new(
+                ErrorKind::Other, format!("Lz4DecompressError: {:?}", e)
+            )
         }
     }
 }
