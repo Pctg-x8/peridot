@@ -2,7 +2,7 @@
 
 use peridot_serialization_utils::*;
 use std::io::prelude::{Write, Read, BufRead};
-use std::io::{Result as IOResult, Error as IOError};
+use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::{SeekFrom, Seek, BufReader};
 use std::fs::File;
 use std::mem::{transmute, replace};
@@ -210,6 +210,16 @@ impl From<lz4_compression::decompress::Error> for ArchiveReadError
     fn from(e: lz4_compression::decompress::Error) -> Self { Self::Lz4DecompressError(e) }
 }
 pub type ArchiveReadResult<T> = Result<T, ArchiveReadError>;
+impl From<ArchiveReadError> for IOError {
+    fn from(e: ArchiveReadError) -> Self {
+        match e {
+            ArchiveReadError::IO(e) => e,
+            ArchiveReadError::IntegrityCheckFailed => IOError::new(ErrorKind::Other, "Archive Integrity check failed"),
+            ArchiveReadError::SignatureMismatch => IOError::new(ErrorKind::Other, "Archive Signature Mismatch"),
+            ArchiveReadError::Lz4DecompressError(e) => IOError::new(ErrorKind::Other, format!("Lz4DecompressError: {:?}", e))
+        }
+    }
+}
 
 pub struct ArchiveRead
 {
