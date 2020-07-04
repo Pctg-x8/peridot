@@ -262,7 +262,9 @@ impl<T> From<T> for Discardable<T>
     fn from(v: T) -> Self { Discardable(RefCell::new(Some(v))) }
 }
 
+/// Queue object with family index
 pub struct Queue { q: br::Queue, family: u32 }
+/// Graphics manager
 pub struct Graphics
 {
     pub(self) instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
@@ -374,7 +376,8 @@ impl Graphics
         return None;
     }
     
-    fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()>
+    /// Submits any commands as transient commands.
+    pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()>
     {
         let cb = LocalCommandBundle(self.cp_onetime_submit.alloc(1, true)?, &self.cp_onetime_submit);
         generator(&mut cb[0].begin_once()?);
