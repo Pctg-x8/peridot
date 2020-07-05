@@ -3,10 +3,15 @@
 use crate::linarg::*;
 use std::ops::Range;
 
+/// How the camera will project vertices?
 pub enum ProjectionMethod
 {
+    /// The orthographic projection
     Orthographic { size: f32 },
-    Perspective { fov: f32 }
+    /// The perspective projection. requires fov(unit: radians)
+    Perspective { fov: f32 },
+    /// UI layouting optimized projection: (0, 0)-(design_width, design_height) will be mapped to (-1, -1)-(1, 1)
+    UI { design_width: f32, design_height: f32 }
 }
 /// A camera
 /// ## Examples
@@ -27,15 +32,11 @@ pub struct Camera
     pub depth_range: Range<f32>
 }
 
-impl Camera
-{
+impl Camera {
     /// calculates the camera projection matrix
-    pub fn projection_matrix(&self) -> Matrix4F32
-    {
-        match self.projection
-        {
-            ProjectionMethod::Perspective { fov } =>
-            {
+    pub fn projection_matrix(&self) -> Matrix4F32 {
+        match self.projection {
+            ProjectionMethod::Perspective { fov } => {
                 let scaling = (fov / 2.0).tan().recip();
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let zscale = (self.depth_range.end / zdiff,
@@ -44,13 +45,19 @@ impl Camera
                 Matrix4([scaling, 0.0, 0.0, 0.0], [0.0, scaling, 0.0, 0.0],
                     [0.0, 0.0, zscale.0, zscale.1], [0.0, 0.0, 1.0, 0.0])
             },
-            ProjectionMethod::Orthographic { size } =>
-            {
+            ProjectionMethod::Orthographic { size } => {
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let t = Matrix4::translation(Vector3(0.0, 0.0, -self.depth_range.start));
                 let s = Matrix4::scale(Vector4(size.recip(), size.recip(), zdiff.recip(), 1.0));
 
                 s * t
+            },
+            ProjectionMethod::UI { design_width, design_height } => {
+                let zdiff = self.depth_range.end - self.depth_range.start;
+                let t = Matrix4::translation(Vector3(-1.0, -1.0, 0.0));
+                let s = Matrix4::scale(Vector4(2.0 / design_width, 2.0 / design_height, zdiff.recip(), 1.0));
+
+                t * s
             }
         }
     }
