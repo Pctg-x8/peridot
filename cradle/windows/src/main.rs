@@ -24,8 +24,7 @@ fn main()
 
     unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
 
-    let wca = WNDCLASSEXA
-    {
+    let wca = WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
         lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
         lpfnWndProc: Some(window_callback),
@@ -41,25 +40,27 @@ fn main()
     let style = WS_OVERLAPPEDWINDOW;
     let mut wrect = RECT { left: 0, top: 0, right: 640, bottom: 480 };
     unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
-    let w = unsafe
-    {
+    let w = unsafe {
         CreateWindowExA(WS_EX_APPWINDOW, wcatom as _, wname_c.as_ptr(), style,
             CW_USEDEFAULT, CW_USEDEFAULT, wrect.right - wrect.left, wrect.bottom - wrect.top,
             std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
     };
     if w.is_null() { panic!("Create Window Failed!"); }
 
-    let nl = NativeLink
-    {
+    let nl = NativeLink {
         al: AssetProvider::new(), prt: RenderTargetProvider(w),
         input: InputHandler::new()
     };
-    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
+    let mut run = GameRun {
+        engine: EngineW::launch(GameW::NAME, GameW::VERSION, nl)
+            .expect("Unable to launch the game"),
+        current_size: peridot::math::Vector2(640, 480)
+    };
     
-    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, std::mem::transmute(&mut e)); }
+    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, &mut run as *mut _ as _); }
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
 
-    while process_message_all() { e.do_update(); }
+    while process_message_all() { run.engine.do_update(); }
 }
 extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT
 {
@@ -68,11 +69,16 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
         WM_DESTROY => unsafe { PostQuitMessage(0); return 0; },
         WM_SIZE => unsafe
         {
-            let ep: *mut EngineW = std::mem::transmute(GetWindowLongPtrA(w, GWLP_USERDATA));
-            if let Some(ep) = ep.as_mut()
+            let run: *mut GameRun = GetWindowLongPtrA(w, GWLP_USERDATA) as _;
+            if let Some(run) = run.as_mut()
             {
                 let (w, h) = (LOWORD(lparam as _), HIWORD(lparam as _));
-                ep.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); ep.do_update();
+                let size = peridot::math::Vector2(w as usize, h as usize);
+                if run.current_size != size {
+                    run.current_size = size.clone();
+                    run.engine.do_resize_backbuffer(size);
+                    run.engine.do_update();
+                }
             }
             return 0;
         },
@@ -94,6 +100,10 @@ fn process_message_all() -> bool
 
 type GameW = userlib::Game<NativeLink>;
 type EngineW = peridot::Engine<GameW, NativeLink>;
+pub struct GameRun {
+    engine: EngineW,
+    current_size: peridot::math::Vector2<usize>
+}
 
 use std::rc::Rc;
 use bedrock as br;
