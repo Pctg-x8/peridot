@@ -22,11 +22,12 @@ fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } 
 pub struct GameDriver
 {
     base: peridot::Engine<NativeLink>,
-    usercode: userlib::Game<NativeLink>
+    usercode: userlib::Game<NativeLink>,
+    current_size: peridot::math::Vector2<usize>
 }
 impl GameDriver
 {
-    fn new(window: HWND) -> Self
+    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self
     {
         let nl = NativeLink
         {
@@ -43,7 +44,7 @@ impl GameDriver
 
         GameDriver
         {
-            base, usercode
+            base, usercode, current_size: init_size
         }
     }
 
@@ -63,8 +64,7 @@ fn main()
 
     unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
 
-    let wca = WNDCLASSEXA
-    {
+    let wca = WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
         lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
         lpfnWndProc: Some(window_callback),
@@ -84,16 +84,15 @@ fn main()
     let style = WS_OVERLAPPEDWINDOW;
     let mut wrect = RECT { left: 0, top: 0, right: 640, bottom: 480 };
     unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
-    let w = unsafe
-    {
+    let w = unsafe {
         CreateWindowExA(WS_EX_APPWINDOW, wcatom as _, wname_c.as_ptr(), style,
             CW_USEDEFAULT, CW_USEDEFAULT, wrect.right - wrect.left, wrect.bottom - wrect.top,
             std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
     };
     if w.is_null() { panic!("Create Window Failed!"); }
     
-    let mut driver = Box::pin(GameDriver::new(w));
-    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, &mut *driver as *mut GameDriver as _); }
+    let mut driver = GameDriver::new(w, peridot::math::Vector2(640, 480));
+    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, &mut driver as *mut GameDriver as _); }
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
 
     while process_message_all() { driver.update(); }
@@ -109,8 +108,12 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
             if let Some(driver) = p.as_mut()
             {
                 let (w, h) = (LOWORD(lparam as _), HIWORD(lparam as _));
-                driver.resize(peridot::math::Vector2(w as _, h as _));
-                driver.update();
+                let size = peridot::math::Vector2(w as usize, h as usize);
+                if driver.current_size != size {
+                    driver.current_size = size.clone();
+                    driver.resize(size);
+                    driver.update();
+                }
             }
             return 0;
         },
