@@ -38,7 +38,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self
+    fn init(e: &peridot::Engine<PL>) -> Self
     {
         let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
             .expect("No Fonts");
@@ -238,7 +238,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }
     }
 
-    fn update(&mut self, _e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
+    fn update(&mut self, _e: &peridot::Engine<PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         (None, br::SubmissionBatch
@@ -253,7 +253,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, _new_size: Vector2<usize>)
+    fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
         self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
@@ -267,7 +267,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
 impl<PL: peridot::NativeLinker> Game<PL>
 {
-    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
+    fn render_commands(&self, e: &peridot::Engine<PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
     {
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
         self.vg_renderer_params2.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst2);

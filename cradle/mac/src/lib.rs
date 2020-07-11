@@ -1,11 +1,11 @@
-#[macro_use]
-extern crate objc;
-#[macro_use] extern crate log;
-extern crate appkit; use appkit::{NSString, NSRect, CocoaObject};
-extern crate libc; use libc::c_void;
 
-extern crate peridot;
-extern crate bedrock as br;
+use objc::{msg_send, sel, sel_impl};
+use log::*;
+use appkit::{NSString, NSRect, CocoaObject};
+use libc::c_void;
+
+use bedrock as br;
+use peridot::{EngineEvents, FeatureRequests};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::Cursor;
 use std::rc::Rc;
@@ -93,7 +93,26 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>>
     {
-        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
+        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).map_err(|e| match e
+        {
+            peridot::archive::ArchiveReadError::IO(e) => e,
+            peridot::archive::ArchiveReadError::IntegrityCheckFailed =>
+            {
+                error!("PrimaryArchive integrity check failed!");
+                IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+            },
+            peridot::archive::ArchiveReadError::SignatureMismatch =>
+            {
+                error!("PrimaryArchive signature mismatch!");
+                IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+            },
+            peridot::archive::ArchiveReadError::Lz4DecompressError(e) =>
+            {
+                error!("lz4 decompress error: {:?}", e);
+                IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+            },
+            _ => IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+        })?;
         let b = arc.read_bin(&format!("{}.{}", path.replace(".", "/"), ext))?;
         match b
         {
@@ -103,7 +122,26 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<ReaderView<par::EitherArchiveReader>>
     {
-        let arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false)?;
+        let arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).map_err(|e| match e
+        {
+            peridot::archive::ArchiveReadError::IO(e) => e,
+            peridot::archive::ArchiveReadError::IntegrityCheckFailed =>
+            {
+                error!("PrimaryArchive integrity check failed!");
+                IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+            },
+            peridot::archive::ArchiveReadError::SignatureMismatch =>
+            {
+                error!("PrimaryArchive signature mismatch!");
+                IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+            },
+            peridot::archive::ArchiveReadError::Lz4DecompressError(e) =>
+            {
+                error!("lz4 decompress error: {:?}", e);
+                IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+            },
+            _ => IOError::new(ErrorKind::Other, "PrimaryArchive read error")
+        })?;
         let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
         match e
         {
@@ -186,7 +224,33 @@ impl peridot::NativeLinker for NativeLink
 }
 mod userlib;
 type Game = userlib::Game<NativeLink>;
-type Engine = peridot::Engine<Game, NativeLink>;
+type Engine = peridot::Engine<NativeLink>;
+
+pub struct GameDriver
+{
+    engine: Engine,
+    usercode: Game
+}
+impl GameDriver
+{
+    pub fn new(rt_view: *mut libc::c_void) -> Self
+    {
+        let nl = NativeLink::new(rt_view);
+        let engine = Engine::new(Game::NAME, Game::VERSION, nl, Game::requested_features());
+        let usercode = Game::init(&engine);
+
+        GameDriver { engine, usercode }
+    }
+
+    fn update(&mut self)
+    {
+        self.engine.do_update(&mut self.usercode);
+    }
+    fn resize(&mut self, size: peridot::math::Vector2<usize>)
+    {
+        self.engine.do_resize_backbuffer(size, &mut self.usercode);
+    }
+}
 
 // Swift Linking //
 
@@ -196,31 +260,28 @@ extern "C"
     fn nsscreen_backing_scale_factor() -> f32;
 }
 
-pub struct GameRun(Engine);
 #[no_mangle]
-pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameRun
+pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameDriver
 {
     log::set_logger(&LOGGER).expect("Failed to set logger");
     log::set_max_level(log::LevelFilter::Trace);
 
-    let nlink = NativeLink::new(v);
-    let engine = Engine::launch(Game::NAME, Game::VERSION, nlink).expect("Failed to launch the game");
-    Box::into_raw(Box::new(GameRun(engine)))
+    Box::into_raw(Box::new(GameDriver::new(v)))
 }
 #[no_mangle]
-pub extern "C" fn terminate_game(gr: *mut GameRun)
+pub extern "C" fn terminate_game(g: *mut GameDriver)
 {
-    unsafe { drop(Box::from_raw(gr)); }
+    unsafe { drop(Box::from_raw(g)); }
 }
 #[no_mangle]
-pub extern "C" fn update_game(gr: *mut GameRun)
+pub extern "C" fn update_game(g: *mut GameDriver)
 {
-    unsafe { (*gr).0.do_update(); }
+    unsafe { (*g).update(); }
 }
 #[no_mangle]
-pub extern "C" fn resize_game(gr: *mut GameRun, w: u32, h: u32)
+pub extern "C" fn resize_game(g: *mut GameDriver, w: u32, h: u32)
 {
-    unsafe { (*gr).0.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); }
+    unsafe { (*g).resize(peridot::math::Vector2(w as _, h as _)); }
 }
 #[no_mangle]
 pub extern "C" fn captionbar_text() -> *mut c_void
