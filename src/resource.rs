@@ -310,6 +310,24 @@ impl br::VkHandle for Image
     fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }
 
+/// A view of the buffer.
+#[derive(Clone, Copy)]
+pub struct BufferView<'b> { pub buffer: &'b Buffer, pub offset: usize }
+impl Buffer {
+    pub fn with_offset(&self, offset: usize) -> BufferView {
+        BufferView { buffer: self, offset }
+    }
+}
+impl BufferView<'_> {
+    pub fn with_offset(self, offset: usize) -> Self {
+        BufferView { buffer: self.buffer, offset: self.offset + offset }
+    }
+}
+/// Conversion for Bedrock bind_vertex_buffers form
+impl<'b> From<BufferView<'b>> for (&'b Buffer, usize) {
+    fn from(v: BufferView<'b>) -> Self { (v.buffer, v.offset) }
+}
+
 #[derive(Clone, Copy)] #[repr(i32)]
 pub enum PixelFormat
 {
