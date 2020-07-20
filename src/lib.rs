@@ -567,12 +567,12 @@ impl ReadyResourceBarriers
 }
 pub struct TransferBatch
 {
-    barrier_range_src: BTreeMap<ResourceKey<Buffer>, Range<u64>>,
-    barrier_range_dst: BTreeMap<ResourceKey<Buffer>, Range<u64>>,
+    barrier_range_src: BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
+    barrier_range_dst: BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
     org_layout_src: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
     org_layout_dst: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
     copy_buffers: HashMap<(ResourceKey<Buffer>, ResourceKey<Buffer>), Vec<VkBufferCopy>>,
-    init_images: BTreeMap<ResourceKey<Image>, (Buffer, u64)>,
+    init_images: BTreeMap<ResourceKey<Image>, (Buffer, br::vk::VkDeviceSize)>,
     ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
 }
 impl TransferBatch
@@ -587,29 +587,34 @@ impl TransferBatch
             ready_barriers: BTreeMap::new()
         }
     }
-    pub fn add_copying_buffer(&mut self, src: (&Buffer, u64), dst: (&Buffer, u64), bytes: u64)
-    {
-        trace!("Registering COPYING-BUFFER: ({}, {}) -> {} bytes", src.1, dst.1, bytes);
-        let (sk, dk) = (ResourceKey(src.0.clone()), ResourceKey(dst.0.clone()));
-        Self::update_barrier_range_for(&mut self.barrier_range_src, sk.clone(), src.1 .. src.1 + bytes);
-        Self::update_barrier_range_for(&mut self.barrier_range_dst, dk.clone(), dst.1 .. dst.1 + bytes);
-        self.copy_buffers.entry((sk, dk)).or_insert_with(Vec::new)
-            .push(VkBufferCopy { srcOffset: src.1 as _, dstOffset: dst.1 as _, size: bytes as _ })
+    pub fn add_copying_buffer(&mut self, src: DeviceBufferView, dst: DeviceBufferView, bytes: br::vk::VkDeviceSize) {
+        trace!("Registering COPYING-BUFFER: ({}, {}) -> {} bytes", src.offset, dst.offset, bytes);
+        let (sk, dk) = (ResourceKey(src.buffer.clone()), ResourceKey(dst.buffer.clone()));
+        Self::update_barrier_range_for(&mut self.barrier_range_src, sk.clone(), src.range(bytes));
+        Self::update_barrier_range_for(&mut self.barrier_range_dst, dk.clone(), dst.range(bytes));
+        self.copy_buffers.entry((sk, dk)).or_insert_with(Vec::new).push(VkBufferCopy {
+            srcOffset: src.offset, dstOffset: dst.offset, size: bytes
+        });
     }
-    pub fn add_mirroring_buffer(&mut self, src: &Buffer, dst: &Buffer, offset: u64, bytes: u64)
-    {
-        self.add_copying_buffer((src, offset), (dst, offset), bytes);
+    pub fn add_mirroring_buffer(
+        &mut self,
+        src: &Buffer,
+        dst: &Buffer,
+        offset: br::vk::VkDeviceSize,
+        bytes: br::vk::VkDeviceSize
+    ) {
+        self.add_copying_buffer(src.with_dev_offset(offset), dst.with_dev_offset(offset), bytes);
     }
-    pub fn init_image_from(&mut self, dest: &Image, src: (&Buffer, u64))
+    pub fn init_image_from(&mut self, dest: &Image, src: DeviceBufferView)
     {
-        self.init_images.insert(ResourceKey(dest.clone()), (src.0.clone(), src.1));
+        self.init_images.insert(ResourceKey(dest.clone()), (src.buffer.clone(), src.offset));
         let size = (dest.size().0 * dest.size().1) as u64 * (dest.format().bpp() >> 3) as u64;
-        Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.0.clone()), src.1 .. src.1 + size);
+        Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.buffer.clone()), src.range(size));
         self.org_layout_dst.insert(ResourceKey(dest.clone()), br::ImageLayout::Preinitialized);
     }
 
     pub fn add_buffer_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
-        res: &Buffer, byterange: Range<u64>, access_grants: br::vk::VkAccessFlags)
+        res: &Buffer, byterange: Range<br::vk::VkDeviceSize>, access_grants: br::vk::VkAccessFlags)
     {
         self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
             .buffer.push((res.clone(), byterange, access_grants));
@@ -622,8 +627,8 @@ impl TransferBatch
     }
     pub fn is_empty(&self) -> bool { self.copy_buffers.is_empty() }
     
-    fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<u64>>,
-        k: ResourceKey<Buffer>, new_range: Range<u64>)
+    fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
+        k: ResourceKey<Buffer>, new_range: Range<br::vk::VkDeviceSize>)
     {
         let r = map.entry(k).or_insert_with(|| new_range.clone());
         r.start = r.start.min(new_range.start);
@@ -637,10 +642,12 @@ impl TransferBatch
     {
         let src_barriers = self.barrier_range_src.iter()
             .map(|(b, r)| br::BufferMemoryBarrier::new(
-                &b.0, r.start as _ .. r.end as _, br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read));
+                &b.0, r.clone(), br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read
+            ));
         let dst_barriers = self.barrier_range_dst.iter()
             .map(|(b, r)| br::BufferMemoryBarrier::new(
-                &b.0, r.start as _ .. r.end as _, 0, br::AccessFlags::TRANSFER.write));
+                &b.0, r.clone(), 0, br::AccessFlags::TRANSFER.write
+            ));
         let barriers: Vec<_> = src_barriers.chain(dst_barriers).collect();
         let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| br::ImageMemoryBarrier::new(
             &br::ImageSubref::color(&b.0, 0, 0), l0, br::ImageLayout::TransferSrcOpt

@@ -322,10 +322,30 @@ impl BufferView<'_> {
     pub fn with_offset(self, offset: usize) -> Self {
         BufferView { buffer: self.buffer, offset: self.offset + offset }
     }
+    pub fn range(&self, bytes: usize) -> std::ops::Range<usize> {
+        self.offset .. self.offset + bytes
+    }
 }
 /// Conversion for Bedrock bind_vertex_buffers form
 impl<'b> From<BufferView<'b>> for (&'b Buffer, usize) {
     fn from(v: BufferView<'b>) -> Self { (v.buffer, v.offset) }
+}
+
+/// a view of the buffer in GPU Address.
+#[derive(Clone, Copy)]
+pub struct DeviceBufferView<'b> { pub buffer: &'b Buffer, pub offset: br::vk::VkDeviceSize }
+impl Buffer {
+    pub fn with_dev_offset(&self, offset: br::vk::VkDeviceSize) -> DeviceBufferView {
+        DeviceBufferView { buffer: self, offset }
+    }
+}
+impl DeviceBufferView<'_> {
+    pub fn with_offset(&self, offset: br::vk::VkDeviceSize) -> Self {
+        DeviceBufferView { buffer: self.buffer, offset: self.offset + offset }
+    }
+    pub fn range(&self, bytes: br::vk::VkDeviceSize) -> std::ops::Range<br::vk::VkDeviceSize> {
+        self.offset .. self.offset + bytes
+    }
 }
 
 #[derive(Clone, Copy)] #[repr(i32)]
@@ -466,7 +486,7 @@ impl TextureInstantiatedGroup
     {
         for (t, &(_, offs)) in self.1.iter().zip(self.0.iter())
         {
-            tb.init_image_from(t.image(), (stgbuf, offs));
+            tb.init_image_from(t.image(), stgbuf.with_dev_offset(offs));
             tb.add_image_graphics_ready(br::PipelineStageFlags::FRAGMENT_SHADER, t.image(),
                 br::ImageLayout::ShaderReadOnlyOpt);
         }
