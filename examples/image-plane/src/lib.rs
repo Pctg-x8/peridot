@@ -111,14 +111,24 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let mut tfb_mut = TransferBatch::new();
         let dst_update_range = buffers.mut_buffer_placement ..
             buffers.mut_buffer_placement + size_of::<Uniform>() as u64;
-        tfb.add_copying_buffer((&buffers.mut_buffer.0, mut_uniform_offset),
-            (&buffers.buffer.0, dst_update_range.start), size_of::<Uniform>() as _);
-        tfb_mut.add_copying_buffer((&buffers.mut_buffer.0, mut_uniform_offset),
-            (&buffers.buffer.0, dst_update_range.start), size_of::<Uniform>() as _);
-        tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
-            dst_update_range.clone(), br::AccessFlags::UNIFORM_READ);
-        tfb_mut.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
-            dst_update_range, br::AccessFlags::UNIFORM_READ);
+        tfb.add_copying_buffer(
+            buffers.mut_buffer.0.with_dev_offset(mut_uniform_offset),
+            buffers.buffer.0.with_dev_offset(dst_update_range.start),
+            size_of::<Uniform>() as _
+        );
+        tfb_mut.add_copying_buffer(
+            buffers.mut_buffer.0.with_dev_offset(mut_uniform_offset),
+            buffers.buffer.0.with_dev_offset(dst_update_range.start),
+            size_of::<Uniform>() as _
+        );
+        tfb.add_buffer_graphics_ready(
+            br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
+            dst_update_range.clone(), br::AccessFlags::UNIFORM_READ
+        );
+        tfb_mut.add_buffer_graphics_ready(
+            br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
+            dst_update_range, br::AccessFlags::UNIFORM_READ
+        );
 
         e.submit_commands(|r|
         {
