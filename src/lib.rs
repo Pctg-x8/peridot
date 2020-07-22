@@ -565,6 +565,7 @@ impl ReadyResourceBarriers
 {
     fn new() -> Self { ReadyResourceBarriers { buffer: Vec::new(), image: Vec::new() } }
 }
+/// Batching Manager for Transferring Operations.
 pub struct TransferBatch
 {
     barrier_range_src: BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
@@ -587,6 +588,8 @@ impl TransferBatch
             ready_barriers: BTreeMap::new()
         }
     }
+
+    /// Add copying operation between buffers.
     pub fn add_copying_buffer(&mut self, src: DeviceBufferView, dst: DeviceBufferView, bytes: br::vk::VkDeviceSize) {
         trace!("Registering COPYING-BUFFER: ({}, {}) -> {} bytes", src.offset, dst.offset, bytes);
         let (sk, dk) = (ResourceKey(src.buffer.clone()), ResourceKey(dst.buffer.clone()));
@@ -596,6 +599,8 @@ impl TransferBatch
             srcOffset: src.offset, dstOffset: dst.offset, size: bytes
         });
     }
+    /// Add copying operation between buffers.
+    /// Shorthand for copying operation that both BufferViews have same offset.
     pub fn add_mirroring_buffer(
         &mut self,
         src: &Buffer,
@@ -605,6 +610,7 @@ impl TransferBatch
     ) {
         self.add_copying_buffer(src.with_dev_offset(offset), dst.with_dev_offset(offset), bytes);
     }
+    /// Add image content initializing operation, from the buffer.
     pub fn init_image_from(&mut self, dest: &Image, src: DeviceBufferView)
     {
         self.init_images.insert(ResourceKey(dest.clone()), (src.buffer.clone(), src.offset));
@@ -613,19 +619,24 @@ impl TransferBatch
         self.org_layout_dst.insert(ResourceKey(dest.clone()), br::ImageLayout::Preinitialized);
     }
 
+    /// Add ready barrier for buffers.
     pub fn add_buffer_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
         res: &Buffer, byterange: Range<br::vk::VkDeviceSize>, access_grants: br::vk::VkAccessFlags)
     {
         self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
             .buffer.push((res.clone(), byterange, access_grants));
     }
+    /// Add ready barrier for images.
     pub fn add_image_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
         res: &Image, layout: br::ImageLayout)
     {
         self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
             .image.push((res.clone(), br::ImageSubresourceRange::color(0, 0), layout));
     }
-    pub fn is_empty(&self) -> bool { self.copy_buffers.is_empty() }
+    /// Have add_copying_buffer, add_mirroring_buffer or init_image_from been called?
+    pub fn has_copy_ops(&self) -> bool { !self.copy_buffers.is_empty() || !self.init_images.is_empty() }
+    /// Have add_buffer_graphics_ready or add_image_graphics_ready been called?
+    pub fn has_ready_barrier_ops(&self) -> bool { !self.ready_barriers.is_empty() }
     
     fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
         k: ResourceKey<Buffer>, new_range: Range<br::vk::VkDeviceSize>)
