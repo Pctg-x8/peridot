@@ -119,7 +119,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let buffer = mb.alloc().expect("Mem Allocation").pop().expect("no objects?").unwrap_buffer();
         let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("no objects?").unwrap_buffer();
         
-        let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(bp.total_size(), |m|
+        let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(0 .. bp.total_size(), |m|
         {
             let p0 = ctx.stage_data_into(m, vg_offs);
             let p1 = ctx2.stage_data_into(m, vg_offs2);
