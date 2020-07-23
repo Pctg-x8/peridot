@@ -98,7 +98,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             depth_range: 1.0 .. 10.0
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
-        buffers.mut_buffer.0.guard_map(buffers.mut_buffer.1, |m| unsafe
+        buffers.mut_buffer.0.guard_map(0 .. buffers.mut_buffer.1, |m| unsafe
         {
             let (v, p) = cam.matrixes();
             let aspect = Matrix4::scale(Vector4(screen_aspect, 1.0, 1.0, 1.0));
@@ -226,7 +226,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
         self.rot += dtsec * 15.0;
-        self.buffers.mut_buffer.0.guard_map(self.mut_uniform_offset + size_of::<Uniform>() as u64, |m| unsafe
+        self.buffers.mut_buffer.0.guard_map(0 .. self.mut_uniform_offset + size_of::<Uniform>() as u64, |m| unsafe
         {
             m.get_mut::<Uniform>(self.mut_uniform_offset as _).object
                 = Quaternion::new(self.rot, Vector3F32::up()).into();
