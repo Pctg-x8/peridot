@@ -1,5 +1,7 @@
-
-$OutDirectory = "peridot-sdk"
+param(
+    [parameter(HelpMessage = "Output Directory Name")][String]$OutDirectory = "peridot-sdk",
+    [parameter(HelpMessage = "Package needs zipped?")][switch]$Compress = $false
+)
 
 New-Item $OutDirectory -ItemType Directory -Force | Out-Null
 Remove-Item $OutDirectory/* -Recurse -Force
@@ -20,3 +22,8 @@ Copy-Item build.sh $OutDirectory
 # Copy tools(for Windows)
 New-Item $OutDirectory/tools -ItemType Directory -Force | Out-Null
 Copy-Item target/release/peridot-*.exe $OutDirectory/tools
+
+# Compress(if required)
+if ($Compress) {
+    Compress-Archive $OutDirectory -DestinationPath "$OutDirectory.zip"
+}
