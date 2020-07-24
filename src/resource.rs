@@ -270,14 +270,14 @@ impl Buffer
     /// Reference to a memory object bound with this object.
     pub fn memory(&self) -> &Memory { &self.1 }
 
-    pub fn map(&self, size: u64) -> br::Result<br::MappedMemoryRange>
+    pub fn map(&self, range: Range<u64>) -> br::Result<br::MappedMemoryRange>
     {
-        self.1.map(self.2 as _ .. (self.2 + size) as _)
+        self.1.map((self.2 + range.start) as _ .. (self.2 + range.end) as _)
     }
     pub unsafe fn unmap(&self) { self.1.unmap() }
-    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, size: u64, f: F) -> br::Result<R>
+    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, range: Range<u64>, f: F) -> br::Result<R>
     {
-        Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(size)?))))
+        Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(range)?))))
     }
 }
 impl Image
@@ -728,7 +728,7 @@ impl FixedMemory
         mb_stg.add(stg_buffer);
         let stg_buffer = mb_stg.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
 
-        stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
+        stg_buffer.guard_map(0 .. stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
 
         textures.copy_from_stage_batches(tfb, &stg_buffer);
         tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, imm_buffer_size);
