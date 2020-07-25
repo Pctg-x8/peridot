@@ -10,7 +10,7 @@ usage_exit() {
 SCRIPT_PATH=$(dirname $0)
 OUT_DIRECTORY="peridot-sdk"
 COMPRESS=0
-while getopts oc:h OPT; do
+while getopts o:ch OPT; do
     case $OPT in
         o)
             OUT_DIRECTORY=$OPTARG
@@ -55,4 +55,4 @@ for f in $(find $SCRIPT_PATH/target/release -name "peridot-*" -type f -perm +a=x
 done
 
 # Compress(if required)
-if [ $COMPRESS -ne 0 ]; then zip $OUT_DIRECTORY -o "$OUT_DIRECTORY.zip"; fi
+if [ $COMPRESS -ne 0 ]; then zip -r "$OUT_DIRECTORY.zip" $OUT_DIRECTORY; fi
