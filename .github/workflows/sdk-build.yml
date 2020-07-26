@@ -9,6 +9,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.client_payload.ref }}
       - name: Build tools (For PowerShell Env)
         if: matrix.os == "windows-latest"
         run: powershell.exe -File ./tools/build-all.ps1
@@ -24,5 +26,5 @@ jobs:
       - name: Upload package to Artifacts
         uses: actions/upload-artifact@v1
         with:
-          name: "Peridot SDK: ${{ matrix.os }}"
+          name: "Peridot SDK: ${{ github.event.client_payload.ref }}-${{ matrix.os }}"
           path: peridot-sdk
