@@ -49,6 +49,8 @@ rsync -auz --progress $SCRIPT_PATH/cradle/android $OUT_DIRECTORY/cradle --exclud
 rsync -auz --progress $SCRIPT_PATH/cradle/android/apkbuild $OUT_DIRECTORY/cradle/android --exclude AndroidManifest.xml --exclude res --exclude local.properties --exclude .gradle --exclude build.gradle --exclude libpegamelib.so --exclude build --exclude .cxx
 
 # Rewrite manifest peridot path
+echo "Rewriting Cargo Manifests......"
+echo "Peridot Branch = $PERIDOT_BRANCH"
 for f in $OUT_DIRECTORY/cradle/**/Cargo.template.toml; do
     echo "rewriting peridot deps in $f..."
     sed -i.o -e "s/peridot = { path = \"..\\/..\" }/peridot = { git = \"https:\\/\\/github.com\\/Pctg-x8\\/peridot\", branch = \"$PERIDOT_BRANCH\" }/g" $f

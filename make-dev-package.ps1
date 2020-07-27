@@ -25,6 +25,8 @@ function RewriteCargoManifest([String]$filePath) {
     $base = $base.Replace("peridot = { path = `"../..`" }", "peridot = { git = `"https://github.com/Pctg-x8/peridot`", branch = `"$PeridotBranch`" }")
     $base | Out-File $filePath -Encoding UTF8
 }
+Write-Host "Rewriting Cargo Manifests......"
+Write-Host "Peridot Branch = $PeridotBranch"
 Get-Item $OutDirectory/cradle/**/Cargo.template.toml | ForEach-Object { RewriteCargoManifest $_.FullName }
 
 # Copy scripts
