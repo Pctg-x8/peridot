@@ -14,7 +14,7 @@ jobs:
         run: powershell.exe -File ./tools/build-all.ps1
       - name: Update Bash (Only for MacOS)
         if: matrix.os == 'macos-latest'
-        run: brew update bash
+        run: brew upgrade bash
       - name: Build tools (For Bash Env)
         if: matrix.os != 'windows-latest'
         run: ./tools/build-all.sh
