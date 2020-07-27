@@ -12,7 +12,7 @@ SCRIPT_PATH=$(dirname $0)
 OUT_DIRECTORY="peridot-sdk"
 PERIDOT_BRANCH="dev"
 COMPRESS=0
-while getopts ob:ch OPT; do
+while getopts o:b:ch OPT; do
     case $OPT in
         o)
             OUT_DIRECTORY=$OPTARG
