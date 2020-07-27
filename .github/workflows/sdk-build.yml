@@ -17,7 +17,7 @@ jobs:
         run: ./tools/build-all.sh
       - name: Make package (For PowerShell Env)
         if: matrix.os == "windows-latest"
-        run: powershell.exe -File ./make-dev-package.ps1 -OutDirectory peridot-sdk -Branch $GITHUB_REF
+        run: powershell.exe -File ./make-dev-package.ps1 -OutDirectory peridot-sdk -PeridotBranch $GITHUB_REF
       - name: Make package (For Bash Env)
         if: matrix.os != "windows-latest"
         run: ./make-dev-package.sh -o peridot-sdk -b $GITHUB_REF
