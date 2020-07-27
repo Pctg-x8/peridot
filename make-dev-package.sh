@@ -53,7 +53,7 @@ echo "Rewriting Cargo Manifests......"
 echo "Peridot Branch = $PERIDOT_BRANCH"
 for f in $OUT_DIRECTORY/cradle/**/Cargo.template.toml; do
     echo "rewriting peridot deps in $f..."
-    sed -i.o -e "s/peridot = { path = \"..\\/..\" }/peridot = { git = \"https:\\/\\/github.com\\/Pctg-x8\\/peridot\", branch = \"$PERIDOT_BRANCH\" }/g" $f
+    sed -i.o -e "s/peridot = { path = \"..\\/..\" }/peridot = { git = \"https:\\/\\/github.com\\/Pctg-x8\\/peridot\", branch = \"${PERIDOT_BRANCH//\/\\\/}\" }/g" $f
     rm $f.o
 done
 
