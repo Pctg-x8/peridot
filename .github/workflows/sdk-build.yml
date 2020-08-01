@@ -12,9 +12,9 @@ jobs:
       - name: Build tools (For PowerShell Env)
         if: matrix.os == 'windows-latest'
         run: powershell.exe -File ./tools/build-all.ps1
-      - name: Upgrade Bash (Only for MacOS)
+      - name: Upgrade utils (Only for MacOS)
         if: matrix.os == 'macos-latest'
-        run: brew install bash
+        run: brew install bash findutils
       - name: Build tools (For Bash Env)
         if: matrix.os != 'windows-latest'
         run: ./tools/build-all.sh
