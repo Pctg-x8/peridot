@@ -8,8 +8,9 @@ try {
         Write-Host "Building: $path"
         Set-Location $ScriptPath/$path
         cargo build --release
-        if ($LastErrorCode -ne 0) {
-            Write-Error -Message "Build sequence failed with code $LastErrorCode"
+        $CargoResult = $LastErrorCode
+        if ($CargoResult -ne 0) {
+            Write-Error -Message "Build sequence failed with code $CargoResult"
         }
     }
 }
