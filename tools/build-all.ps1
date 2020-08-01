@@ -1,5 +1,4 @@
 
-$ErrorActionPreference = "Stop"
 $ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 try {
@@ -8,7 +7,10 @@ try {
     foreach ($path in $Targets) {
         Write-Host "Building: $path"
         Set-Location $ScriptPath/$path
-        cargo build --release 2>&1 | %{ "$_" }
+        cargo build --release
+        if ($LastErrorCode -ne 0) {
+            Write-Error -Message "Build sequence failed with code $LastErrorCode"
+        }
     }
 }
 finally { Pop-Location }
