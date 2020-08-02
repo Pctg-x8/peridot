@@ -30,12 +30,6 @@ jobs:
           grep -qE '.rs$|Cargo(-template)?.toml$' file_changes
           HAS_CODE_CHANGES=$(test "$? -eq 0")
           echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
-      - name: Uploading BeginTimer
-        uses: actions/upload-artifact@v1
-        if: success()
-        with:
-          name: WorkflowBeginTimestamp
-          path: .begintime
   check-formats:
     name: "Code Formats"
     runs-on: ubuntu-latest
