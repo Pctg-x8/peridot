@@ -1,6 +1,6 @@
 #!/bin/bash -xe
 
-BEGINTIME=$(cat .begintime)
+BEGINTIME=$INPUT_BEGINTIME
 ENDTIME=$(date +%s)
 BUILD_TIME_SECS=$(expr $ENDTIME - $BEGINTIME)
 
