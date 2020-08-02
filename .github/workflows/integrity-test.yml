@@ -42,21 +42,26 @@ jobs:
     needs: preconditions
     steps:
       - name: Downloading BeginTimer
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
           path: .
       - name: Checking out(HEAD commit)
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: "Running Check: LineWidth"
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/codeform-checker
         with:
           script: codeform_check
       - name: "Running Check: Vulnerabilities"
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/codeform-checker
         with:
           script: vulnerabilities_elliminator
@@ -80,17 +85,21 @@ jobs:
     needs: preconditions
     steps:
       - name: Downloading BeginTimer
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
           path: .
       - name: Checking out(HEAD commit)
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-baselayer
       # - name: Uploading Build Artifacts
       #   uses: actions/upload-artifact@v1
@@ -115,15 +124,18 @@ jobs:
   check-tools:
     name: "Tools"
     runs-on: ubuntu-latest
-    needs: check-baselayer
+    needs: [preconditions, check-baselayer]
     steps:
       - name: Checking out(HEAD commit)
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
@@ -134,6 +146,7 @@ jobs:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: tools
@@ -154,15 +167,18 @@ jobs:
   check-modules:
     name: "Modules"
     runs-on: ubuntu-latest
-    needs: check-baselayer
+    needs: [preconditions, check-baselayer]
     steps:
       - name: Checking out(HEAD commit)
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
@@ -173,6 +189,7 @@ jobs:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: .
@@ -199,15 +216,18 @@ jobs:
   check-examples:
     name: "Examples"
     runs-on: ubuntu-latest
-    needs: check-modules
+    needs: [preconditions, check-modules]
     steps:
       - name: Checking out(HEAD commit)
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
@@ -218,11 +238,10 @@ jobs:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: examples
-      - name: test
-        run: ls -l .
       - name: Notify as Success
         uses: ./.github/actions/integrity-check-slack-notifier
         env:
