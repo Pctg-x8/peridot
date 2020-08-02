@@ -29,7 +29,8 @@ jobs:
           git --no-pager diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} > file_changes
           cat file_changes
           grep -qE '.rs$|Cargo(-template)?.toml$' file_changes
-          HAS_CODE_CHANGES=$(test "$? -eq 0")
+          [ $? -eq 0 ]
+          HAS_CODE_CHANGES=$?
           echo "HAS_CODE_CHANGES? $HAS_CODE_CHANGES"
           echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
   check-formats:
