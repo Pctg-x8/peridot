@@ -53,7 +53,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: "Running Check: LineWidth"
         if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
@@ -96,7 +95,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Building as Checking
         if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
@@ -132,7 +130,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
         if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
@@ -175,7 +172,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
         if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
@@ -224,7 +220,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
         if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
