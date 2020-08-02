@@ -47,7 +47,6 @@ jobs:
           name: WorkflowBeginTimestamp
           path: .
       - name: Checking out(HEAD commit)
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -83,7 +82,6 @@ jobs:
     needs: preconditions
     steps:
       - name: Downloading BeginTimer
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
@@ -124,7 +122,6 @@ jobs:
     needs: [preconditions, check-baselayer]
     steps:
       - name: Checking out(HEAD commit)
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -165,7 +162,6 @@ jobs:
     needs: [preconditions, check-baselayer]
     steps:
       - name: Checking out(HEAD commit)
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -212,7 +208,6 @@ jobs:
     needs: [preconditions, check-modules]
     steps:
       - name: Checking out(HEAD commit)
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
