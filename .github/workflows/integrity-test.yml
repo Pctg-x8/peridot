@@ -24,10 +24,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking Changed Filenames
+        shell: bash {0}
         run: |
           git --no-pager diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} > file_changes
-          cat file_changes
-          (grep -qE '.rs$|Cargo(-template)?.toml$' file_changes)
+          grep -qE '.rs$|Cargo(-template)?.toml$' file_changes
           echo "::set-output name=has_code_changes::$?"
   check-formats:
     name: "Code Formats"
