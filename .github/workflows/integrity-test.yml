@@ -2,7 +2,6 @@ name: Integrity Check
 on:
   pull_request:
     types: ["opened", "synchronize"]
-    paths: ["**.rs", "**.toml"]
 jobs:
   preconditions:
     name: "Preconditions"
