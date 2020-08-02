@@ -26,9 +26,8 @@ jobs:
       - name: Checking Changed Filenames
         run: |
           git --no-pager diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} > file_changes
-          HAS_CODE_CHANGES=$(grep -qE '.rs$|Cargo(-template)?.toml$' file_changes)
-          echo "HAS_CODE_CHANGES=$HAS_CODE_CHANGES"
-          echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
+          grep -qE '.rs$|Cargo(-template)?.toml$' file_changes
+          echo "::set-output name=has_code_changes::$?"
   check-formats:
     name: "Code Formats"
     runs-on: ubuntu-latest
