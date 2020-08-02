@@ -42,7 +42,6 @@ jobs:
     needs: preconditions
     steps:
       - name: Downloading BeginTimer
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
@@ -132,7 +131,6 @@ jobs:
       - name: Checking out
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
@@ -174,7 +172,6 @@ jobs:
       - name: Checking out
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
@@ -222,7 +219,6 @@ jobs:
       - name: Checking out
         uses: actions/checkout@v2
       - name: Downloading BeginTimer
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/download-artifact@v1
         with:
           name: WorkflowBeginTimestamp
