@@ -40,8 +40,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
     fn init(e: &peridot::Engine<Self, PL>) -> Self
     {
-        if cfg!(feature = "test-feature") { println!("Text Feature available!"); }
-
         let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
             .expect("No Fonts");
         let mut ctx = pvg::Context::new(1.0);
