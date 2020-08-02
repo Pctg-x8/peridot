@@ -12,9 +12,6 @@ jobs:
       - name: Getting begintime
         run: |
           echo "::set-env name=BEGINTIME::$(date +%s)"
-      - name: Saving begintime
-        run:
-          echo $BEGINTIME > $GITHUB_WORKSPACE/.begintime
       - name: Checking out (Merge BASE)
         uses: actions/checkout@v2
         with:
@@ -23,6 +20,9 @@ jobs:
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+      - name: Saving begintime
+        run:
+          echo $BEGINTIME > $GITHUB_WORKSPACE/.begintime
       - name: Checking Changed Filenames
         shell: bash {0}
         run: |
