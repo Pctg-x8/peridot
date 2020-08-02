@@ -41,6 +41,7 @@ jobs:
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
   check-baselayer:
     name: "Base Layer"
     runs-on: ubuntu-latest
@@ -78,6 +79,7 @@ jobs:
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
       - name: Uploading BeginTimer
         uses: actions/upload-artifact@v1
         if: success()
@@ -122,6 +124,7 @@ jobs:
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
   check-modules:
     name: "Modules"
     runs-on: ubuntu-latest
@@ -166,6 +169,7 @@ jobs:
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
   check-examples:
     name: "Examples"
     runs-on: ubuntu-latest
@@ -204,6 +208,7 @@ jobs:
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
       - name: Notify as Failure
         uses: ./.github/actions/integrity-check-slack-notifier
         if: failure()
@@ -217,3 +222,4 @@ jobs:
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}

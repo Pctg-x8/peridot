@@ -9,7 +9,7 @@ default = []
 
 [dependencies]
 peridot = { path = "../.." }
-peridot_derive = { path = "../../derive" }
+peridot-derive = { path = "../../derive" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_EXT_debug_report"] }
 log = "0.4"
 
