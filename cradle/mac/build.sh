@@ -7,6 +7,7 @@ ENTRY_TY_NAME="Game"
 CARGO_SUBCOMMAND="build"
 AFTER_RUN=0
 unset ASSET_PATH
+FEATURES=( "bedrock/VK_MVK_macos_surface" )
 while [ $# -gt 0 ]; do
     case "$1" in
         "--EntryTyName" | "-e")
@@ -19,6 +20,10 @@ while [ $# -gt 0 ]; do
             ;;
         "-AssetDirectory" | "-a")
             ASSET_PATH=$(realpath $2)
+            shift 2
+            ;;
+        "--Feature" | "-f")
+            FEATURES+=( $2 )
             shift 2
             ;;
         *)
@@ -43,8 +48,8 @@ echo "Packaging Assets..."
 $SCRIPT_PATH/../../target/release/peridot-archiver new $ASSET_PATH -o $SCRIPT_PATH/peridot-cradle/assets.par -b $ASSET_PATH/
 
 echo "Building GameCore..."
-FEATURES="bedrock/VK_MVK_macos_surface"
-(cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURES)
+FEATURE_STRING=($(echo "${FEATURES[@]}" | tr ' ' '¥n' | sort -u | tr '¥n' ','))
+(cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURE_STRING)
 
 echo "Building App Bundle..."
 [ ! -d $SCRIPT_PATH/peridot-cradle/rlibs ] && mkdir -p $SCRIPT_PATH/peridot-cradle/rlibs
