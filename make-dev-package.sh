@@ -61,9 +61,12 @@ done
 cp $SCRIPT_PATH/build.ps1 $OUT_DIRECTORY
 cp $SCRIPT_PATH/build.sh $OUT_DIRECTORY
 
+# Select prefer gfind(from findutils)
+if type gfind > /dev/null 2>&1; then FIND=gfind; else FIND=find; fi
+
 # Copy tools(for *nix)
 mkdir -p $OUT_DIRECTORY/tools
-for f in $(find $SCRIPT_PATH/target/release -name "peridot-*" -type f -perm +a=x); do
+for f in $($FIND $SCRIPT_PATH/target/release -name "peridot-*" -type f -perm /a+x); do
     echo "tool detected: $f"
     cp $f $OUT_DIRECTORY/tools/
 done

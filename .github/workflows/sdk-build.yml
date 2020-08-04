@@ -11,10 +11,10 @@ jobs:
         uses: actions/checkout@v2
       - name: Build tools (For PowerShell Env)
         if: matrix.os == 'windows-latest'
-        run: powershell.exe -File ./tools/build-all.ps1
-      - name: Upgrade Bash (Only for MacOS)
+        run: powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ "$_" }
+      - name: Upgrade utils (Only for MacOS)
         if: matrix.os == 'macos-latest'
-        run: brew install bash
+        run: brew install bash findutils
       - name: Build tools (For Bash Env)
         if: matrix.os != 'windows-latest'
         run: ./tools/build-all.sh
