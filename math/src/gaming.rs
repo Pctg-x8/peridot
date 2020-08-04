@@ -2,6 +2,7 @@
 
 use crate::linarg::*;
 use std::ops::Range;
+use crate::{One, Zero};
 
 /// How the camera will project vertices?
 pub enum ProjectionMethod
@@ -81,5 +82,16 @@ impl Camera {
         let axis = basedir.cross(&eyedir).normalize();
         let angle = basedir.dot(&eyedir).acos();
         self.rotation = Quaternion::new(-angle, axis);
+    }
+}
+impl Default for Camera {
+    /// Default value of the Camera, that has identity view transform and Perspective projection with fov=60deg.
+    fn default() -> Self {
+        Camera {
+            projection: ProjectionMethod::Perspective { fov: (60.0 / 180.0) * std::f32::consts::PI },
+            position: Vector3::ZERO,
+            rotation: Quaternion::ONE,
+            depth_range: 0.0 .. 1.0
+        }
     }
 }
