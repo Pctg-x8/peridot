@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::io::Result as IOResult;
 use std::rc::Rc;
 use bedrock as br;
+use peridot::{EngineEvents, FeatureRequests};
 
 mod sound_backend; use sound_backend::NativeAudioEngine;
 mod userlib;
@@ -88,8 +89,6 @@ impl peridot::NativeLinker for NativeLink
     fn render_target_provider(&self) -> &WindowHandler { &self.wh }
     fn input_processor_mut(&mut self) -> &mut PlatformInputHandler { &mut self.ip }
 }
-type Game = userlib::Game<NativeLink>;
-type Engine = peridot::Engine<Game, NativeLink>;
 
 #[allow(dead_code)]
 struct X11
@@ -99,8 +98,7 @@ struct X11
 }
 impl X11
 {
-    fn init() -> Self
-    {
+    fn init() -> Self {
         let (con, screen_index) = xcb::Connection::connect(None).expect("Connecting with xcb");
         let s0 = con.get_setup().roots().nth(screen_index as _).expect("No screen");
         let vis = s0.root_visual();
@@ -111,7 +109,12 @@ impl X11
         let wm_protocols = wm_protocols.get_reply().expect("No WM_PROTOCOLS").atom();
         let wm_delete_window = wm_delete_window.get_reply().expect("No WM_DELETE_WINDOW").atom();
 
-        let title = format!("{} v{}.{}.{}", Game::NAME, Game::VERSION.0, Game::VERSION.1, Game::VERSION.2);
+        let title = format!("{} v{}.{}.{}",
+            userlib::Game::<NativeLink>::NAME,
+            userlib::Game::<NativeLink>::VERSION.0,
+            userlib::Game::<NativeLink>::VERSION.1,
+            userlib::Game::<NativeLink>::VERSION.2
+        );
         let mainwnd_id = con.generate_id();
         xcb::create_window(&con, s0.root_depth(), mainwnd_id, s0.root(), 0, 0, 640, 480, 0,
             xcb::WINDOW_CLASS_INPUT_OUTPUT as _, vis, &[]);
@@ -123,14 +126,12 @@ impl X11
 
         X11 { con, wm_protocols, wm_delete_window, vis, mainwnd_id }
     }
-    fn show(&self)
-    {
+    fn show(&self) {
         xcb::map_window(&self.con, self.mainwnd_id);
         self.con.flush();
     }
     /// Returns false if application has beed exited
-    fn process_all_events(&self) -> bool
-    {
+    fn process_all_events(&self) -> bool {
         while let Some(ev) = self.con.poll_for_event()
         {
             if (ev.response_type() & 0x7f) == xcb::CLIENT_MESSAGE
@@ -147,21 +148,39 @@ impl X11
     }
 }
 
-fn main()
-{
+pub struct GameDriver {
+    engine: peridot::Engine<NativeLink>,
+    usercode: userlib::Game<NativeLink>,
+    _snd: NativeAudioEngine
+}
+impl GameDriver {
+    fn new(wh: WindowHandler) -> Self {
+        let nl = NativeLink {
+            al: PlatformAssetLoader::new(),
+            wh,
+            ip: PlatformInputHandler::new()
+        };
+        let mut engine = peridot::Engine::new(
+            userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
+            nl, userlib::Game::<NativeLink>::requested_features()
+        );
+        let usercode = userlib::Game::init(&engine);
+        engine.postinit();
+        let _snd = async_std::task::block_on(NativeAudioEngine::new(engine.audio_mixer()));
+
+        GameDriver { engine, usercode, _snd }
+    }
+
+    fn update(&mut self) { self.engine.do_update(&mut self.usercode); }
+}
+
+fn main() {
     env_logger::init();
     let x11 = X11::init();
 
-    let n = NativeLink
-    {
-        al: PlatformAssetLoader::new(),
-        wh: WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id },
-        ip: PlatformInputHandler::new()
-    };
-    let mut e = Engine::launch(Game::NAME, Game::VERSION, n).expect("Launching Game");
+    let mut gd = GameDriver::new(WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id });
+
     x11.show();
-    let _snd = async_std::task::block_on(NativeAudioEngine::new(e.audio_mixer()));
-    
-    while x11.process_all_events() { e.do_update(); }
+    while x11.process_all_events() { gd.update(); }
     println!("Terminating Program...");
 }

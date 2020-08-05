@@ -4,3 +4,7 @@ target/
 .vscode/
 android-build/
 **/*.pvp
+
+## other artifacts
+peridot-sdk/
+peridot-sdk.zip

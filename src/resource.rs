@@ -270,14 +270,14 @@ impl Buffer
     /// Reference to a memory object bound with this object.
     pub fn memory(&self) -> &Memory { &self.1 }
 
-    pub fn map(&self, size: u64) -> br::Result<br::MappedMemoryRange>
+    pub fn map(&self, range: Range<u64>) -> br::Result<br::MappedMemoryRange>
     {
-        self.1.map(self.2 as _ .. (self.2 + size) as _)
+        self.1.map((self.2 + range.start) as _ .. (self.2 + range.end) as _)
     }
     pub unsafe fn unmap(&self) { self.1.unmap() }
-    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, size: u64, f: F) -> br::Result<R>
+    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, range: Range<u64>, f: F) -> br::Result<R>
     {
-        Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(size)?))))
+        Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(range)?))))
     }
 }
 impl Image
@@ -310,13 +310,52 @@ impl br::VkHandle for Image
     fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }
 
+/// A view of the buffer.
+#[derive(Clone, Copy)]
+pub struct BufferView<'b> { pub buffer: &'b Buffer, pub offset: usize }
+impl Buffer {
+    pub fn with_offset(&self, offset: usize) -> BufferView {
+        BufferView { buffer: self, offset }
+    }
+}
+impl BufferView<'_> {
+    pub fn with_offset(self, offset: usize) -> Self {
+        BufferView { buffer: self.buffer, offset: self.offset + offset }
+    }
+    pub fn range(&self, bytes: usize) -> std::ops::Range<usize> {
+        self.offset .. self.offset + bytes
+    }
+}
+/// Conversion for Bedrock bind_vertex_buffers form
+impl<'b> From<BufferView<'b>> for (&'b Buffer, usize) {
+    fn from(v: BufferView<'b>) -> Self { (v.buffer, v.offset) }
+}
+
+/// a view of the buffer in GPU Address.
+#[derive(Clone, Copy)]
+pub struct DeviceBufferView<'b> { pub buffer: &'b Buffer, pub offset: br::vk::VkDeviceSize }
+impl Buffer {
+    pub fn with_dev_offset(&self, offset: br::vk::VkDeviceSize) -> DeviceBufferView {
+        DeviceBufferView { buffer: self, offset }
+    }
+}
+impl DeviceBufferView<'_> {
+    pub fn with_offset(&self, offset: br::vk::VkDeviceSize) -> Self {
+        DeviceBufferView { buffer: self.buffer, offset: self.offset + offset }
+    }
+    pub fn range(&self, bytes: br::vk::VkDeviceSize) -> std::ops::Range<br::vk::VkDeviceSize> {
+        self.offset .. self.offset + bytes
+    }
+}
+
 #[derive(Clone, Copy)] #[repr(i32)]
 pub enum PixelFormat
 {
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
     BGRA32 = br::vk::VK_FORMAT_B8G8R8A8_UNORM,
     RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
-    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM
+    BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
+    RGBA64F = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT
 }
 impl PixelFormat
 {
@@ -326,7 +365,8 @@ impl PixelFormat
         match self
         {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
-            PixelFormat::RGB24 | PixelFormat::BGR24 => 24
+            PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
+            PixelFormat::RGBA64F => 64
         }
     }
 }
@@ -446,7 +486,7 @@ impl TextureInstantiatedGroup
     {
         for (t, &(_, offs)) in self.1.iter().zip(self.0.iter())
         {
-            tb.init_image_from(t.image(), (stgbuf, offs));
+            tb.init_image_from(t.image(), stgbuf.with_dev_offset(offs));
             tb.add_image_graphics_ready(br::PipelineStageFlags::FRAGMENT_SHADER, t.image(),
                 br::ImageLayout::ShaderReadOnlyOpt);
         }
@@ -459,6 +499,184 @@ impl Deref for TextureInstantiatedGroup
 {
     type Target = [Texture2D];
     fn deref(&self) -> &[Texture2D] { &self.1 }
+}
+
+/// RenderTexture2D without Readback to CPU
+pub struct DeviceWorkingTexture2D
+{
+    size: math::Vector2<u32>,
+    format: PixelFormat,
+    res: Image,
+    view: br::ImageView
+}
+impl DeviceWorkingTexture2D
+{
+    /// Size of this texture
+    pub fn size(&self) -> &math::Vector2<u32> { &self.size }
+    /// Width of this texture
+    pub fn width(&self) -> u32 { self.size.0 }
+    /// Height of this texture
+    pub fn height(&self) -> u32 { self.size.1 }
+    /// Format of this texture
+    pub fn format(&self) -> PixelFormat { self.format }
+
+    /// Gets underlying resource object
+    pub fn underlying(&self) -> &Image { &self.res }
+}
+impl Deref for DeviceWorkingTexture2D
+{
+    type Target = br::ImageView;
+    fn deref(&self) -> &br::ImageView { &self.view }
+}
+/// RenderTexture3D without Readback to CPU
+pub struct DeviceWorkingTexture3D
+{
+    size: math::Vector3<u32>,
+    format: PixelFormat,
+    res: Image,
+    view: br::ImageView
+}
+impl DeviceWorkingTexture3D
+{
+    /// Size of this texture
+    pub fn size(&self) -> &math::Vector3<u32> { &self.size }
+    /// Width of this texture
+    pub fn width(&self) -> u32 { self.size.0 }
+    /// Height of this texture
+    pub fn height(&self) -> u32 { self.size.1 }
+    /// Depth of this texture
+    pub fn depth(&self) -> u32 { self.size.2 }
+    /// Format of this texture
+    pub fn format(&self) -> PixelFormat { self.format }
+
+    /// Gets underlying resource object
+    pub fn underlying(&self) -> &Image { &self.res }
+}
+impl Deref for DeviceWorkingTexture3D
+{
+    type Target = br::ImageView;
+    fn deref(&self) -> &br::ImageView { &self.view }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct DeviceWorkingTexture2DRef(usize);
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct DeviceWorkingTexture3DRef(usize);
+/// DeviceWorkingTexture Management Arena
+pub struct DeviceWorkingTextureAllocator
+{
+    planes: Vec<br::ImageDesc>,
+    volumes: Vec<br::ImageDesc>
+}
+impl DeviceWorkingTextureAllocator
+{
+    /// Initializes the allocator
+    pub fn new() -> Self
+    {
+        DeviceWorkingTextureAllocator
+        {
+            planes: Vec::new(),
+            volumes: Vec::new()
+        }
+    }
+
+    /// Add new DeviceWorkingTexture2D allocation
+    pub fn new2d(&mut self, size: math::Vector2<u32>, format: PixelFormat, usage: br::ImageUsage)
+        -> DeviceWorkingTexture2DRef
+    {
+        self.planes.push(br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized));
+        DeviceWorkingTexture2DRef(self.planes.len() - 1)
+    }
+
+    /// Add new DeviceWorkingTexture3D allocation
+    pub fn new3d(&mut self, size: math::Vector3<u32>, format: PixelFormat, usage: br::ImageUsage)
+        -> DeviceWorkingTexture3DRef
+    {
+        self.volumes.push(br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized));
+        DeviceWorkingTexture3DRef(self.volumes.len() - 1)
+    }
+
+    /// Allocates all of added textures
+    pub fn alloc(self, g: &Graphics) -> br::Result<DeviceWorkingTextureStore>
+    {
+        let images2 = self.planes.iter().map(|d| d.create(g));
+        let images3 = self.volumes.iter().map(|d| d.create(g));
+        let images: Vec<_> = images2.chain(images3).collect::<Result<_, _>>()?;
+        let mut mb = MemoryBadget::new(g);
+        for img in images { mb.add(img); }
+        let mut bound_images = mb.alloc()?;
+        
+        let v3s = bound_images.split_off(bound_images.len() - self.volumes.len());
+        Ok(DeviceWorkingTextureStore
+        {
+            planes: self.planes.into_iter().zip(bound_images.into_iter()).map(|(d, res)|
+            {
+                let res = res.unwrap_image();
+                let view = res.create_view(
+                    None, None, &br::ComponentMapping::default(),
+                    &br::ImageSubresourceRange::color(0..1, 0..1)
+                )?; 
+
+                Ok(DeviceWorkingTexture2D
+                {
+                    size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
+                    format: unsafe { std::mem::transmute(d.as_ref().format) },
+                    view,
+                    res
+                })
+            }).collect::<Result<_, _>>()?,
+            volumes: self.volumes.into_iter().zip(v3s.into_iter()).map(|(d, res)|
+            {
+                let res = res.unwrap_image();
+                let view = res.create_view(
+                    None, None, &br::ComponentMapping::default(),
+                    &br::ImageSubresourceRange::color(0..1, 0..1)
+                )?; 
+
+                Ok(DeviceWorkingTexture3D
+                {
+                    size: math::Vector3(d.as_ref().extent.width, d.as_ref().extent.height, d.as_ref().extent.depth),
+                    format: unsafe { std::mem::transmute(d.as_ref().format) },
+                    view,
+                    res
+                })
+            }).collect::<Result<_, _>>()?
+        })
+    }
+}
+/// Allocated DeviceWorkingTexture Arena
+pub struct DeviceWorkingTextureStore
+{
+    planes: Vec<DeviceWorkingTexture2D>,
+    volumes: Vec<DeviceWorkingTexture3D>
+}
+/// DeviceWorkingTexture Reference
+pub trait DeviceWorkingTextureRef
+{
+    /// Type of the Texture that this reference referring to
+    type TextureT;
+    /// Gets texture object from the store
+    fn get(self, store: &DeviceWorkingTextureStore) -> &Self::TextureT;
+}
+impl DeviceWorkingTextureStore
+{
+    /// Gets texture object by References
+    pub fn get<R: DeviceWorkingTextureRef>(&self, r: R) -> &<R as DeviceWorkingTextureRef>::TextureT
+    {
+        r.get(self)
+    }
+}
+impl DeviceWorkingTextureRef for DeviceWorkingTexture2DRef
+{
+    type TextureT = DeviceWorkingTexture2D;
+    fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingTexture2D { &store.planes[self.0] }
+}
+impl DeviceWorkingTextureRef for DeviceWorkingTexture3DRef
+{
+    type TextureT = DeviceWorkingTexture3D;
+    fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingTexture3D { &store.volumes[self.0] }
 }
 
 /// Describing the type that can be used as initializer of `FixedBuffer`s
@@ -510,7 +728,7 @@ impl FixedMemory
         mb_stg.add(stg_buffer);
         let stg_buffer = mb_stg.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
 
-        stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
+        stg_buffer.guard_map(0 .. stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
 
         textures.copy_from_stage_batches(tfb, &stg_buffer);
         tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, imm_buffer_size);

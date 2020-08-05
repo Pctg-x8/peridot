@@ -1,61 +1,47 @@
 //! peridot-cradle for android platform
 
-#[macro_use] extern crate log;
-extern crate libc;
-extern crate android_logger;
-extern crate bedrock;
-extern crate android;
-
-use std::ptr::null_mut;
+use log::*;
 
 mod userlib;
 
-use peridot;
-use self::userlib::Game;
+use peridot::{EngineEvents, FeatureRequests};
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use std::pin::Pin;
 
-struct MainWindow
+struct Game
 {
-    e: Option<EngineA>,
-    snd: Option<NativeAudioEngine>,
+    engine: peridot::Engine<NativeLink>,
+    userlib: userlib::Game<NativeLink>,
+    snd: NativeAudioEngine,
     stopping_render: bool
 }
-impl MainWindow
+impl Game
 {
-    fn new() -> Self
+    fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self
     {
-        MainWindow { e: None, snd: None, stopping_render: true }
-    }
-    fn init(&mut self, app: &android::App)
-    {
-        let am = unsafe { AssetManager::from_ptr((*app.activity).asset_manager).expect("null assetmanager") };
         let nl = NativeLink
         {
-            al: PlatformAssetLoader::new(am), prt: PlatformWindowHandler(app.window),
+            al: PlatformAssetLoader::new(asset_manager),
+            prt: PlatformWindowHandler(window),
             input: PlatformInputProcessPlugin::new()
         };
-        let e = EngineA::launch(GameA::NAME, GameA::VERSION, nl).expect("Failed to initialize the engine");
-        let snd = NativeAudioEngine::new(e.audio_mixer());
-        self.e = Some(e);
-        self.snd = Some(snd);
-        self.stopping_render = false;
-    }
-    fn destroy(&mut self)
-    {
-        if let Some(ref mut s) = self.snd { s.pause(); }
-        self.e = None;
-        self.snd = None;
-        self.stopping_render = true;
-    }
-    fn stop_render(&mut self) { self.stopping_render = true; }
-    fn render(&mut self)
-    {
-        if self.stopping_render { return; }
+        let engine = peridot::Engine::new(
+            userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
+            nl, userlib::Game::<NativeLink>::requested_features()
+        );
+        let snd = NativeAudioEngine::new(engine.audio_mixer());
 
-        if let Some(e) = self.e.as_mut() { e.do_update(); }
+        Game
+        {
+            userlib: userlib::Game::init(&engine),
+            engine,
+            snd,
+            stopping_render: false
+        }
     }
+
+    fn update(&mut self) { self.engine.do_update(&mut self.userlib); }
 }
 
 use bedrock as br;
@@ -71,7 +57,8 @@ impl peridot::PlatformRenderTarget for PlatformWindowHandler
         {
             panic!("Vulkan Surface is not supported by this adapter");
         }
-        return peridot::SurfaceInfo::gather_info(&pd, obj);
+        
+        peridot::SurfaceInfo::gather_info(&pd, obj)
     }
     fn current_geometry_extent(&self) -> (usize, usize)
     {
@@ -136,60 +123,45 @@ impl peridot::NativeLinker for NativeLink
     fn render_target_provider(&self) -> &PlatformWindowHandler { &self.prt }
     fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
 }
-type GameA = Game<NativeLink>;
-type EngineA = peridot::Engine<GameA, NativeLink>;
+
+// JNI Exports //
+
+use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}};
 
 #[no_mangle]
-pub extern "C" fn android_main(app: *mut android::App)
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
+    env: JNIEnv<'e>, _: JClass,
+    surface: JObject, asset_manager: JObject) -> JByteBuffer<'e>
 {
-    let app = unsafe { app.as_mut().expect("null app") };
-    app.on_app_cmd = Some(appcmd_callback);
-    let mut mw = MainWindow::new();
-    app.user_data = unsafe { std::mem::transmute(&mut mw) };
-
     android_logger::init_once(
         android_logger::Filter::default().with_min_level(log::Level::Trace)
     );
-    info!("Launching NativeActivity: {:p}", app);
-    std::panic::set_hook(Box::new(|p| { error!("Panicking in app: {}", p); }));
+    info!("Initializing NativeGameEngine...");
 
-    'alp: loop
-    {
-        let (mut _outfd, mut events, mut source) = (0, 0, null_mut::<android::PollSource>());
-        while android::Looper::poll_all(0, &mut _outfd, &mut events, unsafe { std::mem::transmute(&mut source) }) >= 0
-        {
-            if let Some(sref) = unsafe { source.as_mut() } { sref.process(app); }
-            if app.destroy_requested != 0 { break 'alp; }
-        }
-        mw.render();
-    }
+    std::panic::set_hook(Box::new(|p| { error!("Panicking in app! {}", p); }));
+    
+    let window = unsafe { android::ANativeWindow_fromSurface(env.clone(), surface) };
+    let am = unsafe { AssetManager::from_java(env.clone(), asset_manager).expect("null assetmanager") };
+    let e = Game::new(am, window);
+
+    let ptr = Box::into_raw(Box::new(e));
+    env.new_direct_byte_buffer(unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, 0) })
+        .expect("Creating DirectByteBuffer failed")
 }
-
-pub extern "C" fn appcmd_callback(app: *mut android::App, cmd: i32)
+#[no_mangle]
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer)
 {
-    let app = unsafe { app.as_mut().expect("null app") };
-    let mw = unsafe { (app.user_data as *mut MainWindow).as_mut().expect("null window") };
+    info!("Finalizing NativeGameEngine...");
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    drop(unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) });
+}
+#[no_mangle]
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer)
+{
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
-    match cmd
-    {
-        android::APP_CMD_INIT_WINDOW =>
-        {
-            trace!("Initializing Window...");
-            mw.init(app);
-        },
-        android::APP_CMD_TERM_WINDOW =>
-        {
-            trace!("Terminating Window...");
-            mw.stop_render();
-        },
-        android::APP_CMD_DESTROY =>
-        {
-            trace!("Destroying App...");
-            mw.destroy();
-            trace!("App Destroyed");
-        },
-        e => trace!("Unknown Event: {}", e)
-    }
+    e.update();
 }
 
 mod audio_backend;

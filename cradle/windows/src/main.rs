@@ -4,8 +4,9 @@ use winapi::um::winuser::{
     PostQuitMessage, PM_REMOVE,
     LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
 };
+use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
-use winapi::um::libloaderapi::{GetModuleHandleA};
+use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD, DWORD};
 use winapi::shared::winerror::{HRESULT, SUCCEEDED};
@@ -17,6 +18,7 @@ use std::mem::MaybeUninit;
 #[macro_use] extern crate log;
 mod audio; use audio::NativeAudioEngine;
 mod userlib;
+use peridot::{EngineEvents, FeatureRequests};
 
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
@@ -35,13 +37,62 @@ impl CoScopeGuard
 }
 impl Drop for CoScopeGuard { fn drop(&mut self) { unsafe { CoUninitialize() } } }
 
+pub struct GameDriver
+{
+    base: peridot::Engine<NativeLink>,
+    usercode: userlib::Game<NativeLink>,
+    _snd: NativeAudioEngine,
+    current_size: peridot::math::Vector2<usize>
+}
+impl GameDriver
+{
+    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self
+    {
+        let nl = NativeLink
+        {
+            al: AssetProvider::new(),
+            prt: RenderTargetProvider(window),
+            input: InputHandler::new()
+        };
+        let mut base = peridot::Engine::new(
+            userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
+            nl, userlib::Game::<NativeLink>::requested_features()
+        );
+        let usercode = userlib::Game::init(&base);
+        base.postinit();
+        let _snd = NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
+    
+        /*let mut ap = PSGSine::new();
+        ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
+        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap)));
+        let mut ap2 = PSGSine::new();
+        ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
+        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap2)));*/
+
+        GameDriver
+        {
+            base, usercode, _snd, current_size: init_size
+        }
+    }
+
+    fn update(&mut self)
+    {
+        self.base.do_update(&mut self.usercode);
+    }
+    fn resize(&mut self, size: peridot::math::Vector2<usize>)
+    {
+        self.base.do_resize_backbuffer(size, &mut self.usercode);
+    }
+}
+
 fn main()
 {
     env_logger::init();
     let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
 
-    let wca = WNDCLASSEXA
-    {
+    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
+
+    let wca = WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
         lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
         lpfnWndProc: Some(window_callback),
@@ -51,39 +102,28 @@ fn main()
     let wcatom = unsafe { RegisterClassExA(&wca) };
     if wcatom <= 0 { panic!("Register Class Failed!"); }
 
-    let wname = format!("{} v{}.{}.{}", GameW::NAME, GameW::VERSION.0, GameW::VERSION.1, GameW::VERSION.2);
+    let wname = format!("{} v{}.{}.{}",
+        userlib::Game::<NativeLink>::NAME,
+        userlib::Game::<NativeLink>::VERSION.0,
+        userlib::Game::<NativeLink>::VERSION.1,
+        userlib::Game::<NativeLink>::VERSION.2);
     let wname_c = std::ffi::CString::new(wname).expect("Unable to generate a c-style string");
 
     let style = WS_OVERLAPPEDWINDOW;
     let mut wrect = RECT { left: 0, top: 0, right: 640, bottom: 480 };
     unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
-    let w = unsafe
-    {
+    let w = unsafe {
         CreateWindowExA(WS_EX_APPWINDOW, wcatom as _, wname_c.as_ptr(), style,
             CW_USEDEFAULT, CW_USEDEFAULT, wrect.right - wrect.left, wrect.bottom - wrect.top,
             std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
     };
     if w.is_null() { panic!("Create Window Failed!"); }
-
-    let nl = NativeLink
-    {
-        al: AssetProvider::new(), prt: RenderTargetProvider(w),
-        input: InputHandler::new()
-    };
-    let mut e = EngineW::launch(GameW::NAME, GameW::VERSION, nl).expect("Unable to launch the game");
-    let _snd = NativeAudioEngine::new(e.audio_mixer().clone()).expect("Initializing AudioEngine");
-
-    /*let mut ap = PSGSine::new();
-    ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
-    e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap)));
-    let mut ap2 = PSGSine::new();
-    ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
-    e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap2)));*/
     
-    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, std::mem::transmute(&mut e)); }
+    let mut driver = GameDriver::new(w, peridot::math::Vector2(640, 480));
+    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, &mut driver as *mut GameDriver as _); }
     unsafe { ShowWindow(w, SW_SHOWNORMAL); }
 
-    while process_message_all() { e.do_update(); }
+    while process_message_all() { driver.update(); }
 }
 extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT
 {
@@ -92,11 +132,16 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
         WM_DESTROY => unsafe { PostQuitMessage(0); return 0; },
         WM_SIZE => unsafe
         {
-            let ep: *mut EngineW = std::mem::transmute(GetWindowLongPtrA(w, GWLP_USERDATA));
-            if let Some(ep) = ep.as_mut()
+            let p = GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver;
+            if let Some(driver) = p.as_mut()
             {
                 let (w, h) = (LOWORD(lparam as _), HIWORD(lparam as _));
-                ep.do_resize_backbuffer(peridot::math::Vector2(w as _, h as _)); ep.do_update();
+                let size = peridot::math::Vector2(w as usize, h as usize);
+                if driver.current_size != size {
+                    driver.current_size = size.clone();
+                    driver.resize(size);
+                    driver.update();
+                }
             }
             return 0;
         },
@@ -115,9 +160,6 @@ fn process_message_all() -> bool
     
     true
 }
-
-type GameW = userlib::Game<NativeLink>;
-type EngineW = peridot::Engine<GameW, NativeLink>;
 
 use std::rc::Rc;
 use bedrock as br;

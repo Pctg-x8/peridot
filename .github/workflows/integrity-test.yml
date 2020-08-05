@@ -2,29 +2,52 @@ name: Integrity Check
 on:
   pull_request:
     types: ["opened", "synchronize"]
-    paths: ["**.rs", "**.toml"]
 jobs:
+  preconditions:
+    name: "Preconditions"
+    runs-on: ubuntu-latest
+    outputs:
+      begintime: ${{ steps.begintime.outputs.begintime }}
+      has_code_changes: ${{ steps.fileck.outputs.has_code_changes }}
+    steps:
+      - name: Getting begintime
+        id: begintime
+        run: |
+          echo "::set-output name=begintime::$(date +%s)"
+      - name: Checking out (Merge BASE)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Checking out (Merge HEAD)
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checking Changed Filenames
+        id: fileck
+        shell: bash {0}
+        run: |
+          git --no-pager diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} > file_changes
+          grep -qE '\.rs$|Cargo(\.template)?\.toml$' file_changes
+          if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; else HAS_CODE_CHANGES=0; fi
+          echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
   check-formats:
     name: "Code Formats"
     runs-on: ubuntu-latest
+    needs: preconditions
     steps:
-      - name: Getting begintime
-        run: |
-          echo "::set-env name=BEGINTIME::$(date +%s)"
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
-      - name: Saving begintime
-        run:
-          echo $BEGINTIME > .begintime
       - name: "Running Check: LineWidth"
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/codeform-checker
         with:
           script: codeform_check
       - name: "Running Check: Vulnerabilities"
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/codeform-checker
         with:
           script: vulnerabilities_elliminator
@@ -38,26 +61,25 @@ jobs:
         with:
           status: failure
           failure_step: check-formats
+          begintime: ${{ needs.preconditions.outputs.begintime }}
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
   check-baselayer:
     name: "Base Layer"
     runs-on: ubuntu-latest
+    needs: preconditions
     steps:
-      - name: Getting begintime
-        run: |
-          echo "::set-env name=BEGINTIME::$(date +%s)"
       - name: Checking out(HEAD commit)
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
-      - name: Saving begintime
-        run:
-          echo $BEGINTIME > .begintime
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-baselayer
       # - name: Uploading Build Artifacts
       #   uses: actions/upload-artifact@v1
@@ -75,19 +97,15 @@ jobs:
         with:
           status: failure
           failure_step: check-baselayer
+          begintime: ${{ needs.preconditions.outputs.begintime }}
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
-      - name: Uploading BeginTimer
-        uses: actions/upload-artifact@v1
-        if: success()
-        with:
-          name: WorkflowBeginTimestamp
-          path: .begintime
+          pr_title: ${{ github.event.pull_request.title }}
   check-tools:
     name: "Tools"
     runs-on: ubuntu-latest
-    needs: check-baselayer
+    needs: [preconditions, check-baselayer]
     steps:
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
@@ -95,17 +113,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
-      - name: Downloading BeginTimer
-        uses: actions/download-artifact@v1
-        with:
-          name: WorkflowBeginTimestamp
-          path: .
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: tools
@@ -119,13 +133,15 @@ jobs:
         with:
           status: failure
           failure_step: check-tools
+          begintime: ${{ needs.preconditions.outputs.begintime }}
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
   check-modules:
     name: "Modules"
     runs-on: ubuntu-latest
-    needs: check-baselayer
+    needs: [preconditions, check-baselayer]
     steps:
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
@@ -133,17 +149,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
-      - name: Downloading BeginTimer
-        uses: actions/download-artifact@v1
-        with:
-          name: WorkflowBeginTimestamp
-          path: .
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: .
@@ -163,13 +175,15 @@ jobs:
         with:
           status: failure
           failure_step: check-modules
+          begintime: ${{ needs.preconditions.outputs.begintime }}
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
   check-examples:
     name: "Examples"
     runs-on: ubuntu-latest
-    needs: check-modules
+    needs: [preconditions, check-modules]
     steps:
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
@@ -177,22 +191,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
-      - name: Downloading BeginTimer
-        uses: actions/download-artifact@v1
-        with:
-          name: WorkflowBeginTimestamp
-          path: .
       # - name: Downloading last Build Artifacts
       #   uses: actions/download-artifact@v1
       #   with:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
+        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: examples
-      - name: test
-        run: ls -l .
       - name: Notify as Success
         uses: ./.github/actions/integrity-check-slack-notifier
         env:
@@ -201,9 +209,11 @@ jobs:
           AWS_DEFAULT_REGION: "ap-northeast-1"
         with:
           status: success
+          begintime: ${{ needs.preconditions.outputs.begintime }}
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}
       - name: Notify as Failure
         uses: ./.github/actions/integrity-check-slack-notifier
         if: failure()
@@ -214,6 +224,8 @@ jobs:
         with:
           status: failure
           failure_step: check-examples
+          begintime: ${{ needs.preconditions.outputs.begintime }}
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
           pr_number: ${{ github.event.number }}
+          pr_title: ${{ github.event.pull_request.title }}

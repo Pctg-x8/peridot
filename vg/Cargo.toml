@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = ".." }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 # 0.3.1のコミットに合わせる

@@ -11,7 +11,7 @@ log = "*"
 libc = "*"
 rayon = "1.0"
 num_cpus = "1.0"
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", features = ["Presentation", "Implements"] }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Presentation", "Implements"] }
 num = "*"
 
 peridot-archive = { path = "archive" }
@@ -21,6 +21,7 @@ image = "*"
 
 [target.'cfg(debug_assertions)'.dependencies.bedrock]
 git = "https://github.com/Pctg-x8/bedrock"
+branch = "peridot"
 features = ["Presentation", "Implements", "VK_EXT_debug_report"]
 
 [workspace]
