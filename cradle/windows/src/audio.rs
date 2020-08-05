@@ -155,6 +155,7 @@ winapi::DEFINE_PROPERTYKEY!(PKEY_Device_DeviceDesc,
     0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 2);
 winapi::DEFINE_PROPERTYKEY!(PKEY_Device_FriendlyName,
     0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 14);
+#[allow(dead_code)]
 impl MMDeviceProperties {
     pub fn interface_friendly_name(&self) -> IOResult<String> {
         let mut pv = PropVariant::init();
@@ -182,6 +183,7 @@ impl MMDeviceProperties {
     }
 }
 
+/* Example PSGSine unit implementation
 use std::f32::consts::PI as PI_F32;
 pub struct PSGSine { waverate: f32, current_hz: f32, sample_rate: f32, amp: f32, current_frame: u64 }
 impl PSGSine {
@@ -209,6 +211,7 @@ impl peridot::audio::Processor for PSGSine {
         self.current_frame += (flattened_buffer.len() >> 1) as u64;
     }
 }
+*/
 
 use std::thread::{JoinHandle, Builder as ThreadBuilder, sleep};
 use std::time::Duration;
