@@ -263,6 +263,7 @@ impl NativeAudioEngine {
 
             info!("Starting AudioRender...");
             aclient.start().expect("Starting AudioRender");
+            mixer.write().expect("Starting Mixer").start();
             while !exit_state_th.load(Ordering::Acquire) {
                 let pad = aclient.current_padding().expect("Current Padding");
                 let available_frames = process_frames - pad;
