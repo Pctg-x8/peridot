@@ -20,15 +20,14 @@ use std::ptr::NonNull;
 use crate::hr_into_result;
 
 pub struct MMDeviceEnumerator(*mut IMMDeviceEnumerator);
-impl MMDeviceEnumerator
-{
-    fn new() -> IOResult<Self>
-    {
+impl MMDeviceEnumerator {
+    fn new() -> IOResult<Self> {
         let mut enumerator: *mut IMMDeviceEnumerator = std::ptr::null_mut();
-        let hr = unsafe
-        {
-            CoCreateInstance(&CLSID_MMDeviceEnumerator, std::ptr::null_mut(),
-                CLSCTX_ALL, &IMMDeviceEnumerator::uuidof(), std::mem::transmute(&mut enumerator))
+        let hr = unsafe {
+            CoCreateInstance(
+                &CLSID_MMDeviceEnumerator, std::ptr::null_mut(),
+                CLSCTX_ALL, &IMMDeviceEnumerator::uuidof(), std::mem::transmute(&mut enumerator)
+            )
         };
 
         hr_into_result(hr).map(|_| MMDeviceEnumerator(enumerator))
@@ -36,10 +35,8 @@ impl MMDeviceEnumerator
 }
 impl Drop for MMDeviceEnumerator { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
 struct MMDevice(*mut IMMDevice);
-impl MMDeviceEnumerator
-{
-    fn default_audio_endpoint(&self, dataflow: EDataFlow, role: ERole) -> IOResult<MMDevice>
-    {
+impl MMDeviceEnumerator {
+    fn default_audio_endpoint(&self, dataflow: EDataFlow, role: ERole) -> IOResult<MMDevice> {
         let mut md = std::ptr::null_mut();
         let hr = unsafe { (*self.0).GetDefaultAudioEndpoint(dataflow, role, &mut md) };
 
@@ -49,10 +46,8 @@ impl MMDeviceEnumerator
 impl Drop for MMDevice { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
 
 pub struct MMDeviceProperties(*mut IPropertyStore);
-impl MMDevice
-{
-    pub fn properties(&self) -> IOResult<MMDeviceProperties>
-    {
+impl MMDevice {
+    pub fn properties(&self) -> IOResult<MMDeviceProperties> {
         let mut p = std::ptr::null_mut();
         let hr = unsafe { (*self.0).OpenPropertyStore(STGM_READ, &mut p) };
 
@@ -69,34 +64,31 @@ impl<T> Drop for CoBox<T> { fn drop(&mut self) { unsafe { CoTaskMemFree(self.0.a
 
 pub struct AudioClient(*mut IAudioClient);
 impl Drop for AudioClient { fn drop(&mut self) { unsafe { (*self.0).Release(); } } }
-impl MMDevice
-{
-    pub fn activate(&self) -> IOResult<AudioClient>
-    {
+impl MMDevice {
+    pub fn activate(&self) -> IOResult<AudioClient> {
         let mut p = std::ptr::null_mut();
-        let hr = unsafe
-        {
-            (*self.0).Activate(&IAudioClient::uuidof(), CLSCTX_ALL,
-                std::ptr::null_mut(), &mut p)
+        let hr = unsafe {
+            (*self.0).Activate(
+                &IAudioClient::uuidof(), CLSCTX_ALL,
+                std::ptr::null_mut(), &mut p
+            )
         };
 
         hr_into_result(hr).map(|_| AudioClient(p as *mut _))
     }
 }
-impl AudioClient
-{
-    pub fn initialize_shared(&self, buffer_duration: REFERENCE_TIME, wfx: &WAVEFORMATEX) -> IOResult<()>
-    {
-        let hr = unsafe
-        {
-            (*self.0).Initialize(AUDCLNT_SHAREMODE_SHARED, 0,
-                buffer_duration, 0, wfx as *const _, std::ptr::null_mut())
+impl AudioClient {
+    pub fn initialize_shared(&self, buffer_duration: REFERENCE_TIME, wfx: &WAVEFORMATEX) -> IOResult<()> {
+        let hr = unsafe {
+            (*self.0).Initialize(
+                AUDCLNT_SHAREMODE_SHARED, 0,
+                buffer_duration, 0, wfx as *const _, std::ptr::null_mut()
+            )
         };
 
         hr_into_result(hr)
     }
-    pub fn service<IF: InterfaceWrapper>(&self) -> IOResult<IF>
-    {
+    pub fn service<IF: InterfaceWrapper>(&self) -> IOResult<IF> {
         let mut p = std::ptr::null_mut();
         let hr = unsafe { (*self.0).GetService(&IF::uuidof(), &mut p) };
 
@@ -104,62 +96,51 @@ impl AudioClient
     }
     pub fn start(&self) -> IOResult<()> { hr_into_result(unsafe { (*self.0).Start() }) }
 
-    pub fn mix_format(&self) -> IOResult<CoBox<WAVEFORMATEX>>
-    {
+    pub fn mix_format(&self) -> IOResult<CoBox<WAVEFORMATEX>> {
         let mut p = std::ptr::null_mut();
         hr_into_result(unsafe { (*self.0).GetMixFormat(&mut p as *mut _) })?;
         return Ok(CoBox::new(p).expect("NullPointer Returned"));
     }
-    pub fn buffer_size(&self) -> IOResult<usize>
-    {
+    pub fn buffer_size(&self) -> IOResult<usize> {
         let mut us = 0;
         let hr = unsafe { (*self.0).GetBufferSize(&mut us) };
 
         hr_into_result(hr).map(|_| us as usize)
     }
-    pub fn current_padding(&self) -> IOResult<u32>
-    {
+    pub fn current_padding(&self) -> IOResult<u32> {
         let mut v = 0;
         hr_into_result(unsafe { (*self.0).GetCurrentPadding(&mut v) }).map(|_| v)
     }
 }
 pub struct AudioRenderClient(NonNull<IAudioRenderClient>);
-pub trait InterfaceWrapper
-{
+pub trait InterfaceWrapper {
     type Interface: Interface;
     fn uuidof() -> IID { Self::Interface::uuidof() }
     fn wrap(p: *mut Self::Interface) -> Self;
 }
-impl InterfaceWrapper for AudioRenderClient
-{
+impl InterfaceWrapper for AudioRenderClient {
     type Interface = IAudioRenderClient;
     fn wrap(p: *mut IAudioRenderClient) -> Self { AudioRenderClient(NonNull::new(p).expect("null")) }
 }
 impl Drop for AudioRenderClient { fn drop(&mut self) { unsafe { self.0.as_ref().Release(); } } }
-impl AudioRenderClient
-{
-    pub fn get_buffer_ptr(&self, req_frames: u32) -> IOResult<*mut u8>
-    {
+impl AudioRenderClient {
+    pub fn get_buffer_ptr(&self, req_frames: u32) -> IOResult<*mut u8> {
         let mut pp = std::ptr::null_mut();
         let hr = unsafe { self.0.as_ref().GetBuffer(req_frames, &mut pp) };
 
         hr_into_result(hr).map(|_| pp)
     }
-    fn release_buffer(&self, written_frames: u32, silence: bool) -> IOResult<()>
-    {
-        hr_into_result(unsafe
-        {
+    fn release_buffer(&self, written_frames: u32, silence: bool) -> IOResult<()> {
+        hr_into_result(unsafe {
             self.0.as_ref().ReleaseBuffer(written_frames, if silence { AUDCLNT_BUFFERFLAGS_SILENT } else { 0 })
         })
     }
 }
 
 pub struct PropVariant(PROPVARIANT);
-impl PropVariant
-{
+impl PropVariant {
     pub fn init() -> Self { unsafe { PropVariant(std::mem::zeroed()) } }
-    pub unsafe fn as_osstr_unchecked(&self) -> OsString
-    {
+    pub unsafe fn as_osstr_unchecked(&self) -> OsString {
         let ptr = *self.0.data.pwszVal();
         let len = (0..).find(|&x| *ptr.offset(x) == 0).expect("Infinite Length");
         let slice = std::slice::from_raw_parts(ptr, len as _);
@@ -174,35 +155,28 @@ winapi::DEFINE_PROPERTYKEY!(PKEY_Device_DeviceDesc,
     0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 2);
 winapi::DEFINE_PROPERTYKEY!(PKEY_Device_FriendlyName,
     0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 14);
-impl MMDeviceProperties
-{
-    pub fn interface_friendly_name(&self) -> IOResult<String>
-    {
+impl MMDeviceProperties {
+    pub fn interface_friendly_name(&self) -> IOResult<String> {
         let mut pv = PropVariant::init();
         let hr = unsafe { (*self.0).GetValue(&PKEY_DeviceInterface_FriendlyName, &mut pv.0) };
         
-        hr_into_result(hr).map(|_| unsafe
-        {
+        hr_into_result(hr).map(|_| unsafe {
             pv.as_osstr_unchecked().into_string().expect("Decoding FriendlyName")
         })
     }
-    pub fn desc(&self) -> IOResult<String>
-    {
+    pub fn desc(&self) -> IOResult<String> {
         let mut pv = PropVariant::init();
         let hr = unsafe { (*self.0).GetValue(&PKEY_Device_DeviceDesc, &mut pv.0) };
 
-        hr_into_result(hr).map(|_| unsafe
-        {
+        hr_into_result(hr).map(|_| unsafe {
             pv.as_osstr_unchecked().into_string().expect("Decoding DeviceDesc")
         })
     }
-    pub fn friendly_name(&self) -> IOResult<String>
-    {
+    pub fn friendly_name(&self) -> IOResult<String> {
         let mut pv = PropVariant::init();
         let hr = unsafe { (*self.0).GetValue(&PKEY_Device_FriendlyName, &mut pv.0) };
 
-        hr_into_result(hr).map(|_| unsafe
-        {
+        hr_into_result(hr).map(|_| unsafe {
             pv.as_osstr_unchecked().into_string().expect("Decoding DeviceDesc")
         })
     }
@@ -210,28 +184,22 @@ impl MMDeviceProperties
 
 use std::f32::consts::PI as PI_F32;
 pub struct PSGSine { waverate: f32, current_hz: f32, sample_rate: f32, amp: f32, current_frame: u64 }
-impl PSGSine
-{
-    pub fn new() -> Self
-    {
+impl PSGSine {
+    pub fn new() -> Self {
         PSGSine { waverate: 44100.0 / 441.0, current_hz: 441.0, sample_rate: 44100.0, amp: 1.0, current_frame: 0 }
     }
-    pub fn set_osc_hz(&mut self, hz: f32)
-    {
+    pub fn set_osc_hz(&mut self, hz: f32) {
         self.current_hz = hz;
         self.waverate = self.sample_rate / self.current_hz;
     }
     pub fn set_amp(&mut self, amp: f32) { self.amp = amp; }
 }
-impl peridot::audio::Processor for PSGSine
-{
-    fn set_sample_rate(&mut self, samples_per_sec: f32)
-    {
+impl peridot::audio::Processor for PSGSine {
+    fn set_sample_rate(&mut self, samples_per_sec: f32) {
         self.sample_rate = samples_per_sec;
         self.waverate = self.sample_rate / self.current_hz;
     }
-    fn process(&mut self, flattened_buffer: &mut [f32])
-    {
+    fn process(&mut self, flattened_buffer: &mut [f32]) {
         for (n, b) in flattened_buffer.chunks_mut(2).enumerate()
         {
             let v = (2.0 * PI_F32 * (self.current_frame + n as u64) as f32 / self.waverate).sin() * self.amp;
@@ -245,19 +213,15 @@ impl peridot::audio::Processor for PSGSine
 use std::thread::{JoinHandle, Builder as ThreadBuilder, sleep};
 use std::time::Duration;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering, RwLock};
-pub struct NativeAudioEngine
-{
+pub struct NativeAudioEngine {
     process_thread: Option<JoinHandle<()>>, exit_state: Arc<AtomicBool>
 }
-impl NativeAudioEngine
-{
-    pub fn new(mixer: Arc<RwLock<peridot::audio::Mixer>>) -> IOResult<Self>
-    {
+impl NativeAudioEngine {
+    pub fn new(mixer: Arc<RwLock<peridot::audio::Mixer>>) -> IOResult<Self> {
         let exit_state = Arc::new(AtomicBool::new(false));
         let exit_state_th = exit_state.clone();
 
-        let process_thread = ThreadBuilder::new().name("Audio Process".to_owned()).spawn(move ||
-        {
+        let process_thread = ThreadBuilder::new().name("Audio Process".to_owned()).spawn(move || {
             let enumerator = MMDeviceEnumerator::new().expect("Enumerating MMDevices");
             let dev0 = enumerator.default_audio_endpoint(eRender, eConsole).expect("Getting Default AudioEP");
             
@@ -273,10 +237,8 @@ impl NativeAudioEngine
             println!("device mixformat: samples/s={}", mf.nSamplesPerSec);
             println!("device mixformat: channels={}", mf.nChannels);
             println!("device mixformat: tag={}", mf.wFormatTag);*/
-            let wfx = WAVEFORMATEXTENSIBLE
-            {
-                Format: WAVEFORMATEX
-                {
+            let wfx = WAVEFORMATEXTENSIBLE {
+                Format: WAVEFORMATEX {
                     wFormatTag: WAVE_FORMAT_EXTENSIBLE, nChannels: 2,
                     nSamplesPerSec: samples_per_sec, wBitsPerSample: bits_per_sample,
                     nBlockAlign: (bits_per_sample >> 3) * 2,
@@ -312,13 +274,11 @@ impl NativeAudioEngine
             }
         })?.into();
 
-        return Ok(NativeAudioEngine { process_thread, exit_state });
+        Ok(NativeAudioEngine { process_thread, exit_state })
     }
 }
-impl Drop for NativeAudioEngine
-{
-    fn drop(&mut self)
-    {
+impl Drop for NativeAudioEngine {
+    fn drop(&mut self) {
         self.exit_state.store(true, Ordering::Relaxed);
         self.process_thread.take().expect("already joined").join().expect("Joining AudioProcess");
     }
