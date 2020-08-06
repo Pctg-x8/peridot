@@ -182,6 +182,7 @@ jobs:
     name: "Examples"
     runs-on: ubuntu-latest
     needs: [preconditions, check-modules]
+    if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
     steps:
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
@@ -195,7 +196,6 @@ jobs:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: examples
