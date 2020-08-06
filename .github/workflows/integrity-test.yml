@@ -34,6 +34,7 @@ jobs:
     name: "Code Formats"
     runs-on: ubuntu-latest
     needs: preconditions
+    if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
     steps:
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
@@ -42,12 +43,10 @@ jobs:
       - name: Checking out
         uses: actions/checkout@v2
       - name: "Running Check: LineWidth"
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/codeform-checker
         with:
           script: codeform_check
       - name: "Running Check: Vulnerabilities"
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/codeform-checker
         with:
           script: vulnerabilities_elliminator
@@ -70,16 +69,15 @@ jobs:
     name: "Base Layer"
     runs-on: ubuntu-latest
     needs: preconditions
+    if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
     steps:
       - name: Checking out(HEAD commit)
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking out
         uses: actions/checkout@v2
       - name: Building as Checking
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-baselayer
       # - name: Uploading Build Artifacts
       #   uses: actions/upload-artifact@v1
@@ -106,6 +104,7 @@ jobs:
     name: "Tools"
     runs-on: ubuntu-latest
     needs: [preconditions, check-baselayer]
+    if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
     steps:
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
@@ -119,7 +118,6 @@ jobs:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: tools
@@ -142,6 +140,7 @@ jobs:
     name: "Modules"
     runs-on: ubuntu-latest
     needs: [preconditions, check-baselayer]
+    if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
     steps:
       - name: Checking out(HEAD commit)
         uses: actions/checkout@v2
@@ -155,7 +154,6 @@ jobs:
       #     name: "Peridot IntegrityCheck BuildCache"
       #     path: .buildcache
       - name: Building as Checking
-        if: ${{ needs.preconditions.outputs.has_code_changes == 1 }}
         uses: ./.github/actions/checkbuild-subdir
         with:
           path: .
