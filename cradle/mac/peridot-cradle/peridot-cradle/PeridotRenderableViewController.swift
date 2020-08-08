@@ -39,6 +39,49 @@ final class PeridotRenderableViewController : NSViewController {
         self.enginePointer = NativeGameEngine(forView: &self.view)
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
         initDispatchers()
+        
+        let eventTypes: NSEvent.EventTypeMask = [
+            .keyDown, .keyUp, .flagsChanged,
+            .mouseMoved,
+            .leftMouseDown, .leftMouseUp,
+            .rightMouseDown, .rightMouseUp,
+            .otherMouseDown, .otherMouseUp,
+            .scrollWheel, .magnify, .smartMagnify
+        ]
+        NSEvent.addLocalMonitorForEvents(matching: eventTypes) { event in
+            switch event.type {
+            case .keyDown:
+                if !event.isARepeat { NSLog("KeyDown event with \(event)") }
+            case .keyUp:
+                if !event.isARepeat { NSLog("KeyUp event with \(event)") }
+            case .flagsChanged:
+                if !event.isARepeat { NSLog("FlagsChanged event with \(event)") }
+            case .mouseMoved:
+                NSLog("MouseMove event with \(event)")
+            case .leftMouseDown:
+                NSLog("LeftMouseDown event with \(event)")
+            case .leftMouseUp:
+                NSLog("LeftMouseUp event with \(event)")
+            case .rightMouseDown:
+                NSLog("RightMouseDown event with \(event)")
+            case .rightMouseUp:
+                NSLog("RightMouseUp event with \(event)")
+            case .otherMouseDown:
+                NSLog("OtherMouseDown event with \(event)")
+            case .otherMouseUp:
+                NSLog("OtherMouseUp event with \(event)")
+            case .scrollWheel:
+                NSLog("ScrollWheel event with \(event)")
+            case .magnify:
+                NSLog("Magnify event with \(event)")
+            case .smartMagnify:
+                NSLog("SmartMagnify event with \(event)")
+            default:
+                NSLog("Unhandled event with \(event)")
+            }
+            return event
+        }
+        
         (self.view as! PeridotRenderableView).enginePointer = self.enginePointer
     }
     override func viewDidAppear() {
