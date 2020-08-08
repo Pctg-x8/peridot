@@ -3,6 +3,51 @@ use std::rc::Rc;
 use std::mem::replace;
 use std::cell::RefCell;
 
+/// Digital(Buttons) Input
+pub enum NativeButtonInput {
+    /// Keyboard Character(Case insensitive, cradles must pass with lowercase characters)
+    Character(char),
+    UpArrow, DownArrow, LeftArrow, RightArrow,
+    Esc, Enter, Backspace, Space, LeftShift, RightShift, LeftControl, RightControl, LeftMeta, RightMeta,
+    LeftAlt, RightAlt, CapsLock, Kana, Alphabet, ZenkakuHankaku, FunctionKey(u8),
+    /// DUALSHOCK equivalent is ○
+    ButtonA,
+    /// DUALSHOCK equivalent is ×
+    ButtonB,
+    ButtonC,
+    ButtonD,
+    /// DUALSHOCK equivalent is △
+    ButtonX,
+    /// DUALSHOCK equivalent is □
+    ButtonY,
+    ButtonStart,
+    ButtonSelect,
+    ButtonMeta,
+    /// DUALSHOCK equivalent is L1(L2 will be simulated as NativeAnalogInput::LeftTrigger(1.0))
+    ButtonL,
+    /// DUALSHOCK equivalent is R1(R2 will be simulated as NativeAnalogInput::RightTrigger(1.0))
+    ButtonR,
+    /// Stick Index
+    Stick(u32)
+}
+/// Analog(Motions) Input
+pub enum NativeAnalogInput {
+    /// Relative Input
+    MouseX(f32),
+    /// Relative Input
+    MouseY(f32),
+    /// Relative Input
+    ScrollWheel(f32),
+    /// Relative Input
+    Magnify(f32),
+    /// Stick Index(0 = Left, 1 = Right, 2.. = Other), Absolute X Amount, Absolute Y Amount
+    Stick(u32, f32, f32),
+    /// Xbox controller specific: Relative Input
+    LeftTrigger(f32),
+    /// Xbox controller specific: Relative Input
+    RightTrigger(f32)
+}
+
 const MAX_MOUSE_BUTTONS: usize = 5;
 struct AsyncCollectedData
 {
