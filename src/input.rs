@@ -30,7 +30,8 @@ pub enum NativeButtonInput {
     /// Stick Index
     Stick(u32),
     /// Mouse Button(0 = Left, 1 = Right, 2 = Center, 3.. = Other)
-    Mouse(u32)
+    Mouse(u32),
+    POVLeft, POVRight, POVUp, POVDown
 }
 /// Analog(Motions) Input
 pub enum NativeAnalogInput {
