@@ -2,7 +2,8 @@ use winapi::um::winuser::{
     DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
     AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL, WM_SIZE,
     PostQuitMessage, PM_REMOVE,
-    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
+    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA,
+    WM_INPUT
 };
 use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
@@ -12,6 +13,7 @@ use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD
 
 use std::mem::MaybeUninit;
 #[macro_use] extern crate log;
+mod input;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
 
@@ -39,6 +41,7 @@ impl GameDriver
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
+        self::input::init();
         let usercode = userlib::Game::init(&base);
         base.postinit();
 
@@ -116,6 +119,10 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
                 }
             }
             return 0;
+        },
+        WM_INPUT => {
+            self::input::handle_wm_input(wparam, lparam);
+            0
         },
         _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) }
     }

@@ -49,6 +49,13 @@ pub enum NativeAnalogInput {
     /// Xbox controller specific: Relative Input
     RightTrigger(f32)
 }
+/*
+方針めも:
+Peridot側で各種入力を表すenumを作って、cradle側ではプラットフォーム固有のイベントをこのenumに変換してInputProcessに投げる
+こうすることで、Peridot側のAPI変更で生入力を取り扱いたくなってもcradle側は変更が必要なくなるのと、
+そもそもキーマッピングは高度な機能なのでcradle側がハンドリングするのはちょっと違う。
+変換の負荷もたぶんそんな重いものでもないはずなので、これでいいかなと
+*/
 
 const MAX_MOUSE_BUTTONS: usize = 5;
 struct AsyncCollectedData
