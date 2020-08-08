@@ -5,7 +5,7 @@ use std::cell::RefCell;
 
 /// Digital(Buttons) Input
 pub enum NativeButtonInput {
-    /// Keyboard Character(Case insensitive, cradles must pass with lowercase characters)
+    /// Keyboard Character(Case insensitive, cradles must pass with uppercase characters)
     Character(char),
     UpArrow, DownArrow, LeftArrow, RightArrow,
     Esc, Enter, Backspace, Space, LeftShift, RightShift, LeftControl, RightControl, LeftMeta, RightMeta,
