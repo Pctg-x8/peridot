@@ -28,16 +28,18 @@ pub enum NativeButtonInput {
     /// DUALSHOCK equivalent is R1(R2 will be simulated as NativeAnalogInput::RightTrigger(1.0))
     ButtonR,
     /// Stick Index
-    Stick(u32)
+    Stick(u32),
+    /// Mouse Button(0 = Left, 1 = Right, 2 = Center, 3.. = Other)
+    Mouse(u32)
 }
 /// Analog(Motions) Input
 pub enum NativeAnalogInput {
     /// Relative Input
-    MouseX(f32),
+    MouseX(i32),
     /// Relative Input
-    MouseY(f32),
+    MouseY(i32),
     /// Relative Input
-    ScrollWheel(f32),
+    ScrollWheel(i32),
     /// Relative Input
     Magnify(f32),
     /// Stick Index(0 = Left, 1 = Right, 2.. = Other), Absolute X Amount, Absolute Y Amount
@@ -51,12 +53,12 @@ pub enum NativeAnalogInput {
 const MAX_MOUSE_BUTTONS: usize = 5;
 struct AsyncCollectedData
 {
-    mouse_motion_x: isize, mouse_motion_y: isize, mouse_wheel_motion: isize, mouse_button: [bool; MAX_MOUSE_BUTTONS]
+    mouse_motion_x: i32, mouse_motion_y: i32, mouse_wheel_motion: i32, mouse_button: [bool; MAX_MOUSE_BUTTONS]
 }
 #[derive(Debug)]
 struct FrameData
 {
-    mouse_motion_x: isize, mouse_motion_y: isize, mouse_wheel_motion: isize, mouse_pressing: [bool; MAX_MOUSE_BUTTONS],
+    mouse_motion_x: i32, mouse_motion_y: i32, mouse_wheel_motion: i32, mouse_pressing: [bool; MAX_MOUSE_BUTTONS],
     mouse_down_inframe: [bool; MAX_MOUSE_BUTTONS], mouse_up_inframe: [bool; MAX_MOUSE_BUTTONS]
 }
 pub struct InputProcess
@@ -83,7 +85,6 @@ impl InputProcess
 
         return InputProcess { collected: cd.into(), frame: fd.into() };
     }
-    pub fn dispatch_message<M: InputMessage>(&self, msg: M) { msg.process(self); }
     pub fn prepare_for_frame(&self)
     {
         let mut cd = self.collected.borrow_mut();
@@ -100,6 +101,25 @@ impl InputProcess
         }
     }
 
+    /// Cradle to Engine Event Handler
+    pub fn dispatch_button_event(&self, msg: NativeButtonInput, is_press: bool) {
+        match msg {
+            NativeButtonInput::Mouse(b) if (0 .. MAX_MOUSE_BUTTONS as u32).contains(&b) => {
+                self.collected.borrow_mut().mouse_button[b as usize] = is_press;
+            },
+            _ => (/* nop */)
+        }
+    }
+    /// Cradle to Engine Event Handler
+    pub fn dispatch_analog_event(&self, msg: NativeAnalogInput) {
+        match msg {
+            NativeAnalogInput::MouseX(r) => { self.collected.borrow_mut().mouse_motion_x += r; }
+            NativeAnalogInput::MouseY(r) => { self.collected.borrow_mut().mouse_motion_y += r; }
+            NativeAnalogInput::ScrollWheel(s) => { self.collected.borrow_mut().mouse_wheel_motion += s; },
+            _ => (/* nop */)
+        }
+    }
+
     // Mouse/Touch integrated apis
     pub fn plane_touch(&self) -> bool
     {
@@ -109,7 +129,7 @@ impl InputProcess
     {
         self.frame.borrow().mouse_pressing[0]
     }
-    pub fn plane_delta_move(&self) -> (isize, isize)
+    pub fn plane_delta_move(&self) -> (i32, i32)
     {
         (self.frame.borrow().mouse_motion_x, self.frame.borrow().mouse_motion_y)
     }
@@ -126,46 +146,8 @@ impl InputProcess
     {
         if knum >= MAX_MOUSE_BUTTONS { false } else { self.frame.borrow().mouse_pressing[knum] }
     }
-    pub fn mouse_delta_move(&self) -> (isize, isize)
+    pub fn mouse_delta_move(&self) -> (i32, i32)
     {
         (self.frame.borrow().mouse_motion_x, self.frame.borrow().mouse_motion_y)
-    }
-}
-
-pub trait InputMessage: Sized
-{
-    fn process(self, processor: &InputProcess);
-}
-
-pub enum MouseInputMessage
-{
-    ButtonDown(usize), ButtonUp(usize), MoveRel(isize, isize), Wheel(isize)
-}
-impl InputMessage for MouseInputMessage
-{
-    fn process(self, processor: &InputProcess)
-    {
-        match self
-        {
-            MouseInputMessage::ButtonDown(x @ 0 ..= 4) =>
-            {
-                processor.collected.borrow_mut().mouse_button[x] = true;
-            },
-            MouseInputMessage::ButtonDown(x) => trace!("MouseButton #{} Pressing", x),
-            MouseInputMessage::ButtonUp(x @ 0 ..= 4) =>
-            {
-                processor.collected.borrow_mut().mouse_button[x] = false;
-            },
-            MouseInputMessage::ButtonUp(x) => trace!("MouseButton #{} Released", x),
-            MouseInputMessage::MoveRel(x, y) =>
-            {
-                processor.collected.borrow_mut().mouse_motion_x += x;
-                processor.collected.borrow_mut().mouse_motion_y += y;
-            },
-            MouseInputMessage::Wheel(a) =>
-            {
-                processor.collected.borrow_mut().mouse_wheel_motion += a;
-            }
-        }
     }
 }
