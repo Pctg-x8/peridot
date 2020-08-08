@@ -5,7 +5,8 @@ param(
     [parameter(HelpMessage="Asset Directory")][String]$AssetDirectory,
     [parameter(HelpMessage="Package Bundle ID")][String]$AppPackageID = "com.cterm2.peridot",
     [switch]$Release = $false,
-    [parameter(HelpMessage="Additional Rust Features")][String[]]$Features = @()
+    [parameter(HelpMessage="Additional Rust Features")][String[]]$Features = @(),
+    [parameter(HelpMessage="Update Cargo dependencies")][switch]$UpdateDeps = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,6 +87,7 @@ $Env:PERIDOT_WINDOWS_APPID = $AppPackageID
 try {
     Push-Location
     Set-Location $ScriptPath
+    if ($UpdateDeps) { cargo update }
     cargo $CargoSubcommand --features $($ActiveFeatures -join ",") $OptFlags
 }
 finally { Pop-Location }

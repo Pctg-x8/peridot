@@ -7,6 +7,7 @@ SCRIPT_PATH=$(dirname $0)
 ENTRY_TY_NAME="Game"
 unset PACKAGE_ID
 unset PERIDOT_EXTERNAL_ASSET_PATH
+UPDATE_DEPS=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--EntryTyName" | "-e")
@@ -24,6 +25,10 @@ while [ $# -gt 0 ]; do
         "-AppPackageID" | "-p")
             export PACKAGE_ID=$2
             shift 2
+            ;;
+        "--UpdateDeps" | "-u")
+            UPDATE_DEPS=1
+            shift
             ;;
         *)
             if [ -z ${USERLIB_DIRECTORY+x} ]; then USERLIB_DIRECTORY=$1; fi
@@ -54,6 +59,7 @@ rsync -auz $SCRIPT_PATH/apkbuild/app/src/main/res-default/* $SCRIPT_PATH/apkbuil
 [ -d $USERLIB_DIRECTORY/android-res ] && rsync -a $USERLIB_DIRECTORY/android-res/* $SCRIPT_PATH/apkbuild/app/src/main/res
 
 [ -d $SCRIPT_PATH/target/arm64-v8a-linux-android ] && mv $SCRIPT_PATH/target/arm64-v8a-linux-android $SCRIPT_PATH/target/aarch64-linux-android
+if [ $UPDATE_DEPS -ne 0 ]; then (cd $SCRIPT_PATH; cargo update); fi
 (cd $SCRIPT_PATH; cargo ndk --target aarch64-linux-android --android-platform $NDK_PLATFORM_TARGET -- build --features bedrock/VK_EXT_debug_report,bedrock/VK_KHR_android_surface,bedrock/DynamicLoaded)
 [ ! -d $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a ] && mkdir -p $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a
 mv $SCRIPT_PATH/target/aarch64-linux-android/debug/libpegamelib.so $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a/
