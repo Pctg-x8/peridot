@@ -8,6 +8,7 @@ CARGO_SUBCOMMAND="build"
 AFTER_RUN=0
 unset ASSET_PATH
 FEATURES=( "bedrock/VK_MVK_macos_surface" )
+UPDATE_DEPS=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--EntryTyName" | "-e")
@@ -25,6 +26,10 @@ while [ $# -gt 0 ]; do
         "--Feature" | "-f")
             FEATURES+=( $2 )
             shift 2
+            ;;
+        "--UpdateDeps" | "-u")
+            UPDATE_DEPS=1
+            shift
             ;;
         *)
             if [ -z ${USERLIB_DIRECTORY+x} ]; then USERLIB_DIRECTORY=$1; fi
@@ -49,6 +54,7 @@ $SCRIPT_PATH/../../target/release/peridot-archiver new $ASSET_PATH -o $SCRIPT_PA
 
 echo "Building GameCore..."
 FEATURE_STRING=($(echo "${FEATURES[@]}" | tr ' ' '¥n' | sort -u | tr '¥n' ','))
+if [ $UPDATE_DEPS -ne 0 ]; then (cd $SCRIPT_PATH; cargo update); fi
 (cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURE_STRING)
 
 echo "Building App Bundle..."
