@@ -101,7 +101,7 @@ impl InputProcess
         }
     }
 
-    /// Cradle to Engine Event Handler
+    /// Cradle to Engine: Native Event Handler
     pub fn dispatch_button_event(&self, msg: NativeButtonInput, is_press: bool) {
         match msg {
             NativeButtonInput::Mouse(b) if (0 .. MAX_MOUSE_BUTTONS as u32).contains(&b) => {
@@ -110,7 +110,7 @@ impl InputProcess
             _ => (/* nop */)
         }
     }
-    /// Cradle to Engine Event Handler
+    /// Cradle to Engine: Native Event Handler
     pub fn dispatch_analog_event(&self, msg: NativeAnalogInput) {
         match msg {
             NativeAnalogInput::MouseX(r) => { self.collected.borrow_mut().mouse_motion_x += r; }
