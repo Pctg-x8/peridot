@@ -63,7 +63,7 @@ impl MappableNativeInputType for NativeButtonInput {
     type ID = u16;
 
     fn map_to(&self, p: &mut InputProcess, id: u16) {
-        p.buttonmap[self] = id;
+        p.buttonmap.insert(*self, id);
         p.max_button_id = p.max_button_id.max(id);
     }
 }
@@ -71,7 +71,7 @@ impl MappableNativeInputType for NativeAnalogInput {
     type ID = u8;
 
     fn map_to(&self, p: &mut InputProcess, id: u8) {
-        p.analogmap[self] = id;
+        p.analogmap.insert(*self, id);
         p.max_analog_id = p.max_analog_id.max(id);
     }
 }

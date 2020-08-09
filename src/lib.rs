@@ -188,7 +188,7 @@ impl<PL: NativeLinker> Engine<PL>
         };
         self.last_rendering_completion.wait().expect("Waiting Last command completion");
 
-        self.ip.prepare_for_frame();
+        self.ip.prepare_for_frame(dt);
 
         {
             let (copy_submission, mut fb_submission) = userlib.update(self, bb_index, dt);
