@@ -144,7 +144,7 @@ impl GameDriver {
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
-        let usercode = userlib::Game::init(&engine);
+        let usercode = userlib::Game::init(&mut engine);
         engine.postinit();
 
         GameDriver { engine, usercode }

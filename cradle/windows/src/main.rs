@@ -38,7 +38,7 @@ impl GameDriver
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
-        let usercode = userlib::Game::init(&base);
+        let usercode = userlib::Game::init(&mut base);
         base.postinit();
 
         GameDriver
@@ -132,7 +132,6 @@ fn process_message_all() -> bool
     true
 }
 
-use std::rc::Rc;
 use bedrock as br;
 use std::path::PathBuf;
 
