@@ -94,6 +94,7 @@ impl MappableNativeInputType for AxisKey {
         p.ax_neg_buttonmap.insert(self.negative_key, id);
         p.max_analog_id = p.max_analog_id.max(id);
         if p.collected.borrow().analog_values.len() != p.max_analog_id as usize + 1 {
+            p.collected.borrow_mut().ax_button_pressing.resize(p.max_analog_id as usize + 1, false);
             p.collected.borrow_mut().analog_values.resize(p.max_analog_id as usize + 1, 0.0);
         }
     }
@@ -175,6 +176,14 @@ impl InputProcess {
     pub fn prepare_for_frame(&self, delta_time: std::time::Duration) {
         let mut cd = self.collected.borrow_mut();
         let mut fd = self.frame.borrow_mut();
+
+        // Adjust slot size
+        if cd.button_pressing.len() != fd.button_press_time.len() {
+            fd.button_press_time.resize(cd.button_pressing.len(), std::time::Duration::default());
+        }
+        if cd.analog_values.len() != fd.analog_values_abs.len() {
+            fd.analog_values_abs.resize(cd.analog_values.len(), 0.0);
+        }
 
         for (n, f) in cd.button_pressing.iter_mut().enumerate() {
             if *f {
