@@ -24,7 +24,7 @@ final class CurrentKeyboardLayoutCodeConverter {
     func translate(_ code: UInt16) -> Optional<UnsafeMutablePointer<UniChar>> {
         var deadKeyMask: UInt32 = 0
         var charLength = 0
-        let charName = UnsafeMutablePointer<UniChar>.allocate(capacity: MAX_CHAR_LENGTH)
+        let charName = UnsafeMutablePointer<UniChar>.allocate(capacity: Self.MAX_CHAR_LENGTH)
         let r = UCKeyTranslate(
             self.keyboardLayout,
             code,
@@ -33,7 +33,7 @@ final class CurrentKeyboardLayoutCodeConverter {
             UInt32(LMGetKbdType()),
             UInt32(kUCKeyTranslateNoDeadKeysMask),
             &deadKeyMask,
-            MAX_CHAR_LENGTH, &charLength, charName
+            Self.MAX_CHAR_LENGTH, &charLength, charName
         )
         if r == noErr { return charName } else { return nil }
     }
@@ -71,6 +71,7 @@ final class PeridotRenderableViewController : NSViewController {
         initDispatchers()
         
         let kcTranslator = CurrentKeyboardLayoutCodeConverter()
+        var oldFlags: NSEvent.ModifierFlags = NSEvent.ModifierFlags(rawValue: 0)
         
         let eventTypes: NSEvent.EventTypeMask = [
             .keyDown, .keyUp, .flagsChanged,
@@ -98,6 +99,47 @@ final class PeridotRenderableViewController : NSViewController {
                 }
             case .flagsChanged:
                 NSLog("FlagsChanged event with \(event)")
+                if event.modifierFlags.contains(.shift) && !oldFlags.contains(.shift) {
+                    // shift on
+                    self.enginePointer?.handleKeymodDown(code: KEYMOD_SHIFT)
+                }
+                if !event.modifierFlags.contains(.shift) && oldFlags.contains(.shift) {
+                    // shift off
+                    self.enginePointer?.handleKeymodUp(code: KEYMOD_SHIFT)
+                }
+                if event.modifierFlags.contains(.option) && !oldFlags.contains(.option) {
+                    // opt on
+                    self.enginePointer?.handleKeymodDown(code: KEYMOD_OPTION)
+                }
+                if !event.modifierFlags.contains(.option) && oldFlags.contains(.option) {
+                    // opt off
+                    self.enginePointer?.handleKeymodUp(code: KEYMOD_OPTION)
+                }
+                if event.modifierFlags.contains(.command) && !oldFlags.contains(.command) {
+                    // cmd on
+                    self.enginePointer?.handleKeymodDown(code: KEYMOD_COMMAND)
+                }
+                if !event.modifierFlags.contains(.command) && oldFlags.contains(.command) {
+                    // cmd off
+                    self.enginePointer?.handleKeymodUp(code: KEYMOD_COMMAND)
+                }
+                if event.modifierFlags.contains(.control) && !oldFlags.contains(.control) {
+                    // ctrl on
+                    self.enginePointer?.handleKeymodDown(code: KEYMOD_CONTROL)
+                }
+                if !event.modifierFlags.contains(.control) && oldFlags.contains(.control) {
+                    // ctrl off
+                    self.enginePointer?.handleKeymodUp(code: KEYMOD_CONTROL)
+                }
+                if event.modifierFlags.contains(.capsLock) && !oldFlags.contains(.capsLock) {
+                    // shift on
+                    self.enginePointer?.handleKeymodDown(code: KEYMOD_CAPSLOCK)
+                }
+                if !event.modifierFlags.contains(.capsLock) && oldFlags.contains(.capsLock) {
+                    // shift off
+                    self.enginePointer?.handleKeymodUp(code: KEYMOD_CAPSLOCK)
+                }
+                oldFlags = event.modifierFlags
             case .mouseMoved:
                 NSLog("MouseMove event with \(event)")
             case .leftMouseDown:

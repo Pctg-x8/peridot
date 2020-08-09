@@ -13,6 +13,12 @@
 
 typedef struct GameRun_ GameRun;
 
+const uint8_t KEYMOD_SHIFT = 1;
+const uint8_t KEYMOD_OPTION = 2;
+const uint8_t KEYMOD_CONTROL = 3;
+const uint8_t KEYMOD_COMMAND = 4;
+const uint8_t KEYMOD_CAPSLOCK = 5;
+
 GameRun* launch_game(void* viewptr);
 void terminate_game(GameRun* engineptr);
 void update_game(GameRun* engineptr);
@@ -20,6 +26,8 @@ void resize_game(GameRun* engineptr, uint32_t w, uint32_t h);
 
 void handle_character_keydown(GameRun* engineptr, uint8_t character);
 void handle_character_keyup(GameRun* engineptr, uint8_t character);
+void handle_keymod_down(GameRun* engineptr, uint8_t code);
+void handle_keymod_up(GameRun* engineptr, uint8_t code);
 
 void* captionbar_text();
 

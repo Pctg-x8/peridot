@@ -32,6 +32,12 @@ final class NativeGameEngine {
     func handleCharacterKeyUp(character: UInt8) {
         handle_character_keyup(self.p, character)
     }
+    func handleKeymodDown(code: UInt8) {
+        handle_keymod_down(self.p, code)
+    }
+    func handleKeymodUp(code: UInt8) {
+        handle_keymod_up(self.p, code)
+    }
     
     static func captionbarText() -> NSString? {
         let p = captionbar_text()

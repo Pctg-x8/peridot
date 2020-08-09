@@ -300,3 +300,35 @@ pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Up Event: {}", character);
     unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Character(character as _), false); }
 }
+
+const KEYMOD_SHIFT: u8 = 1;
+const KEYMOD_OPTION: u8 = 2;
+const KEYMOD_CONTROL: u8 = 3;
+const KEYMOD_COMMAND: u8 = 4;
+const KEYMOD_CAPSLOCK: u8 = 5;
+#[no_mangle]
+pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
+    trace!("Dispatching Keymod Down Event: {}", code);
+    let code_to_bty = match code {
+        KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
+        KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
+        KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
+        KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
+        KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
+        _ => return
+    };
+    unsafe { (*g).engine.input().dispatch_button_event(code_to_bty, true); }
+}
+#[no_mangle]
+pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
+    trace!("Dispatching Keymod Up Event: {}", code);
+    let code_to_bty = match code {
+        KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
+        KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
+        KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
+        KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
+        KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
+        _ => return
+    };
+    unsafe { (*g).engine.input().dispatch_button_event(code_to_bty, false); }
+}
