@@ -42,7 +42,7 @@ pub trait NativeLinker
 
 pub trait EngineEvents<PL: NativeLinker> : Sized
 {
-    fn init(_e: &Engine<PL>) -> Self;
+    fn init(_e: &mut Engine<PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(&mut self, _e: &Engine<PL>, _on_backbuffer_of: u32, _delta_time: Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
@@ -65,7 +65,7 @@ pub trait EngineEvents<PL: NativeLinker> : Sized
 }
 impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
-    fn init(_e: &Engine<PL>) -> Self { () }
+    fn init(_e: &mut Engine<PL>) -> Self { () }
 }
 pub trait FeatureRequests
 {
@@ -91,7 +91,7 @@ pub struct Engine<PL>
     surface: SurfaceInfo,
     wrt: Discardable<WindowRenderTargets>,
     pub(self) g: Graphics,
-    ip: Rc<InputProcess>,
+    ip: InputProcess,
     gametimer: GameTimer,
     last_rendering_completion: StateFence
 }
@@ -132,7 +132,6 @@ impl<PL: NativeLinker> Engine<PL>
     pub fn postinit(&mut self)
     {
         trace!("PostInit BaseEngine...");
-        self.nativelink.input_processor_mut().on_start_handle(&self.ip);
     }
 }
 impl<PL> Engine<PL>
@@ -145,6 +144,7 @@ impl<PL> Engine<PL>
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
     pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
     pub fn input(&self) -> &InputProcess { &self.ip }
+    pub fn input_mut(&mut self) -> &mut InputProcess { &mut self.ip }
     
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()>
     {
