@@ -14,15 +14,6 @@ jobs:
         id: begintime
         run: |
           echo "::set-output name=begintime::$(date +%s)"
-      - name: Checking out (Merge BASE)
-        uses: actions/checkout@v2
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-      - name: Checking out (Merge HEAD)
-        uses: actions/checkout@v2
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
       - name: Checking Changed Filenames
         id: fileck
         run: |
