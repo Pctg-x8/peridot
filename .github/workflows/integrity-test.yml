@@ -37,7 +37,7 @@ jobs:
             echo $API_RESPONSE | jq ".data.repository.pullRequest.files.nodes[].path" | grep -qE '\.rs"$|Cargo(\.template)?\.toml"$' && :
             if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; break; fi
             HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.hasNextPage")
-            if [[ $HAS_NEXT_PAGE -eq "true" ]]; then
+            if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
               QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.endCursor")
             else
               break
