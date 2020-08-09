@@ -7,10 +7,13 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub struct UniformValues {
     pub mat: peridot::math::Matrix4F32,
-    pub time: f32
+    pub time: f32,
+    pub offset: peridot::math::Vector2F32
 }
 
-pub const INPUT_MOUSE_DOWN: u16 = 0;
+pub const INPUT_PLANE_DOWN: u16 = 0;
+pub const INPUT_PLANE_LEFT: u8 = 0;
+pub const INPUT_PLANE_TOP: u8 = 1;
 
 pub struct Game<NL> {
     renderpass: br::RenderPass,
@@ -35,7 +38,9 @@ impl<NL> Game<NL> {
 }
 impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn init(e: &mut peridot::Engine<NL>) -> Self {
-        e.input_mut().map(peridot::NativeButtonInput::Mouse(0), INPUT_MOUSE_DOWN);
+        e.input_mut().map(peridot::NativeButtonInput::Mouse(0), INPUT_PLANE_DOWN);
+        e.input_mut().map(peridot::NativeAnalogInput::MouseX, INPUT_PLANE_LEFT);
+        e.input_mut().map(peridot::NativeAnalogInput::MouseY, INPUT_PLANE_TOP);
 
         let renderpass = peridot::RenderPassTemplates::single_render(e.backbuffer_format())
             .create(e.graphics())
@@ -197,7 +202,8 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             },
                 .. Default::default()
             }.projection_matrix(),
-            time: 0.0
+            time: 0.0,
+            offset: peridot::math::Vector2(0.0, 0.0)
         };
         let update_commands = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Transfer, 1)
             .expect("Failed to allocate update commands");
@@ -265,9 +271,13 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         self.update_data.time += delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1_000_000.0;
 
-        let current_mouse_input = e.input().button_pressing_time(INPUT_MOUSE_DOWN) > std::time::Duration::default();
+        let current_mouse_input = e.input().button_pressing_time(INPUT_PLANE_DOWN) > std::time::Duration::default();
         if !self.last_mouse_input && current_mouse_input {
             self.update_data.time = 0.0;
+            self.update_data.offset = peridot::math::Vector2(
+                e.input().analog_value_abs(INPUT_PLANE_LEFT),
+                e.input().analog_value_abs(INPUT_PLANE_TOP)
+            );
         }
         self.last_mouse_input = current_mouse_input;
         
