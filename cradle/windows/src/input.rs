@@ -9,10 +9,9 @@ use winapi::shared::minwindef::{FALSE, LPARAM};
 use winapi::shared::windef::{HWND, POINT};
 
 pub struct RawInputHandler {
-    target_hwnd: HWND
 }
 impl RawInputHandler {
-    pub fn init(hwnd: HWND) -> Self {
+    pub fn init() -> Self {
         let ri_devices = [
             // Generic HID mouse
             RAWINPUTDEVICE {
@@ -34,7 +33,6 @@ impl RawInputHandler {
         }
 
         RawInputHandler {
-            target_hwnd: hwnd
         }
     }
     
@@ -98,12 +96,23 @@ impl RawInputHandler {
         }
     }
 }
-impl peridot::NativeInput for RawInputHandler {
+
+pub struct NativeInputHandler {
+    target_hw: HWND
+}
+impl NativeInputHandler {
+    pub fn new(hw: HWND) -> Self {
+        NativeInputHandler {
+            target_hw: hw
+        }
+    }
+}
+impl peridot::NativeInput for NativeInputHandler {
     fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)> {
         if index != 0 { return None; }
 
         let mut p0 = POINT { x: 0, y: 0 };
-        unsafe { GetCursorPos(&mut p0); MapWindowPoints(std::ptr::null_mut(), self.target_hwnd, &mut p0, 1); }
+        unsafe { GetCursorPos(&mut p0); MapWindowPoints(std::ptr::null_mut(), self.target_hw, &mut p0, 1); }
         Some((p0.x as _, p0.y as _))
     }
 }

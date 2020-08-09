@@ -42,7 +42,8 @@ impl GameDriver
             nl, userlib::Game::<NativeLink>::requested_features()
         );
         let usercode = userlib::Game::init(&mut base);
-        let ri_handler = self::input::RawInputHandler::init(window);
+        let ri_handler = self::input::RawInputHandler::init();
+        base.input_mut().set_nativelink(Box::new(self::input::NativeInputHandler::new(window)));
         base.postinit();
 
         GameDriver
