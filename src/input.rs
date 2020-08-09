@@ -1,5 +1,4 @@
 
-use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -114,9 +113,6 @@ pub struct InputProcess {
     ax_neg_buttonmap: HashMap<NativeButtonInput, <NativeAnalogInput as MappableNativeInputType>::ID>,
     max_button_id: <NativeButtonInput as MappableNativeInputType>::ID,
     max_analog_id: <NativeAnalogInput as MappableNativeInputType>::ID
-}
-pub trait InputProcessPlugin {
-    fn on_start_handle(&mut self, processor: &Rc<InputProcess>);
 }
 impl InputProcess {
     pub fn new() -> Self {

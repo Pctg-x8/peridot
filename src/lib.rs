@@ -31,11 +31,9 @@ pub trait NativeLinker
 {
     type AssetLoader: PlatformAssetLoader;
     type RenderTargetProvider: PlatformRenderTarget;
-    type InputProcessor: InputProcessPlugin;
 
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn render_target_provider(&self) -> &Self::RenderTargetProvider;
-    fn input_processor_mut(&mut self) -> &mut Self::InputProcessor;
 
     fn rendering_precision(&self) -> f32 { 1.0 }
 }
