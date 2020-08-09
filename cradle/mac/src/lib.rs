@@ -178,26 +178,9 @@ impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler
         (size.width as _, size.height as _)
     }
 }
-// TODO: InputProcessPlugin実装する
-pub struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
-impl PlatformInputProcessPlugin
-{
-    fn new() -> Self
-    {
-        PlatformInputProcessPlugin { processor: None }
-    }
-}
-impl peridot::InputProcessPlugin for PlatformInputProcessPlugin
-{
-    fn on_start_handle(&mut self, ip: &Rc<peridot::InputProcess>)
-    {
-        self.processor = Some(ip.clone());
-    }
-}
 pub struct NativeLink
 {
-    al: PlatformAssetLoader, prt: PlatformRenderTargetHandler,
-    input: PlatformInputProcessPlugin
+    al: PlatformAssetLoader, prt: PlatformRenderTargetHandler
 }
 impl NativeLink
 {
@@ -205,8 +188,7 @@ impl NativeLink
     {
         NativeLink
         {
-            al: PlatformAssetLoader::new(), prt: PlatformRenderTargetHandler::new(rt_view),
-            input: PlatformInputProcessPlugin::new()
+            al: PlatformAssetLoader::new(), prt: PlatformRenderTargetHandler::new(rt_view)
         }
     }
 }
@@ -214,11 +196,9 @@ impl peridot::NativeLinker for NativeLink
 {
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = PlatformRenderTargetHandler;
-    type InputProcessor = PlatformInputProcessPlugin;
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
-    fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
 
     fn rendering_precision(&self) -> f32 { unsafe { nsscreen_backing_scale_factor() } }
 }

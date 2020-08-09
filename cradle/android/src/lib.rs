@@ -59,23 +59,6 @@ impl peridot::PlatformRenderTarget for PlatformWindowHandler
     }
 }
 
-struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
-impl PlatformInputProcessPlugin
-{
-    fn new() -> Self
-    {
-        PlatformInputProcessPlugin { processor: None }
-    }
-}
-impl peridot::InputProcessPlugin for PlatformInputProcessPlugin
-{
-    fn on_start_handle(&mut self, ip: &Rc<peridot::InputProcess>)
-    {
-        self.processor = Some(ip.clone());
-        info!("Started Handling Inputs...");
-    }
-}
-
 use android::{AssetManager, Asset, AASSET_MODE_STREAMING, AASSET_MODE_RANDOM};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::ffi::CString;
@@ -104,17 +87,15 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
 }
 struct NativeLink
 {
-    al: PlatformAssetLoader, prt: PlatformWindowHandler, input: PlatformInputProcessPlugin
+    al: PlatformAssetLoader, prt: PlatformWindowHandler
 }
 impl peridot::NativeLinker for NativeLink
 {
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = PlatformWindowHandler;
-    type InputProcessor = PlatformInputProcessPlugin;
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &PlatformWindowHandler { &self.prt }
-    fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
 }
 
 // JNI Exports //

@@ -39,21 +39,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> { self.get(path, ext) }
 }
-pub struct PlatformInputHandler { processor: Option<Rc<peridot::InputProcess>> }
-impl PlatformInputHandler
-{
-    fn new() -> Self
-    {
-        PlatformInputHandler { processor: None }
-    }
-}
-impl peridot::InputProcessPlugin for PlatformInputHandler
-{
-    fn on_start_handle(&mut self, processor: &Rc<peridot::InputProcess>)
-    {
-        self.processor = Some(processor.clone());
-    }
-}
 pub struct WindowHandler { dp: *mut xcb::ffi::xcb_connection_t, vis: xcb::Visualid, wid: xcb::Window }
 impl peridot::PlatformRenderTarget for WindowHandler
 {
@@ -77,16 +62,14 @@ impl peridot::PlatformRenderTarget for WindowHandler
         (120, 120)
     }
 }
-pub struct NativeLink { al: PlatformAssetLoader, wh: WindowHandler, ip: PlatformInputHandler }
+pub struct NativeLink { al: PlatformAssetLoader, wh: WindowHandler }
 impl peridot::NativeLinker for NativeLink
 {
     type AssetLoader = PlatformAssetLoader;
     type RenderTargetProvider = WindowHandler;
-    type InputProcessor = PlatformInputHandler;
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn render_target_provider(&self) -> &WindowHandler { &self.wh }
-    fn input_processor_mut(&mut self) -> &mut PlatformInputHandler { &mut self.ip }
 }
 
 #[allow(dead_code)]
@@ -155,8 +138,7 @@ impl GameDriver {
     fn new(wh: WindowHandler) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
-            wh,
-            ip: PlatformInputHandler::new()
+            wh
         };
         let mut engine = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
