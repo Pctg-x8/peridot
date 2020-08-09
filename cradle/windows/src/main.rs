@@ -25,7 +25,8 @@ pub struct GameDriver
 {
     base: peridot::Engine<NativeLink>,
     usercode: userlib::Game<NativeLink>,
-    current_size: peridot::math::Vector2<usize>
+    current_size: peridot::math::Vector2<usize>,
+    ri_handler: self::input::RawInputHandler
 }
 impl GameDriver
 {
@@ -40,13 +41,14 @@ impl GameDriver
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
-        self::input::init();
+        let ri_handler = self::input::RawInputHandler::init();
         let usercode = userlib::Game::init(&mut base);
         base.postinit();
 
         GameDriver
         {
-            base, usercode, current_size: init_size
+            base, usercode, current_size: init_size,
+            ri_handler
         }
     }
 
@@ -120,7 +122,11 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
             return 0;
         },
         WM_INPUT => {
-            self::input::handle_wm_input(wparam, lparam);
+            let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+            if let Some(driver) = unsafe { p.as_mut() }
+            {
+                driver.ri_handler.handle_wm_input(driver.base.input_mut(), lparam);
+            }
             0
         },
         _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) }
