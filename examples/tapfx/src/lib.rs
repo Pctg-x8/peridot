@@ -7,7 +7,7 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub struct UniformValues {
     pub mat: peridot::math::Matrix4F32,
-    pub time: f32,
+    pub time: f32, pub _resv: f32,
     pub offset: peridot::math::Vector2F32
 }
 
@@ -203,7 +203,8 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 .. Default::default()
             }.projection_matrix(),
             time: 0.0,
-            offset: peridot::math::Vector2(0.0, 0.0)
+            offset: peridot::math::Vector2(0.0, 0.0),
+            _resv: 0.0
         };
         let update_commands = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Transfer, 1)
             .expect("Failed to allocate update commands");
