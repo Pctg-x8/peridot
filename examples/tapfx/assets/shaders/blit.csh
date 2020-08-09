@@ -3,7 +3,7 @@ VertexShader {
     const float scaling = (time * 2.0) >= 1.0 ? 0.0 : (1.0 - pow(1.0 - time, 8.0));
     RasterPosition = transpose(projection) * vec4(offset + pos * scaling, 0.5, 1.0);
     uv_v = uv;
-    alpha = 1.0 - time;
+    alpha = pow(1.0 - time, 1.8);
 }
 Varyings VertexShader -> FragmentShader {
     uv_v: vec2;
