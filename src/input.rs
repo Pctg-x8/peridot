@@ -76,12 +76,27 @@ impl MappableNativeInputType for NativeAnalogInput {
     }
 }
 
+/// Represents key input pair as emulated as axis input
+pub struct AxisKey {
+    pub positive_key: NativeButtonInput,
+    pub negative_key: NativeButtonInput
+}
+impl MappableNativeInputType for AxisKey {
+    type ID = <NativeAnalogInput as MappableNativeInputType>::ID;
+
+    fn map_to(&self, p: &mut InputProcess, id: Self::ID) {
+        p.ax_pos_buttonmap.insert(self.positive_key, id);
+        p.ax_neg_buttonmap.insert(self.negative_key, id);
+        p.max_analog_id = p.max_analog_id.max(id);
+    }
+}
+
 type InputMap<T> = HashMap<T, <T as MappableNativeInputType>::ID>;
 
 const MAX_MOUSE_BUTTONS: usize = 5;
 struct AsyncCollectedData {
-    mouse_motion_x: f32, mouse_motion_y: f32, mouse_wheel_motion: f32, mouse_button: [bool; MAX_MOUSE_BUTTONS],
     button_pressing: Vec<bool>,
+    ax_button_pressing: Vec<(bool, bool)>,
     analog_values: Vec<f32>
 }
 #[derive(Debug)]
@@ -95,6 +110,8 @@ pub struct InputProcess {
     collected: RefCell<AsyncCollectedData>, frame: RefCell<FrameData>,
     buttonmap: InputMap<NativeButtonInput>,
     analogmap: InputMap<NativeAnalogInput>,
+    ax_pos_buttonmap: HashMap<NativeButtonInput, <NativeAnalogInput as MappableNativeInputType>::ID>,
+    ax_neg_buttonmap: HashMap<NativeButtonInput, <NativeAnalogInput as MappableNativeInputType>::ID>,
     max_button_id: <NativeButtonInput as MappableNativeInputType>::ID,
     max_analog_id: <NativeAnalogInput as MappableNativeInputType>::ID
 }
@@ -104,8 +121,8 @@ pub trait InputProcessPlugin {
 impl InputProcess {
     pub fn new() -> Self {
         let cd = AsyncCollectedData {
-            mouse_motion_x: 0.0, mouse_motion_y: 0.0, mouse_wheel_motion: 0.0, mouse_button: [false; MAX_MOUSE_BUTTONS],
             button_pressing: Vec::new(),
+            ax_button_pressing: Vec::new(),
             analog_values: Vec::new()
         };
         let fd = FrameData {
@@ -120,10 +137,36 @@ impl InputProcess {
             collected: cd.into(), frame: fd.into(),
             buttonmap: HashMap::new(),
             analogmap: HashMap::new(),
+            ax_pos_buttonmap: HashMap::new(),
+            ax_neg_buttonmap: HashMap::new(),
             max_button_id: 0,
             max_analog_id: 0
         };
     }
+
+    /// Cradle to Engine: Native Event Handler
+    pub fn dispatch_button_event(&self, msg: NativeButtonInput, is_press: bool) {
+        if let Some(&target_button_id) = self.buttonmap.get(&msg) {
+            self.collected.borrow_mut().button_pressing[target_button_id as usize] |= is_press;
+        }
+        if let Some(&target_ax_button_id) = self.ax_pos_buttonmap.get(&msg) {
+            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].0 |= is_press;
+        }
+        if let Some(&target_ax_button_id) = self.ax_neg_buttonmap.get(&msg) {
+            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].1 |= is_press;
+        }
+    }
+    /// Cradle to Engine: Native Event Handler
+    pub fn dispatch_analog_event(&self, ty: NativeAnalogInput, value: f32, is_absolute: bool) {
+        if let Some(&target_analog_id) = self.analogmap.get(&ty) {
+            if is_absolute {
+                self.collected.borrow_mut().analog_values[target_analog_id as usize] = value;
+            } else {
+                self.collected.borrow_mut().analog_values[target_analog_id as usize] += value;
+            }
+        }
+    }
+    
     pub fn prepare_for_frame(&self, delta_time: std::time::Duration) {
         let mut cd = self.collected.borrow_mut();
         let mut fd = self.frame.borrow_mut();
@@ -136,7 +179,12 @@ impl InputProcess {
             }
             *f = false;
         }
-        fd.analog_values_abs.copy_from_slice(&cd.analog_values);
+        let &mut AsyncCollectedData { ref analog_values, ref mut ax_button_pressing, .. } = &mut *cd;
+        for (n, (&a, f)) in analog_values.iter().zip(ax_button_pressing).enumerate() {
+            let (pos, neg) = *f;
+            fd.analog_values_abs[n] = a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
+            *f = (false, false);
+        }
     }
 
     /// Map native input event with id
@@ -150,23 +198,6 @@ impl InputProcess {
     /// Get Analog input absolute value by id
     pub fn analog_value_abs(&self, id: u8) -> f32 {
         self.frame.borrow().analog_values_abs.get(id as usize).copied().unwrap_or(0.0)
-    }
-
-    /// Cradle to Engine: Native Event Handler
-    pub fn dispatch_button_event(&self, msg: NativeButtonInput, is_press: bool) {
-        if let Some(&target_button_id) = self.buttonmap.get(&msg) {
-            self.collected.borrow_mut().button_pressing[target_button_id as usize] |= is_press;
-        }
-    }
-    /// Cradle to Engine: Native Event Handler
-    pub fn dispatch_analog_event(&self, ty: NativeAnalogInput, value: f32, is_absolute: bool) {
-        if let Some(&target_analog_id) = self.analogmap.get(&ty) {
-            if is_absolute {
-                self.collected.borrow_mut().analog_values[target_analog_id as usize] = value;
-            } else {
-                self.collected.borrow_mut().analog_values[target_analog_id as usize] += value;
-            }
-        }
     }
 
     // Mouse/Touch integrated apis
