@@ -50,7 +50,11 @@ pub enum NativeAnalogInput {
     /// Xbox controller specific
     LeftTrigger,
     /// Xbox controller specific
-    RightTrigger
+    RightTrigger,
+    /// Mouse(0) or Pointer(0..)
+    PointerX(u32),
+    /// Mouse(0) or Pointer(0..)
+    PointerY(u32)
 }
 /*
 方針めも:
@@ -109,6 +113,10 @@ impl MappableNativeInputType for AxisKey {
 
 type InputMap<T> = HashMap<T, <T as MappableNativeInputType>::ID>;
 
+pub trait NativeInput {
+    fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)>;
+}
+
 const MAX_MOUSE_BUTTONS: usize = 5;
 struct AsyncCollectedData {
     button_pressing: Vec<bool>,
@@ -123,6 +131,7 @@ struct FrameData {
     analog_values_abs: Vec<f32>
 }
 pub struct InputProcess {
+    nativelink: Option<Box<dyn NativeInput>>,
     collected: RefCell<AsyncCollectedData>, frame: RefCell<FrameData>,
     buttonmap: InputMap<NativeButtonInput>,
     analogmap: InputMap<NativeAnalogInput>,
@@ -147,6 +156,7 @@ impl InputProcess {
         };
 
         return InputProcess {
+            nativelink: None,
             collected: cd.into(), frame: fd.into(),
             buttonmap: HashMap::new(),
             analogmap: HashMap::new(),
@@ -155,6 +165,9 @@ impl InputProcess {
             max_button_id: 0,
             max_analog_id: 0
         };
+    }
+    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput>) {
+        self.nativelink = Some(n);
     }
 
     /// Cradle to Engine: Native Event Handler
@@ -250,5 +263,10 @@ impl InputProcess {
     pub fn mouse_delta_move(&self) -> (f32, f32)
     {
         (self.frame.borrow().mouse_motion_x, self.frame.borrow().mouse_motion_y)
+    }
+
+    /// Gets plane interacting position. pointer_id=0 means Generic Mouse Input
+    pub fn get_plane_position(&self, pointer_id: u32) -> Option<(f32, f32)> {
+        self.nativelink.as_ref()?.get_pointer_position(pointer_id)
     }
 }
