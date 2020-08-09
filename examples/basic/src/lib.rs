@@ -10,5 +10,5 @@ impl<PL: peridot::NativeLinker> Empty<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Empty<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Empty<PL>
 {
-    fn init(_e: &peridot::Engine<PL>) -> Self { Empty(PhantomData) }
+    fn init(_e: &mut peridot::Engine<PL>) -> Self { Empty(PhantomData) }
 }

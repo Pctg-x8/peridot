@@ -33,7 +33,7 @@ impl<NL> Game<NL> {
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
-    fn init(e: &peridot::Engine<NL>) -> Self {
+    fn init(e: &mut peridot::Engine<NL>) -> Self {
         let renderpass = peridot::RenderPassTemplates::single_render(e.backbuffer_format())
             .create(e.graphics())
             .expect("Failed to create RenderPass");
