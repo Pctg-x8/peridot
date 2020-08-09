@@ -263,10 +263,10 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn update(
         &mut self, e: &peridot::Engine<NL>, on_backbuffer_of: u32, delta_time: std::time::Duration
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        self.update_data.time += delta_time.as_secs() as f32 * 1000.0 + delta_time.as_millis() as f32;
+        self.update_data.time += delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
 
         let current_mouse_input = e.input().button_pressing_time(INPUT_MOUSE_DOWN) > std::time::Duration::default();
-        if !current_mouse_input || (!self.last_mouse_input && current_mouse_input) {
+        if !self.last_mouse_input && current_mouse_input {
             self.update_data.time = 0.0;
         }
         self.last_mouse_input = current_mouse_input;
