@@ -20,7 +20,9 @@ pub fn init() {
             hwndTarget: std::ptr::null_mut()
         }
     ];
-    let r = unsafe { RegisterRawInputDevices(ri_devices.as_ptr(), ri_devices.len() as _, std::mem::size_of::<RAWINPUTDEVICE>() as _) };
+    let r = unsafe {
+        RegisterRawInputDevices(ri_devices.as_ptr(), ri_devices.len() as _, std::mem::size_of::<RAWINPUTDEVICE>() as _)
+    };
     if r == FALSE {
         let ec = unsafe { GetLastError() };
         error!("RegisterRawInputDevices failed! GetLastError={}", ec);
@@ -29,10 +31,20 @@ pub fn init() {
 
 pub fn handle_wm_input(wp: WPARAM, lp: LPARAM) {
     let mut buffer_size = 0;
-    unsafe { GetRawInputData(std::mem::transmute(lp), RID_INPUT, std::ptr::null_mut(), &mut buffer_size, std::mem::size_of::<RAWINPUTHEADER>() as _) };
+    unsafe {
+        GetRawInputData(
+            std::mem::transmute(lp), RID_INPUT,
+            std::ptr::null_mut(), &mut buffer_size, std::mem::size_of::<RAWINPUTHEADER>() as _
+        )
+    };
     if buffer_size == 0 { return; }
     let mut buffer = vec![0u8; buffer_size as usize];
-    unsafe { GetRawInputData(std::mem::transmute(lp), RID_INPUT, buffer.as_mut_ptr() as _, &mut buffer_size, std::mem::size_of::<RAWINPUTHEADER>() as _) };
+    unsafe {
+        GetRawInputData(
+            std::mem::transmute(lp), RID_INPUT,
+            buffer.as_mut_ptr() as _, &mut buffer_size, std::mem::size_of::<RAWINPUTHEADER>() as _
+        )
+    };
     let rinput = unsafe { &*(buffer.as_ptr() as *const RAWINPUT) };
 
     match rinput.header.dwType {
