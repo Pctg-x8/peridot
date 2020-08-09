@@ -25,6 +25,7 @@ pub struct Game<NL> {
     update_commands: peridot::CommandBundle,
     update_data: UniformValues,
     uniform_start_d: u64,
+    last_mouse_input: bool,
     _ph: std::marker::PhantomData<*const NL>
 }
 impl<NL> peridot::FeatureRequests for Game<NL> {}
@@ -34,6 +35,8 @@ impl<NL> Game<NL> {
 }
 impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn init(e: &mut peridot::Engine<NL>) -> Self {
+        e.input_mut().map(peridot::NativeButtonInput::Mouse(0), INPUT_MOUSE_DOWN);
+
         let renderpass = peridot::RenderPassTemplates::single_render(e.backbuffer_format())
             .create(e.graphics())
             .expect("Failed to create RenderPass");
@@ -252,14 +255,22 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             update_data,
             update_commands,
             uniform_start_d,
+            last_mouse_input: false,
             _ph: std::marker::PhantomData
         }
     }
 
     fn update(
-        &mut self, _e: &peridot::Engine<NL>, on_backbuffer_of: u32, delta_time: std::time::Duration
+        &mut self, e: &peridot::Engine<NL>, on_backbuffer_of: u32, delta_time: std::time::Duration
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         self.update_data.time += delta_time.as_secs() as f32 * 1000.0 + delta_time.as_millis() as f32;
+
+        let current_mouse_input = e.input().button_pressing_time(INPUT_MOUSE_DOWN) > std::time::Duration::default();
+        if !current_mouse_input || (!self.last_mouse_input && current_mouse_input) {
+            self.update_data.time = 0.0;
+        }
+        self.last_mouse_input = current_mouse_input;
+        
         self.dynamic_buffer.guard_map(
             self.uniform_start_d .. (self.uniform_start_d + std::mem::size_of::<UniformValues>() as u64),
             |m| unsafe { *m.get_mut(0) = self.update_data.clone(); }
