@@ -57,7 +57,9 @@ impl peridot::FixedBufferInitializer for FixedBufferInitializer {
 pub struct Game<NL> {
     renderpass: br::RenderPass,
     framebuffers: Vec<br::Framebuffer>,
+    _smp: br::Sampler,
     _dsl: br::DescriptorSetLayout,
+    _dsl2: br::DescriptorSetLayout,
     _descriptor_pool: br::DescriptorPool,
     descriptors: Vec<br::vk::VkDescriptorSet>,
     pipeline: peridot::LayoutedPipeline,
@@ -87,24 +89,33 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .map(|b| br::Framebuffer::new(&renderpass, &[b], b.size(), 1).expect("Failed to create Framebuffer"))
             .collect();
         
+        let smp = br::SamplerBuilder::default().create(e.graphics()).expect("Failed to create sampler");
         let dsl = br::DescriptorSetLayout::new(
             e.graphics(),
             &[br::DescriptorSetLayoutBinding::UniformBuffer(1, br::ShaderStage::VERTEX)]
         ).expect("Failed to create DescriptorSetLayout");
+        let dsl2 = br::DescriptorSetLayout::new(
+            e.graphics(),
+            &[br::DescriptorSetLayoutBinding::CombinedImageSampler(1, br::ShaderStage::FRAGMENT, &[smp.native_ptr()])]
+        ).expect("Failed to create DescriptorSetLayout for FragmentShader");
         let dp = br::DescriptorPool::new(
             e.graphics(),
-            1,
-            &[br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1)],
+            2,
+            &[
+                br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1),
+                br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 1)
+            ],
             false
         ).expect("Failed to create DescriptorPool");
-        let descriptors = dp.alloc(&[&dsl]).expect("Failed to alloc Required Descriptors");
+        let descriptors = dp.alloc(&[&dsl, &dsl2]).expect("Failed to alloc Required Descriptors");
         
         let shaders = peridot_vertex_processing_pack::PvpShaderModules::new(
             e.graphics(),
             e.load("shaders.blit").expect("Failed to blit shader")
         ).expect("Failed to generate ShaderModules");
         let vps = shaders.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        let pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[&dsl], &[]).expect("Failed to create PipelineLayout"));
+        let pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[&dsl, &dsl2], &[])
+            .expect("Failed to create PipelineLayout"));
 
         let scissors = [
             br::vk::VkRect2D::from(br::Extent2D::clone(e.backbuffers()[0].size().as_ref()))
@@ -153,19 +164,19 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             );
         }).expect("Failed to execute init command");
 
-        e.graphics().update_descriptor_sets(&[
-            br::DescriptorSetWriteInfo(
-                descriptors[0], 0, 0,
-                br::DescriptorUpdateInfo::UniformBuffer(
-                    vec![(
-                        buffers.buffer.0.native_ptr(), 
-                        (buffers.mut_buffer_placement + uniform_start_d) as usize .. (
-                            (buffers.mut_buffer_placement + uniform_start_d) as usize + std::mem::size_of::<UniformValues>()
-                        )
-                    )]
+        let mut dsub = peridot::DescriptorSetUpdateBatch::new();
+        dsub.write(descriptors[0], 0, br::DescriptorUpdateInfo::UniformBuffer(
+            vec![(
+                buffers.buffer.0.native_ptr(), 
+                (buffers.mut_buffer_placement + uniform_start_d) as usize .. (
+                    (buffers.mut_buffer_placement + uniform_start_d) as usize + std::mem::size_of::<UniformValues>()
                 )
-            )
-        ], &[]);
+            )]
+        ));
+        dsub.write(descriptors[1], 0, br::DescriptorUpdateInfo::CombinedImageSampler(
+            vec![(None, buffers.textures[0].native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)]
+        ));
+        dsub.submit(e.graphics());
 
         let main_commands = peridot::CommandBundle::new(
             e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffers().len()
@@ -241,7 +252,9 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         Game {
             renderpass,
             framebuffers,
+            _smp: smp,
             _dsl: dsl,
+            _dsl2: dsl2,
             _descriptor_pool: dp,
             descriptors,
             pipeline,

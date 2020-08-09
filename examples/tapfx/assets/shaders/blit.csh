@@ -8,7 +8,8 @@ Varyings VertexShader -> FragmentShader {
     uv_v: vec2;
 }
 FragmentShader {
-    Target[0] = vec4(uv_v, 0.0, 1.0);
+    const vec4 c = texture(tex, uv_v);
+    Target[0] = vec4(c.xyz, 1.0) * c.a;
 }
 
 Uniform[VertexShader](0, 0) UICamera {
@@ -16,3 +17,4 @@ Uniform[VertexShader](0, 0) UICamera {
     float time;
     vec2 offset;
 }
+Sampler2D[FragmentShader](1, 0) tex
