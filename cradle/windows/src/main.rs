@@ -34,15 +34,14 @@ impl GameDriver
         let nl = NativeLink
         {
             al: AssetProvider::new(),
-            prt: RenderTargetProvider(window),
-            input: InputHandler::new()
+            prt: RenderTargetProvider(window)
         };
         let mut base = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
         self::input::init();
-        let usercode = userlib::Game::init(&base);
+        let usercode = userlib::Game::init(&mut base);
         base.postinit();
 
         GameDriver
@@ -140,7 +139,6 @@ fn process_message_all() -> bool
     true
 }
 
-use std::rc::Rc;
 use bedrock as br;
 use std::path::PathBuf;
 
@@ -200,29 +198,12 @@ impl peridot::PlatformRenderTarget for RenderTargetProvider
     }
     fn current_geometry_extent(&self) -> (usize, usize) { (0, 0) }
 }
-struct InputHandler(Option<Rc<peridot::InputProcess>>);
-impl InputHandler
-{
-    fn new() -> Self
-    {
-        InputHandler(None)
-    }
-}
-impl peridot::InputProcessPlugin for InputHandler
-{
-    fn on_start_handle(&mut self, processor: &Rc<peridot::InputProcess>)
-    {
-        self.0 = Some(processor.clone());
-    }
-}
-struct NativeLink { al: AssetProvider, prt: RenderTargetProvider, input: InputHandler }
+struct NativeLink { al: AssetProvider, prt: RenderTargetProvider }
 impl peridot::NativeLinker for NativeLink
 {
     type AssetLoader = AssetProvider;
     type RenderTargetProvider = RenderTargetProvider;
-    type InputProcessor = InputHandler;
 
     fn asset_loader(&self) -> &AssetProvider { &self.al }
     fn render_target_provider(&self) -> &RenderTargetProvider { &self.prt }
-    fn input_processor_mut(&mut self) -> &mut InputHandler { &mut self.input }
 }
