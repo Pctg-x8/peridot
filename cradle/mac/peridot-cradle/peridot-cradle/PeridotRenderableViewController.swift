@@ -132,11 +132,11 @@ final class PeridotRenderableViewController : NSViewController {
                     self.enginePointer?.handleKeymodUp(code: KEYMOD_CONTROL)
                 }
                 if event.modifierFlags.contains(.capsLock) && !oldFlags.contains(.capsLock) {
-                    // shift on
+                    // caps on
                     self.enginePointer?.handleKeymodDown(code: KEYMOD_CAPSLOCK)
                 }
                 if !event.modifierFlags.contains(.capsLock) && oldFlags.contains(.capsLock) {
-                    // shift off
+                    // caps off
                     self.enginePointer?.handleKeymodUp(code: KEYMOD_CAPSLOCK)
                 }
                 oldFlags = event.modifierFlags
