@@ -64,6 +64,9 @@ impl MappableNativeInputType for NativeButtonInput {
     fn map_to(&self, p: &mut InputProcess, id: u16) {
         p.buttonmap.insert(*self, id);
         p.max_button_id = p.max_button_id.max(id);
+        if p.collected.borrow().button_pressing.len() != p.max_button_id as usize + 1 {
+            p.collected.borrow_mut().button_pressing.resize(p.max_button_id as usize + 1, false);
+        }
     }
 }
 impl MappableNativeInputType for NativeAnalogInput {
@@ -72,6 +75,9 @@ impl MappableNativeInputType for NativeAnalogInput {
     fn map_to(&self, p: &mut InputProcess, id: u8) {
         p.analogmap.insert(*self, id);
         p.max_analog_id = p.max_analog_id.max(id);
+        if p.collected.borrow().analog_values.len() != p.max_analog_id as usize + 1 {
+            p.collected.borrow_mut().analog_values.resize(p.max_analog_id as usize + 1, 0.0);
+        }
     }
 }
 
@@ -87,6 +93,9 @@ impl MappableNativeInputType for AxisKey {
         p.ax_pos_buttonmap.insert(self.positive_key, id);
         p.ax_neg_buttonmap.insert(self.negative_key, id);
         p.max_analog_id = p.max_analog_id.max(id);
+        if p.collected.borrow().analog_values.len() != p.max_analog_id as usize + 1 {
+            p.collected.borrow_mut().analog_values.resize(p.max_analog_id as usize + 1, 0.0);
+        }
     }
 }
 
