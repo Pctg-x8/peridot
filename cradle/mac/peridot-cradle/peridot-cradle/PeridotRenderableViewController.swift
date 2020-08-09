@@ -8,6 +8,36 @@
 
 import Foundation
 import Cocoa
+import Carbon
+
+final class CurrentKeyboardLayoutCodeConverter {
+    static let MAX_CHAR_LENGTH: Int = 4
+    private var keyboardLayout: UnsafePointer<UCKeyboardLayout>
+    
+    init() {
+        let isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
+        let isourceRef = unsafeBitCast(isource, to: CFData.self)
+        let isourceBytes = CFDataGetBytePtr(isourceRef)
+        self.keyboardLayout = unsafeBitCast(isourceBytes, to: UnsafePointer<UCKeyboardLayout>.self)
+    }
+    
+    func translate(_ code: UInt16) -> Optional<UnsafeMutablePointer<UniChar>> {
+        var deadKeyMask: UInt32 = 0
+        var charLength = 0
+        let charName = UnsafeMutablePointer<UniChar>.allocate(capacity: MAX_CHAR_LENGTH)
+        let r = UCKeyTranslate(
+            self.keyboardLayout,
+            code,
+            UInt16(kUCKeyActionDown),
+            0,
+            UInt32(LMGetKbdType()),
+            UInt32(kUCKeyTranslateNoDeadKeysMask),
+            &deadKeyMask,
+            MAX_CHAR_LENGTH, &charLength, charName
+        )
+        if r == noErr { return charName } else { return nil }
+    }
+}
 
 final class PeridotRenderableViewController : NSViewController {
     var dplink: CVDisplayLink? = nil
@@ -40,6 +70,8 @@ final class PeridotRenderableViewController : NSViewController {
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
         initDispatchers()
         
+        let kcTranslator = CurrentKeyboardLayoutCodeConverter()
+        
         let eventTypes: NSEvent.EventTypeMask = [
             .keyDown, .keyUp, .flagsChanged,
             .mouseMoved,
@@ -51,11 +83,21 @@ final class PeridotRenderableViewController : NSViewController {
         NSEvent.addLocalMonitorForEvents(matching: eventTypes) { event in
             switch event.type {
             case .keyDown:
-                if !event.isARepeat { NSLog("KeyDown event with \(event)") }
+                if !event.isARepeat {
+                    if let cs = kcTranslator.translate(event.keyCode) {
+                        NSLog("CharacterKeyDown: \(String(utf16CodeUnits: cs, count: CurrentKeyboardLayoutCodeConverter.MAX_CHAR_LENGTH))")
+                        self.enginePointer?.handleCharacterKeyDown(character: UInt8(cs.move()))
+                    }
+                }
             case .keyUp:
-                if !event.isARepeat { NSLog("KeyUp event with \(event)") }
+                if !event.isARepeat {
+                    if let cs = kcTranslator.translate(event.keyCode) {
+                        NSLog("CharacterKeyUp: \(String(utf16CodeUnits: cs, count: CurrentKeyboardLayoutCodeConverter.MAX_CHAR_LENGTH))")
+                        self.enginePointer?.handleCharacterKeyUp(character: UInt8(cs.move()))
+                    }
+                }
             case .flagsChanged:
-                if !event.isARepeat { NSLog("FlagsChanged event with \(event)") }
+                NSLog("FlagsChanged event with \(event)")
             case .mouseMoved:
                 NSLog("MouseMove event with \(event)")
             case .leftMouseDown:

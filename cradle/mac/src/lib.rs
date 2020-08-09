@@ -289,3 +289,14 @@ pub extern "C" fn captionbar_text() -> *mut c_void
     NSString::from_str(&format!("{} v{}.{}.{}", Game::NAME, Game::VERSION.0, Game::VERSION.1, Game::VERSION.2))
         .expect("CaptionbarText NSString Allocation").into_id() as *mut _
 }
+
+#[no_mangle]
+pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
+    trace!("Dispatching Character Down Event: {}", character);
+    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Character(character as _), true); }
+}
+#[no_mangle]
+pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
+    trace!("Dispatching Character Up Event: {}", character);
+    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Character(character as _), false); }
+}

@@ -26,6 +26,13 @@ final class NativeGameEngine {
         resize_game(self.p, UInt32(newSize.width), UInt32(newSize.height))
     }
     
+    func handleCharacterKeyDown(character: UInt8) {
+        handle_character_keydown(self.p, character)
+    }
+    func handleCharacterKeyUp(character: UInt8) {
+        handle_character_keyup(self.p, character)
+    }
+    
     static func captionbarText() -> NSString? {
         let p = captionbar_text()
         return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
