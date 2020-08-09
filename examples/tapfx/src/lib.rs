@@ -274,10 +274,8 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let current_mouse_input = e.input().button_pressing_time(INPUT_PLANE_DOWN) > std::time::Duration::default();
         if !self.last_mouse_input && current_mouse_input {
             self.update_data.time = 0.0;
-            self.update_data.offset = peridot::math::Vector2(
-                e.input().analog_value_abs(INPUT_PLANE_LEFT),
-                e.input().analog_value_abs(INPUT_PLANE_TOP)
-            );
+            let (ox, oy) = e.input().get_plane_position(0).unwrap_or((0.0, 0.0));
+            self.update_data.offset = peridot::math::Vector2(ox, oy);
         }
         self.last_mouse_input = current_mouse_input;
         
