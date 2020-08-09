@@ -50,11 +50,7 @@ pub enum NativeAnalogInput {
     /// Xbox controller specific
     LeftTrigger,
     /// Xbox controller specific
-    RightTrigger,
-    /// Mouse(0) or Pointer(0..)
-    PointerX(u32),
-    /// Mouse(0) or Pointer(0..)
-    PointerY(u32)
+    RightTrigger
 }
 
 pub trait MappableNativeInputType {
