@@ -22,14 +22,14 @@ impl Game
             prt: PlatformWindowHandler(window),
             input: PlatformInputProcessPlugin::new()
         };
-        let engine = peridot::Engine::new(
+        let mut engine = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
 
         Game
         {
-            userlib: userlib::Game::init(&engine),
+            userlib: userlib::Game::init(&mut engine),
             engine
         }
     }

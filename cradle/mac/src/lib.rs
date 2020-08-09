@@ -216,8 +216,8 @@ impl GameDriver
     pub fn new(rt_view: *mut libc::c_void) -> Self
     {
         let nl = NativeLink::new(rt_view);
-        let engine = Engine::new(Game::NAME, Game::VERSION, nl, Game::requested_features());
-        let usercode = Game::init(&engine);
+        let mut engine = Engine::new(Game::NAME, Game::VERSION, nl, Game::requested_features());
+        let usercode = Game::init(&mut engine);
 
         GameDriver { engine, usercode }
     }
