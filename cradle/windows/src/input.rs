@@ -25,7 +25,9 @@ impl RawInputHandler {
             }
         ];
         let r = unsafe {
-            RegisterRawInputDevices(ri_devices.as_ptr(), ri_devices.len() as _, std::mem::size_of::<RAWINPUTDEVICE>() as _)
+            RegisterRawInputDevices(
+                ri_devices.as_ptr(), ri_devices.len() as _, std::mem::size_of::<RAWINPUTDEVICE>() as _
+            )
         };
         if r == FALSE {
             let ec = unsafe { GetLastError() };
