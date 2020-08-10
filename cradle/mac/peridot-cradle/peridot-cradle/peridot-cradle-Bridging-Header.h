@@ -29,6 +29,9 @@ void handle_character_keyup(GameRun* engineptr, uint8_t character);
 void handle_keymod_down(GameRun* engineptr, uint8_t code);
 void handle_keymod_up(GameRun* engineptr, uint8_t code);
 
+void handle_mouse_button_down(GameRun* engineptr, uint8_t index);
+void handle_mouse_button_up(GameRun* engineptr, uint8_t index);
+
 void* captionbar_text();
 
 #endif /* peridot_cradle_Bridging_Header_h */

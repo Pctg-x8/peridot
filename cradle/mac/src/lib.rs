@@ -312,3 +312,12 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
     };
     unsafe { (*g).engine.input().dispatch_button_event(code_to_bty, false); }
 }
+
+#[no_mangle]
+pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
+    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), true); }
+}
+#[no_mangle]
+pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
+    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false); }
+}

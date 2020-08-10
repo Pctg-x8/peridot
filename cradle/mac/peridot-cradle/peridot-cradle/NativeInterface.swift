@@ -39,6 +39,9 @@ final class NativeGameEngine {
         handle_keymod_up(self.p, code)
     }
     
+    func handleMouseButtonDown(index: UInt8) { handle_mouse_button_down(self.p, index) }
+    func handleMouseButtonUp(index: UInt8) { handle_mouse_button_up(self.p, index) }
+    
     static func captionbarText() -> NSString? {
         let p = captionbar_text()
         return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }

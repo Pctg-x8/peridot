@@ -143,13 +143,13 @@ final class PeridotRenderableViewController : NSViewController {
             case .mouseMoved:
                 NSLog("MouseMove event with \(event)")
             case .leftMouseDown:
-                NSLog("LeftMouseDown event with \(event)")
+                self.enginePointer?.handleMouseButtonDown(index: 0)
             case .leftMouseUp:
-                NSLog("LeftMouseUp event with \(event)")
+                self.enginePointer?.handleMouseButtonUp(index: 0)
             case .rightMouseDown:
-                NSLog("RightMouseDown event with \(event)")
+                self.enginePointer?.handleMouseButtonDown(index: 1)
             case .rightMouseUp:
-                NSLog("RightMouseUp event with \(event)")
+                self.enginePointer?.handleMouseButtonUp(index: 1)
             case .otherMouseDown:
                 NSLog("OtherMouseDown event with \(event)")
             case .otherMouseUp:
