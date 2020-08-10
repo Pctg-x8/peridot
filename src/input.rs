@@ -1,5 +1,4 @@
 
-use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -65,6 +64,9 @@ impl MappableNativeInputType for NativeButtonInput {
     fn map_to(&self, p: &mut InputProcess, id: u16) {
         p.buttonmap.insert(*self, id);
         p.max_button_id = p.max_button_id.max(id);
+        if p.collected.borrow().button_pressing.len() != p.max_button_id as usize + 1 {
+            p.collected.borrow_mut().button_pressing.resize(p.max_button_id as usize + 1, false);
+        }
     }
 }
 impl MappableNativeInputType for NativeAnalogInput {
@@ -73,6 +75,9 @@ impl MappableNativeInputType for NativeAnalogInput {
     fn map_to(&self, p: &mut InputProcess, id: u8) {
         p.analogmap.insert(*self, id);
         p.max_analog_id = p.max_analog_id.max(id);
+        if p.collected.borrow().analog_values.len() != p.max_analog_id as usize + 1 {
+            p.collected.borrow_mut().analog_values.resize(p.max_analog_id as usize + 1, 0.0);
+        }
     }
 }
 
@@ -88,10 +93,18 @@ impl MappableNativeInputType for AxisKey {
         p.ax_pos_buttonmap.insert(self.positive_key, id);
         p.ax_neg_buttonmap.insert(self.negative_key, id);
         p.max_analog_id = p.max_analog_id.max(id);
+        if p.collected.borrow().analog_values.len() != p.max_analog_id as usize + 1 {
+            p.collected.borrow_mut().ax_button_pressing.resize(p.max_analog_id as usize + 1, (false, false));
+            p.collected.borrow_mut().analog_values.resize(p.max_analog_id as usize + 1, 0.0);
+        }
     }
 }
 
 type InputMap<T> = HashMap<T, <T as MappableNativeInputType>::ID>;
+
+pub trait NativeInput {
+    fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)>;
+}
 
 const MAX_MOUSE_BUTTONS: usize = 5;
 struct AsyncCollectedData {
@@ -107,6 +120,7 @@ struct FrameData {
     analog_values_abs: Vec<f32>
 }
 pub struct InputProcess {
+    nativelink: Option<Box<dyn NativeInput>>,
     collected: RefCell<AsyncCollectedData>, frame: RefCell<FrameData>,
     buttonmap: InputMap<NativeButtonInput>,
     analogmap: InputMap<NativeAnalogInput>,
@@ -114,9 +128,6 @@ pub struct InputProcess {
     ax_neg_buttonmap: HashMap<NativeButtonInput, <NativeAnalogInput as MappableNativeInputType>::ID>,
     max_button_id: <NativeButtonInput as MappableNativeInputType>::ID,
     max_analog_id: <NativeAnalogInput as MappableNativeInputType>::ID
-}
-pub trait InputProcessPlugin {
-    fn on_start_handle(&mut self, processor: &Rc<InputProcess>);
 }
 impl InputProcess {
     pub fn new() -> Self {
@@ -134,6 +145,7 @@ impl InputProcess {
         };
 
         return InputProcess {
+            nativelink: None,
             collected: cd.into(), frame: fd.into(),
             buttonmap: HashMap::new(),
             analogmap: HashMap::new(),
@@ -142,6 +154,9 @@ impl InputProcess {
             max_button_id: 0,
             max_analog_id: 0
         };
+    }
+    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput>) {
+        self.nativelink = Some(n);
     }
 
     /// Cradle to Engine: Native Event Handler
@@ -170,6 +185,14 @@ impl InputProcess {
     pub fn prepare_for_frame(&self, delta_time: std::time::Duration) {
         let mut cd = self.collected.borrow_mut();
         let mut fd = self.frame.borrow_mut();
+
+        // Adjust slot size
+        if cd.button_pressing.len() != fd.button_press_time.len() {
+            fd.button_press_time.resize(cd.button_pressing.len(), std::time::Duration::default());
+        }
+        if cd.analog_values.len() != fd.analog_values_abs.len() {
+            fd.analog_values_abs.resize(cd.analog_values.len(), 0.0);
+        }
 
         for (n, f) in cd.button_pressing.iter_mut().enumerate() {
             if *f {
@@ -229,5 +252,10 @@ impl InputProcess {
     pub fn mouse_delta_move(&self) -> (f32, f32)
     {
         (self.frame.borrow().mouse_motion_x, self.frame.borrow().mouse_motion_y)
+    }
+
+    /// Gets plane interacting position. pointer_id=0 means Generic Mouse Input
+    pub fn get_plane_position(&self, pointer_id: u32) -> Option<(f32, f32)> {
+        self.nativelink.as_ref()?.get_pointer_position(pointer_id)
     }
 }
