@@ -59,3 +59,17 @@ func nsscreen_backing_scale_factor() -> Float32 {
     guard let mainScreen = NSScreen.main else { return 0.0 }
     return Float32(mainScreen.backingScaleFactor)
 }
+
+@_cdecl("obtain_mouse_pointer_position")
+func obtain_mouse_pointer_position(
+    viewptr: UnsafeMutableRawPointer,
+    x: UnsafeMutablePointer<Float32>,
+    y: UnsafeMutablePointer<Float32>
+) {
+    let v = unsafeBitCast(viewptr, to: PeridotRenderableView.self)
+    if let p = v.window?.mouseLocationOutsideOfEventStream {
+        let h = v.frame.height - 3.0
+        x.pointee = Float32(p.x - 1.0) * nsscreen_backing_scale_factor()
+        y.pointee = Float32(h - p.y - 2.0) * nsscreen_backing_scale_factor()
+    }
+}

@@ -43,6 +43,7 @@ final class PeridotRenderableViewController : NSViewController {
     var dplink: CVDisplayLink? = nil
     var enginePointer: NativeGameEngine? = nil
     var workDispatcher: DispatchSourceUserDataAdd? = nil
+    var clientMousePoint = CGPoint(x: 0, y: 0)
     
     func initDispatchers() {
         func onUpdateDisplay(_ _: CVDisplayLink,
@@ -69,6 +70,10 @@ final class PeridotRenderableViewController : NSViewController {
         self.enginePointer = NativeGameEngine(forView: &self.view)
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
         initDispatchers()
+        
+        if let p = self.view.window?.mouseLocationOutsideOfEventStream {
+            self.clientMousePoint = p
+        }
         
         let kcTranslator = CurrentKeyboardLayoutCodeConverter()
         var oldFlags: NSEvent.ModifierFlags = NSEvent.ModifierFlags(rawValue: 0)
@@ -141,6 +146,7 @@ final class PeridotRenderableViewController : NSViewController {
                 }
                 oldFlags = event.modifierFlags
             case .mouseMoved:
+                self.clientMousePoint = event.locationInWindow
                 NSLog("MouseMove event with \(event)")
             case .leftMouseDown:
                 self.enginePointer?.handleMouseButtonDown(index: 0)

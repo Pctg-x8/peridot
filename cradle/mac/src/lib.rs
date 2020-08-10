@@ -218,6 +218,8 @@ impl GameDriver
         let nl = NativeLink::new(rt_view);
         let mut engine = Engine::new(Game::NAME, Game::VERSION, nl, Game::requested_features());
         let usercode = Game::init(&mut engine);
+        let nih = Box::new(NativeInputHandler::new(rt_view));
+        engine.input_mut().set_nativelink(nih);
 
         GameDriver { engine, usercode }
     }
@@ -238,6 +240,7 @@ extern "C"
 {
     fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
     fn nsscreen_backing_scale_factor() -> f32;
+    fn obtain_mouse_pointer_position(rt_view: *mut libc::c_void, x: *mut f32, y: *mut f32);
 }
 
 #[no_mangle]
@@ -311,6 +314,27 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
         _ => return
     };
     unsafe { (*g).engine.input().dispatch_button_event(code_to_bty, false); }
+}
+
+struct NativeInputHandler {
+    rt_view: *mut libc::c_void
+}
+impl NativeInputHandler {
+    fn new(rt_view: *mut libc::c_void) -> Self {
+        NativeInputHandler { rt_view }
+    }
+}
+impl peridot::NativeInput for NativeInputHandler {
+    fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)> {
+        if index == 0 {
+            let (mut x, mut y) = (0.0, 0.0);
+            unsafe { obtain_mouse_pointer_position(self.rt_view, &mut x, &mut y); }
+
+            Some((x, y))
+        } else {
+            None
+        }
+    }
 }
 
 #[no_mangle]
