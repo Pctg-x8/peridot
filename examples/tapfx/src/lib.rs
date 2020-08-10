@@ -199,7 +199,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 },
                 .. Default::default()
             }.projection_matrix(),
-            time: 0.0,
+            time: 1.0,
             offset: peridot::math::Vector2(0.0, 0.0),
             _resv: 0.0
         };
