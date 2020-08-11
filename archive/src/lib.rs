@@ -5,7 +5,7 @@ use std::io::prelude::{Write, Read, BufRead};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::{SeekFrom, Seek, BufReader};
 use std::fs::File;
-use std::mem::{transmute, replace};
+use std::mem::transmute;
 use std::collections::HashMap;
 use libflate::deflate as zlib; use lz4_compression; use zstd;
 use crc::crc32;
@@ -125,7 +125,7 @@ impl WhereArchive
             r.read_to_end(&mut buf)?; Some(buf)
         }
         else { None };
-        if let Some(b) = replace_buf { replace(self, WhereArchive::OnMemory(b)); }
+        if let Some(b) = replace_buf { *self = WhereArchive::OnMemory(b); }
         match self
         {
             WhereArchive::OnMemory(ref b) => Ok(b),
