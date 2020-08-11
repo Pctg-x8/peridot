@@ -92,14 +92,14 @@ final class PeridotRenderableViewController : NSViewController {
                 if !event.isARepeat {
                     if let cs = kcTranslator.translate(event.keyCode) {
                         NSLog("CharacterKeyDown: \(String(utf16CodeUnits: cs, count: CurrentKeyboardLayoutCodeConverter.MAX_CHAR_LENGTH))")
-                        self.enginePointer?.handleCharacterKeyDown(character: UInt8(cs.move()))
+                        self.enginePointer?.handleCharacterKeyDown(character: UInt8(cs.pointee))
                     }
                 }
             case .keyUp:
                 if !event.isARepeat {
                     if let cs = kcTranslator.translate(event.keyCode) {
                         NSLog("CharacterKeyUp: \(String(utf16CodeUnits: cs, count: CurrentKeyboardLayoutCodeConverter.MAX_CHAR_LENGTH))")
-                        self.enginePointer?.handleCharacterKeyUp(character: UInt8(cs.move()))
+                        self.enginePointer?.handleCharacterKeyUp(character: UInt8(cs.pointee))
                     }
                 }
             case .flagsChanged:

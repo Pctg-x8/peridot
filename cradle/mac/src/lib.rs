@@ -276,12 +276,20 @@ pub extern "C" fn captionbar_text() -> *mut c_void
 #[no_mangle]
 pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Down Event: {}", character);
-    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Character(character as _), true); }
+    unsafe {
+        (*g).engine.input().dispatch_button_event(
+            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()), true
+        );
+    }
 }
 #[no_mangle]
 pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Up Event: {}", character);
-    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Character(character as _), false); }
+    unsafe {
+        (*g).engine.input().dispatch_button_event(
+            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()), false
+        );
+    }
 }
 
 const KEYMOD_SHIFT: u8 = 1;
