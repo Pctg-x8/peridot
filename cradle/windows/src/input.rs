@@ -62,7 +62,7 @@ impl RawInputHandler {
         match rinput.header.dwType {
             RIM_TYPEKEYBOARD => {
                 let kd = unsafe { rinput.data.keyboard() };
-                debug!(
+                /*debug!(
                     "Keyboard Message! make={} flags={} reserved={} extinfo={} message={} vkey={}",
                     kd.MakeCode,
                     kd.Flags,
@@ -70,7 +70,7 @@ impl RawInputHandler {
                     kd.ExtraInformation,
                     kd.Message,
                     kd.VKey
-                );
+                );*/
                 let is_press = (kd.Flags as u32 & wu::RI_KEY_BREAK) != 0;
                 let ty = match kd.VKey as i32 {
                     wu::VK_BACK => NativeButtonInput::Backspace,
