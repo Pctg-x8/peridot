@@ -1,12 +1,15 @@
 
 use winapi::um::winuser::{
-    RegisterRawInputDevices, GetRawInputData, GetCursorPos, MapWindowPoints,
+    RegisterRawInputDevices, GetRawInputData, GetCursorPos, MapWindowPoints, MapVirtualKeyA,
     RAWINPUTDEVICE, RAWINPUTHEADER, RAWINPUT, RIDEV_NOLEGACY, RID_INPUT,
-    RIM_TYPEKEYBOARD, RIM_TYPEMOUSE
+    RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+    MAPVK_VK_TO_CHAR
 };
+use winapi::um::winuser as wu;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::shared::minwindef::{FALSE, LPARAM};
 use winapi::shared::windef::{HWND, POINT};
+use peridot::{NativeButtonInput, NativeAnalogInput};
 
 pub struct RawInputHandler {
 }
@@ -68,10 +71,66 @@ impl RawInputHandler {
                     kd.Message,
                     kd.VKey
                 );
+                let is_press = (kd.Flags as u32 & wu::RI_KEY_BREAK) != 0;
+                let ty = match kd.VKey as i32 {
+                    wu::VK_BACK => NativeButtonInput::Backspace,
+                    wu::VK_RETURN => NativeButtonInput::Enter,
+                    wu::VK_LSHIFT => NativeButtonInput::LeftShift,
+                    wu::VK_RSHIFT => NativeButtonInput::RightShift,
+                    wu::VK_LCONTROL => NativeButtonInput::LeftControl,
+                    wu::VK_RCONTROL => NativeButtonInput::RightControl,
+                    wu::VK_LWIN => NativeButtonInput::LeftMeta,
+                    wu::VK_RWIN => NativeButtonInput::RightMeta,
+                    wu::VK_LMENU => NativeButtonInput::LeftAlt,
+                    wu::VK_RMENU => NativeButtonInput::RightAlt,
+                    wu::VK_CAPITAL => NativeButtonInput::CapsLock,
+                    wu::VK_ESCAPE => NativeButtonInput::Esc,
+                    wu::VK_SPACE => NativeButtonInput::Character(' '),
+                    wu::VK_LEFT => NativeButtonInput::LeftArrow,
+                    wu::VK_RIGHT => NativeButtonInput::RightArrow,
+                    wu::VK_UP => NativeButtonInput::UpArrow,
+                    wu::VK_DOWN => NativeButtonInput::DownArrow,
+                    c if ((b'0' as i32) ..= (b'9' as i32)).contains(&c) => NativeButtonInput::Character(c as u8 as _),
+                    c if ((b'A' as i32) ..= (b'Z' as i32)).contains(&c) => NativeButtonInput::Character(c as u8 as _),
+                    c if ((b'a' as i32) ..= (b'z' as i32)).contains(&c) => NativeButtonInput::Character(
+                        (c as u8 as char).to_ascii_uppercase()
+                    ),
+                    c @ wu::VK_NUMPAD0 ..= wu::VK_NUMPAD9 => NativeButtonInput::Character(
+                        (b'0' + (c - wu::VK_NUMPAD0) as u8) as _
+                    ),
+                    c @ wu::VK_F1 ..= wu::VK_F24 => NativeButtonInput::FunctionKey(1 + (c - wu::VK_F1) as u8),
+                    // multi emu
+                    wu::VK_SHIFT => {
+                        p.dispatch_button_event(NativeButtonInput::LeftShift, is_press);
+                        p.dispatch_button_event(NativeButtonInput::RightShift, is_press);
+                        return;
+                    },
+                    wu::VK_CONTROL => {
+                        p.dispatch_button_event(NativeButtonInput::LeftControl, is_press);
+                        p.dispatch_button_event(NativeButtonInput::RightControl, is_press);
+                        return;
+                    },
+                    wu::VK_MENU => {
+                        p.dispatch_button_event(NativeButtonInput::LeftAlt, is_press);
+                        p.dispatch_button_event(NativeButtonInput::RightAlt, is_press);
+                        return;
+                    },
+                    // others
+                    _ => {
+                        let c = unsafe { MapVirtualKeyA(kd.VKey as _, MAPVK_VK_TO_CHAR) };
+                        if c != 0 {
+                            NativeButtonInput::Character((c as u8 as char).to_ascii_uppercase())
+                        } else {
+                            debug!("Unhandled key input: {}", kd.VKey);
+                            return;
+                        }
+                    }
+                };
+                p.dispatch_button_event(ty, is_press);
             },
             RIM_TYPEMOUSE => {
                 let md = unsafe { rinput.data.mouse() };
-                debug!(
+                /*debug!(
                     "Mouse Message! flags={} btnFlags={} btnData={} rawButtons={} lastX={} lastY={} extinfo={}",
                     md.usFlags,
                     md.usButtonFlags,
@@ -80,17 +139,19 @@ impl RawInputHandler {
                     md.lLastX,
                     md.lLastY,
                     md.ulExtraInformation
-                );
+                );*/
                 for x in 0 .. 8 {
                     if (md.usButtonFlags & (1 << (x * 2 + 0))) != 0 {
                         // Mouse Button Down
-                        p.dispatch_button_event(peridot::NativeButtonInput::Mouse(x), true);
+                        p.dispatch_button_event(NativeButtonInput::Mouse(x), true);
                     }
                     if (md.usButtonFlags & (1 << (x * 2 + 1))) != 0 {
                         // Mouse Button Up
-                        p.dispatch_button_event(peridot::NativeButtonInput::Mouse(x), false);
+                        p.dispatch_button_event(NativeButtonInput::Mouse(x), false);
                     }
                 }
+                if md.lLastX != 0 { p.dispatch_analog_event(NativeAnalogInput::MouseX, md.lLastX as _, false); }
+                if md.lLastY != 0 { p.dispatch_analog_event(NativeAnalogInput::MouseY, md.lLastY as _, false); }
             },
             ut => {
                 debug!("Unknown input: {}", ut);
