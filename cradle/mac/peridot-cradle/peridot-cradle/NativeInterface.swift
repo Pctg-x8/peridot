@@ -68,8 +68,11 @@ func obtain_mouse_pointer_position(
 ) {
     let v = unsafeBitCast(viewptr, to: PeridotRenderableView.self)
     if let p = v.window?.mouseLocationOutsideOfEventStream {
-        let h = v.frame.height - 3.0
-        x.pointee = Float32(p.x - 1.0) * nsscreen_backing_scale_factor()
-        y.pointee = Float32(h - p.y - 2.0) * nsscreen_backing_scale_factor()
+        let h = v.frame.height
+        var pl = v.convert(p, from: nil)
+        // Note: MacBook Pro 16inch 2019だとなぜかpの時点で5.0だけずれてる
+        pl.y += 5.0
+        x.pointee = Float32(pl.x) * nsscreen_backing_scale_factor()
+        y.pointee = Float32(h - pl.y) * nsscreen_backing_scale_factor()
     }
 }
