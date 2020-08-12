@@ -21,7 +21,7 @@ class NativeActivity : AppCompatActivity(), Choreographer.FrameCallback {
 
         this.hideDecorationUIs()
 
-        val surface = SurfaceView(this)
+        val surface = PeridotSurfaceView(this)
         surface.holder.addCallback(SurfaceCallback(this))
         setContentView(surface)
         Choreographer.getInstance().postFrameCallback(this)
