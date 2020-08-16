@@ -11,8 +11,7 @@ use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
 
 use std::mem::MaybeUninit;
-#[macro_use] extern crate log;
-#[macro_use] extern crate peridot_derive;
+use log::*;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
 

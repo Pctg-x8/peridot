@@ -1,7 +1,7 @@
 
 use std::marker::PhantomData;
-#[macro_use] extern crate log;
-#[macro_use] extern crate peridot_derive;
+use log::*;
+use peridot_derive::SpecConstantStorage;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
