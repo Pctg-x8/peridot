@@ -6,12 +6,13 @@ use winapi::um::winuser::{
     MAPVK_VK_TO_CHAR
 };
 use winapi::um::winuser as wu;
-use winapi::um::xinput::{XInputEnable, XInputGetState, XINPUT_STATE};
+use winapi::um::xinput::*;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::shared::minwindef::{TRUE, FALSE, LPARAM};
 use winapi::shared::windef::{HWND, POINT};
 use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use peridot::{NativeButtonInput, NativeAnalogInput};
+use std::cell::RefCell;
 
 pub struct RawInputHandler {
 }
@@ -164,13 +165,13 @@ impl RawInputHandler {
 
 pub struct NativeInputHandler {
     target_hw: HWND,
-    xi_handler: XInputHandler
+    xi_handler: RefCell<XInputHandler>
 }
 impl NativeInputHandler {
     pub fn new(hw: HWND) -> Self {
         NativeInputHandler {
             target_hw: hw,
-            xi_handler: XInputHandler::new()
+            xi_handler: RefCell::new(XInputHandler::new())
         }
     }
 }
@@ -181,6 +182,9 @@ impl peridot::NativeInput for NativeInputHandler {
         let mut p0 = POINT { x: 0, y: 0 };
         unsafe { GetCursorPos(&mut p0); MapWindowPoints(std::ptr::null_mut(), self.target_hw, &mut p0, 1); }
         Some((p0.x as _, p0.y as _))
+    }
+    fn pull(&self, p: &peridot::InputProcess) {
+        self.xi_handler.borrow_mut().process_state_changes(p);
     }
 }
 
@@ -198,7 +202,7 @@ impl XInputHandler {
         }
     }
 
-    pub fn process_state_changes(&mut self) {
+    pub fn process_state_changes(&mut self, p: &peridot::InputProcess) {
         for n in 0 .. Self::MAX_CONTROLLERS {
             let mut new_state = std::mem::MaybeUninit::<XINPUT_STATE>::uninit();
             let r = unsafe { XInputGetState(n as _, new_state.as_mut_ptr()) };
@@ -208,17 +212,90 @@ impl XInputHandler {
             if let Some(old_state) = self.current_state[n].take() {
                 if !connected {
                     // disconnected controller
-                    info!("Disconnected Controller #{}", n);
+                    info!("Disconnected XInput Controller from #{}", n);
+                    Self::dispatch_diff(&old_state, unsafe { &std::mem::MaybeUninit::zeroed().assume_init() }, p);
                 } else if old_state.dwPacketNumber != new_state.dwPacketNumber {
                     // has changes
-                    info!("Controller packet changes #{}", n);
+                    Self::dispatch_diff(&old_state, &new_state, p);
                 }
             } else if connected {
                 // new connected controller
-                info!("Connected Controller #{}", n);
+                info!("Connected XInput Controller at #{}", n);
+                Self::dispatch_diff(unsafe { &std::mem::MaybeUninit::zeroed().assume_init() }, &new_state, p);
             }
 
             self.current_state[n] = if connected { Some(new_state) } else { None };
         }
     }
+
+    fn dispatch_diff(old_state: &XINPUT_STATE, new_state: &XINPUT_STATE, p: &peridot::InputProcess) {
+        let button_diff_bits = new_state.Gamepad.wButtons ^ old_state.Gamepad.wButtons;
+        for &(bit, ity) in &[
+            (XINPUT_GAMEPAD_A, NativeButtonInput::ButtonA),
+            (XINPUT_GAMEPAD_B, NativeButtonInput::ButtonB),
+            (XINPUT_GAMEPAD_X, NativeButtonInput::ButtonX),
+            (XINPUT_GAMEPAD_Y, NativeButtonInput::ButtonY),
+            (XINPUT_GAMEPAD_START, NativeButtonInput::ButtonStart),
+            (XINPUT_GAMEPAD_BACK, NativeButtonInput::ButtonSelect),
+            (XINPUT_GAMEPAD_DPAD_UP, NativeButtonInput::POVUp),
+            (XINPUT_GAMEPAD_DPAD_DOWN, NativeButtonInput::POVDown),
+            (XINPUT_GAMEPAD_DPAD_LEFT, NativeButtonInput::POVLeft),
+            (XINPUT_GAMEPAD_DPAD_RIGHT, NativeButtonInput::POVRight),
+            (XINPUT_GAMEPAD_LEFT_THUMB, NativeButtonInput::Stick(0)),
+            (XINPUT_GAMEPAD_RIGHT_THUMB, NativeButtonInput::Stick(1)),
+            (XINPUT_GAMEPAD_LEFT_SHOULDER, NativeButtonInput::ButtonL),
+            (XINPUT_GAMEPAD_RIGHT_SHOULDER, NativeButtonInput::ButtonR)
+        ] {
+            if (button_diff_bits & bit) != 0 {
+                p.dispatch_button_event(ity, (new_state.Gamepad.wButtons & bit) != 0);
+            }
+        }
+
+        if new_state.Gamepad.bLeftTrigger != old_state.Gamepad.bLeftTrigger {
+            p.dispatch_analog_event(
+                NativeAnalogInput::LeftTrigger,
+                new_state.Gamepad.bLeftTrigger as f32 / 255.0,
+                true
+            );
+        }
+        if new_state.Gamepad.bRightTrigger != old_state.Gamepad.bRightTrigger {
+            p.dispatch_analog_event(
+                NativeAnalogInput::RightTrigger,
+                new_state.Gamepad.bRightTrigger as f32 / 255.0,
+                true
+            );
+        }
+        if new_state.Gamepad.sThumbLX != old_state.Gamepad.sThumbLX {
+            p.dispatch_analog_event(
+                NativeAnalogInput::StickX(0),
+                normalize_short(new_state.Gamepad.sThumbLX),
+                true
+            );
+        }
+        if new_state.Gamepad.sThumbLY != old_state.Gamepad.sThumbLY {
+            p.dispatch_analog_event(
+                NativeAnalogInput::StickY(0),
+                normalize_short(new_state.Gamepad.sThumbLY),
+                true
+            );
+        }
+        if new_state.Gamepad.sThumbRX != old_state.Gamepad.sThumbRX {
+            p.dispatch_analog_event(
+                NativeAnalogInput::StickX(1),
+                normalize_short(new_state.Gamepad.sThumbRX),
+                true
+            );
+        }
+        if new_state.Gamepad.sThumbRY != old_state.Gamepad.sThumbRY {
+            p.dispatch_analog_event(
+                NativeAnalogInput::StickY(1),
+                normalize_short(new_state.Gamepad.sThumbRY),
+                true
+            );
+        }
+    }
+}
+
+fn normalize_short(x: winapi::shared::ntdef::SHORT) -> f32 {
+    if x > 0 { x as f32 / 32767.0 } else { -(-(x as f32) / 32768.0) }
 }
