@@ -6,9 +6,11 @@ use winapi::um::winuser::{
     MAPVK_VK_TO_CHAR
 };
 use winapi::um::winuser as wu;
+use winapi::um::xinput::{XInputEnable, XInputGetState, XINPUT_STATE};
 use winapi::um::errhandlingapi::GetLastError;
-use winapi::shared::minwindef::{FALSE, LPARAM};
+use winapi::shared::minwindef::{TRUE, FALSE, LPARAM};
 use winapi::shared::windef::{HWND, POINT};
+use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use peridot::{NativeButtonInput, NativeAnalogInput};
 
 pub struct RawInputHandler {
@@ -161,12 +163,14 @@ impl RawInputHandler {
 }
 
 pub struct NativeInputHandler {
-    target_hw: HWND
+    target_hw: HWND,
+    xi_handler: XInputHandler
 }
 impl NativeInputHandler {
     pub fn new(hw: HWND) -> Self {
         NativeInputHandler {
-            target_hw: hw
+            target_hw: hw,
+            xi_handler: XInputHandler::new()
         }
     }
 }
@@ -177,5 +181,44 @@ impl peridot::NativeInput for NativeInputHandler {
         let mut p0 = POINT { x: 0, y: 0 };
         unsafe { GetCursorPos(&mut p0); MapWindowPoints(std::ptr::null_mut(), self.target_hw, &mut p0, 1); }
         Some((p0.x as _, p0.y as _))
+    }
+}
+
+pub struct XInputHandler {
+    current_state: [Option<XINPUT_STATE>; Self::MAX_CONTROLLERS]
+}
+impl XInputHandler {
+    const MAX_CONTROLLERS: usize = 4;
+
+    pub fn new() -> Self {
+        unsafe { XInputEnable(TRUE); }
+
+        XInputHandler {
+            current_state: [None; Self::MAX_CONTROLLERS]
+        }
+    }
+
+    pub fn process_state_changes(&mut self) {
+        for n in 0 .. Self::MAX_CONTROLLERS {
+            let mut new_state = std::mem::MaybeUninit::<XINPUT_STATE>::uninit();
+            let r = unsafe { XInputGetState(n as _, new_state.as_mut_ptr()) };
+            let connected = r != ERROR_DEVICE_NOT_CONNECTED;
+            let new_state = unsafe { new_state.assume_init() };
+
+            if let Some(old_state) = self.current_state[n].take() {
+                if !connected {
+                    // disconnected controller
+                    info!("Disconnected Controller #{}", n);
+                } else if old_state.dwPacketNumber != new_state.dwPacketNumber {
+                    // has changes
+                    info!("Controller packet changes #{}", n);
+                }
+            } else if connected {
+                // new connected controller
+                info!("Connected Controller #{}", n);
+            }
+
+            self.current_state[n] = if connected { Some(new_state) } else { None };
+        }
     }
 }
