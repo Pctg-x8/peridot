@@ -51,7 +51,7 @@ impl System
 	pub fn new_face_group(&self, entries: &[(*const i8, FT_Long)]) -> FaceGroup
 	{
 		let faces = entries.iter()
-			.map(|&(p, x)| FaceGroupEntry::Unloaded(unsafe { CStr::from_ptr(p).to_owned() }, x).into())
+			.map(|&(p, x)| FaceGroupEntry::Unloaded(unsafe { CStr::from_ptr(p as _).to_owned() }, x).into())
 			.collect();
 		
 		FaceGroup { parent: self.clone(), faces, current_size: Cell::new(0.0) }

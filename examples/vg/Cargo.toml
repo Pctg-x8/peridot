@@ -6,6 +6,7 @@ edition = "2018"
 
 [features]
 default = []
+use-freetype = ["peridot-vg/use-freetype"]
 
 [dependencies]
 peridot = { path = "../.." }
