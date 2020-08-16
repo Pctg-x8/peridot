@@ -16,7 +16,7 @@ pub trait DefaultRenderCommands
 {
     type Extras;
 
-    fn default_render_commands<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>,
+    fn default_render_commands<NL: NativeLinker>(&self, e: &Engine<NL>,
         cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras);
 }
 

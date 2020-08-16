@@ -1,0 +1,31 @@
+name: Dev-Package Build
+on: [workflow_dispatch]
+jobs:
+  dev-package-build-to-artifact:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Build tools (For PowerShell Env)
+        if: matrix.os == 'windows-latest'
+        run: powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ "$_" }
+      - name: Upgrade utils (Only for MacOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install bash findutils
+      - name: Build tools (For Bash Env)
+        if: matrix.os != 'windows-latest'
+        run: ./tools/build-all.sh
+      - name: Make package (For PowerShell Env)
+        if: matrix.os == 'windows-latest'
+        run: powershell.exe -File ./make-dev-package.ps1 -OutDirectory peridot-sdk -PeridotBranch $($Env:GITHUB_REF -replace "^refs/heads/")
+      - name: Make package (For Bash Env)
+        if: matrix.os != 'windows-latest'
+        run: ./make-dev-package.sh -o peridot-sdk -b ${GITHUB_REF#"refs/heads/"}
+      - name: Upload package to Artifacts
+        uses: actions/upload-artifact@v1
+        with:
+          name: "PeridotSDK-${{ matrix.os }}"
+          path: peridot-sdk

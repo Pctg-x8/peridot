@@ -3,7 +3,9 @@ param(
     [parameter(HelpMessage="An structure name of entry point of the game")][String]$EntryTyName = "Game",
     [switch]$Run = $false,
     [parameter(Mandatory=$true, HelpMessage="Asset Directory")][String]$AssetDirectory,
-    [parameter(Mandatory=$true, HelpMessage="Package Bundle ID")][String]$AppPackageID
+    [parameter(Mandatory=$true, HelpMessage="Package Bundle ID")][String]$AppPackageID,
+    [parameter(HelpMessage="Additional Rust Features")][String[]]$Features = @(),
+    [parameter(HelpMessage="Update Cargo dependencies")][switch]$UpdateDeps = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,10 +92,11 @@ if (Test-Path $UserlibDirectory\android-res) {
 }
 
 # Build Userlib
-$features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
+$ActiveFeatures = @("bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded") + $Features
 try {
     Push-Location; Set-Location $ScriptPath
-    cargo ndk --target aarch64-linux-android --android-platform $Env:NDK_PLATFORM_TARGET -- build --features $($features -join ",")
+    if ($UpdateDeps) { cargo update }
+    cargo ndk --target aarch64-linux-android --android-platform $Env:NDK_PLATFORM_TARGET -- build --features $($ActiveFeatures -join ",")
     if ($LASTEXITCODE -ne 0) { throw """cargo build"" failed with code $LASTEXITCODE" }
 }
 finally {
