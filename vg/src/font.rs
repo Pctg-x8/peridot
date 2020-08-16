@@ -279,7 +279,7 @@ impl FontProvider
         Ok(Font(face, size))
     }
     #[cfg(not(feature = "use-fontconfig"))]
-    pub fn best_match(_: &str, _: &FontProperties, _: f32) -> Result<Font, FontConstructionError>
+    pub fn best_match(&self, _: &str, _: &FontProperties, _: f32) -> Result<Font, FontConstructionError>
     {
         // no matching algorithm is available!
 
