@@ -213,7 +213,7 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 * self.scale_value() }
 
