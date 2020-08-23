@@ -1,4 +1,4 @@
-package com.cterm2.peridot
+package jp.ct2.peridot
 
 import android.content.Context
 import android.util.Log

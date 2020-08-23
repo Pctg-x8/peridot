@@ -1,6 +1,6 @@
 // Peridot Bootstrap Activity
 
-package com.cterm2.peridot
+package jp.ct2.peridot
 
 import android.arch.lifecycle.ViewModelProvider
 import android.os.Build
