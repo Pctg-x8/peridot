@@ -229,3 +229,11 @@ impl Primitive<ColoredVertex>
         }
     }
 }
+
+#[repr(C, align(16))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct VertexUV3D
+{
+    pub pos: math::Vector4F32,
+    pub uv: math::Vector2F32
+}
