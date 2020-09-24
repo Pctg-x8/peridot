@@ -652,6 +652,9 @@ impl<T: Into<u32> + Copy> From<&'_ Vector4<T>> for br::Extent4D
 {
     fn from(v: &Vector4<T>) -> Self { br::Extent4D(v.0.into(), v.1.into(), v.2.into(), v.3.into()) }
 }
+impl br::AsFormat for Vector2<f32> { const FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R32G32_SFLOAT; }
+impl br::AsFormat for Vector3<f32> { const FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R32G32B32_SFLOAT; }
+impl br::AsFormat for Vector4<f32> { const FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R32G32B32A32_SFLOAT; }
 // euclid interops (for vg) //
 impl<T> Into<euclid::Point2D<T>> for Vector2<T>
 {
