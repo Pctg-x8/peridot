@@ -4,6 +4,7 @@ target/
 .vscode/
 android-build
 **/*.pvp
+**/*.spv
 
 ## other artifacts
 peridot-sdk/
