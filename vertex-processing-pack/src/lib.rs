@@ -88,7 +88,9 @@ impl<'d> PvpShaderModules<'d>
     pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d> {
         let bindings = unsafe {
             // Transparentなのでok
-            std::slice::from_raw_parts(self.bindings.as_ptr() as *const br::VertexInputBindingDescription, self.bindings.len())
+            std::slice::from_raw_parts(
+                self.bindings.as_ptr() as *const br::VertexInputBindingDescription, self.bindings.len()
+            )
         };
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
