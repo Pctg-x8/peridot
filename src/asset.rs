@@ -36,7 +36,7 @@ pub trait FromStreamingAsset: LogicalAssetData
 }
 
 use image::{ImageDecoder, ImageResult, ImageError};
-use image::hdr::{HdrDecoder, HDRMetadata, RGBE8Pixel};
+use image::hdr::{HdrDecoder, HdrMetadata, Rgbe8Pixel};
 pub struct DecodedPixelData
 {
     pub pixels: Vec<u8>, pub size: math::Vector2<u32>,
@@ -74,7 +74,7 @@ pub struct TGA(pub DecodedPixelData);
 pub struct TIFF(pub DecodedPixelData);
 pub struct WebP(pub DecodedPixelData);
 pub struct BMP(pub DecodedPixelData);
-pub struct HDR { pub info: HDRMetadata, pub pixels: Vec<RGBE8Pixel> }
+pub struct HDR { pub info: HdrMetadata, pub pixels: Vec<Rgbe8Pixel> }
 impl LogicalAssetData for PNG { const EXT: &'static str = "png"; }
 impl LogicalAssetData for TGA { const EXT: &'static str = "tga"; }
 impl LogicalAssetData for TIFF { const EXT: &'static str = "tiff"; }
