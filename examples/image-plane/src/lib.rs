@@ -66,7 +66,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     fn init(e: &peridot::Engine<PL>) -> Self
     {
         let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
-        let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;
+        let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
         let image_data: peridot::PNG = e.load("images.example").expect("No image found");
         debug!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
@@ -100,9 +100,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         cam.look_at(Vector3(0.0, 0.0, 0.0));
         buffers.mut_buffer.0.guard_map(0 .. buffers.mut_buffer.1, |m| unsafe
         {
-            let (v, p) = cam.matrixes();
-            let aspect = Matrix4::scale(Vector4(screen_aspect, 1.0, 1.0, 1.0));
-            let vp = aspect * p * v;
+            let (v, p) = cam.matrixes(screen_aspect);
+            let vp = p * v;
             *m.get_mut(mut_uniform_offset as _) = Uniform
             {
                 camera: vp, object: Matrix4::ONE

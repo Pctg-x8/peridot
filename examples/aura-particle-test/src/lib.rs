@@ -141,6 +141,7 @@ pub struct Game<NL> {
     update_cmd: peridot::CommandBundle,
     main_camera: peridot::math::Camera,
     dirty_main_camera: bool,
+    aspect_wh: f32,
     _ph: std::marker::PhantomData<*const NL>
 }
 
@@ -228,6 +229,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             render_cmd,
             update_cmd,
             main_camera,
+            aspect_wh: e.backbuffers()[0].size().0 as f32 / e.backbuffers()[0].size().1 as f32,
             // kicks initial updating
             dirty_main_camera: true,
             _ph: std::marker::PhantomData
@@ -242,7 +244,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         let cp = if self.dirty_main_camera {
             self.res.update_buffer.res.guard_map(self.res.update_buffer.offsets.camera_range(), |p| unsafe {
-                *p.get_mut(0) = self.main_camera.projection_matrix() * self.main_camera.view_matrix();
+                *p.get_mut(0) = self.main_camera.projection_matrix(self.aspect_wh) * self.main_camera.view_matrix();
             }).expect("Failed to map update buffer");
             self.dirty_main_camera = false;
             Some(br::SubmissionBatch {
@@ -265,9 +267,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         self.render_cmd.reset().expect("Failed to reset render commands");
         self.rr.discard_lw();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<NL>, _new_size: peridot::math::Vector2<usize>) {
+    fn on_resize(&mut self, e: &peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
         self.rr.set_lw(RenderingResources::new(e, &self.srr, &self.layouts, &self.desc, &self.res));
         Self::populate_all_render_commands(&self.render_cmd, &self.srr, &self.rr.get(), &self.res, &self.desc);
+        self.aspect_wh = new_size.0 as f32 / new_size.1 as f32;
+        self.dirty_main_camera = true;
     }
 }
 impl<NL> Game<NL> {
