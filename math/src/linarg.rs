@@ -665,6 +665,39 @@ impl<T> Into<euclid::Vector2D<T>> for Vector2<T>
     fn into(self) -> euclid::Vector2D<T> { euclid::Vector2D::new(self.0, self.1) }
 }
 
+// Random Helper //
+use rand::distributions::Distribution;
+impl<T: rand_distr::uniform::SampleUniform + rand_distr::num_traits::Float> Vector2<T> {
+    /// Random point inside of an unit circle
+    pub fn rand_unit_circle<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y]: [T; 2] = rand_distr::UnitCircle.sample(rng);
+        let s = rand_distr::Uniform::new_inclusive(T::zero(), T::one()).sample(rng);
+
+        Vector2(x * s, y * s)
+    }
+    /// Random point on edge of an unit circle
+    pub fn rand_unit_circle_edge<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y] = rand_distr::UnitCircle.sample(rng);
+
+        Vector2(x, y)
+    }
+}
+impl<T: rand_distr::uniform::SampleUniform + rand_distr::num_traits::Float> Vector3<T> {
+    /// Random point inside of an unit sphere
+    pub fn rand_unit_sphere<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y, z]: [T; 3] = rand_distr::UnitSphere.sample(rng);
+        let s = rand_distr::Uniform::new_inclusive(T::zero(), T::one()).sample(rng);
+
+        Vector3(x * s, y * s, z * s)
+    }
+    /// Random point on surface of an unit sphere
+    pub fn rand_unit_sphere_surface<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y, z] = rand_distr::UnitSphere.sample(rng);
+
+        Vector3(x, y, z)
+    }
+}
+
 #[cfg(test)]
 mod tests
 {
@@ -724,5 +757,12 @@ mod tests
         assert!(b.abs() <= std::f32::EPSILON);
         assert!(c.abs() <= std::f32::EPSILON);
         assert!((1.0 - d).abs() <= std::f32::EPSILON);
+    }
+
+
+    #[test]
+    fn is_edge() {
+        assert_eq!(Vector2F32::rand_unit_circle_edge(&mut rand::thread_rng()).len2(), 1.0);
+        assert_eq!(Vector3F32::rand_unit_sphere_surface(&mut rand::thread_rng()).len2(), 1.0);
     }
 }
