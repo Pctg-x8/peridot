@@ -148,8 +148,8 @@ impl ParticleEngine {
                 self.driver.spawn(CPUParticleInstance {
                     scale: peridot::math::Vector3(1.0, 1.0, 1.0),
                     pos: peridot::math::Vector3(0.0, 0.0, 0.0),
-                    velocity: peridot::math::Vector3::rand_unit_sphere(&mut rand::thread_rng()),
-                    lifetime: rand::distributions::Uniform::new_inclusive(0.3, 1.5).sample(&mut rand::thread_rng()),
+                    velocity: peridot::math::Vector3::<f32>::rand_unit_sphere(&mut rand::thread_rng()) * 0.4f32,
+                    lifetime: rand::distributions::Uniform::new_inclusive(0.5, 1.5).sample(&mut rand::thread_rng()),
                     living_time: 0.0
                 });
             }
@@ -320,8 +320,9 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         
         let desc = Descriptors::new(e, &layouts, &res);
         let rr = RenderingResources::new(e, &srr, &layouts);
-        let render_cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffers().len())
-            .expect("Failed to alloc render commandbundle");
+        let render_cmd = peridot::CommandBundle::new(
+            e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffers().len()
+        ).expect("Failed to alloc render commandbundle");
         Self::populate_all_render_commands(&render_cmd, &srr, &rr, &res, &desc);
 
         let update_cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, 1)
@@ -623,10 +624,18 @@ impl Resources {
         stg_buf.guard_map(0 .. stg_bp.total_size(), |p| unsafe {
             p.slice_mut(stg_offs_grid_vb as _, grid_vertices.len()).clone_from_slice(&grid_vertices);
             p.slice_mut::<peridot::VertexUV3D>(stg_offs_vb as _, 4).clone_from_slice(&[
-                peridot::VertexUV3D { pos: peridot::math::Vector4(-0.5, -0.5, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 0.0) },
-                peridot::VertexUV3D { pos: peridot::math::Vector4( 0.5, -0.5, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 0.0) },
-                peridot::VertexUV3D { pos: peridot::math::Vector4(-0.5,  0.5, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 1.0) },
-                peridot::VertexUV3D { pos: peridot::math::Vector4( 0.5,  0.5, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 1.0) }
+                peridot::VertexUV3D {
+                    pos: peridot::math::Vector4(-0.5, -0.5, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 0.0)
+                },
+                peridot::VertexUV3D {
+                    pos: peridot::math::Vector4( 0.5, -0.5, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 0.0)
+                },
+                peridot::VertexUV3D {
+                    pos: peridot::math::Vector4(-0.5,  0.5, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 1.0)
+                },
+                peridot::VertexUV3D {
+                    pos: peridot::math::Vector4( 0.5,  0.5, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 1.0)
+                }
             ]);
         }).expect("Failed to map staging");
 
