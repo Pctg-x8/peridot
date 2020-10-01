@@ -16,6 +16,6 @@ layout(set = 1, binding = 0, std140) readonly buffer InstanceMatrices {
 };
 
 void main() {
-    gl_Position = inst[gl_InstanceIndex] * mvp * pos;
+    gl_Position = transpose(inst[gl_InstanceIndex]) * transpose(mvp) * pos;
     ouv = iuv;
 }

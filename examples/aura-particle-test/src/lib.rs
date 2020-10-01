@@ -3,6 +3,128 @@ use bedrock as br;
 use br::Waitable;
 use std::rc::Rc;
 use peridot::math::One;
+use std::collections::BTreeSet;
+use rayon::prelude::*;
+
+pub struct CPUParticleInstance {
+    pub pos: peridot::math::Vector3F32,
+    pub scale: peridot::math::Vector3F32,
+    pub velocity: peridot::math::Vector3F32
+}
+impl CPUParticleInstance {
+    pub fn update(&mut self, dt: std::time::Duration) {
+        self.pos = self.pos.clone() + self.velocity.clone() * (dt.as_micros() as f64 / 1_000_000.0) as f32
+    }
+    pub fn matrix(&self) -> peridot::math::Matrix4F32 {
+        let s = peridot::math::Matrix4F32::scale(peridot::math::Vector4(self.scale.0, self.scale.1, self.scale.2, 1.0));
+        peridot::math::Matrix4F32::translation(self.pos.clone()) * s
+    }
+}
+pub struct CPUParticleDriver {
+    static_buffer_offset: u64,
+    instances: Vec<CPUParticleInstance>,
+    freespaces: BTreeSet<usize>,
+    update_buffer: peridot::Buffer
+}
+impl CPUParticleDriver {
+    const MAX_RENDERED_INSTANCE_SIZE: usize = 65536;
+
+    pub fn new(
+        g: &peridot::Graphics,
+        buf_prealloc: &mut peridot::BufferPrealloc,
+        _tfb: &mut peridot::TransferBatch
+    ) -> Self {
+        let static_buffer_offset = buf_prealloc.add(
+            peridot::BufferContent::storage::<[peridot::math::Matrix4F32; Self::MAX_RENDERED_INSTANCE_SIZE]>()
+        );
+
+        let mut bp = peridot::BufferPrealloc::new(g);
+        bp.add(peridot::BufferContent::raw_multiple::<peridot::math::Matrix4F32>(Self::MAX_RENDERED_INSTANCE_SIZE));
+        let ub = bp.build_upload().expect("Failed to build particle driver buffer");
+        let mut mb = peridot::MemoryBadget::new(g);
+        mb.add(ub);
+        let ub = mb.alloc_upload().expect("Failed to alloc particle driver memory").pop().unwrap().unwrap_buffer();
+
+        CPUParticleDriver {
+            static_buffer_offset,
+            instances: Vec::new(),
+            freespaces: BTreeSet::new(),
+            update_buffer: ub
+        }
+    }
+    pub fn post_transfer(&self, tfb: &mut peridot::TransferBatch, static_buf: &peridot::Buffer) {
+        tfb.add_buffer_graphics_ready(
+            br::PipelineStageFlags::VERTEX_SHADER, static_buf, self.update_range_static(), br::AccessFlags::SHADER.read
+        );
+    }
+
+    pub fn buffer_bytesize(&self) -> u64 {
+        std::mem::size_of::<[peridot::math::Matrix4F32; Self::MAX_RENDERED_INSTANCE_SIZE]>() as _
+    }
+    pub fn update_range_staging(&self) -> std::ops::Range<u64> {
+        0 .. self.buffer_bytesize()
+    }
+    pub fn update_range_static(&self) -> std::ops::Range<u64> {
+        self.static_buffer_offset .. self.static_buffer_offset + self.buffer_bytesize()
+    }
+
+    /// Returns newly spawned instance index
+    pub fn spawn(&mut self, instance: CPUParticleInstance) -> usize {
+        if let Some(&freespace) = self.freespaces.iter().next() {
+            self.freespaces.take(&freespace);
+            self.instances[freespace] = instance;
+            return freespace;
+        }
+        let next_id = self.instances.len();
+        self.instances.push(instance);
+        next_id
+    }
+    pub fn update(&mut self, dt: std::time::Duration) {
+        let range = 0 .. (std::mem::size_of::<peridot::math::Matrix4F32>() * Self::MAX_RENDERED_INSTANCE_SIZE) as _;
+        let ub = &self.update_buffer;
+        let is = &mut self.instances;
+        ub.guard_map(range, move |m| {
+            let matrices = unsafe { m.slice_mut::<peridot::math::Matrix4F32>(0, Self::MAX_RENDERED_INSTANCE_SIZE) };
+            is.par_iter_mut().zip(matrices).for_each(|(i, m)| {
+                i.update(dt);
+                *m = i.matrix();
+            });
+        }).expect("Failed to update stg buffer");
+    }
+}
+pub struct ParticleEngine {
+    driver: CPUParticleDriver,
+    left_next_spawn: std::time::Duration
+}
+impl ParticleEngine {
+    pub fn new(
+        g: &peridot::Graphics,
+        buf_prealloc: &mut peridot::BufferPrealloc,
+        tfb: &mut peridot::TransferBatch
+    ) -> Self {
+        ParticleEngine {
+            driver: CPUParticleDriver::new(g, buf_prealloc, tfb),
+            left_next_spawn: std::time::Duration::from_millis(100)
+        }
+    }
+    pub fn post_transfer(&self, tfb: &mut peridot::TransferBatch, static_buf: &peridot::Buffer) {
+        self.driver.post_transfer(tfb, static_buf);
+    }
+
+    pub fn update(&mut self, dt: std::time::Duration) {
+        if self.left_next_spawn <= dt {
+            self.left_next_spawn = std::time::Duration::from_millis(100);
+            self.driver.spawn(CPUParticleInstance {
+                scale: peridot::math::Vector3(1.0, 1.0, 1.0),
+                pos: peridot::math::Vector3(0.0, 0.0, 0.0),
+                velocity: peridot::math::Vector3::rand_unit_sphere(&mut rand::thread_rng())
+            });
+        } else {
+            self.left_next_spawn -= dt;
+        }
+        self.driver.update(dt);
+    }
+}
 
 pub struct RenderingResources {
     lines_gp: peridot::LayoutedPipeline,
@@ -11,7 +133,7 @@ pub struct RenderingResources {
 }
 impl RenderingResources {
     pub fn new<NL: peridot::NativeLinker>(
-        e: &peridot::Engine<NL>, srr: &StaticRenderResources, layouts: &Layouts, desc: &Descriptors, res: &Resources
+        e: &peridot::Engine<NL>, srr: &StaticRenderResources, layouts: &Layouts
     ) -> Self {
         let default_shader_uv_v = e.load::<peridot::SpirvShaderBlob>("shaders.uv_v")
             .expect("Failed to load vertex shader")
@@ -163,7 +285,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .expect("Failed to send initializers");
         
         let desc = Descriptors::new(e, &layouts, &res);
-        let rr = RenderingResources::new(e, &srr, &layouts, &desc, &res);
+        let rr = RenderingResources::new(e, &srr, &layouts);
         let render_cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffers().len())
             .expect("Failed to alloc render commandbundle");
         Self::populate_all_render_commands(&render_cmd, &srr, &rr, &res, &desc);
@@ -177,6 +299,14 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 br::AccessFlags::UNIFORM_READ, br::AccessFlags::TRANSFER.write
             ),
             br::BufferMemoryBarrier::new(
+                &res.static_buffer.res, res.pe.driver.update_range_static(),
+                br::AccessFlags::SHADER.read, br::AccessFlags::TRANSFER.write
+            ),
+            br::BufferMemoryBarrier::new(
+                &res.pe.driver.update_buffer, res.pe.driver.update_range_staging(),
+                br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read
+            ),
+            br::BufferMemoryBarrier::new(
                 &res.update_buffer.res,
                 res.update_buffer.offsets.camera_range(),
                 br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read
@@ -187,6 +317,14 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 &res.static_buffer.res,
                 res.static_buffer.offsets.camera_range().into(),
                 br::AccessFlags::TRANSFER.write, br::AccessFlags::UNIFORM_READ
+            ),
+            br::BufferMemoryBarrier::new(
+                &res.static_buffer.res, res.pe.driver.update_range_static(),
+                br::AccessFlags::TRANSFER.write, br::AccessFlags::SHADER.read
+            ),
+            br::BufferMemoryBarrier::new(
+                &res.pe.driver.update_buffer, res.pe.driver.update_range_staging(),
+                br::AccessFlags::TRANSFER.read, br::AccessFlags::HOST.write
             ),
             br::BufferMemoryBarrier::new(
                 &res.update_buffer.res,
@@ -206,6 +344,13 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                     size: std::mem::size_of::<peridot::math::Matrix4F32>() as _
                 }
             ])
+            .copy_buffer(&res.pe.driver.update_buffer, &res.static_buffer.res, &[
+                br::vk::VkBufferCopy {
+                    srcOffset: 0,
+                    dstOffset: res.pe.driver.static_buffer_offset,
+                    size: res.pe.driver.buffer_bytesize()
+                }
+            ])
             .pipeline_barrier(
                 br::PipelineStageFlags::TRANSFER, br::PipelineStageFlags::HOST.vertex_shader(), false,
                 &[], barrier_out, &[]
@@ -215,7 +360,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let mut main_camera = peridot::math::Camera {
             projection: peridot::math::ProjectionMethod::Perspective { fov: 60.0f32.to_radians() },
             depth_range: 0.3 .. 20.0,
-            position: peridot::math::Vector3(0.0, 3.0, 5.0),
+            position: peridot::math::Vector3(0.0, 2.0, 5.0),
             rotation: peridot::math::Quaternion::ONE
         };
         main_camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0));
@@ -240,9 +385,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         &mut self,
         _e: &peridot::Engine<NL>,
         on_backbuffer_of: u32,
-        _delta_time: std::time::Duration
+        delta_time: std::time::Duration
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        let cp = if self.dirty_main_camera {
+        self.res.pe.update(delta_time);
+
+        let cp = {
             self.res.update_buffer.res.guard_map(self.res.update_buffer.offsets.camera_range(), |p| unsafe {
                 *p.get_mut(0) = self.main_camera.projection_matrix(self.aspect_wh) * self.main_camera.view_matrix();
             }).expect("Failed to map update buffer");
@@ -251,8 +398,6 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 command_buffers: std::borrow::Cow::Borrowed(&self.update_cmd[..]),
                 .. Default::default()
             })
-        } else {
-            None
         };
 
         (cp, br::SubmissionBatch {
@@ -268,7 +413,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         self.rr.discard_lw();
     }
     fn on_resize(&mut self, e: &peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
-        self.rr.set_lw(RenderingResources::new(e, &self.srr, &self.layouts, &self.desc, &self.res));
+        self.rr.set_lw(RenderingResources::new(e, &self.srr, &self.layouts));
         Self::populate_all_render_commands(&self.render_cmd, &self.srr, &self.rr.get(), &self.res, &self.desc);
         self.aspect_wh = new_size.0 as f32 / new_size.1 as f32;
         self.dirty_main_camera = true;
@@ -288,6 +433,7 @@ impl<NL> Game<NL> {
                 extent: br::Extent2D::clone(fb.size().as_ref()).into()
             };
             let cv = br::ClearValue::Color([0.0; 4]);
+            let (uvrect_vb, uvrect_vb_offs, uvrect_vb_count) = res.uvrect_vb_view();
             let (grid_vb, grid_vb_offs, grid_vb_count) = res.grid_vb_view();
             cmd.begin().expect("Failed to begin Recording Commands")
                 .begin_render_pass(&srr.rp_main, &fb, render_area, &[cv], true)
@@ -296,6 +442,9 @@ impl<NL> Game<NL> {
                 .bind_vertex_buffers(0, &[(grid_vb, grid_vb_offs)])
                 .draw(grid_vb_count as _, 1, 0, 0)
                 .bind_graphics_pipeline_pair(rr.gp.pipeline(), rr.gp.layout())
+                .bind_graphics_descriptor_sets(1, &[desc.particle_instances()], &[])
+                .bind_vertex_buffers(0, &[(uvrect_vb, uvrect_vb_offs)])
+                .draw(uvrect_vb_count as _, CPUParticleDriver::MAX_RENDERED_INSTANCE_SIZE as _, 0, 0)
                 .end_render_pass();
         }
     }
@@ -337,14 +486,25 @@ pub struct Descriptors {
 }
 impl Descriptors {
     pub fn new<NL>(e: &peridot::Engine<NL>, layouts: &Layouts, res: &Resources) -> Self {
-        let pool = br::DescriptorPool::new(e.graphics(), 1, &[
-            br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1)
+        use br::VkHandle;
+        fn as_usize_range(v: std::ops::Range<u64>) -> std::ops::Range<usize> {
+            v.start as _ .. v.end as _
+        }
+
+        let pool = br::DescriptorPool::new(e.graphics(), 2, &[
+            br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1),
+            br::DescriptorPoolSize(br::DescriptorType::StorageBuffer, 1)
         ], false).expect("Failed to alloc descriptor pool");
-        let descriptors = pool.alloc(&[&layouts.dsl_ub1v]).expect("Failed to allocate descriptors");
+        let descriptors = pool.alloc(&[&layouts.dsl_ub1v, &layouts.dsl_sb1v]).expect("Failed to allocate descriptors");
 
         e.graphics().update_descriptor_sets(&[
             br::DescriptorSetWriteInfo(
                 descriptors[0], 0, 0, br::DescriptorUpdateInfo::UniformBuffer(vec![res.buffer_range_camera()])
+            ),
+            br::DescriptorSetWriteInfo(
+                descriptors[1], 0, 0, br::DescriptorUpdateInfo::StorageBuffer(vec![
+                    (res.static_buffer.res.native_ptr(), as_usize_range(res.pe.driver.update_range_static()))
+                ])
             )
         ], &[]);
         Descriptors {
@@ -354,6 +514,7 @@ impl Descriptors {
     }
 
     pub fn camera(&self) -> br::vk::VkDescriptorSet { self.descriptors[0] }
+    pub fn particle_instances(&self) -> br::vk::VkDescriptorSet { self.descriptors[1] }
 }
 
 pub struct SuballocatedBuffer<O> {
@@ -382,7 +543,8 @@ impl UpdateOffsets {
 }
 pub struct Resources {
     pub static_buffer: SuballocatedBuffer<StaticOffsets>,
-    pub update_buffer: SuballocatedBuffer<UpdateOffsets>
+    pub update_buffer: SuballocatedBuffer<UpdateOffsets>,
+    pub pe: ParticleEngine
 }
 impl Resources {
     pub fn new<NL>(e: &peridot::Engine<NL>, tfb: &mut peridot::TransferBatch) -> Self {
@@ -399,6 +561,7 @@ impl Resources {
             camera_matrix: bp.add(peridot::BufferContent::uniform::<peridot::math::Matrix4F32>()),
             grid_vertices_count: grid_vertices.len()
         };
+        let pe = ParticleEngine::new(e.graphics(), &mut bp, tfb);
         let buf = bp.build_transferred().expect("Failed to build static buffer");
         let mut mem = peridot::MemoryBadget::new(e.graphics());
         mem.add(buf);
@@ -426,10 +589,10 @@ impl Resources {
         stg_buf.guard_map(0 .. stg_bp.total_size(), |p| unsafe {
             p.slice_mut(stg_offs_grid_vb as _, grid_vertices.len()).clone_from_slice(&grid_vertices);
             p.slice_mut::<peridot::VertexUV3D>(stg_offs_vb as _, 4).clone_from_slice(&[
-                peridot::VertexUV3D { pos: peridot::math::Vector4(0.0, 0.0, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 0.0) },
-                peridot::VertexUV3D { pos: peridot::math::Vector4(1.0, 0.0, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 0.0) },
-                peridot::VertexUV3D { pos: peridot::math::Vector4(0.0, 1.0, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 1.0) },
-                peridot::VertexUV3D { pos: peridot::math::Vector4(1.0, 1.0, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 1.0) }
+                peridot::VertexUV3D { pos: peridot::math::Vector4(-0.5, -0.5, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 0.0) },
+                peridot::VertexUV3D { pos: peridot::math::Vector4( 0.5, -0.5, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 0.0) },
+                peridot::VertexUV3D { pos: peridot::math::Vector4(-0.5,  0.5, 0.0, 1.0), uv: peridot::math::Vector2(0.0, 1.0) },
+                peridot::VertexUV3D { pos: peridot::math::Vector4( 0.5,  0.5, 0.0, 1.0), uv: peridot::math::Vector2(1.0, 1.0) }
             ]);
         }).expect("Failed to map staging");
 
@@ -441,10 +604,12 @@ impl Resources {
             stg_buf.with_dev_offset(stg_offs_vb), buf.with_dev_offset(offs.vb),
             std::mem::size_of::<[peridot::VertexUV3D; 4]>() as _
         );
+        pe.post_transfer(tfb, &buf);
 
         Resources {
             static_buffer: SuballocatedBuffer { res: buf, offsets: offs },
-            update_buffer: SuballocatedBuffer { res: update_buf, offsets: update_offs }
+            update_buffer: SuballocatedBuffer { res: update_buf, offsets: update_offs },
+            pe
         }
     }
 
@@ -455,6 +620,13 @@ impl Resources {
             self.static_buffer.res.native_ptr(),
             self.static_buffer.offsets.camera_matrix as usize ..
                 self.static_buffer.offsets.camera_matrix as usize + std::mem::size_of::<peridot::math::Matrix4F32>()
+        )
+    }
+    pub fn uvrect_vb_view(&self) -> (&br::Buffer, usize, usize) {
+        (
+            &self.static_buffer.res,
+            self.static_buffer.offsets.vb as _,
+            4
         )
     }
     pub fn grid_vb_view(&self) -> (&br::Buffer, usize, usize) {
