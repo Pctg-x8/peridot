@@ -22,7 +22,7 @@ pub enum ProjectionMethod {
 ///     projection: ProjectionMethod::Orthographic { size: 5.0 }, position: Vector3::ZERO, rotation: Quaternion::ONE,
 ///     depth_range: 1.0 .. 9.0
 /// };
-/// let (mv, mp) = c.matrixes();
+/// let (mv, mp) = c.matrixes(1.0);
 /// assert_eq!(mv.clone() * Vector3(5.0, 0.0, 1.0), Vector4(5.0, 0.0, 1.0, 1.0));
 /// assert_eq!(mp * mv * Vector3(5.0, 0.0, 1.0), Vector4(1.0, 0.0, 0.0, 1.0));
 /// ```
