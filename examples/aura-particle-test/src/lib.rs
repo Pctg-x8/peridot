@@ -58,7 +58,8 @@ impl CPUParticleDriver {
         let ub = bp.build_upload().expect("Failed to build particle driver buffer");
         let mut mb = peridot::MemoryBadget::new(g);
         mb.add(ub);
-        let ub = mb.alloc_upload().expect("Failed to alloc particle driver memory").pop().unwrap().unwrap_buffer();
+        let ub = mb.alloc_upload().expect("Failed to alloc particle driver memory").pop()
+            .expect("less object").unwrap_buffer();
 
         CPUParticleDriver {
             static_buffer_offset,
@@ -600,7 +601,8 @@ impl Resources {
         let buf = bp.build_transferred().expect("Failed to build static buffer");
         let mut mem = peridot::MemoryBadget::new(e.graphics());
         mem.add(buf);
-        let buf = mem.alloc().expect("Failed to allocate static memory").pop().unwrap().unwrap_buffer();
+        let buf = mem.alloc().expect("Failed to allocate static memory").pop()
+            .expect("less object").unwrap_buffer();
 
         let mut update_bp = peridot::BufferPrealloc::new(e.graphics());
         let update_offs = UpdateOffsets {
@@ -609,7 +611,8 @@ impl Resources {
         let update_buf = update_bp.build_upload().expect("Failed to build update buffer");
         let mut mem = peridot::MemoryBadget::new(e.graphics());
         mem.add(update_buf);
-        let update_buf = mem.alloc_upload().expect("Failed to allocate update memory").pop().unwrap().unwrap_buffer();
+        let update_buf = mem.alloc_upload().expect("Failed to allocate update memory").pop()
+            .expect("less object").unwrap_buffer();
 
         let mut stg_bp = peridot::BufferPrealloc::new(e.graphics());
         let stg_offs_grid_vb = stg_bp.add(
@@ -619,7 +622,8 @@ impl Resources {
         let stg_buf = stg_bp.build_upload().expect("Failed to build staging buffer");
         let mut mem = peridot::MemoryBadget::new(e.graphics());
         mem.add(stg_buf);
-        let stg_buf = mem.alloc_upload().expect("Failed to allocate staging memory").pop().unwrap().unwrap_buffer();
+        let stg_buf = mem.alloc_upload().expect("Failed to allocate staging memory").pop()
+            .expect("less object").unwrap_buffer();
 
         stg_buf.guard_map(0 .. stg_bp.total_size(), |p| unsafe {
             p.slice_mut(stg_offs_grid_vb as _, grid_vertices.len()).clone_from_slice(&grid_vertices);
