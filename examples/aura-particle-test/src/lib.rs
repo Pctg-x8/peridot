@@ -6,18 +6,33 @@ use peridot::math::One;
 use std::collections::BTreeSet;
 use rayon::prelude::*;
 
+#[repr(C, align(16))]
+pub struct ParticleRenderInstance {
+    pub mat: peridot::math::Matrix4F32,
+    pub alpha: f32
+}
+
 pub struct CPUParticleInstance {
     pub pos: peridot::math::Vector3F32,
     pub scale: peridot::math::Vector3F32,
-    pub velocity: peridot::math::Vector3F32
+    pub velocity: peridot::math::Vector3F32,
+    pub lifetime: f32,
+    pub living_time: f32
 }
 impl CPUParticleInstance {
     pub fn update(&mut self, dt: std::time::Duration) {
-        self.pos = self.pos.clone() + self.velocity.clone() * (dt.as_micros() as f64 / 1_000_000.0) as f32
+        self.living_time += (dt.as_micros() as f64 / 1_000_000.0) as f32;
+        self.pos = self.pos.clone() + self.velocity.clone() * (dt.as_micros() as f64 / 1_000_000.0) as f32;
     }
-    pub fn matrix(&self) -> peridot::math::Matrix4F32 {
+    pub fn died(&self) -> bool { self.living_time >= self.lifetime }
+
+    pub fn render_instance(&self) -> ParticleRenderInstance {
         let s = peridot::math::Matrix4F32::scale(peridot::math::Vector4(self.scale.0, self.scale.1, self.scale.2, 1.0));
-        peridot::math::Matrix4F32::translation(self.pos.clone()) * s
+
+        ParticleRenderInstance {
+            mat: peridot::math::Matrix4F32::translation(self.pos.clone()) * s,
+            alpha: 1.0 - self.living_time / self.lifetime
+        }
     }
 }
 pub struct CPUParticleDriver {
@@ -35,11 +50,11 @@ impl CPUParticleDriver {
         _tfb: &mut peridot::TransferBatch
     ) -> Self {
         let static_buffer_offset = buf_prealloc.add(
-            peridot::BufferContent::storage::<[peridot::math::Matrix4F32; Self::MAX_RENDERED_INSTANCE_SIZE]>()
+            peridot::BufferContent::storage::<[ParticleRenderInstance; Self::MAX_RENDERED_INSTANCE_SIZE]>()
         );
 
         let mut bp = peridot::BufferPrealloc::new(g);
-        bp.add(peridot::BufferContent::raw_multiple::<peridot::math::Matrix4F32>(Self::MAX_RENDERED_INSTANCE_SIZE));
+        bp.add(peridot::BufferContent::raw_multiple::<ParticleRenderInstance>(Self::MAX_RENDERED_INSTANCE_SIZE));
         let ub = bp.build_upload().expect("Failed to build particle driver buffer");
         let mut mb = peridot::MemoryBadget::new(g);
         mb.add(ub);
@@ -59,7 +74,7 @@ impl CPUParticleDriver {
     }
 
     pub fn buffer_bytesize(&self) -> u64 {
-        std::mem::size_of::<[peridot::math::Matrix4F32; Self::MAX_RENDERED_INSTANCE_SIZE]>() as _
+        std::mem::size_of::<[ParticleRenderInstance; Self::MAX_RENDERED_INSTANCE_SIZE]>() as _
     }
     pub fn update_range_staging(&self) -> std::ops::Range<u64> {
         0 .. self.buffer_bytesize()
@@ -79,17 +94,29 @@ impl CPUParticleDriver {
         self.instances.push(instance);
         next_id
     }
+    pub fn die(&mut self, id: usize) {
+        self.freespaces.insert(id);
+        self.instances[id].scale = peridot::math::Vector3(0.0, 0.0, 0.0);
+    }
     pub fn update(&mut self, dt: std::time::Duration) {
-        let range = 0 .. (std::mem::size_of::<peridot::math::Matrix4F32>() * Self::MAX_RENDERED_INSTANCE_SIZE) as _;
+        let range = 0 .. std::mem::size_of::<[ParticleRenderInstance; Self::MAX_RENDERED_INSTANCE_SIZE]>() as _;
         let ub = &self.update_buffer;
         let is = &mut self.instances;
-        ub.guard_map(range, move |m| {
-            let matrices = unsafe { m.slice_mut::<peridot::math::Matrix4F32>(0, Self::MAX_RENDERED_INSTANCE_SIZE) };
-            is.par_iter_mut().zip(matrices).for_each(|(i, m)| {
-                i.update(dt);
-                *m = i.matrix();
-            });
+        let died_ids = ub.guard_map(range, move |m| {
+            let matrices = unsafe { m.slice_mut::<ParticleRenderInstance>(0, Self::MAX_RENDERED_INSTANCE_SIZE) };
+            is.par_iter_mut().zip(matrices).enumerate().filter_map(|(id, (i, m))| {
+                if i.died() {
+                    i.scale = peridot::math::Vector3(0.0, 0.0, 0.0);
+                    m.mat = peridot::math::Matrix4F32::scale(peridot::math::Vector4(0.0, 0.0, 0.0, 0.0));
+                    Some(id)
+                } else {
+                    i.update(dt);
+                    *m = i.render_instance();
+                    None
+                }
+            }).collect::<Vec<_>>()
         }).expect("Failed to update stg buffer");
+        for id in died_ids { self.die(id); }
     }
 }
 pub struct ParticleEngine {
@@ -112,12 +139,16 @@ impl ParticleEngine {
     }
 
     pub fn update(&mut self, dt: std::time::Duration) {
+        use rand::distributions::Distribution;
+
         if self.left_next_spawn <= dt {
             self.left_next_spawn = std::time::Duration::from_millis(100);
             self.driver.spawn(CPUParticleInstance {
                 scale: peridot::math::Vector3(1.0, 1.0, 1.0),
                 pos: peridot::math::Vector3(0.0, 0.0, 0.0),
-                velocity: peridot::math::Vector3::rand_unit_sphere(&mut rand::thread_rng())
+                velocity: peridot::math::Vector3::rand_unit_sphere(&mut rand::thread_rng()),
+                lifetime: rand::distributions::Uniform::new_inclusive(0.3, 1.5).sample(&mut rand::thread_rng()),
+                living_time: 0.0
             });
         } else {
             self.left_next_spawn -= dt;
