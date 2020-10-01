@@ -143,13 +143,16 @@ impl ParticleEngine {
 
         if self.left_next_spawn <= dt {
             self.left_next_spawn = std::time::Duration::from_millis(100);
-            self.driver.spawn(CPUParticleInstance {
-                scale: peridot::math::Vector3(1.0, 1.0, 1.0),
-                pos: peridot::math::Vector3(0.0, 0.0, 0.0),
-                velocity: peridot::math::Vector3::rand_unit_sphere(&mut rand::thread_rng()),
-                lifetime: rand::distributions::Uniform::new_inclusive(0.3, 1.5).sample(&mut rand::thread_rng()),
-                living_time: 0.0
-            });
+            let spawn_count = rand::distributions::Uniform::new_inclusive(1, 5).sample(&mut rand::thread_rng());
+            for _ in 0 .. spawn_count {
+                self.driver.spawn(CPUParticleInstance {
+                    scale: peridot::math::Vector3(1.0, 1.0, 1.0),
+                    pos: peridot::math::Vector3(0.0, 0.0, 0.0),
+                    velocity: peridot::math::Vector3::rand_unit_sphere(&mut rand::thread_rng()),
+                    lifetime: rand::distributions::Uniform::new_inclusive(0.3, 1.5).sample(&mut rand::thread_rng()),
+                    living_time: 0.0
+                });
+            }
         } else {
             self.left_next_spawn -= dt;
         }
