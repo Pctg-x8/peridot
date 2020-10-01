@@ -762,7 +762,9 @@ mod tests
 
     #[test]
     fn is_edge() {
-        assert_eq!(Vector2F32::rand_unit_circle_edge(&mut rand::thread_rng()).len2(), 1.0);
-        assert_eq!(Vector3F32::rand_unit_sphere_surface(&mut rand::thread_rng()).len2(), 1.0);
+        assert!((Vector2F32::rand_unit_circle_edge(&mut rand::thread_rng()).len2() - 1.0).abs() <= std::f32::EPSILON);
+        assert!(
+            (Vector3F32::rand_unit_sphere_surface(&mut rand::thread_rng()).len2() - 1.0).abs() <= std::f32::EPSILON
+        );
     }
 }
