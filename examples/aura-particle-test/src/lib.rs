@@ -168,12 +168,28 @@ impl ParticleEngine {
 pub struct RenderingResources {
     lines_gp: peridot::LayoutedPipeline,
     gp: peridot::LayoutedPipeline,
-    fbs: Vec<br::Framebuffer>
+    fbs: Vec<br::Framebuffer>,
+    depth_buffer: peridot::Image,
+    depth_buffer_view: br::ImageView
 }
 impl RenderingResources {
+    const DEPTH_BUFFER_FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_D24_UNORM_S8_UINT;
+
     pub fn new<NL: peridot::NativeLinker>(
         e: &peridot::Engine<NL>, srr: &StaticRenderResources, layouts: &Layouts
     ) -> Self {
+        let depth_buffer = br::ImageDesc::new(
+            e.backbuffers()[0].size(), Self::DEPTH_BUFFER_FORMAT,
+            br::ImageUsage::DEPTH_STENCIL_ATTACHMENT, br::ImageLayout::Undefined
+        ).create(e.graphics()).expect("Failed to create depth buffer image");
+        let mut mb = peridot::MemoryBadget::new(e.graphics());
+        mb.add(depth_buffer);
+        let depth_buffer = mb.alloc().expect("Failed to alloc depth buffer memory")
+            .pop().expect("no objects?").unwrap_image();
+        let depth_buffer_view = depth_buffer.create_view(
+            None, None, &br::ComponentMapping::default(), &br::ImageSubresourceRange::depth_stencil(0 .. 1, 0 .. 1)
+        ).expect("Failed to create ImageView for DepthStencil");
+        
         let default_shader_uv_v = e.load::<peridot::SpirvShaderBlob>("shaders.uv_v")
             .expect("Failed to load vertex shader")
             .instantiate(e.graphics())
@@ -242,6 +258,9 @@ impl RenderingResources {
         gpb.multisample_state(Some(br::MultisampleState::new()));
         gpb.add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
         gpb.viewport_scissors(br::DynamicArrayState::Static(&[vp]), br::DynamicArrayState::Static(&[sc]));
+        gpb.depth_write_enable(true)
+            .depth_test_enable(true)
+            .depth_compare_op(br::CompareOp::Less);
         let lines_gp = peridot::LayoutedPipeline::combine(
             gpb.create(e.graphics(), None).expect("Failed to create Pipeline"),
             &psl_grid
@@ -275,19 +294,30 @@ impl RenderingResources {
             specinfo: None
         });
         gpb.layout(&psl).vertex_processing(vps);
+        gpb.depth_write_enable(false);
         let gp = peridot::LayoutedPipeline::combine(
             gpb.create(e.graphics(), None).expect("Failed to create Pipeline"),
             &psl
         );
 
+        e.submit_commands(|r| {
+            r.pipeline_barrier(
+                br::PipelineStageFlags::BOTTOM_OF_PIPE, br::PipelineStageFlags::EARLY_FRAGMENT_TESTS, true,
+                &[], &[], &[br::ImageMemoryBarrier::new_raw(
+                    &depth_buffer, &br::ImageSubresourceRange::depth_stencil(0 .. 1, 0 .. 1),
+                    br::ImageLayout::Undefined, br::ImageLayout::DepthStencilAttachmentOpt
+                )]
+            );
+        }).expect("Failed to initialize Depth Buffer");
+
         let fbs = e.backbuffers().iter()
             .map(|b|
-                br::Framebuffer::new(&srr.rp_main, &[&b], b.size(), 1).expect("Failed to create Framebuffer")
+                br::Framebuffer::new(&srr.rp_main, &[&b, &depth_buffer_view], b.size(), 1).expect("Failed to create Framebuffer")
             )
             .collect();
 
         RenderingResources {
-            lines_gp, gp, fbs
+            lines_gp, gp, fbs, depth_buffer, depth_buffer_view
         }
     }
 }
@@ -473,10 +503,11 @@ impl<NL> Game<NL> {
                 extent: br::Extent2D::clone(fb.size().as_ref()).into()
             };
             let cv = br::ClearValue::Color([0.0; 4]);
+            let cvd = br::ClearValue::DepthStencil(1.0, 0);
             let (uvrect_vb, uvrect_vb_offs, uvrect_vb_count) = res.uvrect_vb_view();
             let (grid_vb, grid_vb_offs, grid_vb_count) = res.grid_vb_view();
             cmd.begin().expect("Failed to begin Recording Commands")
-                .begin_render_pass(&srr.rp_main, &fb, render_area, &[cv], true)
+                .begin_render_pass(&srr.rp_main, &fb, render_area, &[cv, cvd], true)
                 .bind_graphics_pipeline_pair(rr.lines_gp.pipeline(), rr.lines_gp.layout())
                 .bind_graphics_descriptor_sets(0, &[desc.camera()], &[])
                 .bind_vertex_buffers(0, &[(grid_vb, grid_vb_offs)])
@@ -496,9 +527,11 @@ pub struct StaticRenderResources {
 impl StaticRenderResources {
     pub fn new<NL>(e: &peridot::Engine<NL>) -> Self {
         StaticRenderResources {
-            rp_main: peridot::RenderPassTemplates::single_render(e.backbuffer_format())
-                .create(e.graphics())
-                .expect("Failed to create rp_main")
+            rp_main: peridot::RenderPassTemplates::single_render_with_depth_noread(
+                e.backbuffer_format(), RenderingResources::DEPTH_BUFFER_FORMAT
+            )
+            .create(e.graphics())
+            .expect("Failed to create rp_main")
         }
     }
 }
