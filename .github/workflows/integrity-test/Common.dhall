@@ -62,7 +62,7 @@ let checkoutStep = GithubActions.Step::{
     , name = "Checking out"
     , uses = Some "actions/checkout@v2"
     }
-let checkoutHeadStep = checkoutStep // GithubActions.Step::{
+let checkoutHeadStep = checkoutStep // {
     , name = "Checking out (HEAD commit)"
     , `with` = Some (toMap { ref = ePullRequestHeadHash })
     }

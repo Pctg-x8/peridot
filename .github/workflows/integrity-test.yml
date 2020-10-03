@@ -7,6 +7,7 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
@@ -37,6 +38,7 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
@@ -81,6 +83,7 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
@@ -117,6 +120,7 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
@@ -149,6 +153,7 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
