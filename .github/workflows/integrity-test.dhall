@@ -166,6 +166,8 @@ let checkExamples = GithubActions.Job::{
         ]
     }
 
+let depends = \(deps: List Text) -> \(job: GithubActions.Job.Type) -> job // { needs = Some deps }
+
 in GithubActions.Workflow::{
     , name = "Integrity Check"
     , on = GithubActions.On::{
@@ -178,10 +180,10 @@ in GithubActions.Workflow::{
         }
     , jobs = toMap {
         , preconditions = preconditions
-        , check-formats = checkFormats // { needs = Some ["preconditions"] }
-        , check-baselayer = checkBaseLayer // { needs = Some ["preconditions"] }
-        , check-tools = checkTools // { needs = Some ["preconditions", "check-baselayer"] }
-        , check-modules = checkModules // { needs = Some ["preconditions", "check-baselayer"] }
-        , check-examples = checkExamples // { needs = Some ["preconditions", "check-modules"] }
+        , check-formats = depends ["preconditions"] checkFormats
+        , check-baselayer = depends ["preconditions"] checkBaseLayer
+        , check-tools = depends ["preconditions", "check-baselayer"] checkTools
+        , check-modules = depends ["preconditions", "check-baselayer"] checkModules
+        , check-examples = depends ["preconditions", "check-modules"] checkExamples
         }
     }
