@@ -71,16 +71,34 @@ let slackNotifySuccessStep = GithubActions.Step::{
         })
     }
 
-let SlackNotification = < Success | Failure : Text >
-let slackNotify =
-    let
-        handlers =
-            { Success = slackNotifySuccessStep
-            , Failure = \(stepName: Text) -> slackNotifyIfFailureStep stepName
-            }
-    in \(state: SlackNotification) -> merge handlers state
+let weeklySlackNotifyAsFailureStep = \(stepName: Text) -> GithubActions.Step::{
+    , name = "Notify as Failure"
+    , uses = Some "./.github/actions/weekly-integrity-check-slack-notifier"
+    , `if` = Some "failure()"
+    , env = Some (toMap awsAccessEnvParams)
+    , `with` = Some (toMap {
+        , status = "failure"
+        , failure_step = stepName
+        , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
+        })
+    }
+let weeklySlackNotifyAsSuccessStep = GithubActions.Step::{
+    , name = "Notify as Success"
+    , uses = Some "./.github/actions/weekly-integrity-check-slack-notifier"
+    , env = Some (toMap awsAccessEnvParams)
+    , `with` = Some (toMap {
+        , status = "success"
+        , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
+        })
+    }
 
-let checkFormats = GithubActions.Job::{
+let SlackNotifyProvider = { Success : GithubActions.Step.Type, Failure : Text -> GithubActions.Step.Type }
+let prSlackNotifyProvider = { Success = slackNotifySuccessStep, Failure = slackNotifyIfFailureStep }
+let weeklySlackNotifyProvider = { Success = weeklySlackNotifyAsSuccessStep, Failure = weeklySlackNotifyAsFailureStep }
+let SlackNotification = < Success | Failure : Text >
+let slackNotify = \(provider: SlackNotifyProvider) -> \(state: SlackNotification) -> merge provider state
+
+let checkFormats = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = "Code Formats"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
@@ -88,50 +106,50 @@ let checkFormats = GithubActions.Job::{
         , checkoutStep
         , runCodeformCheckerStep "Running Check: Line Width" "codeform_check"
         , runCodeformCheckerStep "Running Check: Debugging Weaks" "vulnerabilities_elliminator"
-        , slackNotify (SlackNotification.Failure "check-formats")
+        , slackNotify notifyProvider (SlackNotification.Failure "check-formats")
         ]
     }
 
-let checkBaseLayer = GithubActions.Job::{
+let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = "Base Layer"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
         , checkoutStep
         , GithubActions.Step::{ name = "Building as Checking", uses = Some "./.github/actions/checkbuild-baselayer" }
-        , slackNotify (SlackNotification.Failure "check-baselayer")
+        , slackNotify notifyProvider (SlackNotification.Failure "check-baselayer")
         ]
     }
 
-let checkTools = GithubActions.Job::{
+let checkTools = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = "Tools"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
         , checkoutStep
         , runSubdirectoryCheckStep "tools"
-        , slackNotify (SlackNotification.Failure "check-tools")
+        , slackNotify notifyProvider (SlackNotification.Failure "check-tools")
         ]
     }
-let checkModules = GithubActions.Job::{
+let checkModules = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = "Modules"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
         , checkoutStep
         , runSubdirectoryCheckStep "."
-        , slackNotify (SlackNotification.Failure  "check-modules")
+        , slackNotify notifyProvider (SlackNotification.Failure  "check-modules")
         ]
     }
-let checkExamples = GithubActions.Job::{
+let checkExamples = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = "Examples"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
         , checkoutStep
         , runSubdirectoryCheckStep "examples"
-        , slackNotify SlackNotification.Success
-        , slackNotify (SlackNotification.Failure  "check-examples")
+        , slackNotify notifyProvider SlackNotification.Success
+        , slackNotify notifyProvider (SlackNotification.Failure  "check-examples")
         ]
     }
 
@@ -145,6 +163,8 @@ in  { depends
     , eRepositoryName
     , ePullRequestNumber
     , eSecretGithubToken
+    , prSlackNotifyProvider
+    , weeklySlackNotifyProvider
     , checkFormats
     , checkBaseLayer
     , checkTools

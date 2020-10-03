@@ -51,10 +51,10 @@ in GithubActions.Workflow::{
         }
     , jobs = toMap {
         , preconditions = preconditions
-        , check-formats = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputHasChanges CommonDefs.checkFormats)
-        , check-baselayer = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputHasChanges CommonDefs.checkBaseLayer)
-        , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges CommonDefs.checkTools)
-        , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges CommonDefs.checkModules)
-        , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.withCondition preconditionOutputHasChanges CommonDefs.checkExamples)
+        , check-formats = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkFormats CommonDefs.prSlackNotifyProvider))
+        , check-baselayer = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkBaseLayer CommonDefs.prSlackNotifyProvider))
+        , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkTools CommonDefs.prSlackNotifyProvider))
+        , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider))
+        , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider))
         }
     }
