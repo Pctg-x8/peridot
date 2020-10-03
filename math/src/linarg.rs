@@ -759,7 +759,6 @@ mod tests
         assert!((1.0 - d).abs() <= std::f32::EPSILON);
     }
 
-
     #[test]
     fn is_edge() {
         assert!((Vector2F32::rand_unit_circle_edge(&mut rand::thread_rng()).len() - 1.0).abs() <= std::f32::EPSILON);

@@ -12,6 +12,8 @@ pub struct ParticleRenderInstance {
     pub alpha: f32
 }
 
+fn lerp(a: f32, b: f32, x: f32) -> f32 { a * (1.0 - x) + b * x }
+
 pub struct CPUParticleInstance {
     pub pos: peridot::math::Vector3F32,
     pub scale: peridot::math::Vector3F32,
@@ -23,6 +25,8 @@ impl CPUParticleInstance {
     pub fn update(&mut self, dt: std::time::Duration) {
         self.living_time += (dt.as_micros() as f64 / 1_000_000.0) as f32;
         self.pos = self.pos.clone() + self.velocity.clone() * (dt.as_micros() as f64 / 1_000_000.0) as f32;
+        let s = lerp(0.6, 1.0, 1.0 - (self.living_time / self.lifetime).powf(2.0));
+        self.scale = peridot::math::Vector3(s, s, s);
     }
     pub fn died(&self) -> bool { self.living_time >= self.lifetime }
 
