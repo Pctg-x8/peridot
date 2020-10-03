@@ -71,6 +71,15 @@ let slackNotifySuccessStep = GithubActions.Step::{
         })
     }
 
+let SlackNotification = < Success | Failure : Text >
+let slackNotify =
+    let
+        handlers =
+            { Success = slackNotifySuccessStep
+            , Failure = \(stepName: Text) -> slackNotifyIfFailureStep stepName
+            }
+    in \(state: SlackNotification) -> merge handlers state
+
 let checkFormats = GithubActions.Job::{
     , name = "Code Formats"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
@@ -79,7 +88,7 @@ let checkFormats = GithubActions.Job::{
         , checkoutStep
         , runCodeformCheckerStep "Running Check: Line Width" "codeform_check"
         , runCodeformCheckerStep "Running Check: Debugging Weaks" "vulnerabilities_elliminator"
-        , slackNotifyIfFailureStep "check-formats"
+        , slackNotify (SlackNotification.Failure "check-formats")
         ]
     }
 
@@ -90,7 +99,7 @@ let checkBaseLayer = GithubActions.Job::{
         , checkoutHeadStep
         , checkoutStep
         , GithubActions.Step::{ name = "Building as Checking", uses = Some "./.github/actions/checkbuild-baselayer" }
-        , slackNotifyIfFailureStep "check-baselayer"
+        , slackNotify (SlackNotification.Failure "check-baselayer")
         ]
     }
 
@@ -101,7 +110,7 @@ let checkTools = GithubActions.Job::{
         , checkoutHeadStep
         , checkoutStep
         , runSubdirectoryCheckStep "tools"
-        , slackNotifyIfFailureStep "check-tools"
+        , slackNotify (SlackNotification.Failure "check-tools")
         ]
     }
 let checkModules = GithubActions.Job::{
@@ -111,7 +120,7 @@ let checkModules = GithubActions.Job::{
         , checkoutHeadStep
         , checkoutStep
         , runSubdirectoryCheckStep "."
-        , slackNotifyIfFailureStep "check-modules"
+        , slackNotify (SlackNotification.Failure  "check-modules")
         ]
     }
 let checkExamples = GithubActions.Job::{
@@ -121,8 +130,8 @@ let checkExamples = GithubActions.Job::{
         , checkoutHeadStep
         , checkoutStep
         , runSubdirectoryCheckStep "examples"
-        , slackNotifySuccessStep
-        , slackNotifyIfFailureStep "check-examples"
+        , slackNotify SlackNotification.Success
+        , slackNotify (SlackNotification.Failure  "check-examples")
         ]
     }
 
