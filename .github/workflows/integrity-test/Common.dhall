@@ -6,6 +6,7 @@ let ePullRequestNumber = GithubActions.mkExpression "github.event.number"
 let ePullRequestTitle = GithubActions.mkExpression "github.event.pull_request.title"
 let ePullRequestHeadHash = GithubActions.mkExpression "github.event.pull_request.head.sha"
 let ePullRequestBaseHash = GithubActions.mkExpression "github.event.pull_request.base.sha"
+let eGithubOriginHash = GithubActions.mkExpression "github.sha"
 let eSecretGithubToken = GithubActions.mkExpression "secrets.GITHUB_TOKEN"
 let eSecretAWSAccessKey = GithubActions.mkExpression "secrets.AWS_ACCESS_KEY_ID"
 let eSecretAWSAccessSecret = GithubActions.mkExpression "secrets.AWS_ACCESS_SECRET"
@@ -16,46 +17,10 @@ let awsAccessEnvParams =
     , AWS_DEFAULT_REGION = "ap-northeast-1"
     }
 
-let preconditionOutputHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_code_changes == 1"
-let preconditions = GithubActions.Job::{
-    , name = "Preconditions"
-    , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , outputs = Some (toMap {
-        , begintime = GithubActions.mkExpression "steps.begintime.outputs.begintime"
-        , has_code_changes = GithubActions.mkExpression "steps.fileck.outputs.has_code_changes"
-        })
-    , steps = [
-        , GithubActions.Step::{
-            , name = "Getting begintime"
-            , id = Some "begintime"
-            , run = Some "echo \"::set-output name=begintime::$(date +%s)\""
-            }
-        , GithubActions.Step::{
-            , name = "Checking Changed Filenames"
-            , id = Some "fileck"
-            , run = Some
-                ''
-                HAS_CODE_CHANGES=0
-                QUERY_STRING='query($cursor: String) { repository(owner: \"${ eRepositoryOwnerLogin }\", name: \"${ eRepositoryName }\") { pullRequest(number: ${ ePullRequestNumber }) { files(first: 50, after: $cursor) { nodes { path }, pageInfo { hasNextPage, endCursor } } } } }'
-                QUERY_CURSOR='null'
-                while :; do
-                  POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR }\" } }"
-                  echo $POSTDATA
-                  API_RESPONSE=$(curl -s -H "Authorization: Bearer ${ eSecretGithubToken }" -X POST -d "$POSTDATA" https://api.github.com/graphql)
-                  echo $API_RESPONSE
-                  echo $API_RESPONSE | jq ".data.repository.pullRequest.files.nodes[].path" | grep -qE '\.rs"$|Cargo(\.template)?\.toml"$' && :
-                  if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; break; fi
-                  HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.hasNextPage")
-                  if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
-                    QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.endCursor")
-                  else
-                    break
-                  fi
-                done < <(cat)
-                echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
-                ''
-            }
-        ]
+let preconditionRecordBeginTimeStep = GithubActions.Step::{
+    , name = "Getting begintime"
+    , id = Some "begintime"
+    , run = Some "echo \"::set:output name=begintime::$(date +%s)\""
     }
 
 let checkoutStep = GithubActions.Step::{
@@ -109,7 +74,6 @@ let slackNotifySuccessStep = GithubActions.Step::{
 let checkFormats = GithubActions.Job::{
     , name = "Code Formats"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , `if` = Some preconditionOutputHasChanges
     , steps = [
         , checkoutHeadStep
         , checkoutStep
@@ -122,7 +86,6 @@ let checkFormats = GithubActions.Job::{
 let checkBaseLayer = GithubActions.Job::{
     , name = "Base Layer"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , `if` = Some preconditionOutputHasChanges
     , steps = [
         , checkoutHeadStep
         , checkoutStep
@@ -134,7 +97,6 @@ let checkBaseLayer = GithubActions.Job::{
 let checkTools = GithubActions.Job::{
     , name = "Tools"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , `if` = Some preconditionOutputHasChanges
     , steps = [
         , checkoutHeadStep
         , checkoutStep
@@ -145,7 +107,6 @@ let checkTools = GithubActions.Job::{
 let checkModules = GithubActions.Job::{
     , name = "Modules"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , `if` = Some preconditionOutputHasChanges
     , steps = [
         , checkoutHeadStep
         , checkoutStep
@@ -156,7 +117,6 @@ let checkModules = GithubActions.Job::{
 let checkExamples = GithubActions.Job::{
     , name = "Examples"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , `if` = Some preconditionOutputHasChanges
     , steps = [
         , checkoutHeadStep
         , checkoutStep
@@ -167,5 +127,18 @@ let checkExamples = GithubActions.Job::{
     }
 
 let depends = \(deps: List Text) -> \(job: GithubActions.Job.Type) -> job // { needs = Some deps }
+let withCondition = \(cond: Text) -> \(job: GithubActions.Job.Type) -> job // { `if` = Some cond }
 
-in { depends, preconditions, checkFormats, checkBaseLayer, checkTools, checkModules, checkExamples }
+in  { depends
+    , withCondition
+    , preconditionRecordBeginTimeStep
+    , eRepositoryOwnerLogin
+    , eRepositoryName
+    , ePullRequestNumber
+    , eSecretGithubToken
+    , checkFormats
+    , checkBaseLayer
+    , checkTools
+    , checkModules
+    , checkExamples
+    }
