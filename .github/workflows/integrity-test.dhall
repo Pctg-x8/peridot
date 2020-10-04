@@ -64,7 +64,7 @@ let checkWorkflowSync = GithubActions.Job::{
             , name = "test-sync"
             , run = Some "make -C ./.github/workflows test-sync"
             }
-        , CommonDefs.slackNotifyIfFailureStep  "check-sync-workflow"
+        , CommonDefs.runStepOnFailure (CommonDefs.slackNotifyIfFailureStep  "check-sync-workflow" // { name = "Notify as Failure" })
         ]
     }
 
