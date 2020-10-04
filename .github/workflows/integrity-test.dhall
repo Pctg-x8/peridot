@@ -31,7 +31,7 @@ let preconditions = GithubActions.Job::{
                   echo $PATHS
                   echo $PATHS | grep -qE '\.rs"$|Cargo(\.template)?\.toml"$' && :
                   if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; fi
-                  echo $PATHS | grep -qE '\.dhall$' && :
+                  echo $PATHS | grep -qE '\.dhall"$' && :
                   if [[ $? == 0 ]]; then HAS_WORKFLOW_CHANGES=1; fi
                   if [[ $HAS_CODE_CHANGES == 1 && $HAS_WORKFLOW_CHANGES == 1 ]]; then break; fi
                   HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.hasNextPage")
