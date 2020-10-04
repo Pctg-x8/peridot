@@ -22,7 +22,7 @@ let Step =
         }
     }
 
-let RunnerPlatform = < `ubuntu-latest` | Custom: Text >
+let RunnerPlatform = < `ubuntu-latest` | `windows-latest` | `macos-latest` | Custom: Text >
 
 let Job =
     { Type =
