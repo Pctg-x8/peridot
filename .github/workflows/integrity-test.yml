@@ -154,9 +154,7 @@ jobs:
     - name: Checking out
       uses: "actions/checkout@v2"
     - name: Setup Dhall
-      run: |
-        curl -sSL https://get.haskellstack.org/ | sh
-        stack install dhall-yaml
+      run: "stack install dhall-yaml"
     - name: "test-sync"
       run: "make -C ./.github/workflows test-sync"
     - env:
