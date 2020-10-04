@@ -1,6 +1,6 @@
 jobs:
   "check-baselayer":
-    if: "${{ needs.preconditions.output.has_code_changes == 1 }}"
+    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Base Layer
     needs:
     - preconditions
@@ -30,7 +30,7 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-examples":
-    if: "${{ needs.preconditions.output.has_code_changes == 1 }}"
+    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Examples
     needs:
     - preconditions
@@ -76,7 +76,7 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-formats":
-    if: "${{ needs.preconditions.output.has_code_changes == 1 }}"
+    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Code Formats
     needs:
     - preconditions
@@ -112,7 +112,7 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-modules":
-    if: "${{ needs.preconditions.output.has_code_changes == 1 }}"
+    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Modules
     needs:
     - preconditions
@@ -145,7 +145,7 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-sync-workflow":
-    if: "${{ needs.preconditions.output.has_workflow_changes == 1 }}"
+    if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
     name: Check Workflow Files are Synchronized
     needs:
     - preconditions
@@ -173,7 +173,7 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-tools":
-    if: "${{ needs.preconditions.output.has_code_changes == 1 }}"
+    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Tools
     needs:
     - preconditions

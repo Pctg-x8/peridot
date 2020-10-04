@@ -2,8 +2,8 @@ let GithubActions = ./schemas/Actions.dhall
 let CommonDefs = ./integrity-test/Common.dhall
 let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
-let preconditionOutputHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_code_changes == 1"
-let preconditionOutputHasWorkflowChanges = GithubActions.mkExpression "needs.preconditions.output.has_workflow_changes == 1"
+let preconditionOutputHasChanges = GithubActions.mkExpression "needs.preconditions.outputs.has_code_changes == 1"
+let preconditionOutputHasWorkflowChanges = GithubActions.mkExpression "needs.preconditions.outputs.has_workflow_changes == 1"
 let preconditions = GithubActions.Job::{
     , name = Some "Preconditions"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
