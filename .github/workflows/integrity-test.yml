@@ -145,7 +145,7 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-sync-workflow":
-    if: "${{ needs.preconditions.output.has_workflow_changes == 1 }}"
+    if: "${{ needs.preconditions.output.has_workflow_changes == \"1\" }}"
     name: Check Workflow Files are Synchronized
     needs:
     - preconditions
