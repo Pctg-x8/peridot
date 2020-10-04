@@ -11,7 +11,7 @@ jobs:
       uses: "./.github/actions/build-doc"
     - env:
         FIREBASE_TOKEN: "${{ secrets.DOC_HOST_FIREBASE_TOKEN }}"
-      name: "Deployment to Firebase Hosting (for dev)"
+      name: "Deployment to Firebase Hosting (for Dev)"
       uses: "./.github/actions/deployment-dev"
 name: "Document Continuous Deployment (for dev)"
 'on':

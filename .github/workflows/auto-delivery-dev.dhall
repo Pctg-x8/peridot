@@ -1,4 +1,5 @@
 let GithubActions = ./schemas/Actions.dhall
+let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
 in GithubActions.Workflow::{
     , name = Some "SubProject-dev Auto Deliveries"
@@ -10,10 +11,7 @@ in GithubActions.Workflow::{
             , name = Some "Make Delivering PullRequest"
             , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
             , steps = [
-                , GithubActions.Step::{
-                    , name = "Checking out"
-                    , uses = Some "actions/checkout@v2"
-                    }
+                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
                 , GithubActions.Step::{
                     , name = "Fetching all branches"
                     , run = Some "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
