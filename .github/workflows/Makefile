@@ -1,6 +1,6 @@
 
 TARGET_WORKFLOWS = integrity-test weekly-integrity-test auto-delivery-dev docs-cd sdk-build
-FORCE_DEPS = ./schemas/*.dhall ./integrity-test/*.dhall
+FORCE_DEPS = $(wildcard ./schemas/*.dhall) $(wildcard ./integrity-test/*.dhall)
 CONVERTER = dhall-to-yaml-ng
 DIFF = colordiff -u
 

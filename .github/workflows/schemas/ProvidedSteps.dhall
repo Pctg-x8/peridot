@@ -26,7 +26,7 @@ let uploadArtifactStep = \(params: UploadArtifactParams.Type) -> GithubActions.S
 
 let setupDhallStep = GithubActions.Step::{
     , name = "Setup Dhall"
-    , uses = Some "actions/setup-dhall@v4"
+    , uses = Some "dhall-lang/setup-dhall@v4"
 }
 
 in { CheckoutStepParams, checkoutStep, UploadArtifactParams, uploadArtifactStep, setupDhallStep }
