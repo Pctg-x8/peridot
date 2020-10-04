@@ -56,7 +56,7 @@ let checkWorkflowSync = GithubActions.Job::{
         , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
         , GithubActions.Step::{
             , name = "setup packages"
-            , run = Some "brew install dhall-yaml"
+            , run = Some "brew install dhall-yaml colordiff"
             }
         , GithubActions.Step::{
             , name = "test-sync"
