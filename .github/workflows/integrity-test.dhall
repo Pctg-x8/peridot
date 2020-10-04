@@ -3,13 +3,13 @@ let CommonDefs = ./integrity-test/Common.dhall
 let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
 let preconditionOutputHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_code_changes == 1"
-let preconditionOutputWorkflowHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_workflow_changes == \"1\""
+let preconditionOutputWorkflowHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_workflow_changes == 1"
 let preconditions = GithubActions.Job::{
     , name = Some "Preconditions"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , outputs = Some (CommonDefs.preconditionBeginTimestampOutputDef # toMap {
         , has_code_changes = GithubActions.mkExpression "steps.fileck.outputs.has_code_changes"
-        , has_workflow_changes = "1"
+        , has_workflow_changes = GithubActions.mkExpression "steps.fileck.outputs.has_workflow_changes"
         })
     , steps = [
         , CommonDefs.preconditionRecordBeginTimeStep
@@ -79,6 +79,6 @@ in GithubActions.Workflow::{
         , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkTools CommonDefs.prSlackNotifyProvider))
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider))
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider))
-        , check-sync-workflow = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputWorkflowHasChanges checkWorkflowSync)
+        , check-sync-workflow = CommonDefs.depends ["preconditions"] checkWorkflowSync
         }
     }

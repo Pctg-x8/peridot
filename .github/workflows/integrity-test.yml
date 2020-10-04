@@ -145,7 +145,6 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-sync-workflow":
-    if: "${{ needs.preconditions.output.has_workflow_changes == \"1\" }}"
     name: Check Workflow Files are Synchronized
     needs:
     - preconditions
@@ -208,7 +207,7 @@ jobs:
     outputs:
       begintime: "${{ steps.begintime.outputs.begintime }}"
       has_code_changes: "${{ steps.fileck.outputs.has_code_changes }}"
-      has_workflow_changes: '1'
+      has_workflow_changes: "${{ steps.fileck.outputs.has_workflow_changes }}"
     "runs-on": "ubuntu-latest"
     steps:
     - id: begintime
