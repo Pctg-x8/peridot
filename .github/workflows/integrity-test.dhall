@@ -9,7 +9,7 @@ let preconditions = GithubActions.Job::{
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , outputs = Some (CommonDefs.preconditionBeginTimestampOutputDef # toMap {
         , has_code_changes = GithubActions.mkExpression "steps.fileck.outputs.has_code_changes"
-        , has_workflow_changes = GithubActions.mkExpression "steps.fileck.outputs.has_workflow_changes"
+        , has_workflow_changes = "1"
         })
     , steps = [
         , CommonDefs.preconditionRecordBeginTimeStep

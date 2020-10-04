@@ -208,7 +208,7 @@ jobs:
     outputs:
       begintime: "${{ steps.begintime.outputs.begintime }}"
       has_code_changes: "${{ steps.fileck.outputs.has_code_changes }}"
-      has_workflow_changes: "${{ steps.fileck.outputs.has_workflow_changes }}"
+      has_workflow_changes: '1'
     "runs-on": "ubuntu-latest"
     steps:
     - id: begintime
