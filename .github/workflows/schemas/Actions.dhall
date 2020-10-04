@@ -40,33 +40,20 @@ let Job =
         }
     }
 
-let PullRequestTriggerTypes = < opened | synchronize >
-let OnPullRequest =
-    { Type = { types : List PullRequestTriggerTypes }
-    , default = { types = [] : List PullRequestTriggerTypes }
-    }
-let Schedule =
-    { Type = { cron : Text }
-    , default = {=}
-    }
-let On =
-    { Type =
-        { pull_request : Optional OnPullRequest.Type
-        , schedule : Optional (List Schedule.Type)
-        }
-    , default =
-        { pull_request = None OnPullRequest.Type
-        , schedule = None (List Schedule.Type)
-        }
-    }
+let Triggers = ./Triggers.dhall
 
 let Workflow =
     { Type =
-        { name : Text
-        , on : On.Type
+        { name : Optional Text
+        , on : Triggers.On
         , jobs : Map Text Job.Type
         }
-    , default = {=}
+    , default = { name = None Text }
     }
 
-in { Workflow, On, OnPullRequest, PullRequestTriggerTypes, Schedule, Job, RunnerPlatform, Step, mkExpression }
+in { Workflow
+   , Job
+   , RunnerPlatform
+   , Step
+   , mkExpression
+   } /\ Triggers

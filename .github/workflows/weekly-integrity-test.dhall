@@ -11,11 +11,9 @@ let preconditions = GithubActions.Job::{
     }
 
 in GithubActions.Workflow::{
-    , name = "Integrity Check (Weekly)"
-    , on = GithubActions.On::{
-        , schedule = Some [
-            , GithubActions.Schedule::{ cron = "0 12 * * wed" }
-            ]
+    , name = Some "Integrity Check (Weekly)"
+    , on = GithubActions.On.Detailed GithubActions.OnDetails::{
+        , schedule = Some [GithubActions.Schedule::{ cron = "0 12 * * wed" }]
         }
     , jobs = toMap {
         , preconditions = preconditions

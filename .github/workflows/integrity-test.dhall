@@ -39,10 +39,10 @@ let preconditions = GithubActions.Job::{
     }
 
 in GithubActions.Workflow::{
-    , name = "Integrity Check"
-    , on = GithubActions.On::{
+    , name = Some "Integrity Check"
+    , on = GithubActions.On.Detailed GithubActions.OnDetails::{
         , pull_request = Some GithubActions.OnPullRequest::{
-            , types = [
+            , types = Some [
                 , GithubActions.PullRequestTriggerTypes.opened
                 , GithubActions.PullRequestTriggerTypes.synchronize
                 ]
