@@ -1,6 +1,8 @@
 let GithubActions = ./schemas/Actions.dhall
 let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
+let DeliveryPullRequestCreateAction = ../actions/create-dev-delivery-prs/schema.dhall
+
 in GithubActions.Workflow::{
     , name = Some "SubProject-dev Auto Deliveries"
     , on = GithubActions.On.Detailed GithubActions.OnDetails::{
@@ -16,11 +18,7 @@ in GithubActions.Workflow::{
                     , name = "Fetching all branches"
                     , run = Some "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
                     }
-                , GithubActions.Step::{
-                    , name = "Create PullRequests"
-                    , uses = Some "./.github/actions/create-dev-delivery-prs"
-                    , `with` = Some (toMap { token = GithubActions.mkExpression "secrets.GTIHUB_TOKEN" })
-                    }
+                , DeliveryPullRequestCreateAction.step DeliveryPullRequestCreateAction.Params::{=}
                 ]
             }
         }
