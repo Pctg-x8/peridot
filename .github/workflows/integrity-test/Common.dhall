@@ -15,6 +15,10 @@ let eSecretGithubToken = GithubActions.mkExpression "secrets.GITHUB_TOKEN"
 let eSecretAWSAccessKey = GithubActions.mkExpression "secrets.AWS_ACCESS_KEY_ID"
 let eSecretAWSAccessSecret = GithubActions.mkExpression "secrets.AWS_ACCESS_SECRET"
 
+let depends = \(deps: List Text) -> \(job: GithubActions.Job.Type) -> job // { needs = Some deps }
+let withCondition = \(cond: Text) -> \(job: GithubActions.Job.Type) -> job // { `if` = Some cond }
+let withConditionStep = \(cond: Text) -> \(step: GithubActions.Step.Type) -> step // { `if` = Some cond }
+
 let awsAccessEnvParams : SlackNotifierAction.ExecEnv =
     { AWS_ACCESS_KEY_ID = eSecretAWSAccessKey
     , AWS_SECRET_ACCESS_KEY = eSecretAWSAccessSecret
@@ -73,10 +77,16 @@ let weeklySlackNotifyAsSuccessStep = GithubActions.Step::{
         })
     }
 
-let SlackNotifyProvider = { Success : GithubActions.Step.Type, Failure : Text -> GithubActions.Step.Type }
-let prSlackNotifyProvider = { Success = slackNotifySuccessStep, Failure = slackNotifyIfFailureStep }
-let weeklySlackNotifyProvider = { Success = weeklySlackNotifyAsSuccessStep, Failure = weeklySlackNotifyAsFailureStep }
 let SlackNotification = < Success | Failure : Text >
+let SlackNotifyProvider = { Success : GithubActions.Step.Type, Failure : Text -> GithubActions.Step.Type }
+let prSlackNotifyProvider =
+    { Success = slackNotifySuccessStep // { name = "Notify as Success" }
+    , Failure = \(phase: Text) -> slackNotifyIfFailureStep phase // { name = "Notify as Failure" }
+    }
+let weeklySlackNotifyProvider =
+    { Success = weeklySlackNotifyAsSuccessStep // { name = "Notify as Success" }
+    , Failure = \(phase: Text) -> weeklySlackNotifyAsFailureStep phase // { name = "Notify as Failure" }
+    }
 let slackNotify = \(provider: SlackNotifyProvider) -> \(state: SlackNotification) -> merge provider state
 
 let checkFormats = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
@@ -87,7 +97,7 @@ let checkFormats = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::
         , checkoutStep
         , CodeformCheckerAction.step { script = CodeformCheckerAction.Script.codeform_check } // { name = "Running Check: Line Width" }
         , CodeformCheckerAction.step { script = CodeformCheckerAction.Script.vulnerabilities_elliminator } // { name = "Running Check: Debugging Weaks" }
-        , slackNotify notifyProvider (SlackNotification.Failure "check-formats")
+        , withConditionStep "failure()" (slackNotify notifyProvider (SlackNotification.Failure "check-formats"))
         ]
     }
 
@@ -98,7 +108,7 @@ let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job
         , checkoutHeadStep
         , checkoutStep
         , GithubActions.Step::{ name = "Building as Checking", uses = Some "./.github/actions/checkbuild-baselayer" }
-        , slackNotify notifyProvider (SlackNotification.Failure "check-baselayer")
+        , withConditionStep "failure()" (slackNotify notifyProvider (SlackNotification.Failure "check-baselayer"))
         ]
     }
 
@@ -109,7 +119,7 @@ let checkTools = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
         , checkoutHeadStep
         , checkoutStep
         , CheckBuildSubdirAction.step { path = "tools" }
-        , slackNotify notifyProvider (SlackNotification.Failure "check-tools")
+        , withConditionStep "failure()" (slackNotify notifyProvider (SlackNotification.Failure "check-tools"))
         ]
     }
 let checkModules = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
@@ -119,7 +129,7 @@ let checkModules = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::
         , checkoutHeadStep
         , checkoutStep
         , CheckBuildSubdirAction.step { path = "." }
-        , slackNotify notifyProvider (SlackNotification.Failure  "check-modules")
+        , withConditionStep "failure()" (slackNotify notifyProvider (SlackNotification.Failure  "check-modules"))
         ]
     }
 let checkExamples = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
@@ -130,15 +140,13 @@ let checkExamples = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job:
         , checkoutStep
         , CheckBuildSubdirAction.step { path = "examples" }
         , slackNotify notifyProvider SlackNotification.Success
-        , slackNotify notifyProvider (SlackNotification.Failure  "check-examples")
+        , withConditionStep "failure()" (slackNotify notifyProvider (SlackNotification.Failure  "check-examples"))
         ]
     }
 
-let depends = \(deps: List Text) -> \(job: GithubActions.Job.Type) -> job // { needs = Some deps }
-let withCondition = \(cond: Text) -> \(job: GithubActions.Job.Type) -> job // { `if` = Some cond }
-
 in  { depends
     , withCondition
+    , withConditionStep
     , preconditionRecordBeginTimeStep
     , preconditionBeginTimestampOutputDef
     , eRepositoryOwnerLogin
