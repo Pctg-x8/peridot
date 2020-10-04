@@ -227,6 +227,7 @@ jobs:
           API_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -X POST -d "$POSTDATA" https://api.github.com/graphql)
           echo $API_RESPONSE
           PATHS=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.nodes[].path")
+          echo $PATHS
           echo $PATHS | grep -qE '\.rs"$|Cargo(\.template)?\.toml"$' && :
           if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; fi
           echo $PATHS | grep -qE '\.dhall$' && :
@@ -239,6 +240,8 @@ jobs:
             break
           fi
         done < <(cat)
+        echo "HAS_CODE_CHANGES?$HAS_CODE_CHANGES"
+        echo "HAS_WORKFLOW_CHANGES?$HAS_WORKFLOW_CHANGES"
         echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
         echo "::set-output name=has_workflow_changes::$HAS_WORKFLOW_CHANGES"
 name: Integrity Check
