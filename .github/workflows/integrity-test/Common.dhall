@@ -164,6 +164,8 @@ in  { depends
     , eRepositoryName
     , ePullRequestNumber
     , eSecretGithubToken
+    , slackNotifyIfFailureStep
+    , slackNotifySuccessStep
     , prSlackNotifyProvider
     , weeklySlackNotifyProvider
     , checkFormats

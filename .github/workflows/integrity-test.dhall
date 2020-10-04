@@ -1,12 +1,15 @@
 let GithubActions = ./schemas/Actions.dhall
 let CommonDefs = ./integrity-test/Common.dhall
+let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
 let preconditionOutputHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_code_changes == 1"
+let preconditionOutputWorkflowHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_workflow_changes == 1"
 let preconditions = GithubActions.Job::{
     , name = Some "Preconditions"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , outputs = Some (CommonDefs.preconditionBeginTimestampOutputDef # toMap {
         , has_code_changes = GithubActions.mkExpression "steps.fileck.outputs.has_code_changes"
+        , has_workflow_changes = GithubActions.mkExpression "steps.fileck.outputs.has_workflow_changes"
         })
     , steps = [
         , CommonDefs.preconditionRecordBeginTimeStep
@@ -16,6 +19,7 @@ let preconditions = GithubActions.Job::{
             , run = Some
                 ''
                 HAS_CODE_CHANGES=0
+                HAS_WORKFLOW_CHANGES=0
                 QUERY_STRING='query($cursor: String) { repository(owner: \"${ CommonDefs.eRepositoryOwnerLogin }\", name: \"${ CommonDefs.eRepositoryName }\") { pullRequest(number: ${ CommonDefs.ePullRequestNumber }) { files(first: 50, after: $cursor) { nodes { path }, pageInfo { hasNextPage, endCursor } } } } }'
                 QUERY_CURSOR='null'
                 while :; do
@@ -23,8 +27,12 @@ let preconditions = GithubActions.Job::{
                   echo $POSTDATA
                   API_RESPONSE=$(curl -s -H "Authorization: Bearer ${ CommonDefs.eSecretGithubToken }" -X POST -d "$POSTDATA" https://api.github.com/graphql)
                   echo $API_RESPONSE
-                  echo $API_RESPONSE | jq ".data.repository.pullRequest.files.nodes[].path" | grep -qE '\.rs"$|Cargo(\.template)?\.toml"$' && :
-                  if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; break; fi
+                  PATHS=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.nodes[].path")
+                  echo $PATHS | grep -qE '\.rs"$|Cargo(\.template)?\.toml"$' && :
+                  if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; fi
+                  echo $PATHS | grep -qE '\.dhall$' && :
+                  if [[ $? == 0 ]]; then HAS_WORKFLOW_CHANGES=1; fi
+                  if [[ $HAS_CODE_CHANGES == 1 && $HAS_WORKFLOW_CHANGES == 1 ]]; break; fi
                   HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.hasNextPage")
                   if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
                     QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.endCursor")
@@ -33,8 +41,21 @@ let preconditions = GithubActions.Job::{
                   fi
                 done < <(cat)
                 echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
+                echo "::set-output name=has_workflow_changes::$HAS_WORKFLOW_CHANGES"
                 ''
             }
+        ]
+    }
+let checkWorkflowSync = GithubActions.Job::{
+    , name = Some "Check Workflow Files are Synchronized"
+    , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+    , steps = [
+        , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
+        , GithubActions.Step::{
+            , name = "test-sync"
+            , run = Some "make -C ./.github/workflows test-sync"
+            }
+        , CommonDefs.slackNotifyIfFailureStep  "check-sync-workflow"
         ]
     }
 
@@ -55,5 +76,6 @@ in GithubActions.Workflow::{
         , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkTools CommonDefs.prSlackNotifyProvider))
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider))
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider))
+        , check-sync-workflow = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputWorkflowHasChanges checkWorkflowSync)
         }
     }
