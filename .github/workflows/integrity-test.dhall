@@ -32,7 +32,7 @@ let preconditions = GithubActions.Job::{
                   if [[ $? == 0 ]]; then HAS_CODE_CHANGES=1; fi
                   echo $PATHS | grep -qE '\.dhall$' && :
                   if [[ $? == 0 ]]; then HAS_WORKFLOW_CHANGES=1; fi
-                  if [[ $HAS_CODE_CHANGES == 1 && $HAS_WORKFLOW_CHANGES == 1 ]]; break; fi
+                  if [[ $HAS_CODE_CHANGES == 1 && $HAS_WORKFLOW_CHANGES == 1 ]]; then break; fi
                   HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.hasNextPage")
                   if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
                     QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.pullRequest.files.pageInfo.endCursor")
