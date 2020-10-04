@@ -7,7 +7,7 @@ in GithubActions.Workflow::{
         }
     , jobs = toMap {
         , make-pr-for-deliver = GithubActions.Job::{
-            , name = "Make Delivering PullRequest"
+            , name = Some "Make Delivering PullRequest"
             , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
             , steps = [
                 , GithubActions.Step::{

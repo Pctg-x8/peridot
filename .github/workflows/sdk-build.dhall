@@ -1,5 +1,6 @@
 let GithubActions = ./schemas/Actions.dhall
 let List/map = https://prelude.dhall-lang.org/List/map
+let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
 let PowershellOnlyStep = \(params: GithubActions.Step.Type) -> params // {
     , `if` = Some "matrix.os == 'windows-latest'"
@@ -24,10 +25,7 @@ in GithubActions.Workflow::{
                 }
             , runs-on = GithubActions.RunnerPlatform.Custom (GithubActions.mkExpression "matrix.os")
             , steps = [
-                , GithubActions.Step::{
-                    , name = "Checkout"
-                    , uses = Some "actions/checkout@v2"
-                    }
+                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
                 , PowershellOnlyStep GithubActions.Step::{
                     , name = "Build tools (For PowerShell Env)"
                     , run = Some "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }"
@@ -49,13 +47,9 @@ in GithubActions.Workflow::{
                     , name = "Make package (For Bash Env)"
                     , run = Some "./make-dev-package.sh -o peridot-sdk -b \${GITHUB_REF#\"refs/heads/\"}"
                     }
-                , GithubActions.Step::{
-                    , name = "Upload package to Artifacts"
-                    , uses = Some "actions/upload-artifact@v1"
-                    , `with` = Some (toMap {
-                        , name = "PeridotSDK-" ++ GithubActions.mkExpression "matrix.os"
-                        , path = "peridot-sdk"
-                        })
+                , ProvidedSteps.uploadArtifactStep ProvidedSteps.UploadArtifactParams::{
+                    , name = "PeridotSDK-" ++ GithubActions.mkExpression "matrix.os"
+                    , path = "peridot-sdk"
                     }
                 ]
             }

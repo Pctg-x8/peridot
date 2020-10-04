@@ -3,7 +3,7 @@ let CommonDefs = ./integrity-test/Common.dhall
 
 let preconditionOutputHasChanges = GithubActions.mkExpression "needs.preconditions.output.has_code_changes == 1"
 let preconditions = GithubActions.Job::{
-    , name = "Preconditions"
+    , name = Some "Preconditions"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , outputs = Some (CommonDefs.preconditionBeginTimestampOutputDef # toMap {
         , has_code_changes = GithubActions.mkExpression "steps.fileck.outputs.has_code_changes"

@@ -2,7 +2,7 @@ let GithubActions = ./schemas/Actions.dhall
 let CommonDefs = ./integrity-test/Common.dhall
 
 let preconditions = GithubActions.Job::{
-    , name = "Preconditions"
+    , name = Some "Preconditions"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , outputs = Some CommonDefs.preconditionBeginTimestampOutputDef
     , steps = [

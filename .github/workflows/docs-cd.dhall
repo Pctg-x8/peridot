@@ -10,7 +10,7 @@ in GithubActions.Workflow::{
         }
     , jobs = toMap {
         , doc-gen-deploy = GithubActions.Job::{
-            , name = "Doc Generate and Deploy"
+            , name = Some "Doc Generate and Deploy"
             , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
             , steps = [
                 , GithubActions.Step::{

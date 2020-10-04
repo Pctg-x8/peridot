@@ -1,4 +1,5 @@
 let GithubActions = ../schemas/Actions.dhall
+let ProvidedSteps = ../schemas/ProvidedSteps.dhall
 
 let eRepositoryOwnerLogin = GithubActions.mkExpression "github.event.repository.owner.login"
 let eRepositoryName = GithubActions.mkExpression "github.event.repository.name"
@@ -26,13 +27,9 @@ let preconditionBeginTimestampOutputDef = toMap {
     , begintime = GithubActions.mkExpression "steps.begintime.outputs.begintime"
     }
 
-let checkoutStep = GithubActions.Step::{
-    , name = "Checking out"
-    , uses = Some "actions/checkout@v2"
-    }
-let checkoutHeadStep = checkoutStep // {
+let checkoutStep = ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
+let checkoutHeadStep = (ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{ ref = Some ePullRequestHeadHash }) // {
     , name = "Checking out (HEAD commit)"
-    , `with` = Some (toMap { ref = ePullRequestHeadHash })
     }
 let runCodeformCheckerStep = \(name: Text) -> \(script: Text) -> GithubActions.Step::{
     , name = name
@@ -102,7 +99,7 @@ let SlackNotification = < Success | Failure : Text >
 let slackNotify = \(provider: SlackNotifyProvider) -> \(state: SlackNotification) -> merge provider state
 
 let checkFormats = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
-    , name = "Code Formats"
+    , name = Some "Code Formats"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
@@ -114,7 +111,7 @@ let checkFormats = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::
     }
 
 let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
-    , name = "Base Layer"
+    , name = Some "Base Layer"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
@@ -125,7 +122,7 @@ let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job
     }
 
 let checkTools = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
-    , name = "Tools"
+    , name = Some "Tools"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
@@ -135,7 +132,7 @@ let checkTools = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
         ]
     }
 let checkModules = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
-    , name = "Modules"
+    , name = Some "Modules"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
@@ -145,7 +142,7 @@ let checkModules = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::
         ]
     }
 let checkExamples = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
-    , name = "Examples"
+    , name = Some "Examples"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
