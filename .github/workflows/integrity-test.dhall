@@ -56,7 +56,14 @@ let checkWorkflowSync = GithubActions.Job::{
     , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
-        , ProvidedSteps.setupDhallStep
+        , GithubActions.Step::{
+            , name = "Setup Dhall"
+            , run = Some
+                ''
+                curl -sSL https://get.haskellstack.org/ | sh
+                stack install dhall-yaml
+                ''
+            }
         , GithubActions.Step::{
             , name = "test-sync"
             , run = Some "make -C ./.github/workflows test-sync"
