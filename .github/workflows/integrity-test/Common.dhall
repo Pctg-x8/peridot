@@ -3,6 +3,7 @@ let ProvidedSteps = ../schemas/ProvidedSteps.dhall
 
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
+let SlackNotifierAction = ../../actions/integrity-check-slack-notifier/schema.dhall
 
 let eRepositoryOwnerLogin = GithubActions.mkExpression "github.event.repository.owner.login"
 let eRepositoryName = GithubActions.mkExpression "github.event.repository.name"
@@ -14,7 +15,7 @@ let eSecretGithubToken = GithubActions.mkExpression "secrets.GITHUB_TOKEN"
 let eSecretAWSAccessKey = GithubActions.mkExpression "secrets.AWS_ACCESS_KEY_ID"
 let eSecretAWSAccessSecret = GithubActions.mkExpression "secrets.AWS_ACCESS_SECRET"
 
-let awsAccessEnvParams =
+let awsAccessEnvParams : SlackNotifierAction.ExecEnv =
     { AWS_ACCESS_KEY_ID = eSecretAWSAccessKey
     , AWS_SECRET_ACCESS_KEY = eSecretAWSAccessSecret
     , AWS_DEFAULT_REGION = "ap-northeast-1"
@@ -34,34 +35,22 @@ let checkoutHeadStep = (ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepPar
     , name = "Checking out (HEAD commit)"
     }
 
-let slackNotifyIfFailureStep = \(stepName: Text) -> GithubActions.Step::{
-    , name = "Notify as Failure"
-    , uses = Some "./.github/actions/integrity-check-slack-notifier"
-    , `if` = Some "failure()"
-    , env = Some (toMap awsAccessEnvParams)
-    , `with` = Some (toMap {
-        , status = "failure"
-        , failure_step = stepName
-        , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , head_sha = ePullRequestHeadHash
-        , base_sha = ePullRequestBaseHash
-        , pr_number = ePullRequestNumber
-        , pr_title = ePullRequestTitle
-        })
-    }
-let slackNotifySuccessStep = GithubActions.Step::{
-    , name = "Notify as Success"
-    , uses = Some "./.github/actions/integrity-check-slack-notifier"
-    , env = Some (toMap awsAccessEnvParams)
-    , `with` = Some (toMap {
-        , status = "success"
-        , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , head_sha = ePullRequestHeadHash
-        , base_sha = ePullRequestBaseHash
-        , pr_number = ePullRequestNumber
-        , pr_title = ePullRequestTitle
-        })
-    }
+let slackNotifyIfFailureStep = \(stepName: Text) -> SlackNotifierAction.step {
+    , status = SlackNotifierAction.Status.Failure stepName
+    , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
+    , head_sha = ePullRequestHeadHash
+    , base_sha = ePullRequestBaseHash
+    , pr_number = ePullRequestNumber
+    , pr_title = ePullRequestTitle
+    } awsAccessEnvParams
+let slackNotifySuccessStep = SlackNotifierAction.step {
+    , status = SlackNotifierAction.Status.Success
+    , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
+    , head_sha = ePullRequestHeadHash
+    , base_sha = ePullRequestBaseHash
+    , pr_number = ePullRequestNumber
+    , pr_title = ePullRequestTitle
+    } awsAccessEnvParams
 
 let weeklySlackNotifyAsFailureStep = \(stepName: Text) -> GithubActions.Step::{
     , name = "Notify as Failure"
