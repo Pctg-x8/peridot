@@ -12,7 +12,6 @@ jobs:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
       uses: "actions/checkout@v2"
-      with: {}
     - name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
     - env:
@@ -44,7 +43,6 @@ jobs:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
       uses: "actions/checkout@v2"
-      with: {}
     - name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
@@ -90,7 +88,6 @@ jobs:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
       uses: "actions/checkout@v2"
-      with: {}
     - name: "Running Check: Line Width"
       uses: "./.github/actions/codeform-checker"
       with:
@@ -128,7 +125,6 @@ jobs:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
       uses: "actions/checkout@v2"
-      with: {}
     - name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
@@ -162,7 +158,6 @@ jobs:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
       uses: "actions/checkout@v2"
-      with: {}
     - name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
