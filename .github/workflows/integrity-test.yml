@@ -148,10 +148,12 @@ jobs:
     name: Check Workflow Files are Synchronized
     needs:
     - preconditions
-    "runs-on": "ubuntu-latest"
+    "runs-on": "macos-latest"
     steps:
     - name: Checking out
       uses: "actions/checkout@v2"
+    - name: setup packages
+      run: "brew install dhall-yaml"
     - name: "test-sync"
       run: "make -C ./.github/workflows test-sync"
     - env:
