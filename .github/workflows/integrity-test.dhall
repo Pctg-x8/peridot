@@ -53,13 +53,10 @@ let preconditions = GithubActions.Job::{
     }
 let checkWorkflowSync = GithubActions.Job::{
     , name = Some "Check Workflow Files are Synchronized"
-    , runs-on = GithubActions.RunnerPlatform.macos-latest
+    , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
-        , GithubActions.Step::{
-            , name = "setup packages"
-            , run = Some "brew install dhall-yaml colordiff"
-            }
+        , ProvidedSteps.setupDhallStep
         , GithubActions.Step::{
             , name = "test-sync"
             , run = Some "make -C ./.github/workflows test-sync"

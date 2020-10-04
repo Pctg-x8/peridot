@@ -24,4 +24,9 @@ let uploadArtifactStep = \(params: UploadArtifactParams.Type) -> GithubActions.S
     , `with` = Some (toMap params)
     }
 
-in { CheckoutStepParams, checkoutStep, UploadArtifactParams, uploadArtifactStep }
+let setupDhallStep = GithubActions.Step::{
+    , name = "Setup Dhall"
+    , uses = Some "actions/setup-dhall@v4"
+}
+
+in { CheckoutStepParams, checkoutStep, UploadArtifactParams, uploadArtifactStep, setupDhallStep }
