@@ -20,7 +20,10 @@ let awsAccessEnvParams =
 let preconditionRecordBeginTimeStep = GithubActions.Step::{
     , name = "Getting begintime"
     , id = Some "begintime"
-    , run = Some "echo \"::set:output name=begintime::$(date +%s)\""
+    , run = Some "echo \"::set-output name=begintime::$(date +%s)\""
+    }
+let preconditionBeginTimestampOutputDef = toMap {
+    , begintime = GithubActions.mkExpression "steps.begintime.outputs.begintime"
     }
 
 let checkoutStep = GithubActions.Step::{
@@ -159,6 +162,7 @@ let withCondition = \(cond: Text) -> \(job: GithubActions.Job.Type) -> job // { 
 in  { depends
     , withCondition
     , preconditionRecordBeginTimeStep
+    , preconditionBeginTimestampOutputDef
     , eRepositoryOwnerLogin
     , eRepositoryName
     , ePullRequestNumber

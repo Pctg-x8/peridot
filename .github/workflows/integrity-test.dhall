@@ -5,8 +5,7 @@ let preconditionOutputHasChanges = GithubActions.mkExpression "needs.preconditio
 let preconditions = GithubActions.Job::{
     , name = "Preconditions"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , outputs = Some (toMap {
-        , begintime = GithubActions.mkExpression "steps.begintime.outputs.begintime"
+    , outputs = Some (CommonDefs.preconditionBeginTimestampOutputDef # toMap {
         , has_code_changes = GithubActions.mkExpression "steps.fileck.outputs.has_code_changes"
         })
     , steps = [

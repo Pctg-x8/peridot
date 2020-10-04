@@ -45,10 +45,19 @@ let OnPullRequest =
     { Type = { types : List PullRequestTriggerTypes }
     , default = { types = [] : List PullRequestTriggerTypes }
     }
+let Schedule =
+    { Type = { cron : Text }
+    , default = {=}
+    }
 let On =
     { Type =
-        { pull_request : Optional OnPullRequest.Type }
-    , default = {=}
+        { pull_request : Optional OnPullRequest.Type
+        , schedule : Optional (List Schedule.Type)
+        }
+    , default =
+        { pull_request = None OnPullRequest.Type
+        , schedule = None (List Schedule.Type)
+        }
     }
 
 let Workflow =
@@ -60,4 +69,4 @@ let Workflow =
     , default = {=}
     }
 
-in { Workflow, On, OnPullRequest, PullRequestTriggerTypes, Job, RunnerPlatform, Step, mkExpression }
+in { Workflow, On, OnPullRequest, PullRequestTriggerTypes, Schedule, Job, RunnerPlatform, Step, mkExpression }
