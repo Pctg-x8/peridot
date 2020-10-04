@@ -1,13 +1,15 @@
 let GithubActions = ../schemas/Actions.dhall
 let ProvidedSteps = ../schemas/ProvidedSteps.dhall
 
+let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
+let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
+
 let eRepositoryOwnerLogin = GithubActions.mkExpression "github.event.repository.owner.login"
 let eRepositoryName = GithubActions.mkExpression "github.event.repository.name"
 let ePullRequestNumber = GithubActions.mkExpression "github.event.number"
 let ePullRequestTitle = GithubActions.mkExpression "github.event.pull_request.title"
 let ePullRequestHeadHash = GithubActions.mkExpression "github.event.pull_request.head.sha"
 let ePullRequestBaseHash = GithubActions.mkExpression "github.event.pull_request.base.sha"
-let eGithubOriginHash = GithubActions.mkExpression "github.sha"
 let eSecretGithubToken = GithubActions.mkExpression "secrets.GITHUB_TOKEN"
 let eSecretAWSAccessKey = GithubActions.mkExpression "secrets.AWS_ACCESS_KEY_ID"
 let eSecretAWSAccessSecret = GithubActions.mkExpression "secrets.AWS_ACCESS_SECRET"
@@ -30,16 +32,6 @@ let preconditionBeginTimestampOutputDef = toMap {
 let checkoutStep = ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
 let checkoutHeadStep = (ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{ ref = Some ePullRequestHeadHash }) // {
     , name = "Checking out (HEAD commit)"
-    }
-let runCodeformCheckerStep = \(name: Text) -> \(script: Text) -> GithubActions.Step::{
-    , name = name
-    , uses = Some "./.github/actions/codeform-checker"
-    , `with` = Some (toMap { script = script })
-    }
-let runSubdirectoryCheckStep = \(path: Text) -> GithubActions.Step::{
-    , name = "Building as Checking"
-    , uses = Some "./.github/actions/checkbuild-subdir"
-    , `with` = Some (toMap { path = path })
     }
 
 let slackNotifyIfFailureStep = \(stepName: Text) -> GithubActions.Step::{
@@ -104,8 +96,8 @@ let checkFormats = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::
     , steps = [
         , checkoutHeadStep
         , checkoutStep
-        , runCodeformCheckerStep "Running Check: Line Width" "codeform_check"
-        , runCodeformCheckerStep "Running Check: Debugging Weaks" "vulnerabilities_elliminator"
+        , CodeformCheckerAction.step { script = CodeformCheckerAction.Script.codeform_check } // { name = "Running Check: Line Width" }
+        , CodeformCheckerAction.step { script = CodeformCheckerAction.Script.vulnerabilities_elliminator } // { name = "Running Check: Debugging Weaks" }
         , slackNotify notifyProvider (SlackNotification.Failure "check-formats")
         ]
     }
@@ -127,7 +119,7 @@ let checkTools = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , steps = [
         , checkoutHeadStep
         , checkoutStep
-        , runSubdirectoryCheckStep "tools"
+        , CheckBuildSubdirAction.step { path = "tools" }
         , slackNotify notifyProvider (SlackNotification.Failure "check-tools")
         ]
     }
@@ -137,7 +129,7 @@ let checkModules = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::
     , steps = [
         , checkoutHeadStep
         , checkoutStep
-        , runSubdirectoryCheckStep "."
+        , CheckBuildSubdirAction.step { path = "." }
         , slackNotify notifyProvider (SlackNotification.Failure  "check-modules")
         ]
     }
@@ -147,7 +139,7 @@ let checkExamples = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job:
     , steps = [
         , checkoutHeadStep
         , checkoutStep
-        , runSubdirectoryCheckStep "examples"
+        , CheckBuildSubdirAction.step { path = "examples" }
         , slackNotify notifyProvider SlackNotification.Success
         , slackNotify notifyProvider (SlackNotification.Failure  "check-examples")
         ]

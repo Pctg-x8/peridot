@@ -1,4 +1,7 @@
 let GithubActions = ./schemas/Actions.dhall
+let ProvidedSteps = ./schemas/ProvidedSteps.dhall
+
+let DeploymentAction = ../actions/deployment-dev/schema.dhall
 
 in GithubActions.Workflow::{
     , name = Some "Document Continuous Deployment (for dev)"
@@ -13,20 +16,12 @@ in GithubActions.Workflow::{
             , name = Some "Doc Generate and Deploy"
             , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
             , steps = [
-                , GithubActions.Step::{
-                    , name = "Checking out"
-                    , uses = Some "actions/checkout@v2"
-                    , `with` = Some (toMap { ref = "dev" })
-                    }
+                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{ ref = Some "dev" }
                 , GithubActions.Step::{
                     , name = "Build docs"
                     , uses = Some "./.github/actions/build-doc"
                     }
-                , GithubActions.Step::{
-                    , name = "Deployment to Firebase Hosting (for dev)"
-                    , uses = Some "./.github/actions/deployment-dev"
-                    , env = Some (toMap { FIREBASE_TOKEN = GithubActions.mkExpression "secrets.DOC_HOST_FIREBASE_TOKEN" })
-                    }
+                , DeploymentAction.step { FirebaseToken = GithubActions.mkExpression "secrets.DOC_HOST_FIREBASE_TOKEN" }
                 ]
             }
         }
