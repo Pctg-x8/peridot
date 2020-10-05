@@ -76,7 +76,7 @@ let installDhallScript =
     done < <(cat)
     echo "$TARGET_FILE"
     mkdir $HOME/dhall
-    curl $TARGET_FILE | tar x --bzip2 -C $HOME/dhall
+    curl -L $TARGET_FILE | tar x --bzip2 -C $HOME/dhall
     echo "::add-path::$HOME/dhall/bin"
     ''
 let checkWorkflowSync = GithubActions.Job::{
