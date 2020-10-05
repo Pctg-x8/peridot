@@ -312,7 +312,8 @@ impl RenderingResources {
 
         let fbs = e.backbuffers().iter()
             .map(|b|
-                br::Framebuffer::new(&srr.rp_main, &[&b, &depth_buffer_view], b.size(), 1).expect("Failed to create Framebuffer")
+                br::Framebuffer::new(&srr.rp_main, &[&b, &depth_buffer_view], b.size(), 1)
+                    .expect("Failed to create Framebuffer")
             )
             .collect();
 
