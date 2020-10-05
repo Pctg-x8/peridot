@@ -2,7 +2,7 @@ let GithubActions = ./schemas/Actions.dhall
 let CommonDefs = ./integrity-test/Common.dhall
 let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
-let needsOutputPath = \(jobId: Text) -> \(name: Text) -> "needs." ++ jobId ++ ".outputs." ++ name
+let needsOutputPath = \(jobId: Text) -> \(name: Text) -> "needs.${jobId}.outputs.${name}"
 
 let preconditionOutputHasChanges = GithubActions.mkExpression (needsOutputPath "preconditions" "has_code_changes" ++ " == 1")
 let preconditionOutputHasWorkflowChanges = GithubActions.mkExpression (needsOutputPath "preconditions" "has_workflow_changes" ++ " == 1")
