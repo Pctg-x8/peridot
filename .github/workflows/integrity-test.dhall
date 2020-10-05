@@ -51,6 +51,31 @@ let preconditions = GithubActions.Job::{
             }
         ]
     }
+
+let installDhallScript =
+    let releaseAssetSelector = "nodes { name, downloadUrl }, pageInfo { hasNextPage, endCursor }"
+    let releaseSelector = "nodes { releaseAssets(first: 10, after: $cursor) { ${ releaseAssetSelector } } }"
+    let repositorySelector = "releases(first: 1, orderBy: { direction: DESC, field: CREATED_AT }) { ${ releaseSelector } }"
+    let query = "query($cursor: String) { repository(owner: \\\"dhall-lang\\\", name: \\\"dhall-haskell\\\") { ${ repositorySelector } } }"
+    in ''
+    QUERY_STRING='${query}'
+    QUERY_CURSOR='null'
+    TARGET_FILE=""
+    while :; do
+      POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR } }"
+      API_RESPONSE=$(curl -s -H "Authorization: Bearer ${ CommonDefs.eSecretGithubToken }" -X POST -d "$POSTDATA" https://api.github.com/graphql)
+      TARGET_FILE=echo $API_RESPONSE | jq '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-linux")).downloadUrl'
+      if [[ $TARGET_FILE != "" ]]; then break; fi
+      HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.hasNextPage")
+      if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
+        QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageINfo.endCursor")
+      else
+        echo "Latest dhall release does not contains dhall-yaml for linux platform!"
+        exit 1
+      fi
+    done < <(cat)
+    echo "$TARGET_FILE"
+    ''
 let checkWorkflowSync = GithubActions.Job::{
     , name = Some "Check Workflow Files are Synchronized"
     , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
@@ -58,7 +83,7 @@ let checkWorkflowSync = GithubActions.Job::{
         , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
         , GithubActions.Step::{
             , name = "Setup Dhall"
-            , run = Some "stack install dhall-yaml"
+            , run = Some installDhallScript
             }
         , GithubActions.Step::{
             , name = "test-sync"

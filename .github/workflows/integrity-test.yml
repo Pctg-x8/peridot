@@ -154,7 +154,24 @@ jobs:
     - name: Checking out
       uses: "actions/checkout@v2"
     - name: Setup Dhall
-      run: "stack install dhall-yaml"
+      run: |
+        QUERY_STRING='query($cursor: String) { repository(owner: \"dhall-lang\", name: \"dhall-haskell\") { releases(first: 1, orderBy: { direction: DESC, field: CREATED_AT }) { nodes { releaseAssets(first: 10, after: $cursor) { nodes { name, downloadUrl }, pageInfo { hasNextPage, endCursor } } } } } }'
+        QUERY_CURSOR='null'
+        TARGET_FILE=""
+        while :; do
+          POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR } }"
+          API_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -X POST -d "$POSTDATA" https://api.github.com/graphql)
+          TARGET_FILE=echo $API_RESPONSE | jq '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-linux")).downloadUrl'
+          if [[ $TARGET_FILE != "" ]]; then break; fi
+          HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.hasNextPage")
+          if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
+            QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageINfo.endCursor")
+          else
+            echo "Latest dhall release does not contains dhall-yaml for linux platform!"
+            exit 1
+          fi
+        done < <(cat)
+        echo "$TARGET_FILE"
     - name: "test-sync"
       run: "make -C ./.github/workflows test-sync"
     - env:
