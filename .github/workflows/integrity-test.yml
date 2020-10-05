@@ -175,7 +175,8 @@ jobs:
         mkdir $HOME/dhall
         curl -L $TARGET_FILE | tar x --bzip2 -C $HOME/dhall
         echo "::add-path::$HOME/dhall/bin"
-        apt-get install -y colordiff
+        sudo apt-get update
+        sudo apt-get install -y colordiff
     - name: "test-sync"
       run: "make -C ./.github/workflows test-sync"
     - env:

@@ -78,7 +78,8 @@ let installDhallScript =
     mkdir $HOME/dhall
     curl -L $TARGET_FILE | tar x --bzip2 -C $HOME/dhall
     echo "::add-path::$HOME/dhall/bin"
-    apt-get install -y colordiff
+    sudo apt-get update
+    sudo apt-get install -y colordiff
     ''
 let checkWorkflowSync = GithubActions.Job::{
     , name = Some "Check Workflow Files are Synchronized"
