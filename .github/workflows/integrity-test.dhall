@@ -64,7 +64,7 @@ let installDhallScript =
     while :; do
       POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR } }"
       API_RESPONSE=$(curl -s -H "Authorization: Bearer ${ CommonDefs.eSecretGithubToken }" -X POST -d "$POSTDATA" https://api.github.com/graphql)
-      TARGET_FILE=echo $API_RESPONSE | jq '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-linux")).downloadUrl'
+      TARGET_FILE=$(echo $API_RESPONSE | jq '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-linux")).downloadUrl')
       if [[ $TARGET_FILE != "" ]]; then break; fi
       HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.hasNextPage")
       if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
