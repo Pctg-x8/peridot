@@ -3,167 +3,8 @@ use bedrock as br;
 use br::Waitable;
 use std::rc::Rc;
 use peridot::math::One;
-use std::collections::BTreeSet;
-use rayon::prelude::*;
 
-#[repr(C, align(16))]
-pub struct ParticleRenderInstance {
-    pub mat: peridot::math::Matrix4F32,
-    pub alpha: f32
-}
-
-fn lerp(a: f32, b: f32, x: f32) -> f32 { a * (1.0 - x) + b * x }
-
-pub struct CPUParticleInstance {
-    pub pos: peridot::math::Vector3F32,
-    pub scale: peridot::math::Vector3F32,
-    pub velocity: peridot::math::Vector3F32,
-    pub lifetime: f32,
-    pub living_time: f32
-}
-impl CPUParticleInstance {
-    pub fn update(&mut self, dt: std::time::Duration) {
-        self.living_time += (dt.as_micros() as f64 / 1_000_000.0) as f32;
-        self.pos = self.pos.clone() + self.velocity.clone() * (dt.as_micros() as f64 / 1_000_000.0) as f32;
-        let s = lerp(0.6, 1.0, 1.0 - (self.living_time / self.lifetime).powf(2.0));
-        self.scale = peridot::math::Vector3(s, s, s);
-    }
-    pub fn died(&self) -> bool { self.living_time >= self.lifetime }
-
-    pub fn render_instance(&self) -> ParticleRenderInstance {
-        let s = peridot::math::Matrix4F32::scale(peridot::math::Vector4(self.scale.0, self.scale.1, self.scale.2, 1.0));
-
-        ParticleRenderInstance {
-            mat: peridot::math::Matrix4F32::translation(self.pos.clone()) * s,
-            alpha: 1.0 - self.living_time / self.lifetime
-        }
-    }
-}
-pub struct CPUParticleDriver {
-    static_buffer_offset: u64,
-    instances: Vec<CPUParticleInstance>,
-    freespaces: BTreeSet<usize>,
-    update_buffer: peridot::Buffer
-}
-impl CPUParticleDriver {
-    const MAX_RENDERED_INSTANCE_SIZE: usize = 65536;
-
-    pub fn new(
-        g: &peridot::Graphics,
-        buf_prealloc: &mut peridot::BufferPrealloc,
-        _tfb: &mut peridot::TransferBatch
-    ) -> Self {
-        let static_buffer_offset = buf_prealloc.add(
-            peridot::BufferContent::storage::<[ParticleRenderInstance; Self::MAX_RENDERED_INSTANCE_SIZE]>()
-        );
-
-        let mut bp = peridot::BufferPrealloc::new(g);
-        bp.add(peridot::BufferContent::raw_multiple::<ParticleRenderInstance>(Self::MAX_RENDERED_INSTANCE_SIZE));
-        let ub = bp.build_upload().expect("Failed to build particle driver buffer");
-        let mut mb = peridot::MemoryBadget::new(g);
-        mb.add(ub);
-        let ub = mb.alloc_upload().expect("Failed to alloc particle driver memory").pop()
-            .expect("less object").unwrap_buffer();
-
-        CPUParticleDriver {
-            static_buffer_offset,
-            instances: Vec::new(),
-            freespaces: BTreeSet::new(),
-            update_buffer: ub
-        }
-    }
-    pub fn post_transfer(&self, tfb: &mut peridot::TransferBatch, static_buf: &peridot::Buffer) {
-        tfb.add_buffer_graphics_ready(
-            br::PipelineStageFlags::VERTEX_SHADER, static_buf, self.update_range_static(), br::AccessFlags::SHADER.read
-        );
-    }
-
-    pub fn buffer_bytesize(&self) -> u64 {
-        std::mem::size_of::<[ParticleRenderInstance; Self::MAX_RENDERED_INSTANCE_SIZE]>() as _
-    }
-    pub fn update_range_staging(&self) -> std::ops::Range<u64> {
-        0 .. self.buffer_bytesize()
-    }
-    pub fn update_range_static(&self) -> std::ops::Range<u64> {
-        self.static_buffer_offset .. self.static_buffer_offset + self.buffer_bytesize()
-    }
-
-    /// Returns newly spawned instance index
-    pub fn spawn(&mut self, instance: CPUParticleInstance) -> usize {
-        if let Some(&freespace) = self.freespaces.iter().next() {
-            self.freespaces.take(&freespace);
-            self.instances[freespace] = instance;
-            return freespace;
-        }
-        let next_id = self.instances.len();
-        self.instances.push(instance);
-        next_id
-    }
-    pub fn die(&mut self, id: usize) {
-        self.freespaces.insert(id);
-        self.instances[id].scale = peridot::math::Vector3(0.0, 0.0, 0.0);
-    }
-    pub fn update(&mut self, dt: std::time::Duration) {
-        let range = 0 .. std::mem::size_of::<[ParticleRenderInstance; Self::MAX_RENDERED_INSTANCE_SIZE]>() as _;
-        let ub = &self.update_buffer;
-        let is = &mut self.instances;
-        let died_ids = ub.guard_map(range, move |m| {
-            let matrices = unsafe { m.slice_mut::<ParticleRenderInstance>(0, Self::MAX_RENDERED_INSTANCE_SIZE) };
-            is.par_iter_mut().zip(matrices).enumerate().filter_map(|(id, (i, m))| {
-                if i.died() {
-                    i.scale = peridot::math::Vector3(0.0, 0.0, 0.0);
-                    m.mat = peridot::math::Matrix4F32::scale(peridot::math::Vector4(0.0, 0.0, 0.0, 0.0));
-                    Some(id)
-                } else {
-                    i.update(dt);
-                    *m = i.render_instance();
-                    None
-                }
-            }).collect::<Vec<_>>()
-        }).expect("Failed to update stg buffer");
-        for id in died_ids { self.die(id); }
-    }
-}
-pub struct ParticleEngine {
-    driver: CPUParticleDriver,
-    left_next_spawn: std::time::Duration
-}
-impl ParticleEngine {
-    pub fn new(
-        g: &peridot::Graphics,
-        buf_prealloc: &mut peridot::BufferPrealloc,
-        tfb: &mut peridot::TransferBatch
-    ) -> Self {
-        ParticleEngine {
-            driver: CPUParticleDriver::new(g, buf_prealloc, tfb),
-            left_next_spawn: std::time::Duration::from_millis(100)
-        }
-    }
-    pub fn post_transfer(&self, tfb: &mut peridot::TransferBatch, static_buf: &peridot::Buffer) {
-        self.driver.post_transfer(tfb, static_buf);
-    }
-
-    pub fn update(&mut self, dt: std::time::Duration) {
-        use rand::distributions::Distribution;
-
-        if self.left_next_spawn <= dt {
-            self.left_next_spawn = std::time::Duration::from_millis(100);
-            let spawn_count = rand::distributions::Uniform::new_inclusive(1, 5).sample(&mut rand::thread_rng());
-            for _ in 0 .. spawn_count {
-                self.driver.spawn(CPUParticleInstance {
-                    scale: peridot::math::Vector3(1.0, 1.0, 1.0),
-                    pos: peridot::math::Vector3(0.0, 0.0, 0.0),
-                    velocity: peridot::math::Vector3::<f32>::rand_unit_sphere(&mut rand::thread_rng()) * 0.4f32,
-                    lifetime: rand::distributions::Uniform::new_inclusive(0.5, 1.5).sample(&mut rand::thread_rng()),
-                    living_time: 0.0
-                });
-            }
-        } else {
-            self.left_next_spawn -= dt;
-        }
-        self.driver.update(dt);
-    }
-}
+mod particle; use self::particle::*;
 
 pub struct RenderingResources {
     lines_gp: peridot::LayoutedPipeline,
@@ -363,6 +204,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
 
         let update_cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, 1)
             .expect("Failed to allocate update cmd");
+        let (particle_update_buffer, particle_update_range) = res.pe.staging_buffer_ranged();
         let barrier_in = &[
             br::BufferMemoryBarrier::new(
                 &res.static_buffer.res,
@@ -370,11 +212,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 br::AccessFlags::UNIFORM_READ, br::AccessFlags::TRANSFER.write
             ),
             br::BufferMemoryBarrier::new(
-                &res.static_buffer.res, res.pe.driver.update_range_static(),
+                &res.static_buffer.res, res.pe.managed_instance_buffer_range(),
                 br::AccessFlags::SHADER.read, br::AccessFlags::TRANSFER.write
             ),
             br::BufferMemoryBarrier::new(
-                &res.pe.driver.update_buffer, res.pe.driver.update_range_staging(),
+                particle_update_buffer, particle_update_range.clone(),
                 br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read
             ),
             br::BufferMemoryBarrier::new(
@@ -390,11 +232,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 br::AccessFlags::TRANSFER.write, br::AccessFlags::UNIFORM_READ
             ),
             br::BufferMemoryBarrier::new(
-                &res.static_buffer.res, res.pe.driver.update_range_static(),
+                &res.static_buffer.res, res.pe.managed_instance_buffer_range(),
                 br::AccessFlags::TRANSFER.write, br::AccessFlags::SHADER.read
             ),
             br::BufferMemoryBarrier::new(
-                &res.pe.driver.update_buffer, res.pe.driver.update_range_staging(),
+                particle_update_buffer, particle_update_range.clone(),
                 br::AccessFlags::TRANSFER.read, br::AccessFlags::HOST.write
             ),
             br::BufferMemoryBarrier::new(
@@ -415,11 +257,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                     size: std::mem::size_of::<peridot::math::Matrix4F32>() as _
                 }
             ])
-            .copy_buffer(&res.pe.driver.update_buffer, &res.static_buffer.res, &[
+            .copy_buffer(particle_update_buffer, &res.static_buffer.res, &[
                 br::vk::VkBufferCopy {
                     srcOffset: 0,
-                    dstOffset: res.pe.driver.static_buffer_offset,
-                    size: res.pe.driver.buffer_bytesize()
+                    dstOffset: res.pe.managed_instance_buffer_range().start,
+                    size: particle_update_range.end - particle_update_range.start
                 }
             ])
             .pipeline_barrier(
@@ -516,7 +358,7 @@ impl<NL> Game<NL> {
                 .bind_graphics_pipeline_pair(rr.gp.pipeline(), rr.gp.layout())
                 .bind_graphics_descriptor_sets(1, &[desc.particle_instances()], &[])
                 .bind_vertex_buffers(0, &[(uvrect_vb, uvrect_vb_offs)])
-                .draw(uvrect_vb_count as _, CPUParticleDriver::MAX_RENDERED_INSTANCE_SIZE as _, 0, 0)
+                .draw(uvrect_vb_count as _, CPUParticleDriver::MAX_RENDERED_INSTANCE_COUNT as _, 0, 0)
                 .end_render_pass();
         }
     }
@@ -577,7 +419,7 @@ impl Descriptors {
             ),
             br::DescriptorSetWriteInfo(
                 descriptors[1], 0, 0, br::DescriptorUpdateInfo::StorageBuffer(vec![
-                    (res.static_buffer.res.native_ptr(), as_usize_range(res.pe.driver.update_range_static()))
+                    (res.static_buffer.res.native_ptr(), as_usize_range(res.pe.managed_instance_buffer_range()))
                 ])
             )
         ], &[]);
