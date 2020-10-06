@@ -165,6 +165,7 @@ jobs:
       name: Getting begintime
       run: "echo \"::set-output name=begintime::$(date +%s)\""
   "report-success":
+    name: Report as Success
     needs:
     - preconditions
     - "check-examples"

@@ -157,6 +157,7 @@ let checkExamples = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Te
     }
 
 let reportSuccessJob = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
+    , name = Some "Report as Success"
     , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep

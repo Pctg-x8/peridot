@@ -269,6 +269,7 @@ jobs:
         echo "::set-output name=has_code_changes::$HAS_CODE_CHANGES"
         echo "::set-output name=has_workflow_changes::$HAS_WORKFLOW_CHANGES"
   "report-success":
+    name: Report as Success
     needs:
     - preconditions
     - "check-examples"
