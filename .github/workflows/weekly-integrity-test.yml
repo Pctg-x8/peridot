@@ -34,26 +34,19 @@ jobs:
     - "check-modules"
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: 'true'
+      name: Checking out
       uses: "actions/checkout@v2"
     - if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
         path: examples
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      name: Notify as Success
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
-      with:
-        begintime: "${{ needs.preconditions.outputs.begintime }}"
-        status: success
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -171,6 +164,27 @@ jobs:
     - id: begintime
       name: Getting begintime
       run: "echo \"::set-output name=begintime::$(date +%s)\""
+  "report-success":
+    needs:
+    - "check-examples"
+    - "check-formats"
+    "runs-on": "ubuntu-latest"
+    steps:
+    - name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
+    - name: Checking out
+      uses: "actions/checkout@v2"
+    - env:
+        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+        AWS_DEFAULT_REGION: "ap-northeast-1"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+      name: Notify as Success
+      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      with:
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        status: success
 name: "Integrity Check (Weekly)"
 'on':
   schedule:

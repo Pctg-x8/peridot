@@ -146,12 +146,22 @@ let checkModules = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Tex
 let checkExamples = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
     , name = Some "Examples"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
+    , steps = List/concat GithubActions.Step.Type [
+        , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
+            , checkoutHeadStep
+            , checkoutStep
+            , CheckBuildSubdirAction.step { path = "examples" }
+            ]
+        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-examples"))]
+        ]
+    }
+
+let reportSuccessJob = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
+    , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
         , checkoutHeadStep
         , checkoutStep
-        , withConditionStep precondition (CheckBuildSubdirAction.step { path = "examples" })
         , slackNotify notifyProvider SlackNotification.Success
-        , runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-examples"))
         ]
     }
 
@@ -174,4 +184,5 @@ in  { depends
     , checkTools
     , checkModules
     , checkExamples
+    , reportSuccessJob
     }
