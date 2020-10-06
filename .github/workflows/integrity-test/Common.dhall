@@ -109,35 +109,38 @@ let checkFormats = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Tex
 let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
     , name = Some "Base Layer"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , steps = [
-        , withConditionStep precondition checkoutHeadStep
-        , withConditionStep precondition checkoutStep
-        , withConditionStep precondition GithubActions.Step::{
-            , name = "Building as Checking"
-            , uses = Some "./.github/actions/checkbuild-baselayer"
-            }
-        , runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-baselayer"))
+    , steps = List/concat GithubActions.Step.Type [
+        , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
+            , checkoutHeadStep
+            , checkoutStep
+            , GithubActions.Step::{ name = "Building as Checking", uses = Some "./.github/actions/checkbuild-baselayer" }
+            ]
+        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-baselayer"))]
         ]
     }
 
 let checkTools = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
     , name = Some "Tools"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , steps = [
-        , withConditionStep precondition checkoutHeadStep
-        , withConditionStep precondition checkoutStep
-        , withConditionStep precondition (CheckBuildSubdirAction.step { path = "tools" })
-        , runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-tools"))
+    , steps = List/concat GithubActions.Step.Type [
+        , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
+            , checkoutHeadStep
+            , checkoutStep
+            , CheckBuildSubdirAction.step { path = "tools" }
+            ]
+        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-tools"))]
         ]
     }
 let checkModules = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
     , name = Some "Modules"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
-    , steps = [
-        , withConditionStep precondition checkoutHeadStep
-        , withConditionStep precondition checkoutStep
-        , withConditionStep precondition (CheckBuildSubdirAction.step { path = "." })
-        , runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-modules"))
+    , steps = List/concat GithubActions.Step.Type [
+        , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
+            , checkoutHeadStep
+            , checkoutStep
+            , CheckBuildSubdirAction.step { path = "." }
+            ]
+        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-modules"))]
         ]
     }
 let checkExamples = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
