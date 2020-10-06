@@ -114,6 +114,6 @@ in GithubActions.Workflow::{
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-sync-workflow = CommonDefs.depends ["preconditions"] checkWorkflowSync
-        , report-success = CommonDefs.depends ["check-examples", "check-formats", "check-sync-workflow"] (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
+        , report-success = CommonDefs.depends ["preconditions", "check-examples", "check-formats", "check-sync-workflow"] (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
         }
     }

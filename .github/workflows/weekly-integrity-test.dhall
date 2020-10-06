@@ -22,6 +22,6 @@ in GithubActions.Workflow::{
         , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkTools CommonDefs.weeklySlackNotifyProvider "true")
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.weeklySlackNotifyProvider "true")
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.weeklySlackNotifyProvider "true")
-        , report-success = CommonDefs.depends ["check-examples", "check-formats"] (CommonDefs.reportSuccessJob CommonDefs.weeklySlackNotifyProvider)
+        , report-success = CommonDefs.depends ["preconditions", "check-examples", "check-formats"] (CommonDefs.reportSuccessJob CommonDefs.weeklySlackNotifyProvider)
         }
     }

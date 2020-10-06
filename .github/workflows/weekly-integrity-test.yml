@@ -166,6 +166,7 @@ jobs:
       run: "echo \"::set-output name=begintime::$(date +%s)\""
   "report-success":
     needs:
+    - preconditions
     - "check-examples"
     - "check-formats"
     "runs-on": "ubuntu-latest"

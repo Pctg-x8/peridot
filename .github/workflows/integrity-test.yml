@@ -270,6 +270,7 @@ jobs:
         echo "::set-output name=has_workflow_changes::$HAS_WORKFLOW_CHANGES"
   "report-success":
     needs:
+    - preconditions
     - "check-examples"
     - "check-formats"
     - "check-sync-workflow"
