@@ -5,13 +5,16 @@ jobs:
     - preconditions
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: 'true'
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: 'true'
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
@@ -31,25 +34,19 @@ jobs:
     - "check-modules"
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: 'true'
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: 'true'
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
         path: examples
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      name: Notify as Success
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
-      with:
-        begintime: "${{ needs.preconditions.outputs.begintime }}"
-        status: success
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -67,17 +64,21 @@ jobs:
     - preconditions
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: 'true'
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: "Running Check: Line Width"
+    - if: 'true'
+      name: "Running Check: Line Width"
       uses: "./.github/actions/codeform-checker"
       with:
         script: codeform_check
-    - name: "Running Check: Debugging Weaks"
+    - if: 'true'
+      name: "Running Check: Debugging Weaks"
       uses: "./.github/actions/codeform-checker"
       with:
         script: vulnerabilities_elliminator
@@ -99,13 +100,16 @@ jobs:
     - "check-baselayer"
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: 'true'
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: 'true'
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
         path: '.'
@@ -127,13 +131,16 @@ jobs:
     - "check-baselayer"
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: 'true'
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: 'true'
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
         path: tools
@@ -157,6 +164,29 @@ jobs:
     - id: begintime
       name: Getting begintime
       run: "echo \"::set-output name=begintime::$(date +%s)\""
+  "report-success":
+    name: Report as Success
+    needs:
+    - preconditions
+    - "check-examples"
+    - "check-formats"
+    "runs-on": "ubuntu-latest"
+    steps:
+    - name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
+    - name: Checking out
+      uses: "actions/checkout@v2"
+    - env:
+        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+        AWS_DEFAULT_REGION: "ap-northeast-1"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+      name: Notify as Success
+      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      with:
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        status: success
 name: "Integrity Check (Weekly)"
 'on':
   schedule:
