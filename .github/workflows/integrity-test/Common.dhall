@@ -144,8 +144,8 @@ let checkExamples = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Te
     , name = Some "Examples"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = [
-        , withConditionStep precondition checkoutHeadStep
-        , withConditionStep precondition checkoutStep
+        , checkoutHeadStep
+        , checkoutStep
         , withConditionStep precondition (CheckBuildSubdirAction.step { path = "examples" })
         , slackNotify notifyProvider SlackNotification.Success
         , runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-examples"))

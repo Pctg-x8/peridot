@@ -38,13 +38,11 @@ jobs:
     - "check-modules"
     "runs-on": "ubuntu-latest"
     steps:
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: "Checking out (HEAD commit)"
+    - name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: Checking out
+    - name: Checking out
       uses: "actions/checkout@v2"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking

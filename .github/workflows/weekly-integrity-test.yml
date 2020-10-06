@@ -34,13 +34,11 @@ jobs:
     - "check-modules"
     "runs-on": "ubuntu-latest"
     steps:
-    - if: 'true'
-      name: "Checking out (HEAD commit)"
+    - name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - if: 'true'
-      name: Checking out
+    - name: Checking out
       uses: "actions/checkout@v2"
     - if: 'true'
       name: Building as Checking
