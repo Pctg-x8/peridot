@@ -1,18 +1,20 @@
 jobs:
   "check-baselayer":
-    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Base Layer
     needs:
     - preconditions
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
@@ -30,20 +32,22 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-examples":
-    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Examples
     needs:
     - preconditions
     - "check-modules"
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
         path: examples
@@ -76,23 +80,26 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-formats":
-    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Code Formats
     needs:
     - preconditions
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: "Running Check: Line Width"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Running Check: Line Width"
       uses: "./.github/actions/codeform-checker"
       with:
         script: codeform_check
-    - name: "Running Check: Debugging Weaks"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Running Check: Debugging Weaks"
       uses: "./.github/actions/codeform-checker"
       with:
         script: vulnerabilities_elliminator
@@ -112,20 +119,22 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-modules":
-    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Modules
     needs:
     - preconditions
     - "check-baselayer"
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
         path: '.'
@@ -145,15 +154,16 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-sync-workflow":
-    if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
     name: Check Workflow Files are Synchronized
     needs:
     - preconditions
     "runs-on": "ubuntu-latest"
     steps:
-    - name: Checking out
+    - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Setup Dhall
+    - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
+      name: Setup Dhall
       run: |
         QUERY_STRING='query($cursor: String) { repository(owner: \"dhall-lang\", name: \"dhall-haskell\") { releases(first: 1, orderBy: { direction: DESC, field: CREATED_AT }) { nodes { releaseAssets(first: 10, after: $cursor) { nodes { name, downloadUrl }, pageInfo { hasNextPage, endCursor } } } } } }'
         QUERY_CURSOR='null'
@@ -177,7 +187,8 @@ jobs:
         echo "::add-path::$HOME/dhall/bin"
         sudo apt-get update
         sudo apt-get install -y colordiff
-    - name: "test-sync"
+    - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
+      name: "test-sync"
       run: "make -C ./.github/workflows test-sync"
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
@@ -195,20 +206,22 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         status: failure
   "check-tools":
-    if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
     name: Tools
     needs:
     - preconditions
     - "check-baselayer"
     "runs-on": "ubuntu-latest"
     steps:
-    - name: "Checking out (HEAD commit)"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v2"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
-    - name: Checking out
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
       uses: "actions/checkout@v2"
-    - name: Building as Checking
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
         path: tools

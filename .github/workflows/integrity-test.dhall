@@ -1,11 +1,13 @@
 let GithubActions = ./schemas/Actions.dhall
 let CommonDefs = ./integrity-test/Common.dhall
 let ProvidedSteps = ./schemas/ProvidedSteps.dhall
+let List/map = https://prelude.dhall-lang.org/List/map
 
 let needsOutputPath = \(jobId: Text) -> \(name: Text) -> "needs.${jobId}.outputs.${name}"
 
 let preconditionOutputHasChanges = GithubActions.mkExpression (needsOutputPath "preconditions" "has_code_changes" ++ " == 1")
 let preconditionOutputHasWorkflowChanges = GithubActions.mkExpression (needsOutputPath "preconditions" "has_workflow_changes" ++ " == 1")
+let runStepsOnWorkflowFilesChanged = List/map GithubActions.Step.Type GithubActions.Step.Type (CommonDefs.withConditionStep preconditionOutputHasWorkflowChanges)
 let preconditions = GithubActions.Job::{
     , name = Some "Preconditions"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
@@ -84,7 +86,7 @@ let installDhallScript =
 let checkWorkflowSync = GithubActions.Job::{
     , name = Some "Check Workflow Files are Synchronized"
     , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
-    , steps = [
+    , steps = (runStepsOnWorkflowFilesChanged [
         , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
         , GithubActions.Step::{
             , name = "Setup Dhall"
@@ -94,8 +96,9 @@ let checkWorkflowSync = GithubActions.Job::{
             , name = "test-sync"
             , run = Some "make -C ./.github/workflows test-sync"
             }
-        , CommonDefs.runStepOnFailure (CommonDefs.slackNotifyIfFailureStep  "check-sync-workflow" // { name = "Notify as Failure" })
-        ]
+        ]) # [
+            , CommonDefs.runStepOnFailure (CommonDefs.slackNotifyIfFailureStep  "check-sync-workflow" // { name = "Notify as Failure" })
+            ]
     }
 
 in GithubActions.Workflow::{
@@ -110,11 +113,11 @@ in GithubActions.Workflow::{
         }
     , jobs = toMap {
         , preconditions = preconditions
-        , check-formats = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkFormats CommonDefs.prSlackNotifyProvider))
-        , check-baselayer = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkBaseLayer CommonDefs.prSlackNotifyProvider))
-        , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkTools CommonDefs.prSlackNotifyProvider))
-        , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider))
-        , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.withCondition preconditionOutputHasChanges (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider))
-        , check-sync-workflow = CommonDefs.depends ["preconditions"] (CommonDefs.withCondition preconditionOutputHasWorkflowChanges checkWorkflowSync)
+        , check-formats = CommonDefs.depends ["preconditions"] (CommonDefs.checkFormats CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-baselayer = CommonDefs.depends ["preconditions"] (CommonDefs.checkBaseLayer CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkTools CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-sync-workflow = CommonDefs.depends ["preconditions"] checkWorkflowSync
         }
     }

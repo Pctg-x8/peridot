@@ -17,10 +17,10 @@ in GithubActions.Workflow::{
         }
     , jobs = toMap {
         , preconditions = preconditions
-        , check-formats = CommonDefs.depends ["preconditions"] (CommonDefs.checkFormats CommonDefs.weeklySlackNotifyProvider)
-        , check-baselayer = CommonDefs.depends ["preconditions"] (CommonDefs.checkBaseLayer CommonDefs.weeklySlackNotifyProvider)
-        , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkTools CommonDefs.weeklySlackNotifyProvider)
-        , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.weeklySlackNotifyProvider)
-        , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.weeklySlackNotifyProvider)
+        , check-formats = CommonDefs.depends ["preconditions"] (CommonDefs.checkFormats CommonDefs.weeklySlackNotifyProvider "true")
+        , check-baselayer = CommonDefs.depends ["preconditions"] (CommonDefs.checkBaseLayer CommonDefs.weeklySlackNotifyProvider "true")
+        , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkTools CommonDefs.weeklySlackNotifyProvider "true")
+        , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.weeklySlackNotifyProvider "true")
+        , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.weeklySlackNotifyProvider "true")
         }
     }
