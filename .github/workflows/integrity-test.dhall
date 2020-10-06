@@ -79,7 +79,7 @@ let installDhallScript =
     echo "$TARGET_FILE"
     mkdir $HOME/dhall
     curl -L $TARGET_FILE | tar x --bzip2 -C $HOME/dhall
-    echo "::add-path::$HOME/dhall/bin"
+    echo "$HOME/dhall/bin" >> $GITHUB_PATH
     sudo apt-get update
     sudo apt-get install -y colordiff
     ''
