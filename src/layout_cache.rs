@@ -16,7 +16,11 @@ impl<'d> DescriptorSetLayoutCache<'d> {
     }
 
     /// Gets an object. And create a new object if not exists.
-    pub fn query(&mut self, device: &br::Device, bindings: &'d [br::DescriptorSetLayoutBinding<'d>]) -> &br::DescriptorSetLayout {
+    pub fn query(
+        &mut self,
+        device: &br::Device,
+        bindings: &'d [br::DescriptorSetLayoutBinding<'d>]
+    ) -> &br::DescriptorSetLayout {
         self.object_map.entry(bindings).or_insert_with(||
             br::DescriptorSetLayout::new(device, bindings).expect("Failed to create DescriptorSetLayout")
         )
