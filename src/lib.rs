@@ -26,6 +26,7 @@ pub mod utils; pub use self::utils::*;
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 mod model; pub use self::model::*;
+mod layout_cache; pub use self::layout_cache::*;
 
 pub trait NativeLinker
 {
