@@ -2,6 +2,7 @@
 
 use bedrock as br;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// An object cache for DescriptorSetLayout
 pub struct DescriptorSetLayoutCache<'d> {
@@ -15,7 +16,7 @@ impl<'d> DescriptorSetLayoutCache<'d> {
         }
     }
 
-    /// Gets an object. And create a new object if not exists.
+    /// Get an object. And create a new object if not exists.
     pub fn query(
         &mut self,
         device: &br::Device,
