@@ -2,7 +2,6 @@
 
 use bedrock as br;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 /// An object cache for DescriptorSetLayout
 pub struct DescriptorSetLayoutCache<'d> {
