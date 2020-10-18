@@ -131,7 +131,7 @@ impl<PL: NativeLinker> Engine<PL> {
 impl<NL: NativeLinker> Engine<NL> {
     pub fn graphics(&self) -> &Graphics { &self.g }
     pub fn graphics_device(&self) -> &br::Device { &self.g.device }
-    pub fn graphics_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
+    pub fn graphics_queue_family_index(&self) -> u32 { self.g.graphics_queue_family_index() }
     // 将来的に分かれるかも？
     pub fn transfer_queue_family_index(&self) -> u32 { self.g.graphics_queue.family }
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.presenter.format() }
@@ -235,7 +235,7 @@ pub struct Queue { q: br::Queue, family: u32 }
 /// Graphics manager
 pub struct Graphics
 {
-    pub(self) _instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
+    pub(self) instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
     graphics_queue: Queue,
     #[cfg(debug_assertions)] _d: DebugReport,
     cp_onetime_submit: br::CommandPool,
@@ -287,7 +287,7 @@ impl Graphics
         {
             cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
             graphics_queue: Queue { q: device.queue(gqf_index, 0), family: gqf_index },
-            _instance: instance, adapter, device,
+            instance, adapter, device,
             #[cfg(debug_assertions)] _d,
             memory_type_index_cache: RefCell::new(BTreeMap::new())
         });
@@ -354,6 +354,10 @@ impl Graphics
     pub fn submit_buffered_commands(&self, batches: &[br::SubmissionBatch], fence: &br::Fence) -> br::Result<()> {
         self.graphics_queue.q.submit(batches, Some(fence))
     }
+
+    pub fn instance(&self) -> &br::Instance { &self.instance }
+    pub fn adapter(&self) -> &br::PhysicalDevice { &self.adapter }
+    pub fn graphics_queue_family_index(&self) -> u32 { self.graphics_queue.family }
 }
 impl Deref for Graphics
 {
