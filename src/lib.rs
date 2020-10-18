@@ -18,7 +18,7 @@ use std::time::{Instant as InstantTimer, Duration};
 use std::ffi::CStr;
 
 mod window; use self::window::StateFence;
-pub use self::window::{PlatformRenderTarget, SurfaceInfo};
+pub use self::window::SurfaceInfo;
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
 pub mod utils; pub use self::utils::*;
