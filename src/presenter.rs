@@ -10,14 +10,14 @@ pub trait PlatformPresenter {
 
     fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord);
     fn next_backbuffer_index(&mut self) -> br::Result<u32>;
-    fn render_and_present(
-        &mut self,
+    fn render_and_present<'s>(
+        &'s mut self,
         g: &crate::Graphics,
         last_render_fence: &br::Fence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch,
-        update_submission: Option<br::SubmissionBatch>
+        render_submission: br::SubmissionBatch<'s>,
+        update_submission: Option<br::SubmissionBatch<'s>>
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for backbuffer resources
     fn resize(&mut self, g: &crate::Graphics, new_size: math::Vector2<usize>) -> bool;
@@ -98,7 +98,7 @@ impl IntegratedSwapchain {
     pub fn acquire_next_backbuffer_index(&self) -> br::Result<u32> {
         self.swapchain.get().swapchain.acquire_next(None, br::CompletionHandler::from(&self.rendering_order))
     }
-    pub fn render_and_present<'s, NL: crate::NativeLinker>(
+    pub fn render_and_present<'s>(
         &'s mut self,
         g: &crate::Graphics,
         last_render_fence: &br::Fence,
