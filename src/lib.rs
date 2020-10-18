@@ -27,6 +27,7 @@ mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;
 mod model; pub use self::model::*;
 mod layout_cache; pub use self::layout_cache::*;
+mod presenter; pub use self::presenter::*;
 
 pub trait NativeLinker
 {
@@ -146,6 +147,7 @@ impl<PL> Engine<PL>
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.surface.format() }
     pub fn backbuffers(&self) -> Ref<[br::ImageView]> { Ref::map(self.wrt.get(), |x| x.backbuffers()) }
     pub fn input(&self) -> &InputProcess { &self.ip }
+    pub fn last_rendering_completion_object(&self) -> &br::Fence { self.last_rendering_completion.object() }
     
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()>
     {
@@ -169,8 +171,7 @@ impl<PL: NativeLinker> Engine<PL>
     
     pub fn rendering_precision(&self) -> f32 { self.nativelink.rendering_precision() }
 }
-impl<PL: NativeLinker> Engine<PL>
-{
+impl<PL: NativeLinker> Engine<PL> {
     pub fn do_update<EH: EngineEvents<PL>>(&mut self, userlib: &mut EH)
     {
         let dt = self.gametimer.delta_time();
@@ -230,8 +231,7 @@ impl<PL: NativeLinker> Engine<PL>
         }
     }
 
-    pub fn do_resize_backbuffer<EH: EngineEvents<PL>>(&mut self, new_size: math::Vector2<usize>, userlib: &mut EH)
-    {
+    pub fn do_resize_backbuffer<EH: EngineEvents<PL>>(&mut self, new_size: math::Vector2<usize>, userlib: &mut EH) {
         self.last_rendering_completion.wait().expect("Waiting Last command completion");
         userlib.discard_backbuffer_resources();
         self.wrt.discard_lw();
@@ -243,10 +243,8 @@ impl<PL: NativeLinker> Engine<PL>
         userlib.on_resize(self, new_size);
     }
 }
-impl<PL> Drop for Engine<PL>
-{
-    fn drop(&mut self)
-    {
+impl<PL> Drop for Engine<PL> {
+    fn drop(&mut self) {
         self.graphics().device.wait().expect("device error");
     }
 }

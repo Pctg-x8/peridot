@@ -11,10 +11,11 @@ pub trait PlatformRenderTarget
     fn current_geometry_extent(&self) -> (usize, usize);
 }
 
-pub struct SurfaceInfo
-{
-    obj: br::Surface, fmt: br::vk::VkSurfaceFormatKHR, pres_mode: br::PresentMode,
-    available_composite_alpha: br::CompositeAlpha
+pub struct SurfaceInfo {
+    pub(crate) obj: br::Surface,
+    pub(crate) fmt: br::vk::VkSurfaceFormatKHR,
+    pub(crate) pres_mode: br::PresentMode,
+    pub(crate) available_composite_alpha: br::CompositeAlpha
 }
 impl SurfaceInfo
 {
