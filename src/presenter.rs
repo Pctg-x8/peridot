@@ -35,11 +35,18 @@ impl IntegratedSwapchainObject {
         let eh = if si.currentExtent.height == 0xffff_ffff { default_extent.1 as _ } else { si.currentExtent.height };
         let ext = br::Extent2D(ew, eh);
         let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
+        let pre_transform =
+            if br::SurfaceTransform::Identity.contains(si.supportedTransforms) {
+                br::SurfaceTransform::Identity
+            } else {
+                br::SurfaceTransform::Inherit
+            };
         let chain = br::SwapchainBuilder::new(
             &surface_info.obj, buffer_count, &surface_info.fmt, &ext, br::ImageUsage::COLOR_ATTACHMENT
         )
         .present_mode(surface_info.pres_mode)
         .composite_alpha(surface_info.available_composite_alpha)
+        .pre_transform(pre_transform)
         .create(&g.device)
         .expect("Failed to create Swapchain");
         
