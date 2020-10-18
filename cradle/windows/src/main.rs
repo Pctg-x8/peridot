@@ -173,7 +173,7 @@ impl peridot::PlatformAssetLoader for AssetProvider
     }
 }
 struct Presenter {
-    window: HWND,
+    _window: HWND,
     sc: peridot::IntegratedSwapchain
 }
 impl Presenter {
@@ -189,7 +189,7 @@ impl Presenter {
         }
 
         Presenter {
-            window,
+            _window: window,
             sc: peridot::IntegratedSwapchain::new(g, s, peridot::math::Vector2(0, 0))
         }
     }

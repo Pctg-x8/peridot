@@ -142,10 +142,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             tfb.sink_graphics_ready_commands(rec);
         }).expect("ImmResource Initialization");
 
-        let screen_size = e.backbuffers()[0].size().clone();
+        let screen_size = e.backbuffer(0).expect("no backbuffer").size().clone();
         let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
             .create(&e.graphics()).expect("RenderPass Creation");
-        let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
+        let framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+                br::Framebuffer::new(&renderpass, &[&bb], &screen_size, 1)
+            })
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
         let dsl = br::DescriptorSetLayout::new(&e.graphics(), &[
@@ -255,7 +259,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     }
     fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
-        self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
+        self.framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+                br::Framebuffer::new(&self.renderpass, &[&bb], bb.size(), 1)
+            })
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         for (r, f) in self.render_cb.iter().zip(&self.framebuffers)
         {
