@@ -10,6 +10,7 @@ pub trait PlatformPresenter {
 
     fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord);
     fn next_backbuffer_index(&mut self) -> br::Result<u32>;
+    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s>(
         &'s mut self,
         g: &crate::Graphics,
@@ -104,6 +105,9 @@ impl IntegratedSwapchain {
     }
     pub fn acquire_next_backbuffer_index(&self) -> br::Result<u32> {
         self.swapchain.get().swapchain.acquire_next(None, br::CompletionHandler::from(&self.rendering_order))
+    }
+    pub fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        (br::ImageLayout::PresentSrc, br::PipelineStageFlags::TOP_OF_PIPE)
     }
     pub fn render_and_present<'s>(
         &'s mut self,

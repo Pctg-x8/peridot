@@ -203,6 +203,9 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.emit_initialize_backbuffer_commands(recorder)
     }
     fn next_backbuffer_index(&mut self) -> br::Result<u32> { self.sc.acquire_next_backbuffer_index() }
+    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.sc.requesting_backbuffer_layout()
+    }
     fn render_and_present<'s>(
         &'s mut self,
         g: &peridot::Graphics,
