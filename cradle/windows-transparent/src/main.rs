@@ -248,7 +248,8 @@ struct Presenter {
     render_completion_counter: u64,
     present_completion_counter: u64,
     _render_completion_fence_handle: OwnedHandle,
-    present_completion_event: OwnedHandle
+    present_completion_event: OwnedHandle,
+    present_inflight: bool
 }
 impl Presenter {
     fn new(g: &peridot::Graphics, window: HWND) -> Self {
@@ -328,7 +329,8 @@ impl Presenter {
             _render_completion_fence_handle: render_completion_fence_handle,
             render_completion_counter: 0,
             present_completion_counter: 0,
-            present_completion_event
+            present_completion_event,
+            present_inflight: false
         }
     }
 }
@@ -439,10 +441,13 @@ impl peridot::PlatformPresenter for Presenter {
                 .expect("Failed to submit render commands");
         }
 
-        unsafe {
-            winapi::um::synchapi::WaitForSingleObject(
-                self.present_completion_event.handle(), winapi::um::winbase::INFINITE
-            );
+        if self.present_inflight {
+            unsafe {
+                winapi::um::synchapi::WaitForSingleObject(
+                    self.present_completion_event.handle(), winapi::um::winbase::INFINITE
+                );
+            }
+            self.present_inflight = false;
         }
 
         self.render_completion_counter += 1;
@@ -455,11 +460,21 @@ impl peridot::PlatformPresenter for Presenter {
         self.present_completion_fence.set_event_notification(
             self.present_completion_counter, self.present_completion_event.handle()
         ).expect("Failed to set Completion Event");
+        self.present_inflight = true;
 
         Ok(())
     }
     /// Returns whether re-initializing is needed for backbuffer resources
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+        if self.present_inflight {
+            unsafe {
+                winapi::um::synchapi::WaitForSingleObject(
+                    self.present_completion_event.handle(), winapi::um::winbase::INFINITE
+                );
+            }
+            self.present_inflight = false;
+        }
+
         self.backbuffers.clear();
         self.sc.resize(metrics::Size2U(new_size.0 as _, new_size.1 as _)).expect("Failed to resize backbuffers");
         for bb_index in 0 .. 2 {
