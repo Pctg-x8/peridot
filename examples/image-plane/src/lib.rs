@@ -138,8 +138,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             tfb_mut.sink_graphics_ready_commands(&mut rec);
         }
 
-        let attdesc = br::AttachmentDescription::new(e.backbuffer_format(),
-            br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+        let outer_layout = e.requesting_backbuffer_layout().0;
+        let attdesc = br::AttachmentDescription::new(e.backbuffer_format(), outer_layout, outer_layout)
             .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
         let renderpass = br::RenderPassBuilder::new().add_attachment(attdesc)
             .add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None))

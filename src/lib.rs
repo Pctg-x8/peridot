@@ -137,6 +137,9 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.presenter.format() }
     pub fn backbuffer_count(&self) -> usize { self.presenter.backbuffer_count() }
     pub fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.presenter.backbuffer(index) }
+    pub fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.presenter.requesting_backbuffer_layout()
+    }
     pub fn input(&self) -> &InputProcess { &self.ip }
     
     pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(&self, generator: Gen) -> br::Result<()> {
@@ -325,7 +328,7 @@ impl Graphics
         }
     }
 
-    pub(self) fn memory_type_index_for(&self, mask: br::MemoryPropertyFlags, index_mask: u32) -> Option<u32>
+    pub fn memory_type_index_for(&self, mask: br::MemoryPropertyFlags, index_mask: u32) -> Option<u32>
     {
         if let Some(&mi) = self.memory_type_index_cache.borrow().get(&(mask.bits(), index_mask)) { return Some(mi); }
         for (n, m) in self.adapter.memory_properties().types().enumerate()
@@ -353,6 +356,9 @@ impl Graphics
     }
     pub fn submit_buffered_commands(&self, batches: &[br::SubmissionBatch], fence: &br::Fence) -> br::Result<()> {
         self.graphics_queue.q.submit(batches, Some(fence))
+    }
+    pub fn submit_buffered_commands_raw(&self, batches: &[br::vk::VkSubmitInfo], fence: &br::Fence) -> br::Result<()> {
+        self.graphics_queue.q.submit_raw(batches, Some(fence))
     }
 
     pub fn instance(&self) -> &br::Instance { &self.instance }
@@ -437,11 +443,11 @@ impl SubpassDependencyTemplates
 pub enum RenderPassTemplates {}
 impl RenderPassTemplates
 {
-    pub fn single_render(format: br::vk::VkFormat) -> br::RenderPassBuilder
+    pub fn single_render(format: br::vk::VkFormat, outer_requesting_layout: br::ImageLayout) -> br::RenderPassBuilder
     {
         let mut b = br::RenderPassBuilder::new();
         let adesc =
-            br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+            br::AttachmentDescription::new(format, outer_requesting_layout, outer_requesting_layout)
             .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
         b.add_attachment(adesc);
         b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));

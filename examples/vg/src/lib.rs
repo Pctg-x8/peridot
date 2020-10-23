@@ -143,7 +143,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }).expect("ImmResource Initialization");
 
         let screen_size = e.backbuffer(0).expect("no backbuffer").size().clone();
-        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
+        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format(), e.requesting_backbuffer_layout().0)
             .create(&e.graphics()).expect("RenderPass Creation");
         let framebuffers = (0..e.backbuffer_count())
             .map(|bb_index| {
