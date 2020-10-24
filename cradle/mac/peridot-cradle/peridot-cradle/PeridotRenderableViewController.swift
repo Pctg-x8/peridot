@@ -30,6 +30,7 @@ final class CurrentKeyboardLayoutCodeConverter {
         var deadKeyMask: UInt32 = 0
         var charLength = 0
         let charName = UnsafeMutablePointer<UniChar>.allocate(capacity: Self.MAX_CHAR_LENGTH)
+        charName.initialize(repeating: 0, count: Self.MAX_CHAR_LENGTH)
         let r = UCKeyTranslate(
             self.keyboardLayout,
             code,
