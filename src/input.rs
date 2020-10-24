@@ -104,6 +104,9 @@ type InputMap<T> = HashMap<T, <T as MappableNativeInputType>::ID>;
 
 pub trait NativeInput {
     fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)>;
+
+    #[allow(unused_variables)]
+    fn pull(&self, p: &InputProcess) {}
 }
 
 const MAX_MOUSE_BUTTONS: usize = 5;
@@ -183,6 +186,8 @@ impl InputProcess {
     }
     
     pub fn prepare_for_frame(&self, delta_time: std::time::Duration) {
+        if let Some(ref p) = self.nativelink { p.pull(self); }
+        
         let mut cd = self.collected.borrow_mut();
         let mut fd = self.frame.borrow_mut();
 

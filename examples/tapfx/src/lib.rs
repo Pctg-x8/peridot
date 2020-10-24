@@ -2,6 +2,7 @@
 use bedrock as br;
 use bedrock::VkHandle;
 use std::rc::Rc;
+use peridot::ModelData;
 
 #[repr(C)]
 #[derive(Clone)]
@@ -15,39 +16,26 @@ pub const INPUT_PLANE_DOWN: u16 = 0;
 pub const INPUT_PLANE_LEFT: u8 = 0;
 pub const INPUT_PLANE_TOP: u8 = 1;
 
-struct FixedBufferInitializer {
+struct BufferOffsets {
     vertex_start: u64
+}
+struct FixedBufferInitializer {
+    offsets: BufferOffsets,
+    sprite_plane: peridot::Primitive<peridot::VertexUV2D>
 }
 impl peridot::FixedBufferInitializer for FixedBufferInitializer {
     fn stage_data(&mut self, m: &br::MappedMemoryRange) {
-        unsafe { 
-            m.slice_mut(self.vertex_start as _, 4).clone_from_slice(&[
-                peridot::VertexUV2D {
-                    pos: peridot::math::Vector2(-32.0, -32.0),
-                    uv: peridot::math::Vector2(0.0, 0.0)
-                },
-                peridot::VertexUV2D {
-                    pos: peridot::math::Vector2(32.0, -32.0),
-                    uv: peridot::math::Vector2(1.0, 0.0)
-                },
-                peridot::VertexUV2D {
-                    pos: peridot::math::Vector2(-32.0, 32.0),
-                    uv: peridot::math::Vector2(0.0, 1.0)
-                },
-                peridot::VertexUV2D {
-                    pos: peridot::math::Vector2(32.0, 32.0),
-                    uv: peridot::math::Vector2(1.0, 1.0)
-                }
-            ]);
-        }
+        self.sprite_plane.stage_data_into(m, self.offsets.vertex_start);
     }
     fn buffer_graphics_ready(
         &self, tfb: &mut peridot::TransferBatch, buffer: &peridot::Buffer, buffer_range: std::ops::Range<u64>
     ) {
         tfb.add_buffer_graphics_ready(
             br::PipelineStageFlags::VERTEX_INPUT, buffer,
-            (buffer_range.start + self.vertex_start) .. (
-                buffer_range.start + self.vertex_start + std::mem::size_of::<peridot::VertexUV2D>() as u64
+            (buffer_range.start + self.offsets.vertex_start) .. (
+                buffer_range.start + self.offsets.vertex_start + (
+                    self.sprite_plane.vertices.len() * std::mem::size_of::<peridot::VertexUV2D>()
+                ) as u64
             ),
             br::AccessFlags::VERTEX_ATTRIBUTE_READ
         );
@@ -134,15 +122,18 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let main_image_data: peridot::PNG = e.load("images.peridot_default_tapfx_circle")
             .expect("Failed to load main_image_data");
         let mut tig = peridot::TextureInitializationGroup::new(e.graphics());
-        let main_image_offs = tig.add(main_image_data);
+        tig.add(main_image_data);
+
+        let sprite_plane = peridot::Primitive::uv_plane_centric(32.0);
 
         let mut bp_dynamic = peridot::BufferPrealloc::new(e.graphics());
         let uniform_start_d = bp_dynamic.add(peridot::BufferContent::uniform::<UniformValues>());
         let mut tfb = peridot::TransferBatch::new();
         let mut bp = peridot::BufferPrealloc::new(e.graphics());
-        let vertex_start = bp.add(peridot::BufferContent::vertices::<peridot::VertexUV2D>(4));
+        let vertex_start = sprite_plane.prealloc(&mut bp);
         let mut fm_init = FixedBufferInitializer {
-            vertex_start
+            offsets: BufferOffsets { vertex_start },
+            sprite_plane
         };
         let buffers = peridot::FixedMemory::new(e.graphics(), bp, bp_dynamic, tig, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
@@ -199,7 +190,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 },
                 .. Default::default()
             }.projection_matrix(),
-            time: 0.0,
+            time: 1.0,
             offset: peridot::math::Vector2(0.0, 0.0),
             _resv: 0.0
         };

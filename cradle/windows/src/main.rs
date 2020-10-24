@@ -2,7 +2,8 @@ use winapi::um::winuser::{
     DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
     AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL, WM_SIZE,
     PostQuitMessage, PM_REMOVE,
-    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
+    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA,
+    WM_INPUT
 };
 use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
@@ -12,6 +13,7 @@ use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD
 
 use std::mem::MaybeUninit;
 #[macro_use] extern crate log;
+mod input;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
 
@@ -23,7 +25,8 @@ pub struct GameDriver
 {
     base: peridot::Engine<NativeLink>,
     usercode: userlib::Game<NativeLink>,
-    current_size: peridot::math::Vector2<usize>
+    current_size: peridot::math::Vector2<usize>,
+    ri_handler: self::input::RawInputHandler
 }
 impl GameDriver
 {
@@ -39,11 +42,14 @@ impl GameDriver
             nl, userlib::Game::<NativeLink>::requested_features()
         );
         let usercode = userlib::Game::init(&mut base);
+        let ri_handler = self::input::RawInputHandler::init();
+        base.input_mut().set_nativelink(Box::new(self::input::NativeInputHandler::new(window)));
         base.postinit();
 
         GameDriver
         {
-            base, usercode, current_size: init_size
+            base, usercode, current_size: init_size,
+            ri_handler
         }
     }
 
@@ -115,6 +121,14 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
                 }
             }
             return 0;
+        },
+        WM_INPUT => {
+            let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+            if let Some(driver) = unsafe { p.as_mut() }
+            {
+                driver.ri_handler.handle_wm_input(driver.base.input_mut(), lparam);
+            }
+            0
         },
         _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) }
     }
