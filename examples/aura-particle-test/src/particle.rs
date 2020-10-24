@@ -20,7 +20,11 @@ pub struct CPUParticleInstance {
 }
 impl CPUParticleInstance {
     pub fn update(&mut self, dt: std::time::Duration) {
-        self.living_time += (dt.as_micros() as f64 / 1_000_000.0) as f32;
+        let dt_millis = (dt.as_micros() as f64 / 1_000_000.0) as f32;
+
+        self.living_time += dt_millis;
+        self.velocity.1 -= 9.8 * dt_millis * 0.1;
+
         self.pos = self.pos.clone() + self.velocity.clone() * (dt.as_micros() as f64 / 1_000_000.0) as f32;
         let s = lerp(0.6, 1.0, 1.0 - (self.living_time / self.lifetime).powf(2.0));
         self.scale = peridot::math::Vector3(s, s, s);
@@ -31,7 +35,7 @@ impl CPUParticleInstance {
         let s = peridot::math::Matrix4F32::scale(peridot::math::Vector4(self.scale.0, self.scale.1, self.scale.2, 1.0));
 
         ParticleRenderInstance {
-            mat: peridot::math::Matrix4F32::translation(self.pos.clone()) * s,
+            mat: peridot::math::Matrix4F32::translation(-self.pos.clone()) * s,
             alpha: 1.0 - self.living_time / self.lifetime
         }
     }
@@ -150,7 +154,7 @@ impl ParticleEngine {
                 self.driver.spawn(CPUParticleInstance {
                     scale: peridot::math::Vector3(1.0, 1.0, 1.0),
                     pos: peridot::math::Vector3(0.0, 0.0, 0.0),
-                    velocity: peridot::math::Vector3::<f32>::rand_unit_sphere(&mut rand::thread_rng()) * 0.4f32,
+                    velocity: (&peridot::math::Vector3::<f32>::rand_unit_sphere(&mut rand::thread_rng()) * &peridot::math::Vector3(1.0f32, 2.0f32, 1.0f32) + peridot::math::Vector3(0.0, 2.0, 0.0)) * 0.4f32,
                     lifetime: rand::distributions::Uniform::new_inclusive(0.5, 1.5).sample(&mut rand::thread_rng()),
                     living_time: 0.0
                 });
@@ -166,4 +170,54 @@ impl ParticleEngine {
 	pub fn managed_instance_buffer_range(&self) -> std::ops::Range<u64> {
 		self.driver.update_range_static()
 	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct TimeMillisec(f32);
+impl From<f32> for TimeMillisec { fn from(v: f32) -> Self { TimeMillisec(v) } }
+impl Eq for TimeMillisec { fn assert_receiver_is_total_eq(&self) {} }
+impl Ord for TimeMillisec {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).expect("Compare with Invalid TimeMillisec!")
+    }
+}
+impl std::ops::Add<f32> for TimeMillisec {
+    type Output = TimeMillisec; fn add(self, rhs: f32) -> Self { TimeMillisec(self.0 + rhs) }
+}
+impl std::ops::AddAssign<f32> for TimeMillisec {
+    fn add_assign(&mut self, rhs: f32) { self.0 += rhs; }
+}
+
+pub struct MultipleTrigger<T: Copy> {
+    current_time: TimeMillisec,
+    queue: std::collections::BTreeMap<TimeMillisec, T>
+}
+impl<T: Copy> MultipleTrigger<T> {
+    pub fn new() -> Self {
+        MultipleTrigger {
+            current_time: TimeMillisec(0.0),
+            queue: std::collections::BTreeMap::new()
+        }
+    }
+    /// Returns triggered Ts
+    pub fn update(&mut self, dt_millis: f32) -> Vec<T> {
+        self.current_time += dt_millis;
+        let mut vs = Vec::new();
+        while self.queue.first_key_value().map_or(false, |(&k, _)| k <= self.current_time) {
+            let (_, v) = self.queue.pop_first().expect("Unreachable");
+            vs.push(v);
+        }
+
+        vs
+    }
+}
+
+pub enum ParticleSpawnerTiming {
+    Oneshot { delay: f32 },
+    Interval { delay: f32, interval: f32 }
+}
+pub struct ParticleSpawner {
+    timing: ParticleSpawnerTiming,
+    count_range: std::ops::Range<u32>
 }

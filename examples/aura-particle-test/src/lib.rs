@@ -1,3 +1,4 @@
+#![feature(map_first_last)]
 
 use bedrock as br;
 use br::Waitable;
