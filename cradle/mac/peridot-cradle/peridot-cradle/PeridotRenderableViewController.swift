@@ -15,7 +15,12 @@ final class CurrentKeyboardLayoutCodeConverter {
     private var keyboardLayout: UnsafePointer<UCKeyboardLayout>
     
     init() {
-        let isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
+        var isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
+        if isource == nil {
+            // 日本語レイアウトだと上記だとうまくいかないらしい
+            // https://github.com/microsoft/node-native-keymap/blob/4bb080c3e83abca10942aa4fb81e2f7a81bf64db/src/keyboard_mac.mm#L89
+            isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardLayoutInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
+        }
         let isourceRef = unsafeBitCast(isource, to: CFData.self)
         let isourceBytes = CFDataGetBytePtr(isourceRef)
         self.keyboardLayout = unsafeBitCast(isourceBytes, to: UnsafePointer<UCKeyboardLayout>.self)
