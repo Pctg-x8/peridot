@@ -12,6 +12,7 @@ pub enum udev_enumerate {}
 pub enum udev_queue {}
 pub enum udev_hwdb {}
 
+#[link(name = "udev")]
 extern "C" {
 	pub fn udev_ref(udev: *mut udev) -> *mut udev;
 	pub fn udev_unref(udev: *mut udev) -> *mut udev;
