@@ -8,6 +8,7 @@ use std::rc::Rc;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 
+mod udev;
 mod userlib;
 
 pub struct PlatformAssetLoader { basedir: PathBuf }

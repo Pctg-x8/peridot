@@ -13,5 +13,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
 log = "0.4"
 env_logger = "0.5"
 xcb = "0.8"
+libc = "0.2"
 
 #%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
