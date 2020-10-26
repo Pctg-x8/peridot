@@ -109,7 +109,9 @@ impl Monitor {
 		&self, subsystem: &std::ffi::CStr, devtype: Option<&std::ffi::CStr>
 	) -> Result<(), c_int> {
 		let r = unsafe {
-			udev_monitor_filter_add_match_subsystem_devtype(self.as_ptr(), subsystem.as_ptr(), devtype.map_or_else(std::ptr::null, |s| s.as_ptr()))
+			udev_monitor_filter_add_match_subsystem_devtype(
+				self.as_ptr(), subsystem.as_ptr(), devtype.map_or_else(std::ptr::null, |s| s.as_ptr())
+			)
 		};
 		if r >= 0 { Ok(()) } else { Err(r) }
 	}
