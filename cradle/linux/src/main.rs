@@ -4,11 +4,12 @@
 use std::fs::File;
 use std::path::PathBuf;
 use std::io::Result as IOResult;
-use std::rc::Rc;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
+use std::os::unix::io::{AsRawFd, RawFd};
 
 mod udev;
+mod epoll;
 mod userlib;
 
 pub struct PlatformAssetLoader { basedir: PathBuf }
@@ -109,6 +110,7 @@ impl X11
 
         X11 { con, wm_protocols, wm_delete_window, vis, mainwnd_id }
     }
+    fn fd(&self) -> RawFd { self.con.as_raw_fd() }
     fn show(&self) {
         xcb::map_window(&self.con, self.mainwnd_id);
         self.con.flush();
@@ -154,13 +156,142 @@ impl GameDriver {
     fn update(&mut self) { self.engine.do_update(&mut self.usercode); }
 }
 
+fn lookup_device_name(d: &udev::Device) -> Option<String> {
+    match d.property_value(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"NAME\0") }) {
+        Some(n) => Some(String::from(n.to_str().expect("decoding failed"))),
+        None => d.parent().as_ref().and_then(lookup_device_name)
+    }
+}
+
 fn main() {
     env_logger::init();
     let x11 = X11::init();
 
+    let udev = udev::Context::new().expect("Failed to initialize udev");
+    let enumerator = udev::Enumerate::new(&udev).expect("Failed to create udev Enumerator");
+    let target_subsystem_name = std::ffi::CString::new("input").expect("encoding failed");
+    enumerator.add_match_subsystem(&target_subsystem_name).expect("Failed to set subsystem filter");
+    enumerator.add_match_is_initialized().expect("FAiled to set initialized filter");
+    enumerator.scan_devices().expect("Failed to scan devices");
+    println!("Input Device Enumeration: ");
+    let event_device_regex = regex::Regex::new("event[0-9]+$").expect("invalid regex");
+    for e in enumerator.iter() {
+        let syspath = e.name().expect("no name?");
+        let device = udev::Device::from_syspath(&udev, syspath).expect("Failed to create udev Device");
+        let devnode = match device.devnode() {
+            Some(s) => s.to_str().expect("decoding failed"),
+            None => continue
+        };
+        if !event_device_regex.is_match(devnode) { continue; }
+        println!("* {}", syspath.to_string_lossy());
+        println!(
+            "  * name = {}",
+            lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
+        );
+        println!("  * devnode = {}", devnode);
+        /*println!("  * initialized ? {}", device.is_initialized());
+        for p in device.iter_properties() {
+            let name = p.name().expect("no name?").to_str().expect("decoding failed");
+            if let Some(v) = p.value() {
+                println!("  * {} = {}", name, v.to_str().expect("decoding failed value"));
+            } else {
+                println!("  * {}", name);
+            }
+        }
+        if let Some(p) = device.parent() {
+            println!(
+                "    * name = {}",
+                p.property_value(&name_property_key).map_or("<none>", |s| s.to_str().expect("decoding failed"))
+            );
+            println!(
+                "    * devtype = {}",
+                p.devtype().map_or("<none>", |s| s.to_str().expect("decoding failed"))
+            );
+            println!(
+                "    * devnode = {}",
+                p.devnode().map_or("<none>", |s| s.to_str().expect("decoding failed"))
+            );
+            println!("    * initialized ? {}", p.is_initialized());
+            for p in p.iter_properties() {
+                let name = p.name().expect("no name?").to_str().expect("decoding failed");
+                if let Some(v) = p.value() {
+                    println!("    * {} = {}", name, v.to_str().expect("decoding failed value"));
+                } else {
+                    println!("    * {}", name);
+                }
+            }
+        }*/
+    }
+    let monitor = udev::Monitor::from_netlink(
+        &udev, unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"udev\0") }
+    ).expect("Failed to create udev monitor");
+    monitor.filter_add_match_subsystem_devtype(
+        unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"input\0") },
+        None
+    ).expect("Failed to set monitor subsystem filter");
+    monitor.filter_update().expect("Failed to update monitor filter");
+    monitor.enable_receiving().expect("Failed to set monitor receiving enable");
+    let monitor_fd = monitor.fd().expect("Failed to retrieve udev monitor fd");
+
     let mut gd = GameDriver::new(WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id });
 
+    let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
+    ep.add_fd(x11.fd(), libc::EPOLLIN as _).expect("Failed to add x11 fd");
+    ep.add_fd(monitor_fd, libc::EPOLLIN as _).expect("Failed to add udev monitor fd");
+
     x11.show();
-    while x11.process_all_events() { gd.update(); }
+    let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2];
+    'app: loop {
+        let count = ep.wait(&mut events, Some(1)).expect("Failed to waiting epoll");
+        // TODO: あとでちゃんと待つ(external_fence_fdとか使えばepollで待てそうな気がする)
+        if count == 0 { gd.update(); }
+
+        for e in &events[..count as usize] {
+            if e.u64 == x11.fd() as _ {
+                if !x11.process_all_events() { break 'app; }
+            } else if e.u64 == monitor_fd as _ {
+                let device = monitor.receive_device().expect("no device received?");
+                let devnode = match device.devnode() {
+                    Some(s) => s.to_str().expect("decoding failed"),
+                    None => continue
+                };
+                if !event_device_regex.is_match(devnode) { continue; }
+                println!("Incoming Device Event: {}", device.action().to_str().expect("decoding failed"));
+                for p in device.iter_properties() {
+                    let name = p.name().expect("no name?").to_str().expect("decoding failed");
+                    if let Some(v) = p.value() {
+                        println!("  * {} = {}", name, v.to_str().expect("decoding failed value"));
+                    } else {
+                        println!("  * {}", name);
+                    }
+                }
+                if let Some(p) = device.parent() {
+                    println!(
+                        "    * name = {}",
+                        p.property_value(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"NAME\0") })
+                            .map_or("<none>", |s| s.to_str().expect("decoding failed"))
+                    );
+                    println!(
+                        "    * devtype = {}",
+                        p.devtype().map_or("<none>", |s| s.to_str().expect("decoding failed"))
+                    );
+                    println!(
+                        "    * devnode = {}",
+                        p.devnode().map_or("<none>", |s| s.to_str().expect("decoding failed"))
+                    );
+                    println!("    * initialized ? {}", p.is_initialized());
+                    for p in p.iter_properties() {
+                        let name = p.name().expect("no name?").to_str().expect("decoding failed");
+                        if let Some(v) = p.value() {
+                            println!("    * {} = {}", name, v.to_str().expect("decoding failed value"));
+                        } else {
+                            println!("    * {}", name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // while x11.process_all_events() { gd.update(); }
     println!("Terminating Program...");
 }

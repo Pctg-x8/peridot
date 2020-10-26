@@ -43,7 +43,7 @@ impl Device {
 		unsafe { super::Context::from_ptr(udev_device_get_udev(self.as_ptr())).expect("no context?") }
 	}
 	pub fn parent(&self) -> Option<Self> {
-		unsafe { Self::from_ptr(udev_device_get_parent(self.as_ptr())) }
+		unsafe { Self::from_ptr(udev_device_ref(udev_device_get_parent(self.as_ptr()))) }
 	}
 	pub fn parent_with_subsystem_devtype(&self, subsystem: &std::ffi::CStr, devtype: &std::ffi::CStr) -> Option<Self> {
 		unsafe {
@@ -53,32 +53,56 @@ impl Device {
 		}
 	}
 
-	pub fn devpath(&self) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_devpath(self.as_ptr())) }
+	pub fn devpath(&self) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_devpath(self.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
-	pub fn subsystem(&self) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_subsystem(self.as_ptr())) }
+	pub fn subsystem(&self) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_subsystem(self.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
-	pub fn devtype(&self) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_devtype(self.as_ptr())) }
+	pub fn devtype(&self) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_devtype(self.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
-	pub fn syspath(&self) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_syspath(self.as_ptr())) }
+	pub fn syspath(&self) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_syspath(self.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
-	pub fn sysname(&self) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_sysname(self.as_ptr())) }
+	pub fn sysname(&self) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_sysname(self.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
-	pub fn sysnum(&self) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_sysnum(self.as_ptr())) }
+	pub fn sysnum(&self) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_sysnum(self.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
-	pub fn devnode(&self) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_devnode(self.as_ptr())) }
+	pub fn devnode(&self) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_devnode(self.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
 	pub fn is_initialized(&self) -> bool {
 		unsafe { udev_device_get_is_initialized(self.as_ptr()) == 1 }
 	}
-	pub fn property_value(&self, key: &std::ffi::CStr) -> &std::ffi::CStr {
-		unsafe { std::ffi::CStr::from_ptr(udev_device_get_property_value(self.as_ptr(), key.as_ptr())) }
+	pub fn property_value(&self, key: &std::ffi::CStr) -> Option<&std::ffi::CStr> {
+		unsafe {
+			let p = udev_device_get_property_value(self.as_ptr(), key.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
+		}
 	}
 	pub fn driver(&self) -> &std::ffi::CStr {
 		unsafe { std::ffi::CStr::from_ptr(udev_device_get_driver(self.as_ptr())) }

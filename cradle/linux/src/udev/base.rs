@@ -40,7 +40,7 @@ impl ListEntry {
 	}
 
 	pub fn next(&self) -> Option<Self> {
-		unsafe { NonNull::new(udev_list_entry_get_next(self.0.as_ptr())).map(Self) }
+		unsafe { Self::from_ptr(udev_list_entry_get_next(self.0.as_ptr())) }
 	}
 	pub fn get_by_name(&self, name: &std::ffi::CStr) -> Option<Self> {
 		unsafe {
@@ -48,14 +48,16 @@ impl ListEntry {
 		}
 	}
 
-	pub fn name(&self) -> &std::ffi::CStr {
+	pub fn name(&self) -> Option<&std::ffi::CStr> {
 		unsafe {
-			std::ffi::CStr::from_ptr(udev_list_entry_get_name(self.0.as_ptr()))
+			let p = udev_list_entry_get_name(self.0.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
 		}
 	}
-	pub fn value(&self) -> &std::ffi::CStr {
+	pub fn value(&self) -> Option<&std::ffi::CStr> {
 		unsafe {
-			std::ffi::CStr::from_ptr(udev_list_entry_get_value(self.0.as_ptr()))
+			let p = udev_list_entry_get_value(self.0.as_ptr());
+			if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p)) }
 		}
 	}
 }
@@ -104,10 +106,10 @@ impl Monitor {
 	}
 	
 	pub fn filter_add_match_subsystem_devtype(
-		&self, subsystem: &std::ffi::CStr, devtype: &std::ffi::CStr
+		&self, subsystem: &std::ffi::CStr, devtype: Option<&std::ffi::CStr>
 	) -> Result<(), c_int> {
 		let r = unsafe {
-			udev_monitor_filter_add_match_subsystem_devtype(self.as_ptr(), subsystem.as_ptr(), devtype.as_ptr())
+			udev_monitor_filter_add_match_subsystem_devtype(self.as_ptr(), subsystem.as_ptr(), devtype.map_or_else(std::ptr::null, |s| s.as_ptr()))
 		};
 		if r >= 0 { Ok(()) } else { Err(r) }
 	}
