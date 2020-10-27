@@ -323,7 +323,7 @@ fn main() {
             // resize
             events.resize(2 + devmgr.len(), unsafe { std::mem::MaybeUninit::zeroed().assume_init() });
         }
-        
+
         let count = ep.wait(&mut events, Some(1)).expect("Failed to waiting epoll");
         // TODO: あとでちゃんと待つ(external_fence_fdとか使えばepollで待てそうな気がする)
         if count == 0 { gd.update(); }
@@ -351,7 +351,9 @@ fn main() {
                             lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
                         );
                         devmgr.add(
-                            String::from(devnode), EventDevice::open(devnode_c).expect("Failed to open added device"), &ep
+                            String::from(devnode),
+                            EventDevice::open(devnode_c).expect("Failed to open added device"),
+                            &ep
                         );
                     },
                     "remove" => if let Some(id) = devmgr.lookup_id_by_node(devnode) {
