@@ -9,11 +9,15 @@ impl Epoll {
 		if r < 0 { Err(std::io::Error::last_os_error()) } else { Ok(Epoll(r)) }
 	}
 
-	pub fn add_fd(&self, fd: c_int, events: u32) -> std::io::Result<()> {
-		let mut event_data = libc::epoll_event { events, u64: fd as _ };
+	pub fn add_fd(&self, fd: c_int, events: u32, extras: u64) -> std::io::Result<()> {
+		let mut event_data = libc::epoll_event { events, u64: extras };
 		let r = unsafe {
 			libc::epoll_ctl(self.0, libc::EPOLL_CTL_ADD, fd, &mut event_data)
 		};
+		if r < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+	}
+	pub fn remove_fd(&self, fd: c_int) -> std::io::Result<()> {
+		let r = unsafe { libc::epoll_ctl(self.0, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut()) };
 		if r < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
 	}
 	pub fn wait(

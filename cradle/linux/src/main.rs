@@ -1,3 +1,4 @@
+#![feature(map_first_last)]
 
 #[macro_use] extern crate log;
 
@@ -10,6 +11,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 
 mod udev;
 mod epoll;
+mod kernel_input;
 mod userlib;
 
 pub struct PlatformAssetLoader { basedir: PathBuf }
@@ -163,6 +165,75 @@ fn lookup_device_name(d: &udev::Device) -> Option<String> {
     }
 }
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+pub struct EventDevice(libc::c_int);
+impl EventDevice {
+    pub fn open(path: &std::ffi::CStr) -> std::io::Result<Self> {
+        let fp = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
+        if fp < 0 { Err(std::io::Error::last_os_error()) } else { Ok(Self(fp)) }
+    }
+
+    pub fn read(&self) -> std::io::Result<kernel_input::InputEvent> {
+        let mut ev = std::mem::MaybeUninit::uninit();
+        let r = unsafe { libc::read(self.0, ev.as_mut_ptr() as _, std::mem::size_of::<kernel_input::InputEvent>()) };
+        if r < 0 { Err(std::io::Error::last_os_error()) } else { Ok(unsafe { ev.assume_init() }) }
+    }
+}
+impl Drop for EventDevice {
+    fn drop(&mut self) { unsafe { libc::close(self.0); } }
+}
+
+pub struct EventDeviceManager {
+    pub epoll_id_resv: u64,
+    pub devices_by_id: BTreeMap<u64, EventDevice>,
+    pub id_free_list: BTreeSet<u64>,
+    pub device_id_by_node: HashMap<String, u64>
+}
+impl EventDeviceManager {
+    pub fn new(
+        initial_devices: impl Iterator<Item = (String, EventDevice)>, epoll_id_resv: u64, epoll: &epoll::Epoll
+    ) -> Self {
+        let mut devices_by_id = BTreeMap::new();
+        let mut device_id_by_node = HashMap::with_capacity(initial_devices.size_hint().0);
+        for (n, (node, d)) in initial_devices.enumerate() {
+            epoll.add_fd(d.0, libc::EPOLLIN as _, n as u64 + epoll_id_resv)
+                .expect("Failed to register initial device fd to epoll");
+            devices_by_id.insert(n as u64, d);
+            device_id_by_node.insert(node, n as u64);
+        }
+
+        EventDeviceManager {
+            epoll_id_resv,
+            devices_by_id,
+            id_free_list: BTreeSet::new(),
+            device_id_by_node
+        }
+    }
+    pub fn len(&self) -> usize { self.devices_by_id.len() }
+
+    /// Returns assigned id(in EventDeviceManager)
+    pub fn add(&mut self, node: String, device: EventDevice, epoll: &epoll::Epoll) -> u64 {
+        let id = self.id_free_list.pop_first().unwrap_or_else(|| self.devices_by_id.len() as u64);
+        epoll.add_fd(device.0, libc::EPOLLIN as _, id + self.epoll_id_resv)
+            .expect("Failed to register device fd to epoll");
+        self.devices_by_id.insert(id, device);
+        self.device_id_by_node.insert(node, id);
+        
+        id
+    }
+    pub fn remove(&mut self, id: u64, epoll: &epoll::Epoll) {
+        if let Some(d) = self.devices_by_id.remove(&id) {
+            self.id_free_list.insert(id);
+            epoll.remove_fd(d.0).expect("Failed to unregister device fd from epoll");
+        }
+    }
+
+    pub fn lookup_id_by_node(&self, node: &str) -> Option<u64> { self.device_id_by_node.get(node).copied() }
+    pub fn translate_epoll_value(&self, epoll_value: u64) -> u64 { epoll_value - self.epoll_id_resv }
+    pub fn get_device(&self, id: u64) -> Option<&EventDevice> { self.devices_by_id.get(&id) }
+}
+
 fn main() {
     env_logger::init();
     let x11 = X11::init();
@@ -173,22 +244,31 @@ fn main() {
     enumerator.add_match_subsystem(&target_subsystem_name).expect("Failed to set subsystem filter");
     enumerator.add_match_is_initialized().expect("FAiled to set initialized filter");
     enumerator.scan_devices().expect("Failed to scan devices");
-    println!("Input Device Enumeration: ");
     let event_device_regex = regex::Regex::new("event[0-9]+$").expect("invalid regex");
-    for e in enumerator.iter() {
+    let initial_devices = enumerator.iter().filter_map(|e| {
         let syspath = e.name().expect("no name?");
         let device = udev::Device::from_syspath(&udev, syspath).expect("Failed to create udev Device");
-        let devnode = match device.devnode() {
-            Some(s) => s.to_str().expect("decoding failed"),
-            None => continue
+        let devnode_c = match device.devnode() {
+            Some(s) => s,
+            None => return None
         };
-        if !event_device_regex.is_match(devnode) { continue; }
-        println!("* {}", syspath.to_string_lossy());
+        let devnode = devnode_c.to_str().expect("decoding failed");
+        if !event_device_regex.is_match(devnode) { return None; }
+        /*println!("* {}", syspath.to_string_lossy());
         println!(
             "  * name = {}",
             lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
         );
-        println!("  * devnode = {}", devnode);
+        println!("  * devnode = {}", devnode);*/
+
+        info!(
+            "Registering Input Device: {} ({})",
+            devnode, lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
+        );
+        
+        Some((String::from(devnode), EventDevice::open(devnode_c).expect("Failed to open event device")))
+    });
+    /*for e in enumerator.iter() {
         /*println!("  * initialized ? {}", device.is_initialized());
         for p in device.iter_properties() {
             let name = p.name().expect("no name?").to_str().expect("decoding failed");
@@ -221,7 +301,7 @@ fn main() {
                 }
             }
         }*/
-    }
+    }*/
     let monitor = udev::Monitor::from_netlink(
         &udev, unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"udev\0") }
     ).expect("Failed to create udev monitor");
@@ -236,28 +316,54 @@ fn main() {
     let mut gd = GameDriver::new(WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id });
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
-    ep.add_fd(x11.fd(), libc::EPOLLIN as _).expect("Failed to add x11 fd");
-    ep.add_fd(monitor_fd, libc::EPOLLIN as _).expect("Failed to add udev monitor fd");
+    ep.add_fd(x11.fd(), libc::EPOLLIN as _, 0).expect("Failed to add x11 fd");
+    ep.add_fd(monitor_fd, libc::EPOLLIN as _, 1).expect("Failed to add udev monitor fd");
+    let mut devmgr = EventDeviceManager::new(initial_devices, 2, &ep);
 
     x11.show();
-    let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2];
+    let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2 + devmgr.len()];
     'app: loop {
         let count = ep.wait(&mut events, Some(1)).expect("Failed to waiting epoll");
         // TODO: あとでちゃんと待つ(external_fence_fdとか使えばepollで待てそうな気がする)
         if count == 0 { gd.update(); }
 
         for e in &events[..count as usize] {
-            if e.u64 == x11.fd() as _ {
+            if e.u64 == 0 {
                 if !x11.process_all_events() { break 'app; }
-            } else if e.u64 == monitor_fd as _ {
+            } else if e.u64 == 1 {
                 let device = monitor.receive_device().expect("no device received?");
-                let devnode = match device.devnode() {
-                    Some(s) => s.to_str().expect("decoding failed"),
+                let devnode_c = match device.devnode() {
+                    Some(s) => s,
                     None => continue
                 };
+                let devnode = devnode_c.to_str().expect("decoding failed");
                 if !event_device_regex.is_match(devnode) { continue; }
-                println!("Incoming Device Event: {}", device.action().to_str().expect("decoding failed"));
-                for p in device.iter_properties() {
+                let action = device.action().to_str().expect("action decoding failed");
+                println!("Incoming Device Event: {}", action);
+
+                match action {
+                    "add" => {
+                        info!(
+                            "Registering Input Device: {} ({})",
+                            devnode,
+                            lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
+                        );
+                        devmgr.add(
+                            String::from(devnode), EventDevice::open(devnode_c).expect("Failed to open added device"), &ep
+                        );
+                    },
+                    "remove" => if let Some(id) = devmgr.lookup_id_by_node(devnode) {
+                        info!(
+                            "Unregistering Input Device: {} ({})",
+                            devnode,
+                            lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
+                        );
+                        devmgr.remove(id, &ep);
+                    },
+                    a => debug!("Unknown device action: {:?}", a)
+                }
+                
+                /*for p in device.iter_properties() {
                     let name = p.name().expect("no name?").to_str().expect("decoding failed");
                     if let Some(v) = p.value() {
                         println!("  * {} = {}", name, v.to_str().expect("decoding failed value"));
@@ -288,10 +394,25 @@ fn main() {
                             println!("    * {}", name);
                         }
                     }
-                }
+                }*/
+            } else {
+                let ev = match devmgr.get_device(devmgr.translate_epoll_value(e.u64)) {
+                    Some(d) => match d.read() {
+                        Ok(ev) => ev,
+                        Err(e) => {
+                            error!("Failed to read from device: {:?}", e);
+                            continue;
+                        }
+                    },
+                    None => {
+                        let evnum = unsafe { std::ptr::read_unaligned(&e.u64) };
+                        error!("device not found? ev={}", evnum);
+                        continue;
+                    }
+                };
+                println!("event: type={}, code={}, value={}", ev.type_, ev.code, ev.value);
             }
         }
     }
-    // while x11.process_all_events() { gd.update(); }
     println!("Terminating Program...");
 }
