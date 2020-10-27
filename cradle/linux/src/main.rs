@@ -319,6 +319,11 @@ fn main() {
     x11.show();
     let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2 + devmgr.len()];
     'app: loop {
+        if events.len() != 2 + devmgr.len() {
+            // resize
+            events.resize(2 + devmgr.len(), unsafe { std::mem::MaybeUninit::zeroed().assume_init() });
+        }
+        
         let count = ep.wait(&mut events, Some(1)).expect("Failed to waiting epoll");
         // TODO: あとでちゃんと待つ(external_fence_fdとか使えばepollで待てそうな気がする)
         if count == 0 { gd.update(); }
