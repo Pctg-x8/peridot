@@ -164,6 +164,41 @@ fn lookup_device_name(d: &udev::Device) -> Option<String> {
         None => d.parent().as_ref().and_then(lookup_device_name)
     }
 }
+#[allow(dead_code)]
+fn diag_device(d: &udev::Device) {
+    for p in d.iter_properties() {
+        let name = p.name().expect("no name?").to_str().expect("decoding failed");
+        if let Some(v) = p.value() {
+            println!("  * {} = {}", name, v.to_str().expect("decoding failed value"));
+        } else {
+            println!("  * {}", name);
+        }
+    }
+    if let Some(p) = d.parent() {
+        println!(
+            "    * name = {}",
+            p.property_value(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"NAME\0") })
+                .map_or("<none>", |s| s.to_str().expect("decoding failed"))
+        );
+        println!(
+            "    * devtype = {}",
+            p.devtype().map_or("<none>", |s| s.to_str().expect("decoding failed"))
+        );
+        println!(
+            "    * devnode = {}",
+            p.devnode().map_or("<none>", |s| s.to_str().expect("decoding failed"))
+        );
+        println!("    * initialized ? {}", p.is_initialized());
+        for p in p.iter_properties() {
+            let name = p.name().expect("no name?").to_str().expect("decoding failed");
+            if let Some(v) = p.value() {
+                println!("    * {} = {}", name, v.to_str().expect("decoding failed value"));
+            } else {
+                println!("    * {}", name);
+            }
+        }
+    }
+}
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -254,12 +289,7 @@ fn main() {
         };
         let devnode = devnode_c.to_str().expect("decoding failed");
         if !event_device_regex.is_match(devnode) { return None; }
-        /*println!("* {}", syspath.to_string_lossy());
-        println!(
-            "  * name = {}",
-            lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
-        );
-        println!("  * devnode = {}", devnode);*/
+        // diag_device(&device);
 
         info!(
             "Registering Input Device: {} ({})",
@@ -268,40 +298,6 @@ fn main() {
         
         Some((String::from(devnode), EventDevice::open(devnode_c).expect("Failed to open event device")))
     });
-    /*for e in enumerator.iter() {
-        /*println!("  * initialized ? {}", device.is_initialized());
-        for p in device.iter_properties() {
-            let name = p.name().expect("no name?").to_str().expect("decoding failed");
-            if let Some(v) = p.value() {
-                println!("  * {} = {}", name, v.to_str().expect("decoding failed value"));
-            } else {
-                println!("  * {}", name);
-            }
-        }
-        if let Some(p) = device.parent() {
-            println!(
-                "    * name = {}",
-                p.property_value(&name_property_key).map_or("<none>", |s| s.to_str().expect("decoding failed"))
-            );
-            println!(
-                "    * devtype = {}",
-                p.devtype().map_or("<none>", |s| s.to_str().expect("decoding failed"))
-            );
-            println!(
-                "    * devnode = {}",
-                p.devnode().map_or("<none>", |s| s.to_str().expect("decoding failed"))
-            );
-            println!("    * initialized ? {}", p.is_initialized());
-            for p in p.iter_properties() {
-                let name = p.name().expect("no name?").to_str().expect("decoding failed");
-                if let Some(v) = p.value() {
-                    println!("    * {} = {}", name, v.to_str().expect("decoding failed value"));
-                } else {
-                    println!("    * {}", name);
-                }
-            }
-        }*/
-    }*/
     let monitor = udev::Monitor::from_netlink(
         &udev, unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"udev\0") }
     ).expect("Failed to create udev monitor");
@@ -340,6 +336,7 @@ fn main() {
                 if !event_device_regex.is_match(devnode) { continue; }
                 let action = device.action().to_str().expect("action decoding failed");
                 println!("Incoming Device Event: {}", action);
+                // diag_device(&device);
 
                 match action {
                     "add" => {
@@ -362,39 +359,6 @@ fn main() {
                     },
                     a => debug!("Unknown device action: {:?}", a)
                 }
-                
-                /*for p in device.iter_properties() {
-                    let name = p.name().expect("no name?").to_str().expect("decoding failed");
-                    if let Some(v) = p.value() {
-                        println!("  * {} = {}", name, v.to_str().expect("decoding failed value"));
-                    } else {
-                        println!("  * {}", name);
-                    }
-                }
-                if let Some(p) = device.parent() {
-                    println!(
-                        "    * name = {}",
-                        p.property_value(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"NAME\0") })
-                            .map_or("<none>", |s| s.to_str().expect("decoding failed"))
-                    );
-                    println!(
-                        "    * devtype = {}",
-                        p.devtype().map_or("<none>", |s| s.to_str().expect("decoding failed"))
-                    );
-                    println!(
-                        "    * devnode = {}",
-                        p.devnode().map_or("<none>", |s| s.to_str().expect("decoding failed"))
-                    );
-                    println!("    * initialized ? {}", p.is_initialized());
-                    for p in p.iter_properties() {
-                        let name = p.name().expect("no name?").to_str().expect("decoding failed");
-                        if let Some(v) = p.value() {
-                            println!("    * {} = {}", name, v.to_str().expect("decoding failed value"));
-                        } else {
-                            println!("    * {}", name);
-                        }
-                    }
-                }*/
             } else {
                 let ev = match devmgr.get_device(devmgr.translate_epoll_value(e.u64)) {
                     Some(d) => match d.read() {
