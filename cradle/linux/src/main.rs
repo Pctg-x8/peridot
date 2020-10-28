@@ -202,21 +202,21 @@ fn diag_device(d: &udev::Device) {
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-pub struct EventDevice(libc::c_int);
+pub struct EventDevice { fd: libc::c_int, is_mouse: bool }
 impl EventDevice {
-    pub fn open(path: &std::ffi::CStr) -> std::io::Result<Self> {
+    pub fn open(path: &std::ffi::CStr, is_mouse: bool) -> std::io::Result<Self> {
         let fp = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
-        if fp < 0 { Err(std::io::Error::last_os_error()) } else { Ok(Self(fp)) }
+        if fp < 0 { Err(std::io::Error::last_os_error()) } else { Ok(Self { fd: fp, is_mouse }) }
     }
 
     pub fn read(&self) -> std::io::Result<kernel_input::InputEvent> {
         let mut ev = std::mem::MaybeUninit::uninit();
-        let r = unsafe { libc::read(self.0, ev.as_mut_ptr() as _, std::mem::size_of::<kernel_input::InputEvent>()) };
+        let r = unsafe { libc::read(self.fd, ev.as_mut_ptr() as _, std::mem::size_of::<kernel_input::InputEvent>()) };
         if r < 0 { Err(std::io::Error::last_os_error()) } else { Ok(unsafe { ev.assume_init() }) }
     }
 }
 impl Drop for EventDevice {
-    fn drop(&mut self) { unsafe { libc::close(self.0); } }
+    fn drop(&mut self) { unsafe { libc::close(self.fd); } }
 }
 
 pub struct EventDeviceManager {
@@ -232,7 +232,7 @@ impl EventDeviceManager {
         let mut devices_by_id = BTreeMap::new();
         let mut device_id_by_node = HashMap::with_capacity(initial_devices.size_hint().0);
         for (n, (node, d)) in initial_devices.enumerate() {
-            epoll.add_fd(d.0, libc::EPOLLIN as _, n as u64 + epoll_id_resv)
+            epoll.add_fd(d.fd, libc::EPOLLIN as _, n as u64 + epoll_id_resv)
                 .expect("Failed to register initial device fd to epoll");
             devices_by_id.insert(n as u64, d);
             device_id_by_node.insert(node, n as u64);
@@ -250,7 +250,7 @@ impl EventDeviceManager {
     /// Returns assigned id(in EventDeviceManager)
     pub fn add(&mut self, node: String, device: EventDevice, epoll: &epoll::Epoll) -> u64 {
         let id = self.id_free_list.pop_first().unwrap_or_else(|| self.devices_by_id.len() as u64);
-        epoll.add_fd(device.0, libc::EPOLLIN as _, id + self.epoll_id_resv)
+        epoll.add_fd(device.fd, libc::EPOLLIN as _, id + self.epoll_id_resv)
             .expect("Failed to register device fd to epoll");
         self.devices_by_id.insert(id, device);
         self.device_id_by_node.insert(node, id);
@@ -260,7 +260,7 @@ impl EventDeviceManager {
     pub fn remove(&mut self, id: u64, epoll: &epoll::Epoll) {
         if let Some(d) = self.devices_by_id.remove(&id) {
             self.id_free_list.insert(id);
-            epoll.remove_fd(d.0).expect("Failed to unregister device fd from epoll");
+            epoll.remove_fd(d.fd).expect("Failed to unregister device fd from epoll");
         }
     }
 
@@ -297,6 +297,7 @@ fn main() {
     enumerator.add_match_subsystem(&target_subsystem_name).expect("Failed to set subsystem filter");
     enumerator.add_match_is_initialized().expect("FAiled to set initialized filter");
     enumerator.scan_devices().expect("Failed to scan devices");
+    let id_input_mouse = unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"ID_INPUT_MOUSE\0") };
     let event_device_regex = regex::Regex::new("event[0-9]+$").expect("invalid regex");
     let initial_devices = enumerator.iter().filter_map(|e| {
         let syspath = e.name().expect("no name?");
@@ -307,14 +308,13 @@ fn main() {
         };
         let devnode = devnode_c.to_str().expect("decoding failed");
         if !event_device_regex.is_match(devnode) { return None; }
+        let device_name = lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"));
         // diag_device(&device);
+        let is_mouse = device.property_value(id_input_mouse).map_or(false, |s| s.to_str() == Ok("1"));
 
-        info!(
-            "Registering Input Device: {} ({})",
-            devnode, lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
-        );
+        info!("Registering Input Device: {} ({})", devnode, device_name);
         
-        Some((String::from(devnode), EventDevice::open(devnode_c).expect("Failed to open event device")))
+        Some((String::from(devnode), EventDevice::open(devnode_c, is_mouse).expect("Failed to open event device")))
     });
     let monitor = udev::Monitor::from_netlink(
         &udev, unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"udev\0") }
@@ -359,36 +359,30 @@ fn main() {
                 let devnode = devnode_c.to_str().expect("decoding failed");
                 if !event_device_regex.is_match(devnode) { continue; }
                 let action = device.action().to_str().expect("action decoding failed");
+                let device_name = lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"));
                 println!("Incoming Device Event: {}", action);
                 // diag_device(&device);
 
                 match action {
                     "add" => {
-                        info!(
-                            "Registering Input Device: {} ({})",
-                            devnode,
-                            lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
-                        );
+                        let is_mouse = device.property_value(id_input_mouse).map_or(false, |s| s.to_str() == Ok("1"));
+                        info!("Registering Input Device: {} ({})", devnode, device_name);
                         devmgr.add(
                             String::from(devnode),
-                            EventDevice::open(devnode_c).expect("Failed to open added device"),
+                            EventDevice::open(devnode_c, is_mouse).expect("Failed to open added device"),
                             &ep
                         );
                     },
                     "remove" => if let Some(id) = devmgr.lookup_id_by_node(devnode) {
-                        info!(
-                            "Unregistering Input Device: {} ({})",
-                            devnode,
-                            lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"))
-                        );
+                        info!( "Unregistering Input Device: {} ({})", devnode, device_name);
                         devmgr.remove(id, &ep);
                     },
                     a => debug!("Unknown device action: {:?}", a)
                 }
             } else {
-                let ev = match devmgr.get_device(devmgr.translate_epoll_value(e.u64)) {
+                let (ev, is_mouse) = match devmgr.get_device(devmgr.translate_epoll_value(e.u64)) {
                     Some(d) => match d.read() {
-                        Ok(ev) => ev,
+                        Ok(ev) => (ev, d.is_mouse),
                         Err(e) => {
                             error!("Failed to read from device: {:?}", e);
                             continue;
@@ -402,6 +396,9 @@ fn main() {
                 };
                 
                 if ev.type_ == kernel_input::EventType::Synchronize as u16 {
+                    // ignore dataframe sync
+                    if ev.code == 0 { continue; }
+
                     println!("syn event: code={}, value={}", ev.code, ev.value);
                 } else if ev.type_ == kernel_input::EventType::Key as u16 {
                     let is_press = match ev.value {
@@ -412,13 +409,28 @@ fn main() {
 
                     if let Some(b) = map_key_button(ev.code) {
                         gd.engine.input().dispatch_button_event(b, is_press);
+                    } else {
+                        debug!("key event: code={}", ev.code);
                     }
                 } else if ev.type_ == kernel_input::EventType::Relative as u16 {
-                    println!("relative event: code={}, value={}", ev.code, ev.value);
+                    if let Some(b) = if is_mouse { map_mouse_input_rel(ev.code) } else { map_input_rel(ev.code) } {
+                        gd.engine.input().dispatch_analog_event(b, ev.value as _, false);
+                    } else {
+                        debug!("relative event: code={}, value={}", ev.code, ev.value);
+                    }
                 } else if ev.type_ == kernel_input::EventType::Absolute as u16 {
-                    println!("absolute event: code={}, value={}", ev.code, ev.value);
+                    // ignore misc event from mouse, bitmask of pressed buttons
+                    if is_mouse && ev.code == kernel_input::AbsoluteAxes::Misc as u16 { continue; }
+                    
+                    if let Some(b) = if is_mouse { map_mouse_input_abs(ev.code) } else { map_input_abs(ev.code) } {
+                        gd.engine.input().dispatch_analog_event(b, ev.value as _, true);
+                    } else {
+                        debug!("absolute event: code={}, value={}", ev.code, ev.value);
+                    }
                 } else {
-                    println!("Other event: type={}, code={}, value={}", ev.type_, ev.code, ev.value);
+                    // ignore keyscan misc
+                    if ev.type_ == kernel_input::EventType::Misc as u16 && ev.code == 4 { continue; }
+                    debug!("Other event: type={}, code={}, value={}", ev.type_, ev.code, ev.value);
                 }
             }
         }
@@ -432,5 +444,75 @@ fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
     }
 
     debug!("key event: code={}", key);
+    None
+}
+fn map_mouse_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
+    if code == kernel_input::RelativeAxes::X as u16 {
+        return Some(peridot::NativeAnalogInput::MouseX);
+    }
+    if code == kernel_input::RelativeAxes::Y as u16 {
+        return Some(peridot::NativeAnalogInput::MouseY);
+    }
+    if code == kernel_input::RelativeAxes::Wheel as u16 {
+        return Some(peridot::NativeAnalogInput::ScrollWheel);
+    }
+
+    map_input_rel(code)
+}
+fn map_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
+    if code == kernel_input::RelativeAxes::X as u16 {
+        return Some(peridot::NativeAnalogInput::StickX(0));
+    }
+    if code == kernel_input::RelativeAxes::RX as u16 {
+        return Some(peridot::NativeAnalogInput::StickX(1));
+    }
+    if code == kernel_input::RelativeAxes::Y as u16 {
+        return Some(peridot::NativeAnalogInput::StickY(0));
+    }
+    if code == kernel_input::RelativeAxes::RY as u16 {
+        return Some(peridot::NativeAnalogInput::StickY(1));
+    }
+    if code == kernel_input::RelativeAxes::Z as u16 {
+        return Some(peridot::NativeAnalogInput::StickZ(0));
+    }
+    if code == kernel_input::RelativeAxes::RZ as u16 {
+        return Some(peridot::NativeAnalogInput::StickZ(1));
+    }
+
+    None
+}
+fn map_mouse_input_abs(code: u16) -> Option<peridot::NativeAnalogInput> {
+    if code == kernel_input::AbsoluteAxes::X as u16 {
+        return Some(peridot::NativeAnalogInput::MouseX);
+    }
+    if code == kernel_input::AbsoluteAxes::Y as u16 {
+        return Some(peridot::NativeAnalogInput::MouseY);
+    }
+    if code == kernel_input::AbsoluteAxes::Wheel as u16 {
+        return Some(peridot::NativeAnalogInput::ScrollWheel);
+    }
+
+    map_input_abs(code)
+}
+fn map_input_abs(code: u16) -> Option<peridot::NativeAnalogInput> {
+    if code == kernel_input::AbsoluteAxes::X as u16 {
+        return Some(peridot::NativeAnalogInput::StickX(0));
+    }
+    if code == kernel_input::AbsoluteAxes::RX as u16 {
+        return Some(peridot::NativeAnalogInput::StickX(1));
+    }
+    if code == kernel_input::AbsoluteAxes::Y as u16 {
+        return Some(peridot::NativeAnalogInput::StickY(0));
+    }
+    if code == kernel_input::AbsoluteAxes::RY as u16 {
+        return Some(peridot::NativeAnalogInput::StickY(1));
+    }
+    if code == kernel_input::AbsoluteAxes::Z as u16 {
+        return Some(peridot::NativeAnalogInput::StickZ(0));
+    }
+    if code == kernel_input::AbsoluteAxes::RZ as u16 {
+        return Some(peridot::NativeAnalogInput::StickZ(1));
+    }
+
     None
 }
