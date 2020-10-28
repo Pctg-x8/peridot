@@ -439,6 +439,41 @@ fn main() {
 }
 
 fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
+    use peridot::NativeButtonInput::Character as C;
+    const KEYBOARD_MAP: &[peridot::NativeButtonInput] = &[
+        peridot::NativeButtonInput::Esc,
+        C('1'), C('2'), C('3'), C('4'), C('5'), C('6'), C('7'), C('8'), C('9'), C('0'), C('-'), C('='),
+        peridot::NativeButtonInput::Backspace,
+        C('\t'), C('Q'), C('W'), C('E'), C('R'), C('T'), C('Y'), C('U'), C('I'), C('O'), C('P'), C('{'), C('}'),
+        peridot::NativeButtonInput::Enter, peridot::NativeButtonInput::LeftControl,
+        C('A'), C('S'), C('D'), C('F'), C('G'), C('H'), C('J'), C('K'), C('L'), C(';'), C('\''), C('`'),
+        peridot::NativeButtonInput::LeftShift, C('\\'),
+        C('Z'), C('X'), C('C'), C('V'), C('B'), C('N'), C('M'), C(','), C('.'), C('/'),
+        peridot::NativeButtonInput::RightShift, C('*'), peridot::NativeButtonInput::LeftAlt, C(' '),
+        peridot::NativeButtonInput::CapsLock,
+        peridot::NativeButtonInput::FunctionKey(1), peridot::NativeButtonInput::FunctionKey(2),
+        peridot::NativeButtonInput::FunctionKey(3), peridot::NativeButtonInput::FunctionKey(4),
+        peridot::NativeButtonInput::FunctionKey(5), peridot::NativeButtonInput::FunctionKey(6),
+        peridot::NativeButtonInput::FunctionKey(7), peridot::NativeButtonInput::FunctionKey(8),
+        peridot::NativeButtonInput::FunctionKey(9), peridot::NativeButtonInput::FunctionKey(10)
+    ];
+
+    if (1 ..= 68).contains(&key) { return Some(KEYBOARD_MAP[key as usize - 1]); }
+    if key == 85 { return Some(peridot::NativeButtonInput::ZenkakuHankaku); }
+    if key == 87 { return Some(peridot::NativeButtonInput::FunctionKey(11)); }
+    if key == 88 { return Some(peridot::NativeButtonInput::FunctionKey(12)); }
+    if key == 97 { return Some(peridot::NativeButtonInput::RightControl); }
+    if key == 100 { return Some(peridot::NativeButtonInput::RightAlt); }
+    if key == 103 { return Some(peridot::NativeButtonInput::UpArrow); }
+    if key == 105 { return Some(peridot::NativeButtonInput::LeftArrow); }
+    if key == 106 { return Some(peridot::NativeButtonInput::RightArrow); }
+    if key == 108 { return Some(peridot::NativeButtonInput::DownArrow); }
+    if key == 125 { return Some(peridot::NativeButtonInput::LeftMeta); }
+    if key == 126 { return Some(peridot::NativeButtonInput::RightMeta); }
+    if (183 ..= 194).contains(&key) {
+        return Some(peridot::NativeButtonInput::FunctionKey(13 + (key - 183) as u8));
+    }
+
     if (kernel_input::Key::Left as u16 ..= kernel_input::Key::Task as u16).contains(&key) {
         return Some(peridot::NativeButtonInput::Mouse((key - kernel_input::Key::Left as u16) as _));
     }
