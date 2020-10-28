@@ -399,7 +399,7 @@ fn main() {
                     // ignore dataframe sync
                     if ev.code == 0 { continue; }
 
-                    println!("syn event: code={}, value={}", ev.code, ev.value);
+                    debug!("syn event: code={}, value={}", ev.code, ev.value);
                 } else if ev.type_ == kernel_input::EventType::Key as u16 {
                     let is_press = match ev.value {
                         0 => false,
@@ -421,7 +421,7 @@ fn main() {
                 } else if ev.type_ == kernel_input::EventType::Absolute as u16 {
                     // ignore misc event from mouse, bitmask of pressed buttons
                     if is_mouse && ev.code == kernel_input::AbsoluteAxes::Misc as u16 { continue; }
-                    
+
                     if let Some(b) = if is_mouse { map_mouse_input_abs(ev.code) } else { map_input_abs(ev.code) } {
                         gd.engine.input().dispatch_analog_event(b, ev.value as _, true);
                     } else {
