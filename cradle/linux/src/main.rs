@@ -269,9 +269,27 @@ impl EventDeviceManager {
     pub fn get_device(&self, id: u64) -> Option<&EventDevice> { self.devices_by_id.get(&id) }
 }
 
+pub struct InputNativeLink {
+    ws_ref: std::rc::Weak<X11>
+}
+impl peridot::NativeInput for InputNativeLink {
+    fn get_pointer_position(&self, _index: u32) -> Option<(f32, f32)> {
+        if let Some(ws) = self.ws_ref.upgrade() {
+            let ck = xcb::query_pointer(&ws.con, ws.mainwnd_id);
+            ws.con.flush();
+            let ptrinfo = ck.get_reply().expect("Failed to query pointer to xcb");
+            println!("ptrinfo: same_screen ? {}", ptrinfo.same_screen());
+            // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
+            Some((ptrinfo.win_x() as _, ptrinfo.win_y() as f32 - 5.0))
+        } else {
+            None
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
-    let x11 = X11::init();
+    let x11 = std::rc::Rc::new(X11::init());
 
     let udev = udev::Context::new().expect("Failed to initialize udev");
     let enumerator = udev::Enumerate::new(&udev).expect("Failed to create udev Enumerator");
@@ -310,6 +328,7 @@ fn main() {
     let monitor_fd = monitor.fd().expect("Failed to retrieve udev monitor fd");
 
     let mut gd = GameDriver::new(WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id });
+    gd.engine.input_mut().set_nativelink(Box::new(InputNativeLink { ws_ref: std::rc::Rc::downgrade(&x11) }));
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
     ep.add_fd(x11.fd(), libc::EPOLLIN as _, 0).expect("Failed to add x11 fd");
@@ -381,9 +400,37 @@ fn main() {
                         continue;
                     }
                 };
-                println!("event: type={}, code={}, value={}", ev.type_, ev.code, ev.value);
+                
+                if ev.type_ == kernel_input::EventType::Synchronize as u16 {
+                    println!("syn event: code={}, value={}", ev.code, ev.value);
+                } else if ev.type_ == kernel_input::EventType::Key as u16 {
+                    let is_press = match ev.value {
+                        0 => false,
+                        1 => true,
+                        _ => continue
+                    };
+
+                    if let Some(b) = map_key_button(ev.code) {
+                        gd.engine.input().dispatch_button_event(b, is_press);
+                    }
+                } else if ev.type_ == kernel_input::EventType::Relative as u16 {
+                    println!("relative event: code={}, value={}", ev.code, ev.value);
+                } else if ev.type_ == kernel_input::EventType::Absolute as u16 {
+                    println!("absolute event: code={}, value={}", ev.code, ev.value);
+                } else {
+                    println!("Other event: type={}, code={}, value={}", ev.type_, ev.code, ev.value);
+                }
             }
         }
     }
     println!("Terminating Program...");
+}
+
+fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
+    if (kernel_input::Key::Left as u16 ..= kernel_input::Key::Task as u16).contains(&key) {
+        return Some(peridot::NativeButtonInput::Mouse((key - kernel_input::Key::Left as u16) as _));
+    }
+
+    debug!("key event: code={}", key);
+    None
 }
