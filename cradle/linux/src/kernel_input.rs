@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 
 #[repr(C)]
 pub struct InputEvent {
