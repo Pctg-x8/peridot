@@ -15,22 +15,20 @@ use std::mem::MaybeUninit;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
 
+mod presenter; use self::presenter::Presenter;
+
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
 fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
 
-pub struct GameDriver
-{
+pub struct GameDriver {
     base: peridot::Engine<NativeLink>,
     usercode: userlib::Game<NativeLink>,
     current_size: peridot::math::Vector2<usize>
 }
-impl GameDriver
-{
-    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self
-    {
-        let nl = NativeLink
-        {
+impl GameDriver {
+    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
+        let nl = NativeLink {
             al: AssetProvider::new(),
             window,
             input: InputHandler::new()
@@ -42,24 +40,20 @@ impl GameDriver
         let usercode = userlib::Game::init(&base);
         base.postinit();
 
-        GameDriver
-        {
+        GameDriver {
             base, usercode, current_size: init_size
         }
     }
 
-    fn update(&mut self)
-    {
+    fn update(&mut self) {
         self.base.do_update(&mut self.usercode);
     }
-    fn resize(&mut self, size: peridot::math::Vector2<usize>)
-    {
+    fn resize(&mut self, size: peridot::math::Vector2<usize>) {
         self.base.do_resize_backbuffer(size, &mut self.usercode);
     }
 }
 
-fn main()
-{
+fn main() {
     env_logger::init();
 
     unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
@@ -81,11 +75,16 @@ fn main()
         userlib::Game::<NativeLink>::VERSION.2);
     let wname_c = std::ffi::CString::new(wname).expect("Unable to generate a c-style string");
 
+    let wsex = if cfg!(feature = "transparent") {
+        WS_EX_APPWINDOW | winapi::um::winuser::WS_EX_NOREDIRECTIONBITMAP
+    } else {
+        WS_EX_APPWINDOW
+    };
     let style = WS_OVERLAPPEDWINDOW;
     let mut wrect = RECT { left: 0, top: 0, right: 640, bottom: 480 };
     unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
     let w = unsafe {
-        CreateWindowExA(WS_EX_APPWINDOW, wcatom as _, wname_c.as_ptr(), style,
+        CreateWindowExA(wsex, wcatom as _, wname_c.as_ptr(), style,
             CW_USEDEFAULT, CW_USEDEFAULT, wrect.right - wrect.left, wrect.bottom - wrect.top,
             std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
     };
@@ -134,7 +133,6 @@ fn process_message_all() -> bool
 }
 
 use std::rc::Rc;
-use bedrock as br;
 use std::path::PathBuf;
 
 struct AssetProvider { base: PathBuf }
@@ -172,62 +170,7 @@ impl peridot::PlatformAssetLoader for AssetProvider
         return std::fs::File::open(&p);
     }
 }
-struct Presenter {
-    _window: HWND,
-    sc: peridot::IntegratedSwapchain
-}
-impl Presenter {
-    fn new(g: &peridot::Graphics, window: HWND) -> Self {
-        if !g.adapter().win32_presentation_support(g.graphics_queue_family_index()) {
-            panic!("WindowSubsystem does not support Vulkan Rendering");
-        }
-        let s = br::Surface::new_win32(g.instance(), module_handle(), window).expect("Failed to create Surface");
-        let support = g.adapter().surface_support(g.graphics_queue_family_index(), &s)
-            .expect("Failed to query Surface Support");
-        if !support {
-            panic!("Vulkan does not support this surface to render");
-        }
 
-        Presenter {
-            _window: window,
-            sc: peridot::IntegratedSwapchain::new(g, s, peridot::math::Vector2(0, 0))
-        }
-    }
-}
-impl peridot::PlatformPresenter for Presenter {
-    fn format(&self) -> br::vk::VkFormat { self.sc.format() }
-    fn backbuffer_count(&self) -> usize { self.sc.backbuffer_count() }
-    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.sc.backbuffer(index) }
-
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
-        self.sc.emit_initialize_backbuffer_commands(recorder)
-    }
-    fn next_backbuffer_index(&mut self) -> br::Result<u32> { self.sc.acquire_next_backbuffer_index() }
-    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
-        self.sc.requesting_backbuffer_layout()
-    }
-    fn render_and_present<'s>(
-        &'s mut self,
-        g: &peridot::Graphics,
-        last_render_fence: &br::Fence,
-        present_queue: &br::Queue,
-        backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>
-    ) -> br::Result<()> {
-        self.sc.render_and_present(
-            g, last_render_fence, present_queue, backbuffer_index, render_submission, update_submission
-        )
-    }
-    /// Returns whether re-initializing is needed for backbuffer resources
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
-        self.sc.resize(g, new_size);
-        // WSI integrated swapchain needs reinitializing backbuffer resource
-        true
-    }
-    // unimplemented?
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> { peridot::math::Vector2(0, 0) }
-}
 struct InputHandler(Option<Rc<peridot::InputProcess>>);
 impl InputHandler
 {
@@ -250,8 +193,16 @@ impl peridot::NativeLinker for NativeLink
     type Presenter = Presenter;
     type InputProcessor = InputHandler;
 
+    #[cfg(not(feature = "transparent"))]
     fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_win32_surface"] }
+    #[cfg(feature = "transparent")]
+    fn instance_extensions(&self) -> Vec<&str> { vec![] }
+    #[cfg(not(feature = "transparent"))]
     fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain"] }
+    #[cfg(feature = "transparent")]
+    fn device_extensions(&self) -> Vec<&str> {
+        vec!["VK_KHR_external_memory_win32", "VK_KHR_external_semaphore_win32"]
+    }
 
     fn asset_loader(&self) -> &AssetProvider { &self.al }
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter { Presenter::new(g, self.window) }
