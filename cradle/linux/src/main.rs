@@ -39,6 +39,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> { self.get(path, ext) }
 }
+
 pub struct PlatformInputHandler { processor: Option<Rc<peridot::InputProcess>> }
 impl PlatformInputHandler
 {
@@ -54,38 +55,76 @@ impl peridot::InputProcessPlugin for PlatformInputHandler
         self.processor = Some(processor.clone());
     }
 }
+
 pub struct WindowHandler { dp: *mut xcb::ffi::xcb_connection_t, vis: xcb::Visualid, wid: xcb::Window }
-impl peridot::PlatformRenderTarget for WindowHandler
-{
-    fn surface_extension_name(&self) -> &'static str { "VK_KHR_xcb_surface" }
-    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-        -> br::Result<peridot::SurfaceInfo>
-    {
-        if !pd.xcb_presentation_support(renderer_queue_family, self.dp, self.vis)
-        {
-            panic!("Vulkan Presentation is not supported");
+pub struct Presenter {
+    sc: peridot::IntegratedSwapchain
+}
+impl Presenter {
+    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &WindowHandler) -> Self {
+        if !g.adapter().xcb_presentation_support(renderer_queue_family, w.dp, w.vis) {
+            panic!("Vulkan Presentation is not supported!");
         }
-        let so = br::Surface::new_xcb(&vi, self.dp, self.wid)?;
-        if !pd.surface_support(renderer_queue_family, &so)?
-        {
+        let so = br::Surface::new_xcb(g.instance(), w.dp, w.wid).expect("Failed to create Surface object");
+        if !g.adapter().surface_support(renderer_queue_family, &so).expect("Failed to query surface support") {
             panic!("Vulkan Surface is not supported");
         }
-        return peridot::SurfaceInfo::gather_info(pd, so);
-    }
-    fn current_geometry_extent(&self) -> (usize, usize)
-    {
-        (120, 120)
+        let sc = peridot::IntegratedSwapchain::new(g, so, peridot::math::Vector2(120, 120));
+
+        Presenter { sc }
     }
 }
+impl peridot::PlatformPresenter for Presenter {
+    fn format(&self) -> br::vk::VkFormat { self.sc.format() }
+    fn backbuffer_count(&self) -> usize { self.sc.backbuffer_count() }
+    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.sc.backbuffer(index) }
+    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.sc.requesting_backbuffer_layout()
+    }
+    
+    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+        self.sc.emit_initialize_backbuffer_commands(recorder)
+    }
+    fn next_backbuffer_index(&mut self) -> br::Result<u32> {
+        self.sc.acquire_next_backbuffer_index()
+    }
+    fn render_and_present<'s>(
+        &'s mut self,
+        g: &peridot::Graphics,
+        last_render_fence: &br::Fence,
+        present_queue: &br::Queue,
+        backbuffer_index: u32,
+        render_submission: br::SubmissionBatch<'s>,
+        update_submission: Option<br::SubmissionBatch<'s>>
+    ) -> br::Result<()> {
+        self.sc.render_and_present(
+            g, last_render_fence, present_queue, backbuffer_index, render_submission, update_submission
+        )
+    }
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+        self.sc.resize(g, new_size);
+        // WSI integrated swapchain needs reinitializing backbuffer resource
+        true
+    }
+
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+        peridot::math::Vector2(120, 120)
+    }
+}
+
 pub struct NativeLink { al: PlatformAssetLoader, wh: WindowHandler, ip: PlatformInputHandler }
-impl peridot::NativeLinker for NativeLink
-{
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
-    type RenderTargetProvider = WindowHandler;
+    type Presenter = Presenter;
     type InputProcessor = PlatformInputHandler;
 
+    fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_xcb_surface"] }
+    fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain"] }
+
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
-    fn render_target_provider(&self) -> &WindowHandler { &self.wh }
+    fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
+        Presenter::new(g, g.graphics_queue_family_index(), &self.wh)
+    }
     fn input_processor_mut(&mut self) -> &mut PlatformInputHandler { &mut self.ip }
 }
 
