@@ -70,12 +70,13 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         e.input_mut().map(peridot::NativeAnalogInput::MouseX, INPUT_PLANE_LEFT);
         e.input_mut().map(peridot::NativeAnalogInput::MouseY, INPUT_PLANE_TOP);
 
-        let renderpass = peridot::RenderPassTemplates::single_render(e.backbuffer_format())
-            .create(e.graphics())
-            .expect("Failed to create RenderPass");
-        let framebuffers: Vec<_> = e.backbuffers().iter()
-            .map(|b| br::Framebuffer::new(&renderpass, &[b], b.size(), 1).expect("Failed to create Framebuffer"))
-            .collect();
+        let renderpass = peridot::RenderPassTemplates::single_render(
+            e.backbuffer_format(), e.requesting_backbuffer_layout().0
+        ).create(e.graphics()).expect("Failed to create RenderPass");
+        let framebuffers: Vec<_> = (0 .. e.backbuffer_count()).map(|bb_index| {
+            let b = e.backbuffer(bb_index).expect("no backbuffer?");
+            br::Framebuffer::new(&renderpass, &[&b], b.size(), 1).expect("Failed to create Framebuffer")
+        }).collect();
         
         let smp = br::SamplerBuilder::default().create(e.graphics()).expect("Failed to create sampler");
         let dsl = br::DescriptorSetLayout::new(
@@ -106,7 +107,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .expect("Failed to create PipelineLayout"));
 
         let scissors = [
-            br::vk::VkRect2D::from(br::Extent2D::clone(e.backbuffers()[0].size().as_ref()))
+            br::vk::VkRect2D::from(br::Extent2D::clone(e.backbuffer(0).expect("empty backbuffers").size().as_ref()))
         ];
         let viewports = [
             br::Viewport::from_rect_with_depth_range(&scissors[0], 0.0 .. 1.0).into_inner()
@@ -170,7 +171,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         dsub.submit(e.graphics());
 
         let main_commands = peridot::CommandBundle::new(
-            e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffers().len()
+            e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffer_count()
         ).expect("Failed to allocate render commands");
         for (b, fb) in main_commands.iter().zip(&framebuffers) {
             let mut rec = b.begin().expect("Failed to begin recording main commands");
@@ -182,7 +183,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             rec.end_render_pass();
         }
 
-        let &br::Extent3D(bb_width, bb_height, _) = e.backbuffers()[0].size();
+        let &br::Extent3D(bb_width, bb_height, _) = e.backbuffer(0).expect("empty backbuffers").size();
         let update_data = UniformValues {
             mat: peridot::math::Camera {
                 projection: peridot::math::ProjectionMethod::UI {
