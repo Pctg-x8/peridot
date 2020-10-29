@@ -17,25 +17,23 @@ mod input;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
 
+mod presenter; use self::presenter::Presenter;
+
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
 fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
 
-pub struct GameDriver
-{
+pub struct GameDriver {
     base: peridot::Engine<NativeLink>,
     usercode: userlib::Game<NativeLink>,
     current_size: peridot::math::Vector2<usize>,
     ri_handler: self::input::RawInputHandler
 }
-impl GameDriver
-{
-    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self
-    {
-        let nl = NativeLink
-        {
+impl GameDriver {
+    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
+        let nl = NativeLink {
             al: AssetProvider::new(),
-            prt: RenderTargetProvider(window)
+            window
         };
         let mut base = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
@@ -46,25 +44,20 @@ impl GameDriver
         base.input_mut().set_nativelink(Box::new(self::input::NativeInputHandler::new(window)));
         base.postinit();
 
-        GameDriver
-        {
-            base, usercode, current_size: init_size,
-            ri_handler
+        GameDriver {
+            base, usercode, current_size: init_size, rt_handler
         }
     }
 
-    fn update(&mut self)
-    {
+    fn update(&mut self) {
         self.base.do_update(&mut self.usercode);
     }
-    fn resize(&mut self, size: peridot::math::Vector2<usize>)
-    {
+    fn resize(&mut self, size: peridot::math::Vector2<usize>) {
         self.base.do_resize_backbuffer(size, &mut self.usercode);
     }
 }
 
-fn main()
-{
+fn main() {
     env_logger::init();
 
     unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
@@ -86,11 +79,16 @@ fn main()
         userlib::Game::<NativeLink>::VERSION.2);
     let wname_c = std::ffi::CString::new(wname).expect("Unable to generate a c-style string");
 
+    let wsex = if cfg!(feature = "transparent") {
+        WS_EX_APPWINDOW | winapi::um::winuser::WS_EX_NOREDIRECTIONBITMAP
+    } else {
+        WS_EX_APPWINDOW
+    };
     let style = WS_OVERLAPPEDWINDOW;
     let mut wrect = RECT { left: 0, top: 0, right: 640, bottom: 480 };
     unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
     let w = unsafe {
-        CreateWindowExA(WS_EX_APPWINDOW, wcatom as _, wname_c.as_ptr(), style,
+        CreateWindowExA(wsex, wcatom as _, wname_c.as_ptr(), style,
             CW_USEDEFAULT, CW_USEDEFAULT, wrect.right - wrect.left, wrect.bottom - wrect.top,
             std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
     };
@@ -146,7 +144,7 @@ fn process_message_all() -> bool
     true
 }
 
-use bedrock as br;
+use std::rc::Rc;
 use std::path::PathBuf;
 
 struct AssetProvider { base: PathBuf }
@@ -184,33 +182,24 @@ impl peridot::PlatformAssetLoader for AssetProvider
         return std::fs::File::open(&p);
     }
 }
-struct RenderTargetProvider(HWND);
-impl peridot::PlatformRenderTarget for RenderTargetProvider
-{
-    fn surface_extension_name(&self) -> &'static str { "VK_KHR_win32_surface" }
-    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-        -> br::Result<peridot::SurfaceInfo>
-    {
-        if !pd.win32_presentation_support(renderer_queue_family)
-        {
-            panic!("WindowSubsystem does not support Vulkan rendering");
-        }
-        let s = br::Surface::new_win32(vi, module_handle(), self.0)?;
-        if !pd.surface_support(renderer_queue_family, &s)?
-        {
-            panic!("Vulkan does not support this surface to render");
-        }
 
-        peridot::SurfaceInfo::gather_info(pd, s)
-    }
-    fn current_geometry_extent(&self) -> (usize, usize) { (0, 0) }
-}
-struct NativeLink { al: AssetProvider, prt: RenderTargetProvider }
+struct NativeLink { al: AssetProvider, window: HWND }
 impl peridot::NativeLinker for NativeLink
 {
     type AssetLoader = AssetProvider;
-    type RenderTargetProvider = RenderTargetProvider;
+    type Presenter = Presenter;
+
+    #[cfg(not(feature = "transparent"))]
+    fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_win32_surface"] }
+    #[cfg(feature = "transparent")]
+    fn instance_extensions(&self) -> Vec<&str> { vec![] }
+    #[cfg(not(feature = "transparent"))]
+    fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain"] }
+    #[cfg(feature = "transparent")]
+    fn device_extensions(&self) -> Vec<&str> {
+        vec!["VK_KHR_external_memory_win32", "VK_KHR_external_semaphore_win32"]
+    }
 
     fn asset_loader(&self) -> &AssetProvider { &self.al }
-    fn render_target_provider(&self) -> &RenderTargetProvider { &self.prt }
+    fn new_presenter(&self, g: &peridot::Graphics) -> Presenter { Presenter::new(g, self.window) }
 }

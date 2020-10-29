@@ -150,55 +150,83 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
         }
     }
 }
-pub struct PlatformRenderTargetHandler(*mut c_void);
-impl PlatformRenderTargetHandler
-{
-    fn new(o: *mut c_void) -> Self
-    {
-        PlatformRenderTargetHandler(o)
-    }
+fn acquire_view_size(view: *mut c_void) -> peridot::math::Vector2<usize> {
+    let NSRect { size, .. } = unsafe { msg_send![view as *mut objc::runtime::Object, frame] };
+    debug!("current geometry extent: {}/{}", size.width, size.height);
+    peridot::math::Vector2(size.width as _, size.height as _)
 }
-impl peridot::PlatformRenderTarget for PlatformRenderTargetHandler
-{
-    fn surface_extension_name(&self) -> &'static str { "VK_MVK_macos_surface" }
-    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-        -> br::Result<peridot::SurfaceInfo>
-    {
-        let obj = br::Surface::new_macos(vi, self.0 as *const _)?;
-        if !pd.surface_support(renderer_queue_family, &obj)?
-        {
+pub struct Presenter {
+    view_ptr: *mut c_void,
+    sc: peridot::IntegratedSwapchain
+}
+impl Presenter {
+    fn new(view_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
+        let obj = br::Surface::new_macos(g.instance(), view_ptr as *const _).expect("Failed to create Surface");
+        let support = g.adapter().surface_support(g.graphics_queue_family_index(), &obj)
+            .expect("Failed to query Surface Support");
+        if !support {
             panic!("Vulkan Rendering is not supported by this adapter.");
         }
-        return peridot::SurfaceInfo::gather_info(&pd, obj);
-    }
-    fn current_geometry_extent(&self) -> (usize, usize)
-    {
-        let NSRect { size, .. } = unsafe { msg_send![self.0 as *mut objc::runtime::Object, frame] };
-        debug!("current geometry extent: {}/{}", size.width, size.height);
-        (size.width as _, size.height as _)
+
+        Presenter {
+            view_ptr,
+            sc: peridot::IntegratedSwapchain::new(g, obj, acquire_view_size(view_ptr))
+        }
     }
 }
-pub struct NativeLink
-{
-    al: PlatformAssetLoader, prt: PlatformRenderTargetHandler
+impl peridot::PlatformPresenter for Presenter {
+    fn format(&self) -> br::vk::VkFormat { self.sc.format() }
+    fn backbuffer_count(&self) -> usize { self.sc.backbuffer_count() }
+    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.sc.backbuffer(index) }
+
+    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+        self.sc.emit_initialize_backbuffer_commands(recorder);
+    }
+    fn next_backbuffer_index(&mut self) -> br::Result<u32> {
+        self.sc.acquire_next_backbuffer_index()
+    }
+    fn render_and_present<'s>(
+        &'s mut self,
+        g: &peridot::Graphics,
+        last_render_fence: &br::Fence,
+        present_queue: &br::Queue,
+        backbuffer_index: u32,
+        render_submission: br::SubmissionBatch<'s>,
+        update_submission: Option<br::SubmissionBatch<'s>>
+    ) -> br::Result<()> {
+        self.sc.render_and_present(
+            g, last_render_fence, present_queue, backbuffer_index, render_submission, update_submission
+        )
+    }
+    /// Returns whether re-initializing is needed for backbuffer resources
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+        self.sc.resize(g, new_size);
+        // WSI integrated swapchain needs reinitializing backbuffer resource
+        true
+    }
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> { acquire_view_size(self.view_ptr) }
 }
-impl NativeLink
-{
-    pub fn new(rt_view: *mut c_void) -> Self
-    {
-        NativeLink
-        {
-            al: PlatformAssetLoader::new(), prt: PlatformRenderTargetHandler::new(rt_view)
+pub struct NativeLink {
+    rt_view: *mut c_void,
+    al: PlatformAssetLoader
+}
+impl NativeLink {
+    pub fn new(rt_view: *mut c_void) -> Self {
+        NativeLink {
+            al: PlatformAssetLoader::new(), rt_view
         }
     }
 }
 impl peridot::NativeLinker for NativeLink
 {
     type AssetLoader = PlatformAssetLoader;
-    type RenderTargetProvider = PlatformRenderTargetHandler;
+    type Presenter = Presenter;
+
+    fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_MVK_macos_surface"] }
+    fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain"] }
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
-    fn render_target_provider(&self) -> &PlatformRenderTargetHandler { &self.prt }
+    fn new_presenter(&self, g: &peridot::Graphics) -> Presenter { Presenter::new(self.rt_view, g) }
 
     fn rendering_precision(&self) -> f32 { unsafe { nsscreen_backing_scale_factor() } }
 }
