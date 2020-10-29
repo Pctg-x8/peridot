@@ -278,9 +278,13 @@ impl peridot::NativeInput for InputNativeLink {
             let ck = xcb::query_pointer(&ws.con, ws.mainwnd_id);
             ws.con.flush();
             let ptrinfo = ck.get_reply().expect("Failed to query pointer to xcb");
-            println!("ptrinfo: same_screen ? {}", ptrinfo.same_screen());
-            // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
-            Some((ptrinfo.win_x() as _, ptrinfo.win_y() as f32 - 5.0))
+            if ptrinfo.same_screen() {
+                // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
+                Some((ptrinfo.win_x() as _, ptrinfo.win_y() as f32 - 5.0))
+            } else {
+                debug!("Fixme: Handle same_screen = false");
+                None
+            }
         } else {
             None
         }
@@ -438,7 +442,7 @@ fn main() {
             }
         }
     }
-    println!("Terminating Program...");
+    info!("Terminating Program...");
 }
 
 fn map_analog_key_emulation(key: u16) -> Option<peridot::NativeAnalogInput> {
