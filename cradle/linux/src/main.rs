@@ -409,6 +409,8 @@ fn main() {
 
                     if let Some(b) = map_key_button(ev.code) {
                         gd.engine.input().dispatch_button_event(b, is_press);
+                    } else if let Some(a) = map_analog_key_emulation(ev.code) {
+                        gd.engine.input().dispatch_analog_event(a, if is_press { 1.0 } else { 0.0 }, true);
                     } else {
                         debug!("key event: code={}", ev.code);
                     }
@@ -422,6 +424,7 @@ fn main() {
                     // ignore misc event from mouse, bitmask of pressed buttons
                     if is_mouse && ev.code == kernel_input::AbsoluteAxes::Misc as u16 { continue; }
 
+                    // Todo: hat -> pov button translation
                     if let Some(b) = if is_mouse { map_mouse_input_abs(ev.code) } else { map_input_abs(ev.code) } {
                         gd.engine.input().dispatch_analog_event(b, ev.value as _, true);
                     } else {
@@ -438,24 +441,40 @@ fn main() {
     println!("Terminating Program...");
 }
 
+fn map_analog_key_emulation(key: u16) -> Option<peridot::NativeAnalogInput> {
+    if key == 0x138 { return Some(peridot::NativeAnalogInput::LeftTrigger); }
+    if key == 0x139 { return Some(peridot::NativeAnalogInput::RightTrigger); }
+
+    None
+}
 fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
+    use peridot::NativeButtonInput::*;
     use peridot::NativeButtonInput::Character as C;
+
     const KEYBOARD_MAP: &[peridot::NativeButtonInput] = &[
-        peridot::NativeButtonInput::Esc,
+        Esc,
         C('1'), C('2'), C('3'), C('4'), C('5'), C('6'), C('7'), C('8'), C('9'), C('0'), C('-'), C('='),
-        peridot::NativeButtonInput::Backspace,
+        Backspace,
         C('\t'), C('Q'), C('W'), C('E'), C('R'), C('T'), C('Y'), C('U'), C('I'), C('O'), C('P'), C('{'), C('}'),
-        peridot::NativeButtonInput::Enter, peridot::NativeButtonInput::LeftControl,
+        Enter, LeftControl,
         C('A'), C('S'), C('D'), C('F'), C('G'), C('H'), C('J'), C('K'), C('L'), C(';'), C('\''), C('`'),
-        peridot::NativeButtonInput::LeftShift, C('\\'),
+        LeftShift, C('\\'),
         C('Z'), C('X'), C('C'), C('V'), C('B'), C('N'), C('M'), C(','), C('.'), C('/'),
-        peridot::NativeButtonInput::RightShift, C('*'), peridot::NativeButtonInput::LeftAlt, C(' '),
-        peridot::NativeButtonInput::CapsLock,
-        peridot::NativeButtonInput::FunctionKey(1), peridot::NativeButtonInput::FunctionKey(2),
-        peridot::NativeButtonInput::FunctionKey(3), peridot::NativeButtonInput::FunctionKey(4),
-        peridot::NativeButtonInput::FunctionKey(5), peridot::NativeButtonInput::FunctionKey(6),
-        peridot::NativeButtonInput::FunctionKey(7), peridot::NativeButtonInput::FunctionKey(8),
-        peridot::NativeButtonInput::FunctionKey(9), peridot::NativeButtonInput::FunctionKey(10)
+        RightShift, C('*'), LeftAlt, C(' '),
+        CapsLock,
+        FunctionKey(1), FunctionKey(2),
+        FunctionKey(3), FunctionKey(4),
+        FunctionKey(5), FunctionKey(6),
+        FunctionKey(7), FunctionKey(8),
+        FunctionKey(9), FunctionKey(10)
+    ];
+    const GAMEPAD_MAP: &[Option<peridot::NativeButtonInput>] = &[
+        Some(ButtonA), Some(ButtonB), Some(ButtonC),
+        Some(ButtonX), Some(ButtonY), None/*ButtonZ*/,
+        Some(ButtonL), Some(ButtonR),
+        None, None,
+        Some(ButtonSelect), Some(ButtonStart), None,
+        Some(Stick(0)), Some(Stick(1))
     ];
 
     if (1 ..= 68).contains(&key) { return Some(KEYBOARD_MAP[key as usize - 1]); }
@@ -473,7 +492,8 @@ fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
     if (183 ..= 194).contains(&key) {
         return Some(peridot::NativeButtonInput::FunctionKey(13 + (key - 183) as u8));
     }
-
+    if (0x130 ..= 0x13e).contains(&key) { return GAMEPAD_MAP[key as usize - 0x130]; }
+    
     if (kernel_input::Key::Left as u16 ..= kernel_input::Key::Task as u16).contains(&key) {
         return Some(peridot::NativeButtonInput::Mouse((key - kernel_input::Key::Left as u16) as _));
     }
