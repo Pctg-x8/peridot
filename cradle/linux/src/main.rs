@@ -1,13 +1,18 @@
+#![feature(map_first_last)]
 
 #[macro_use] extern crate log;
 
 use std::fs::File;
 use std::path::PathBuf;
 use std::io::Result as IOResult;
-use std::rc::Rc;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
+use std::os::unix::io::{AsRawFd, RawFd};
 
+mod udev;
+mod epoll;
+mod kernel_input;
+mod input;
 mod userlib;
 
 pub struct PlatformAssetLoader { basedir: PathBuf }
@@ -73,13 +78,11 @@ impl peridot::NativeLinker for NativeLink
 }
 
 #[allow(dead_code)]
-struct X11
-{
+pub struct X11 {
     con: xcb::Connection, wm_protocols: xcb::Atom, wm_delete_window: xcb::Atom, vis: xcb::Visualid,
     mainwnd_id: xcb::Window
 }
-impl X11
-{
+impl X11 {
     fn init() -> Self {
         let (con, screen_index) = xcb::Connection::connect(None).expect("Connecting with xcb");
         let s0 = con.get_setup().roots().nth(screen_index as _).expect("No screen");
@@ -108,6 +111,7 @@ impl X11
 
         X11 { con, wm_protocols, wm_delete_window, vis, mainwnd_id }
     }
+    fn fd(&self) -> RawFd { self.con.as_raw_fd() }
     fn show(&self) {
         xcb::map_window(&self.con, self.mainwnd_id);
         self.con.flush();
@@ -135,7 +139,7 @@ pub struct GameDriver {
     usercode: userlib::Game<NativeLink>
 }
 impl GameDriver {
-    fn new(wh: WindowHandler) -> Self {
+    fn new(wh: WindowHandler, x11: &std::rc::Rc<X11>) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
             wh
@@ -145,6 +149,7 @@ impl GameDriver {
             nl, userlib::Game::<NativeLink>::requested_features()
         );
         let usercode = userlib::Game::init(&mut engine);
+        engine.input_mut().set_nativelink(Box::new(input::InputNativeLink::new(x11)));
         engine.postinit();
 
         GameDriver { engine, usercode }
@@ -155,11 +160,38 @@ impl GameDriver {
 
 fn main() {
     env_logger::init();
-    let x11 = X11::init();
+    let x11 = std::rc::Rc::new(X11::init());
 
-    let mut gd = GameDriver::new(WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id });
+    let mut gd = GameDriver::new(
+        WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id },
+        &x11
+    );
+
+    let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
+    ep.add_fd(x11.fd(), libc::EPOLLIN as _, 0).expect("Failed to add x11 fd");
+    let mut input = input::InputSystem::new(&ep, 1, 2);
 
     x11.show();
-    while x11.process_all_events() { gd.update(); }
-    println!("Terminating Program...");
+    let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2 + input.managed_devices_count()];
+    'app: loop {
+        if events.len() != 2 + input.managed_devices_count() {
+            // resize
+            events.resize(2 + input.managed_devices_count(), unsafe { std::mem::MaybeUninit::zeroed().assume_init() });
+        }
+
+        let count = ep.wait(&mut events, Some(1)).expect("Failed to waiting epoll");
+        // TODO: あとでちゃんと待つ(external_fence_fdとか使えばepollで待てそうな気がする)
+        if count == 0 { gd.update(); }
+
+        for e in &events[..count as usize] {
+            if e.u64 == 0 {
+                if !x11.process_all_events() { break 'app; }
+            } else if e.u64 == 1 {
+                input.process_monitor_event(&ep);
+            } else {
+                input.process_device_event(gd.engine.input(), e.u64);
+            }
+        }
+    }
+    info!("Terminating Program...");
 }
