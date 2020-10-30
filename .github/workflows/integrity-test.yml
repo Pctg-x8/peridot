@@ -90,6 +90,11 @@ jobs:
       uses: "./.github/actions/codeform-checker"
       with:
         script: vulnerabilities_elliminator
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Running Check: Trailing Newline for Source Code Files"
+      uses: "./.github/actions/codeform-checker"
+      with:
+        script: trailing_newline_checker
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"

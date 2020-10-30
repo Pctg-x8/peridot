@@ -2,7 +2,7 @@ from glob import iglob
 import re
 from typing import Iterable, Tuple
 
-def target_sources():
+def target_sources(first_matcher: str = "**/*.rs"):
     return (p for p in iglob("**/*.rs", recursive=True) if not p.startswith("extras/") and not "target/" in p)
 def file_lines(fp) -> Iterable[Tuple[int, str]]: return enumerate(iter(fp.readline, ""), 1)
 
