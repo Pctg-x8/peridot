@@ -101,6 +101,7 @@ let checkFormats = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Tex
             , checkoutStep
             , CodeformCheckerAction.step { script = CodeformCheckerAction.Script.codeform_check } // { name = "Running Check: Line Width" }
             , CodeformCheckerAction.step { script = CodeformCheckerAction.Script.vulnerabilities_elliminator } // { name = "Running Check: Debugging Weaks" }
+            , CodeformCheckerAction.step { script = CodeformCheckerAction.Script.trailing_newline_checker } // { name = "Running Check: Trailing Newline for Source Code Files" }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-formats"))]
         ]
