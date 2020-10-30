@@ -4,22 +4,19 @@ use log::*;
 
 mod userlib;
 
+use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::rc::Rc;
 
-struct Game
-{
+struct Game {
     engine: peridot::Engine<NativeLink>,
     userlib: userlib::Game<NativeLink>
 }
-impl Game
-{
-    fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self
-    {
-        let nl = NativeLink
-        {
+impl Game {
+    fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
+        let nl = NativeLink {
             al: PlatformAssetLoader::new(asset_manager),
-            prt: PlatformWindowHandler(window),
+            w: window,
             input: PlatformInputProcessPlugin::new()
         };
         let mut engine = peridot::Engine::new(
@@ -27,35 +24,69 @@ impl Game
             nl, userlib::Game::<NativeLink>::requested_features()
         );
 
-        Game
-        {
+        Game {
             userlib: userlib::Game::init(&mut engine),
-            engine
         }
     }
 
     fn update(&mut self) { self.engine.do_update(&mut self.userlib); }
 }
 
-use bedrock as br;
-struct PlatformWindowHandler(*mut android::ANativeWindow);
-impl peridot::PlatformRenderTarget for PlatformWindowHandler
-{
-    fn surface_extension_name(&self) -> &'static str { "VK_KHR_android_surface" }
-    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-        -> br::Result<peridot::SurfaceInfo>
-    {
-        let obj = br::Surface::new_android(vi, self.0)?;
-        if !pd.surface_support(renderer_queue_family, &obj)?
-        {
+struct Presenter {
+    window: *mut android::ANativeWindow,
+    sc: peridot::IntegratedSwapchain
+}
+impl Presenter {
+    pub fn new(g: &peridot::Graphics, render_queue_family_index: u32, window: *mut android::ANativeWindow) -> Self {
+        let obj = br::Surface::new_android(g.instance(), window).expect("Failed to create Surface");
+        let supported = g.adapter().surface_support(render_queue_family_index, &obj)
+            .expect("Failed to query surface availability");
+        if !supported {
             panic!("Vulkan Surface is not supported by this adapter");
         }
-        
-        peridot::SurfaceInfo::gather_info(&pd, obj)
+
+        Presenter {
+            window,
+            sc: peridot::IntegratedSwapchain::new(
+                g, obj, unsafe { peridot::math::Vector2((*window).width() as _, (*window).height() as _) }
+            )
+        }
     }
-    fn current_geometry_extent(&self) -> (usize, usize)
-    {
-        unsafe { ((*self.0).width() as _, (*self.0).height() as _) }
+}
+impl peridot::PlatformPresenter for Presenter {
+    fn format(&self) -> br::vk::VkFormat { self.sc.format() }
+    fn backbuffer_count(&self) -> usize { self.sc.backbuffer_count() }
+    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.sc.backbuffer(index) }
+
+    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+        self.sc.emit_initialize_backbuffer_commands(recorder)
+    }
+    fn next_backbuffer_index(&mut self) -> br::Result<u32> { self.sc.acquire_next_backbuffer_index() }
+    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.sc.requesting_backbuffer_layout()
+    }
+    fn render_and_present<'s>(
+        &'s mut self,
+        g: &peridot::Graphics,
+        last_render_fence: &br::Fence,
+        present_queue: &br::Queue,
+        backbuffer_index: u32,
+        render_submission: br::SubmissionBatch<'s>,
+        update_submission: Option<br::SubmissionBatch<'s>>
+    ) -> br::Result<()> {
+        self.sc.render_and_present(
+            g, last_render_fence, present_queue, backbuffer_index, render_submission, update_submission
+        )
+    }
+    /// Returns whether re-initializing is needed for backbuffer resources
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+        self.sc.resize(g, new_size);
+        // WSI integrated swapchain needs reinitializing backbuffer resource
+        true
+    }
+
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+        unsafe { peridot::math::Vector2((*self.window).width() as _, (*self.window).height() as _) }
     }
 }
 
@@ -63,39 +94,38 @@ use android::{AssetManager, Asset, AASSET_MODE_STREAMING, AASSET_MODE_RANDOM};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::ffi::CString;
 struct PlatformAssetLoader { amgr: AssetManager }
-impl PlatformAssetLoader
-{
+impl PlatformAssetLoader {
     fn new(amgr: AssetManager) -> Self { PlatformAssetLoader { amgr } }
 }
-impl peridot::PlatformAssetLoader for PlatformAssetLoader
-{
+impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = Asset;
     type StreamingAsset = Asset;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Asset>
-    {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Asset> {
         let mut path_str = path.replace(".", "/"); path_str.push('.'); path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_RANDOM).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset>
-    {
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset> {
         let mut path_str = path.replace(".", "/"); path_str.push('.'); path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr.open(path_str.as_ptr(), AASSET_MODE_STREAMING).ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
 }
-struct NativeLink
-{
-    al: PlatformAssetLoader, prt: PlatformWindowHandler
+
+struct NativeLink {
+    al: PlatformAssetLoader, w: *mut android::ANativeWindow
 }
-impl peridot::NativeLinker for NativeLink
-{
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
-    type RenderTargetProvider = PlatformWindowHandler;
+    type Presenter = Presenter;
+    fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_android_surface"] }
+    fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain"] }
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
-    fn render_target_provider(&self) -> &PlatformWindowHandler { &self.prt }
+    fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
+        Presenter::new(g, g.graphics_queue_family_index(), self.w)
+    }
 }
 
 // JNI Exports //
@@ -104,12 +134,12 @@ use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}};
 
 #[no_mangle]
 pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
-    env: JNIEnv<'e>, _: JClass,
-    surface: JObject, asset_manager: JObject) -> JByteBuffer<'e>
-{
-    android_logger::init_once(
-        android_logger::Filter::default().with_min_level(log::Level::Trace)
-    );
+    env: JNIEnv<'e>,
+    _: JClass,
+    surface: JObject,
+    asset_manager: JObject
+) -> JByteBuffer<'e> {
+    android_logger::init_once(android_logger::Filter::default().with_min_level(log::Level::Trace));
     info!("Initializing NativeGameEngine...");
 
     std::panic::set_hook(Box::new(|p| { error!("Panicking in app! {}", p); }));
@@ -123,15 +153,13 @@ pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
         .expect("Creating DirectByteBuffer failed")
 }
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer)
-{
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer) {
     info!("Finalizing NativeGameEngine...");
     let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
     drop(unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) });
 }
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer)
-{
+pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer) {
     let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
     let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
