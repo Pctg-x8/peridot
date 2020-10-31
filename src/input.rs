@@ -31,6 +31,8 @@ pub enum NativeButtonInput {
     Stick(u32),
     /// Mouse Button(0 = Left, 1 = Right, 2 = Center, 3.. = Other)
     Mouse(u32),
+    /// Touch with ID
+    Touch(u32),
     POVLeft, POVRight, POVUp, POVDown
 }
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -50,7 +52,11 @@ pub enum NativeAnalogInput {
     /// Xbox controller specific
     LeftTrigger,
     /// Xbox controller specific
-    RightTrigger
+    RightTrigger,
+    /// Touch x position Move with ID
+    TouchMoveX(u32),
+    /// Touch y position Move with ID
+    TouchMoveY(u32)
 }
 
 pub trait MappableNativeInputType {

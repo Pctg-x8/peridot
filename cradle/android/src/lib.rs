@@ -165,3 +165,10 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(e: JNIEnv, _: JC
 
     e.update();
 }
+
+#[no_mangle]
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(e: JNIEnv, _: JClass, obj: JByteBuffer) {
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    
+}
