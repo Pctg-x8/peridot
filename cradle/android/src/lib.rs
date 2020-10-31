@@ -16,8 +16,7 @@ impl Game {
     fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(asset_manager),
-            w: window,
-            input: PlatformInputProcessPlugin::new()
+            w: window
         };
         let mut engine = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
@@ -26,6 +25,7 @@ impl Game {
 
         Game {
             userlib: userlib::Game::init(&mut engine),
+            engine
         }
     }
 
@@ -133,7 +133,7 @@ impl peridot::NativeLinker for NativeLink {
 use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}};
 
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
     env: JNIEnv<'e>,
     _: JClass,
     surface: JObject,
@@ -153,13 +153,13 @@ pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
         .expect("Creating DirectByteBuffer failed")
 }
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer) {
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer) {
     info!("Finalizing NativeGameEngine...");
     let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
     drop(unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) });
 }
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer) {
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer) {
     let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
     let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 

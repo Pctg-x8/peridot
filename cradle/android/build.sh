@@ -71,5 +71,5 @@ echo -e "💠  $SCRIPT_PATH/apkbuild/app/build/outputs/apk/debug/app-debug.apk"
 
 if [ $AFTER_RUN -ne 0 ]; then
     ADB=$ANDROID_HOME/platform-tools/adb
-	(cd $SCRIPT_PATH/apkbuild; $ADB uninstall $PACKAGE_ID; $ADB install app/build/outputs/apk/debug/app-debug.apk && $ADB shell am start -n $PACKAGE_ID/com.cterm2.peridot.NativeActivity)
+	(cd $SCRIPT_PATH/apkbuild; $ADB uninstall $PACKAGE_ID; $ADB install app/build/outputs/apk/debug/app-debug.apk && $ADB shell am start -n $PACKAGE_ID/jp.ct2.peridot.NativeActivity)
 fi
