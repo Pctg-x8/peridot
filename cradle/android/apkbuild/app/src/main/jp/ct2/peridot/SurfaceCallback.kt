@@ -13,6 +13,10 @@ final class NativeLibLink {
     external fun fin(o: ByteBuffer)
     external fun update(o: ByteBuffer)
 
+    external fun processTouchDownEvent(o: ByteBuffer, id: Int)
+    external fun processTouchUpEvent(o: ByteBuffer, id: Int)
+    external fun setTouchPositionAbsolute(o: ByteBuffer, id: Int, x: Float, y: Float)
+
     init {
         System.loadLibrary("ntv")
     }
@@ -37,6 +41,22 @@ final class NativeEngine : ViewModel() {
 
     fun update() {
         this.internalPtr?.let { this.ntvlink.update(it) }
+    }
+
+    fun setTouchPositionAbsolute(id: Int, x: Float, y: Float) {
+        this.internalPtr?.let { this.ntvlink.setTouchPositionAbsolute(it, id, x, y) }
+    }
+    fun touchDown(id: Int, x: Float, y: Float) {
+        this.internalPtr?.let {
+            this.ntvlink.setTouchPositionAbsolute(it, id, x, y)
+            this.ntvlink.processTouchDownEvent(it, id)
+        }
+    }
+    fun touchUp(id: Int, x: Float, y: Float) {
+        this.internalPtr?.let {
+            this.ntvlink.setTouchPositionAbsolute(it, id, x, y)
+            this.ntvlink.processTouchUpEvent(it, id)
+        }
     }
 }
 

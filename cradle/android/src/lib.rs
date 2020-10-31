@@ -10,7 +10,8 @@ use std::rc::Rc;
 
 struct Game {
     engine: peridot::Engine<NativeLink>,
-    userlib: userlib::Game<NativeLink>
+    userlib: userlib::Game<NativeLink>,
+    pos_cache: std::rc::Rc<std::cell::RefCell<TouchPositionCache>>
 }
 impl Game {
     fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
@@ -22,10 +23,14 @@ impl Game {
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
+        let pos_cache = std::rc::Rc::new(std::cell::RefCell::new(TouchPositionCache::new()));
+        engine.input_mut().set_nativelink(Box::new(InputNativeLink { pos_cache: pos_cache.clone() }));
+        engine.postinit();
 
         Game {
             userlib: userlib::Game::init(&mut engine),
-            engine
+            engine,
+            pos_cache
         }
     }
 
@@ -128,9 +133,30 @@ impl peridot::NativeLinker for NativeLink {
     }
 }
 
+struct TouchPositionCache(Vec<(f32, f32)>);
+impl TouchPositionCache {
+    pub fn new() -> Self { TouchPositionCache(Vec::new()) }
+    pub fn query(&self, id: usize) -> Option<&(f32, f32)> {
+        self.0.get(id)
+    }
+    pub fn set(&mut self, id: usize, x: f32, y: f32) {
+        if self.0.len() <= id { self.0.resize(id + 1, (0.0, 0.0)); }
+        self.0[id] = (x, y);
+    }
+}
+
+struct InputNativeLink {
+    pos_cache: std::rc::Rc<std::cell::RefCell<TouchPositionCache>>
+}
+impl peridot::NativeInput for InputNativeLink {
+    fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)> {
+        self.pos_cache.borrow().query(index as _).copied()
+    }
+}
+
 // JNI Exports //
 
-use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}};
+use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}, sys::{jint, jfloat}};
 
 #[no_mangle]
 pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
@@ -167,8 +193,42 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(e: JNIEnv, _: JC
 }
 
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(e: JNIEnv, _: JClass, obj: JByteBuffer) {
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint
+) {
     let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
     let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
-    
+
+    gd.engine.input().dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
+}
+#[no_mangle]
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint
+) {
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+
+    gd.engine.input().dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
+}
+#[no_mangle]
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint,
+    x: jfloat,
+    y: jfloat
+) {
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+
+    gd.pos_cache.borrow_mut().set(id as _, x, y);
+    gd.engine.input().dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveX(id as _), x, true);
+    gd.engine.input().dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveY(id as _), y, true);
 }

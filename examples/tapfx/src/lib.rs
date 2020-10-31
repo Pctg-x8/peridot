@@ -67,8 +67,11 @@ impl<NL> Game<NL> {
 impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn init(e: &mut peridot::Engine<NL>) -> Self {
         e.input_mut().map(peridot::NativeButtonInput::Mouse(0), INPUT_PLANE_DOWN);
+        e.input_mut().map(peridot::NativeButtonInput::Touch(0), INPUT_PLANE_DOWN);
         e.input_mut().map(peridot::NativeAnalogInput::MouseX, INPUT_PLANE_LEFT);
+        e.input_mut().map(peridot::NativeAnalogInput::TouchMoveX(0), INPUT_PLANE_LEFT);
         e.input_mut().map(peridot::NativeAnalogInput::MouseY, INPUT_PLANE_TOP);
+        e.input_mut().map(peridot::NativeAnalogInput::TouchMoveY(0), INPUT_PLANE_TOP);
 
         let renderpass = peridot::RenderPassTemplates::single_render(
             e.backbuffer_format(), e.requesting_backbuffer_layout().0
