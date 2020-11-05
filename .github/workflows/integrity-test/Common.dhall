@@ -1,9 +1,9 @@
-let GithubActions = ../schemas/Actions.dhall
-let ProvidedSteps = ../schemas/ProvidedSteps.dhall
+let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
+let ProvidedSteps = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
 
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
-let SlackNotifierAction = ../../actions/integrity-check-slack-notifier/schema.dhall
+let SlackNotifierAction = https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
 let List/concat = https://prelude.dhall-lang.org/List/concat
 let List/map = https://prelude.dhall-lang.org/List/map
 
@@ -37,8 +37,8 @@ let preconditionBeginTimestampOutputDef = toMap {
     , begintime = GithubActions.mkExpression "steps.begintime.outputs.begintime"
     }
 
-let checkoutStep = ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
-let checkoutHeadStep = (ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{ ref = Some ePullRequestHeadHash }) // {
+let checkoutStep = ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
+let checkoutHeadStep = (ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{ ref = Some ePullRequestHeadHash }) // {
     , name = "Checking out (HEAD commit)"
     }
 

@@ -1,4 +1,4 @@
-let GithubActions = ./schemas/Actions.dhall
+let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 let CommonDefs = ./integrity-test/Common.dhall
 
 let preconditions = GithubActions.Job::{
