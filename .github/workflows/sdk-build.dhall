@@ -1,6 +1,6 @@
-let GithubActions = ./schemas/Actions.dhall
+let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
+let ProvidedSteps = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
 let List/map = https://prelude.dhall-lang.org/List/map
-let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 
 let PowershellOnlyStep = \(params: GithubActions.Step.Type) -> params // {
     , `if` = Some "matrix.os == 'windows-latest'"
@@ -25,7 +25,7 @@ in GithubActions.Workflow::{
                 }
             , runs-on = GithubActions.RunnerPlatform.Custom (GithubActions.mkExpression "matrix.os")
             , steps = [
-                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
+                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
                 , PowershellOnlyStep GithubActions.Step::{
                     , name = "Build tools (For PowerShell Env)"
                     , run = Some "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }"

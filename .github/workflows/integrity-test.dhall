@@ -1,6 +1,6 @@
-let GithubActions = ./schemas/Actions.dhall
+let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
+let ProvidedSteps = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
 let CommonDefs = ./integrity-test/Common.dhall
-let ProvidedSteps = ./schemas/ProvidedSteps.dhall
 let List/map = https://prelude.dhall-lang.org/List/map
 let List/concat = https://prelude.dhall-lang.org/List/concat
 
@@ -88,7 +88,7 @@ let checkWorkflowSync = GithubActions.Job::{
     , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = List/concat GithubActions.Step.Type [
         , List/map GithubActions.Step.Type GithubActions.Step.Type (CommonDefs.withConditionStep preconditionOutputHasWorkflowChanges) [
-            , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
+            , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
             , GithubActions.Step::{ name = "Setup Dhall", run = Some installDhallScript }
             , GithubActions.Step::{ name = "test-sync", run = Some "make -C ./.github/workflows test-sync" }
             ]

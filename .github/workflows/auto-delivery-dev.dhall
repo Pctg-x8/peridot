@@ -1,5 +1,5 @@
-let GithubActions = ./schemas/Actions.dhall
-let ProvidedSteps = ./schemas/ProvidedSteps.dhall
+let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
+let ProvidedSteps = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
 
 let DeliveryPullRequestCreateAction = ../actions/create-dev-delivery-prs/schema.dhall
 
@@ -13,7 +13,7 @@ in GithubActions.Workflow::{
             , name = Some "Make Delivering PullRequest"
             , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
             , steps = [
-                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutStepParams::{=}
+                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
                 , GithubActions.Step::{
                     , name = "Fetching all branches"
                     , run = Some "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
