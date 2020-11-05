@@ -1,4 +1,4 @@
-let GithubActions = ../../workflows/schemas/Actions.dhall
+let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 
 let Script = < codeform_check | vulnerabilities_elliminator | trailing_newline_checker >
 let scriptAsText =
