@@ -3,7 +3,7 @@ let ProvidedSteps = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master
 
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
-let SlackNotifierAction = ../../actions/integrity-check-slack-notifier/schema.dhall
+let SlackNotifierAction = https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
 let List/concat = https://prelude.dhall-lang.org/List/concat
 let List/map = https://prelude.dhall-lang.org/List/map
 
