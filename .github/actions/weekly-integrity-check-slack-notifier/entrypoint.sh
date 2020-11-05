@@ -1,6 +1,6 @@
 #!/bin/bash -xe
 
-BEGINTIME=$(cat .begintime)
+BEGINTIME=$INPUT_BEGINTIME
 ENDTIME=$(date +%s)
 BUILD_TIME_SECS=$(expr $ENDTIME - $BEGINTIME)
 
@@ -19,7 +19,7 @@ BUILD_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
 # send!
 PAYLOAD="{$PAYLOAD_STATUS_HEADER, \"build_url\": \"$BUILD_URL\", \"number\": \"$GITHUB_RUN_NUMBER\", \"duration\": $BUILD_TIME_SECS, \"repository\": \"$GITHUB_REPOSITORY\", \"branch_name\": \"$GITHUB_REF\", \"commit\": $COMMIT_INFO, \"weekly\": true}"
-aws lambda invoke --function-name PeridotIntegrityTestNotificationGHA --invocation-type Event --payload "$PAYLOAD" out.log
+aws lambda invoke --function-name CIResultNotificationGHA --invocation-type Event --payload "$PAYLOAD" out.log
 
 # propagate failure status
 [ $INPUT_STATUS == "success" ]
