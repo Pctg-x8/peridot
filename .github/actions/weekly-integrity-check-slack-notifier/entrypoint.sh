@@ -18,7 +18,7 @@ fi
 BUILD_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
 # send!
-PAYLOAD="{$PAYLOAD_STATUS_HEADER, \"build_url\": \"$BUILD_URL\", \"number\": \"$GITHUB_RUN_NUMBER\", \"duration\": $BUILD_TIME_SECS, \"repository\": \"$GITHUB_REPOSITORY\", \"branch_name\": \"$GITHUB_REF\", \"commit\": $COMMIT_INFO, \"weekly\": true}"
+PAYLOAD="{$PAYLOAD_STATUS_HEADER, \"build_url\": \"$BUILD_URL\", \"number\": $GITHUB_RUN_NUMBER, \"duration\": $BUILD_TIME_SECS, \"repository\": \"$GITHUB_REPOSITORY\", \"branch_name\": \"$GITHUB_REF\", \"commit\": $COMMIT_INFO, \"weekly\": true}"
 aws lambda invoke --function-name CIResultNotificationGHA --invocation-type Event --payload "$PAYLOAD" out.log
 
 # propagate failure status
