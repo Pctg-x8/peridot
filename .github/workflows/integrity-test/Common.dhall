@@ -166,11 +166,11 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
             , checkoutStep
             , GithubActions.Step::{
                 , name = "cargo check"
-                , run = Some "cd cradle/windows; pwd; cargo check"
+                , run = Some "./build.ps1 windows examples/basic -RunTests"
                 }
             , GithubActions.Step::{
                 , name = "cargo check for transparent-back"
-                , run = Some "cd cradle/windows; pwd; cargo check --features transparent"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features transparent"
                 }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-windows"))]
