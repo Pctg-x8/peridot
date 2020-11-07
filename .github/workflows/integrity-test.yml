@@ -47,10 +47,13 @@ jobs:
       name: Checking out
       uses: "actions/checkout@v2"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: Building as Checking
-      uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: cradle/windows
+      name: cargo check
+      run: cargo check
+      "working-directory": cradle/windows
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "cargo check for transparent-back"
+      run: "cargo check --features transparent"
+      "working-directory": cradle/windows
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -186,6 +189,11 @@ jobs:
     - preconditions
     "runs-on": "ubuntu-latest"
     steps:
+    - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
       name: Checking out
       uses: "actions/checkout@v2"
