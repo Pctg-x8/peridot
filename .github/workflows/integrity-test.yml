@@ -323,6 +323,7 @@ jobs:
     - "check-examples"
     - "check-formats"
     - "check-sync-workflow"
+    - "check-cradle-windows"
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"

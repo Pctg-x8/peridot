@@ -209,6 +209,7 @@ jobs:
     - preconditions
     - "check-examples"
     - "check-formats"
+    - "check-cradle-windows"
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
