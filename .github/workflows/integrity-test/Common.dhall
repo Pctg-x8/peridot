@@ -201,6 +201,7 @@ in  { depends
     , slackNotifySuccessStep
     , prSlackNotifyProvider
     , weeklySlackNotifyProvider
+    , checkoutHeadStep
     , checkFormats
     , checkBaseLayer
     , checkTools

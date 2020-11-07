@@ -88,6 +88,7 @@ let checkWorkflowSync = GithubActions.Job::{
     , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = List/concat GithubActions.Step.Type [
         , List/map GithubActions.Step.Type GithubActions.Step.Type (CommonDefs.withConditionStep preconditionOutputHasWorkflowChanges) [
+            , CommonDefs.checkoutHeadStep
             , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
             , GithubActions.Step::{ name = "Setup Dhall", run = Some installDhallScript }
             , GithubActions.Step::{ name = "test-sync", run = Some "make -C ./.github/workflows test-sync" }
