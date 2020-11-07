@@ -217,7 +217,7 @@ fn main() {
         }
 
         let count = ep.wait(&mut events, Some(1)).expect("Failed to waiting epoll");
-        // TODO: あとでちゃんと待つ(external_fence_fdとか使えばepollで待てそうな気がする)
+        // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 { gd.update(); }
 
         for e in &events[..count as usize] {
