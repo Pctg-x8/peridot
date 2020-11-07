@@ -10,23 +10,27 @@ use std::rc::Rc;
 
 struct Game {
     engine: peridot::Engine<NativeLink>,
-    userlib: userlib::Game<NativeLink>
+    userlib: userlib::Game<NativeLink>,
+    pos_cache: std::rc::Rc<std::cell::RefCell<TouchPositionCache>>
 }
 impl Game {
     fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(asset_manager),
-            w: window,
-            input: PlatformInputProcessPlugin::new()
+            w: window
         };
-        let engine = peridot::Engine::new(
+        let mut engine = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
+        let pos_cache = std::rc::Rc::new(std::cell::RefCell::new(TouchPositionCache::new()));
+        engine.input_mut().set_nativelink(Box::new(InputNativeLink { pos_cache: pos_cache.clone() }));
+        engine.postinit();
 
         Game {
-            userlib: userlib::Game::init(&engine),
-            engine
+            userlib: userlib::Game::init(&mut engine),
+            engine,
+            pos_cache
         }
     }
 
@@ -91,19 +95,6 @@ impl peridot::PlatformPresenter for Presenter {
     }
 }
 
-struct PlatformInputProcessPlugin { processor: Option<Rc<peridot::InputProcess>> }
-impl PlatformInputProcessPlugin {
-    fn new() -> Self {
-        PlatformInputProcessPlugin { processor: None }
-    }
-}
-impl peridot::InputProcessPlugin for PlatformInputProcessPlugin {
-    fn on_start_handle(&mut self, ip: &Rc<peridot::InputProcess>) {
-        self.processor = Some(ip.clone());
-        info!("Started Handling Inputs...");
-    }
-}
-
 use android::{AssetManager, Asset, AASSET_MODE_STREAMING, AASSET_MODE_RANDOM};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::ffi::CString;
@@ -128,13 +119,11 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
 }
 
 struct NativeLink {
-    al: PlatformAssetLoader, w: *mut android::ANativeWindow, input: PlatformInputProcessPlugin
+    al: PlatformAssetLoader, w: *mut android::ANativeWindow
 }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = Presenter;
-    type InputProcessor = PlatformInputProcessPlugin;
-
     fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_android_surface"] }
     fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain"] }
 
@@ -142,15 +131,35 @@ impl peridot::NativeLinker for NativeLink {
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
         Presenter::new(g, g.graphics_queue_family_index(), self.w)
     }
-    fn input_processor_mut(&mut self) -> &mut PlatformInputProcessPlugin { &mut self.input }
+}
+
+struct TouchPositionCache(Vec<(f32, f32)>);
+impl TouchPositionCache {
+    pub fn new() -> Self { TouchPositionCache(Vec::new()) }
+    pub fn query(&self, id: usize) -> Option<&(f32, f32)> {
+        self.0.get(id)
+    }
+    pub fn set(&mut self, id: usize, x: f32, y: f32) {
+        if self.0.len() <= id { self.0.resize(id + 1, (0.0, 0.0)); }
+        self.0[id] = (x, y);
+    }
+}
+
+struct InputNativeLink {
+    pos_cache: std::rc::Rc<std::cell::RefCell<TouchPositionCache>>
+}
+impl peridot::NativeInput for InputNativeLink {
+    fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)> {
+        self.pos_cache.borrow().query(index as _).copied()
+    }
 }
 
 // JNI Exports //
 
-use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}};
+use jni::{JNIEnv, objects::{JByteBuffer, JObject, JClass}, sys::{jint, jfloat}};
 
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
     env: JNIEnv<'e>,
     _: JClass,
     surface: JObject,
@@ -170,15 +179,56 @@ pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_init<'e>(
         .expect("Creating DirectByteBuffer failed")
 }
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer) {
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(e: JNIEnv, _: JClass, obj: JByteBuffer) {
     info!("Finalizing NativeGameEngine...");
     let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
     drop(unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) });
 }
 #[no_mangle]
-pub extern "system" fn Java_com_cterm2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer) {
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(e: JNIEnv, _: JClass, obj: JByteBuffer) {
     let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
     let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
     e.update();
+}
+
+#[no_mangle]
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint
+) {
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+
+    gd.engine.input().dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
+}
+#[no_mangle]
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint
+) {
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+
+    gd.engine.input().dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
+}
+#[no_mangle]
+pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint,
+    x: jfloat,
+    y: jfloat
+) {
+    let bytes = e.get_direct_buffer_address(obj).expect("Getting Pointer from DirectByteBuffer failed");
+    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+
+    gd.pos_cache.borrow_mut().set(id as _, x, y);
+    gd.engine.input().dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveX(id as _), x, true);
+    gd.engine.input().dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveY(id as _), y, true);
 }

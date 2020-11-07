@@ -58,7 +58,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
-    fn init(e: &peridot::Engine<PL>) -> Self
+    fn init(e: &mut peridot::Engine<PL>) -> Self
     {
         let screen_size: br::Extent3D = e.backbuffer(0).expect("no backbuffers").size().clone().into();
         let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;

@@ -2,7 +2,8 @@ use winapi::um::winuser::{
     DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
     AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL, WM_SIZE,
     PostQuitMessage, PM_REMOVE,
-    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
+    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA,
+    WM_INPUT
 };
 use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
@@ -12,6 +13,7 @@ use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD
 
 use std::mem::MaybeUninit;
 #[macro_use] extern crate log;
+mod input;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
 
@@ -24,24 +26,26 @@ fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } 
 pub struct GameDriver {
     base: peridot::Engine<NativeLink>,
     usercode: userlib::Game<NativeLink>,
-    current_size: peridot::math::Vector2<usize>
+    current_size: peridot::math::Vector2<usize>,
+    ri_handler: self::input::RawInputHandler
 }
 impl GameDriver {
     fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
         let nl = NativeLink {
             al: AssetProvider::new(),
-            window,
-            input: InputHandler::new()
+            window
         };
         let mut base = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
-        let usercode = userlib::Game::init(&base);
+        let usercode = userlib::Game::init(&mut base);
+        let ri_handler = self::input::RawInputHandler::init();
+        base.input_mut().set_nativelink(Box::new(self::input::NativeInputHandler::new(window)));
         base.postinit();
 
         GameDriver {
-            base, usercode, current_size: init_size
+            base, usercode, current_size: init_size, rt_handler
         }
     }
 
@@ -116,6 +120,14 @@ extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: L
             }
             return 0;
         },
+        WM_INPUT => {
+            let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+            if let Some(driver) = unsafe { p.as_mut() }
+            {
+                driver.ri_handler.handle_wm_input(driver.base.input_mut(), lparam);
+            }
+            0
+        },
         _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) }
     }
 }
@@ -171,27 +183,11 @@ impl peridot::PlatformAssetLoader for AssetProvider
     }
 }
 
-struct InputHandler(Option<Rc<peridot::InputProcess>>);
-impl InputHandler
-{
-    fn new() -> Self
-    {
-        InputHandler(None)
-    }
-}
-impl peridot::InputProcessPlugin for InputHandler
-{
-    fn on_start_handle(&mut self, processor: &Rc<peridot::InputProcess>)
-    {
-        self.0 = Some(processor.clone());
-    }
-}
-struct NativeLink { al: AssetProvider, window: HWND, input: InputHandler }
+struct NativeLink { al: AssetProvider, window: HWND }
 impl peridot::NativeLinker for NativeLink
 {
     type AssetLoader = AssetProvider;
     type Presenter = Presenter;
-    type InputProcessor = InputHandler;
 
     #[cfg(not(feature = "transparent"))]
     fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_win32_surface"] }
@@ -206,5 +202,4 @@ impl peridot::NativeLinker for NativeLink
 
     fn asset_loader(&self) -> &AssetProvider { &self.al }
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter { Presenter::new(g, self.window) }
-    fn input_processor_mut(&mut self) -> &mut InputHandler { &mut self.input }
 }

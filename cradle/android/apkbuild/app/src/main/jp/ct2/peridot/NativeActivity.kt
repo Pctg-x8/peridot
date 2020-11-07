@@ -1,6 +1,6 @@
 // Peridot Bootstrap Activity
 
-package com.cterm2.peridot
+package jp.ct2.peridot
 
 import android.arch.lifecycle.ViewModelProvider
 import android.os.Build
@@ -21,7 +21,7 @@ class NativeActivity : AppCompatActivity(), Choreographer.FrameCallback {
 
         this.hideDecorationUIs()
 
-        val surface = SurfaceView(this)
+        val surface = PeridotSurfaceView(this)
         surface.holder.addCallback(SurfaceCallback(this))
         setContentView(surface)
         Choreographer.getInstance().postFrameCallback(this)
