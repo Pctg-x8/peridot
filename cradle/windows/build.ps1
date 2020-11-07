@@ -77,7 +77,7 @@ $ExternCrateName = $PackageName.Replace("-", "_")
 
 pub use $ExternCrateName::$EntryTyName as Game;" | Out-File $ScriptPath\src\userlib.rs -Encoding UTF8
 
-$CargoSubcommand = if ($Run) { "run" } else if ($RunTests) { "test" } else { "build" }
+$CargoSubcommand = if ($Run) { "run" } elseif ($RunTests) { "test" } else { "build" }
 $ActiveFeatures = @("bedrock/VK_KHR_win32_surface") + $Features
 $OptFlags = if ($Release) { "--release" } else { "" }
 if ($AssetDirectory) {
