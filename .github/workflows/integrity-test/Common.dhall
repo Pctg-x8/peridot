@@ -171,7 +171,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
                 }
             , GithubActions.Step::{
                 , name = "cargo check for transparent-back"
-                , run = Some "./build.ps1 windows examples/basic -RunTests -Features transparent,bedrock/DynamicLoaded"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features \"transparent,bedrock/DynamicLoaded\""
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]
