@@ -21,7 +21,7 @@ impl RenderingResources {
         e: &peridot::Engine<NL>, srr: &StaticRenderResources, layouts: &Layouts
     ) -> Self {
         let depth_buffer = br::ImageDesc::new(
-            e.backbuffers()[0].size(), Self::DEPTH_BUFFER_FORMAT,
+            e.backbuffer(0).expect("no backbuffers?").size(), Self::DEPTH_BUFFER_FORMAT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT, br::ImageLayout::Undefined
         ).create(e.graphics()).expect("Failed to create depth buffer image");
         let mut mb = peridot::MemoryBadget::new(e.graphics());
@@ -59,7 +59,7 @@ impl RenderingResources {
         );
         let sc = br::vk::VkRect2D {
             offset: br::vk::VkOffset2D::default(),
-            extent: AsRef::<br::Extent2D>::as_ref(e.backbuffers()[0].size()).clone().into()
+            extent: AsRef::<br::Extent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()).clone().into()
         };
         let vp = br::Viewport::from_rect_with_depth_range(&sc, 0.0 .. 1.0).into();
         let bindings = &[
@@ -152,11 +152,13 @@ impl RenderingResources {
             );
         }).expect("Failed to initialize Depth Buffer");
 
-        let fbs = e.backbuffers().iter()
-            .map(|b|
+        let fbs = (0 .. e.backbuffer_count())
+            .map(|bb_index| {
+                let b = e.backbuffer(bb_index).expect("no backbuffers?");
+
                 br::Framebuffer::new(&srr.rp_main, &[&b, &depth_buffer_view], b.size(), 1)
                     .expect("Failed to create Framebuffer")
-            )
+            })
             .collect();
 
         RenderingResources {
@@ -187,7 +189,7 @@ impl<NL> Game<NL> {
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
-    fn init(e: &peridot::Engine<NL>) -> Self {
+    fn init(e: &mut peridot::Engine<NL>) -> Self {
         let srr = StaticRenderResources::new(e);
         let layouts = Layouts::new(e);
 
@@ -199,7 +201,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let desc = Descriptors::new(e, &layouts, &res);
         let rr = RenderingResources::new(e, &srr, &layouts);
         let render_cmd = peridot::CommandBundle::new(
-            e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffers().len()
+            e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffer_count()
         ).expect("Failed to alloc render commandbundle");
         Self::populate_all_render_commands(&render_cmd, &srr, &rr, &res, &desc);
 
@@ -279,6 +281,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         };
         main_camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0));
 
+        let &br::Extent3D(sx, sy, _) = e.backbuffer(0).expect("no backbuffers?").size();
         Game {
             srr,
             layouts,
@@ -288,7 +291,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             render_cmd,
             update_cmd,
             main_camera,
-            aspect_wh: e.backbuffers()[0].size().0 as f32 / e.backbuffers()[0].size().1 as f32,
+            aspect_wh: sx as f32 / sy as f32,
             // kicks initial updating
             dirty_main_camera: true,
             _ph: std::marker::PhantomData
@@ -369,10 +372,11 @@ pub struct StaticRenderResources {
     pub rp_main: br::RenderPass
 }
 impl StaticRenderResources {
-    pub fn new<NL>(e: &peridot::Engine<NL>) -> Self {
+    pub fn new<NL: peridot::NativeLinker>(e: &peridot::Engine<NL>) -> Self {
         StaticRenderResources {
             rp_main: peridot::RenderPassTemplates::single_render_with_depth_noread(
-                e.backbuffer_format(), RenderingResources::DEPTH_BUFFER_FORMAT
+                e.backbuffer_format(), RenderingResources::DEPTH_BUFFER_FORMAT,
+                e.requesting_backbuffer_layout().0
             )
             .create(e.graphics())
             .expect("Failed to create rp_main")
@@ -385,7 +389,7 @@ pub struct Layouts {
     pub dsl_sb1v: br::DescriptorSetLayout
 }
 impl Layouts {
-    pub fn new<NL>(e: &peridot::Engine<NL>) -> Self {
+    pub fn new<NL: peridot::NativeLinker>(e: &peridot::Engine<NL>) -> Self {
         Layouts {
             dsl_ub1v: br::DescriptorSetLayout::new(e.graphics(), &[
                 br::DescriptorSetLayoutBinding::UniformBuffer(1, br::ShaderStage::VERTEX)
@@ -402,7 +406,7 @@ pub struct Descriptors {
     descriptors: Vec<br::vk::VkDescriptorSet>
 }
 impl Descriptors {
-    pub fn new<NL>(e: &peridot::Engine<NL>, layouts: &Layouts, res: &Resources) -> Self {
+    pub fn new<NL: peridot::NativeLinker>(e: &peridot::Engine<NL>, layouts: &Layouts, res: &Resources) -> Self {
         use br::VkHandle;
         fn as_usize_range(v: std::ops::Range<u64>) -> std::ops::Range<usize> {
             v.start as _ .. v.end as _
@@ -464,7 +468,7 @@ pub struct Resources {
     pub pe: ParticleEngine
 }
 impl Resources {
-    pub fn new<NL>(e: &peridot::Engine<NL>, tfb: &mut peridot::TransferBatch) -> Self {
+    pub fn new<NL: peridot::NativeLinker>(e: &peridot::Engine<NL>, tfb: &mut peridot::TransferBatch) -> Self {
         let grid_vertices: Vec<_> = peridot::Primitive::limited_xz_grid(10).vertices
             .into_iter()
             .map(|v| peridot::ColoredVertex { pos: v, color: peridot::math::Vector4(0.6, 0.6, 0.6, 1.0) })
