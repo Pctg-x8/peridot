@@ -166,11 +166,13 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
             , checkoutStep
             , GithubActions.Step::{
                 , name = "cargo check"
-                , run = Some "$Env:VK_SDK_PATH=''; ./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
+                , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             , GithubActions.Step::{
                 , name = "cargo check for transparent-back"
-                , run = Some "$Env:VK_SDK_PATH=''; ./build.ps1 windows examples/basic -RunTests -Features transparent,bedrock/DynamicLoaded"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features transparent,bedrock/DynamicLoaded"
+                , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-windows"))]
