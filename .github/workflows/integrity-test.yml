@@ -28,8 +28,10 @@ jobs:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-baselayer"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: failure
   "check-cradle-windows":
     name: "Cradle(Windows)"
@@ -68,8 +70,10 @@ jobs:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-cradle-windows"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: failure
   "check-examples":
     name: Examples
@@ -103,8 +107,10 @@ jobs:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-examples"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: failure
   "check-formats":
     name: Code Formats
@@ -147,8 +153,10 @@ jobs:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-formats"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: failure
   "check-modules":
     name: Modules
@@ -182,8 +190,10 @@ jobs:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-modules"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: failure
   "check-sync-workflow":
     name: Check Workflow Files are Synchronized
@@ -239,8 +249,10 @@ jobs:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-sync-workflow"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: failure
   "check-tools":
     name: Tools
@@ -274,8 +286,10 @@ jobs:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-tools"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: failure
   preconditions:
     name: Preconditions
@@ -344,8 +358,10 @@ jobs:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
         pr_number: "${{ github.event.number }}"
         pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
         status: success
 name: Integrity Check
 'on':
