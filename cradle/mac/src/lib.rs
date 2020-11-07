@@ -246,6 +246,8 @@ impl GameDriver
         let nl = NativeLink::new(rt_view);
         let mut engine = Engine::new(Game::NAME, Game::VERSION, nl, Game::requested_features());
         let usercode = Game::init(&mut engine);
+        let nih = Box::new(NativeInputHandler::new(rt_view));
+        engine.input_mut().set_nativelink(nih);
 
         GameDriver { engine, usercode }
     }
@@ -266,6 +268,7 @@ extern "C"
 {
     fn nsbundle_path_for_resource(name: *mut NSString, oftype: *mut NSString) -> *mut objc::runtime::Object;
     fn nsscreen_backing_scale_factor() -> f32;
+    fn obtain_mouse_pointer_position(rt_view: *mut libc::c_void, x: *mut f32, y: *mut f32);
 }
 
 #[no_mangle]
@@ -296,4 +299,85 @@ pub extern "C" fn captionbar_text() -> *mut c_void
 {
     NSString::from_str(&format!("{} v{}.{}.{}", Game::NAME, Game::VERSION.0, Game::VERSION.1, Game::VERSION.2))
         .expect("CaptionbarText NSString Allocation").into_id() as *mut _
+}
+
+#[no_mangle]
+pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
+    trace!("Dispatching Character Down Event: {}", character);
+    unsafe {
+        (*g).engine.input().dispatch_button_event(
+            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()), true
+        );
+    }
+}
+#[no_mangle]
+pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
+    trace!("Dispatching Character Up Event: {}", character);
+    unsafe {
+        (*g).engine.input().dispatch_button_event(
+            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()), false
+        );
+    }
+}
+
+const KEYMOD_SHIFT: u8 = 1;
+const KEYMOD_OPTION: u8 = 2;
+const KEYMOD_CONTROL: u8 = 3;
+const KEYMOD_COMMAND: u8 = 4;
+const KEYMOD_CAPSLOCK: u8 = 5;
+#[no_mangle]
+pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
+    trace!("Dispatching Keymod Down Event: {}", code);
+    let code_to_bty = match code {
+        KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
+        KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
+        KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
+        KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
+        KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
+        _ => return
+    };
+    unsafe { (*g).engine.input().dispatch_button_event(code_to_bty, true); }
+}
+#[no_mangle]
+pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
+    trace!("Dispatching Keymod Up Event: {}", code);
+    let code_to_bty = match code {
+        KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
+        KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
+        KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
+        KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
+        KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
+        _ => return
+    };
+    unsafe { (*g).engine.input().dispatch_button_event(code_to_bty, false); }
+}
+
+struct NativeInputHandler {
+    rt_view: *mut libc::c_void
+}
+impl NativeInputHandler {
+    fn new(rt_view: *mut libc::c_void) -> Self {
+        NativeInputHandler { rt_view }
+    }
+}
+impl peridot::NativeInput for NativeInputHandler {
+    fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)> {
+        if index == 0 {
+            let (mut x, mut y) = (0.0, 0.0);
+            unsafe { obtain_mouse_pointer_position(self.rt_view, &mut x, &mut y); }
+
+            Some((x, y))
+        } else {
+            None
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
+    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), true); }
+}
+#[no_mangle]
+pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
+    unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false); }
 }
