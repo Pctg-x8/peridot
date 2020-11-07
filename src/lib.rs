@@ -454,11 +454,14 @@ impl RenderPassTemplates
         b
     }
     pub fn single_render_with_depth_noread(
-        format: br::vk::VkFormat, depth_format: br::vk::VkFormat
+        format: br::vk::VkFormat, depth_format: br::vk::VkFormat,
+        color_attachment_outer_requesting_layout: br::ImageLayout
     ) -> br::RenderPassBuilder {
         let mut b = br::RenderPassBuilder::new();
-        let adesc = br::AttachmentDescription::new(format, br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
-            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        let adesc = br::AttachmentDescription::new(
+            format, color_attachment_outer_requesting_layout, color_attachment_outer_requesting_layout
+        )
+        .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
         let addesc = br::AttachmentDescription::new(
             depth_format, br::ImageLayout::DepthStencilAttachmentOpt, br::ImageLayout::DepthStencilAttachmentOpt
         )
