@@ -1,12 +1,14 @@
-let GithubActions = ../../workflows/schemas/Actions.dhall
+let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 
-let Script = < codeform_check | vulnerabilities_elliminator >
+let Script = < codeform_check | vulnerabilities_elliminator | trailing_newline_checker >
 let scriptAsText =
     let handler =
         { codeform_check = "codeform_check"
         , vulnerabilities_elliminator = "vulnerabilities_elliminator"
+        , trailing_newline_checker = "trailing_newline_checker"
         }
     in \(s: Script) -> merge handler s
+
 let Params = { script : Script }
 let step = \(params: Params) -> GithubActions.Step::{
     , name = "RunScript"

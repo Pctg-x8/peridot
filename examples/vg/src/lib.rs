@@ -38,7 +38,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
-    fn init(e: &peridot::Engine<PL>) -> Self
+    fn init(e: &mut peridot::Engine<PL>) -> Self
     {
         let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
             .expect("No Fonts");
@@ -142,10 +142,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             tfb.sink_graphics_ready_commands(rec);
         }).expect("ImmResource Initialization");
 
-        let screen_size = e.backbuffers()[0].size().clone();
-        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
+        let screen_size = e.backbuffer(0).expect("no backbuffer").size().clone();
+        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format(), e.requesting_backbuffer_layout().0)
             .create(&e.graphics()).expect("RenderPass Creation");
-        let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
+        let framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+                br::Framebuffer::new(&renderpass, &[&bb], &screen_size, 1)
+            })
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
         let dsl = br::DescriptorSetLayout::new(&e.graphics(), &[
@@ -195,6 +199,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         curve_vertex_processing.fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
         let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), interior_vertex_processing);
+        gpb.multisample_state(Some(br::MultisampleState::new()));
         gpb.viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
         let gp = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Create GraphicsPipeline"), &pl);
@@ -255,7 +260,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     }
     fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
-        self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
+        self.framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+                br::Framebuffer::new(&self.renderpass, &[&bb], bb.size(), 1)
+            })
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         for (r, f) in self.render_cb.iter().zip(&self.framebuffers)
         {

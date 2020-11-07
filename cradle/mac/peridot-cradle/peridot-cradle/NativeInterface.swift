@@ -26,6 +26,22 @@ final class NativeGameEngine {
         resize_game(self.p, UInt32(newSize.width), UInt32(newSize.height))
     }
     
+    func handleCharacterKeyDown(character: UInt8) {
+        handle_character_keydown(self.p, character)
+    }
+    func handleCharacterKeyUp(character: UInt8) {
+        handle_character_keyup(self.p, character)
+    }
+    func handleKeymodDown(code: UInt8) {
+        handle_keymod_down(self.p, code)
+    }
+    func handleKeymodUp(code: UInt8) {
+        handle_keymod_up(self.p, code)
+    }
+    
+    func handleMouseButtonDown(index: UInt8) { handle_mouse_button_down(self.p, index) }
+    func handleMouseButtonUp(index: UInt8) { handle_mouse_button_up(self.p, index) }
+    
     static func captionbarText() -> NSString? {
         let p = captionbar_text()
         return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
@@ -42,4 +58,21 @@ func nsbundle_path_for_resource(path: NSString, ext: NSString) -> UnsafeMutableR
 func nsscreen_backing_scale_factor() -> Float32 {
     guard let mainScreen = NSScreen.main else { return 0.0 }
     return Float32(mainScreen.backingScaleFactor)
+}
+
+@_cdecl("obtain_mouse_pointer_position")
+func obtain_mouse_pointer_position(
+    viewptr: UnsafeMutableRawPointer,
+    x: UnsafeMutablePointer<Float32>,
+    y: UnsafeMutablePointer<Float32>
+) {
+    let v = unsafeBitCast(viewptr, to: PeridotRenderableView.self)
+    if let p = v.window?.mouseLocationOutsideOfEventStream {
+        let h = v.frame.height
+        var pl = v.convert(p, from: nil)
+        // Note: MacBook Pro 16inch 2019だとなぜかpの時点で5.0だけずれてる
+        pl.y += 5.0
+        x.pointee = Float32(pl.x) * nsscreen_backing_scale_factor()
+        y.pointee = Float32(h - pl.y) * nsscreen_backing_scale_factor()
+    }
 }

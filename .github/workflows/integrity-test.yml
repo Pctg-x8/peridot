@@ -22,7 +22,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"
@@ -57,7 +57,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"
@@ -90,13 +90,18 @@ jobs:
       uses: "./.github/actions/codeform-checker"
       with:
         script: vulnerabilities_elliminator
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Running Check: Trailing Newline for Source Code Files"
+      uses: "./.github/actions/codeform-checker"
+      with:
+        script: trailing_newline_checker
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"
@@ -131,7 +136,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"
@@ -183,7 +188,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"
@@ -218,7 +223,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"
@@ -288,7 +293,7 @@ jobs:
         AWS_DEFAULT_REGION: "ap-northeast-1"
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       name: Notify as Success
-      uses: "./.github/actions/integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
         begintime: "${{ needs.preconditions.outputs.begintime }}"

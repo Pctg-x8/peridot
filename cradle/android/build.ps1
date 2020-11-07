@@ -125,7 +125,7 @@ if ($Run) {
         Set-Location $ScriptPath/apkbuild
         RunADB uninstall $AppPackageID
         RunADB install app/build/outputs/apk/debug/app-debug.apk
-        RunADB shell am start -n $AppPackageID/com.cterm2.peridot.NativeActivity
+        RunADB shell am start -n $AppPackageID/jp.ct2.peridot.NativeActivity
     }
     finally { Pop-Location }
 }

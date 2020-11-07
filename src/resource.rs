@@ -585,12 +585,12 @@ pub struct DeviceWorkingTexture2DRef(usize);
 #[derive(Clone, Copy)]
 pub struct DeviceWorkingTexture3DRef(usize);
 /// DeviceWorkingTexture Management Arena
-pub struct DeviceWorkingTextureAllocator
+pub struct DeviceWorkingTextureAllocator<'d>
 {
-    planes: Vec<br::ImageDesc>,
-    volumes: Vec<br::ImageDesc>
+    planes: Vec<br::ImageDesc<'d>>,
+    volumes: Vec<br::ImageDesc<'d>>
 }
-impl DeviceWorkingTextureAllocator
+impl DeviceWorkingTextureAllocator<'_>
 {
     /// Initializes the allocator
     pub fn new() -> Self
