@@ -48,10 +48,10 @@ jobs:
       uses: "actions/checkout@v2"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
-      run: "./build.ps1 windows examples/basic -RunTests"
+      run: "./build.ps1 windows examples/basic -RunTests -Feeatures bedrock/DynamicLoaded"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "cargo check for transparent-back"
-      run: "./build.ps1 windows examples/basic -RunTests -Features transparent"
+      run: "./build.ps1 windows examples/basic -RunTests -Features transparent,bedrock/DynamicLoaded"
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
