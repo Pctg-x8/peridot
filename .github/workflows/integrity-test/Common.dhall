@@ -6,6 +6,7 @@ let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
 let SlackNotifierAction = https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
 let List/concat = https://prelude.dhall-lang.org/List/concat
 let List/map = https://prelude.dhall-lang.org/List/map
+let List/end_map = \(t: Type) -> \(f: t -> t) -> \(a: List t) -> List/map t t f a
 
 let eRepositoryOwnerLogin = GithubActions.mkExpression "github.event.repository.owner.login"
 let eRepositoryName = GithubActions.mkExpression "github.event.repository.name"
@@ -156,6 +157,27 @@ let checkExamples = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Te
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-examples"))]
         ]
     }
+let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
+    , name = Some "Cradle(Windows)"
+    , runs-on = GithubActions.RunnerPlatform.windows-latest
+    , steps = List/concat GithubActions.Step.Type [
+        , List/end_map GithubActions.Step.Type (withConditionStep precondition) [
+            , checkoutHeadStep
+            , checkoutStep
+            , GithubActions.Step::{
+                , name = "cargo check"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
+                , env = Some (toMap { VK_SDK_PATH = "" })
+                }
+            , GithubActions.Step::{
+                , name = "cargo check for transparent-back"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features \"transparent,bedrock/DynamicLoaded\""
+                , env = Some (toMap { VK_SDK_PATH = "" })
+                }
+            ]
+        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-windows"))]
+        ]
+    }
 
 let reportSuccessJob = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = Some "Report as Success"
@@ -181,10 +203,12 @@ in  { depends
     , slackNotifySuccessStep
     , prSlackNotifyProvider
     , weeklySlackNotifyProvider
+    , checkoutHeadStep
     , checkFormats
     , checkBaseLayer
     , checkTools
     , checkModules
     , checkExamples
+    , checkCradleWindows
     , reportSuccessJob
     }

@@ -88,6 +88,7 @@ let checkWorkflowSync = GithubActions.Job::{
     , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = List/concat GithubActions.Step.Type [
         , List/map GithubActions.Step.Type GithubActions.Step.Type (CommonDefs.withConditionStep preconditionOutputHasWorkflowChanges) [
+            , CommonDefs.checkoutHeadStep
             , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
             , GithubActions.Step::{ name = "Setup Dhall", run = Some installDhallScript }
             , GithubActions.Step::{ name = "test-sync", run = Some "make -C ./.github/workflows test-sync" }
@@ -114,6 +115,7 @@ in GithubActions.Workflow::{
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-sync-workflow = CommonDefs.depends ["preconditions"] checkWorkflowSync
-        , report-success = CommonDefs.depends ["preconditions", "check-examples", "check-formats", "check-sync-workflow"] (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
+        , check-cradle-windows = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleWindows CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , report-success = CommonDefs.depends ["preconditions", "check-examples", "check-formats", "check-sync-workflow", "check-cradle-windows"] (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
         }
     }

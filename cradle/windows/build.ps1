@@ -6,7 +6,8 @@ param(
     [parameter(HelpMessage="Package Bundle ID")][String]$AppPackageID = "com.cterm2.peridot",
     [switch]$Release = $false,
     [parameter(HelpMessage="Additional Rust Features")][String[]]$Features = @(),
-    [parameter(HelpMessage="Update Cargo dependencies")][switch]$UpdateDeps = $false
+    [parameter(HelpMessage="Update Cargo dependencies")][switch]$UpdateDeps = $false,
+    [parameter(HelpMessage="Run tests via cargo test")][switch]$RunTests = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,7 +77,7 @@ $ExternCrateName = $PackageName.Replace("-", "_")
 
 pub use $ExternCrateName::$EntryTyName as Game;" | Out-File $ScriptPath\src\userlib.rs -Encoding UTF8
 
-$CargoSubcommand = if ($Run) { "run" } else { "build" }
+$CargoSubcommand = if ($Run) { "run" } elseif ($RunTests) { "test" } else { "build" }
 $ActiveFeatures = @("bedrock/VK_KHR_win32_surface") + $Features
 $OptFlags = if ($Release) { "--release" } else { "" }
 if ($AssetDirectory) {
