@@ -43,6 +43,20 @@ let checkoutHeadStep = (ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams:
     , name = "Checking out (HEAD commit)"
     }
 
+let cacheStep = GithubActions.Step::{
+    , name = "Initialize Cache"
+    , uses = Some "actions/cache@v2"
+    , `with` = Some (toMap {
+        , path =
+            ''
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            ''
+        , key = "${GithubActions.mkExpression "runner.os"}-cargo-${GithubActions.mkExpression "hashFiles('**/Cargo.lock')"}"
+        })
+    }
+
 let slackNotifyIfFailureStep = \(stepName: Text) -> SlackNotifierAction.step {
     , status = SlackNotifierAction.Status.Failure stepName
     , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
@@ -113,6 +127,7 @@ let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> \(precondition: T
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , GithubActions.Step::{ name = "Building as Checking", uses = Some "./.github/actions/checkbuild-baselayer" }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-baselayer"))]
@@ -126,6 +141,7 @@ let checkTools = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Text)
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , CheckBuildSubdirAction.step { path = "tools" }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-tools"))]
@@ -138,6 +154,7 @@ let checkModules = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Tex
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , CheckBuildSubdirAction.step { path = "." }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-modules"))]
@@ -150,6 +167,7 @@ let checkExamples = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Te
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , CheckBuildSubdirAction.step { path = "examples" }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-examples"))]
@@ -162,6 +180,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
         , List/end_map GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , GithubActions.Step::{
                 , name = "cargo check"
                 , run = Some "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
@@ -209,4 +228,5 @@ in  { depends
     , checkExamples
     , checkCradleWindows
     , reportSuccessJob
+    , cacheStep
     }
