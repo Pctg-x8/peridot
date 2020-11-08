@@ -14,6 +14,15 @@ jobs:
       name: Checking out
       uses: "actions/checkout@v2"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
     - env:
@@ -48,6 +57,15 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
       uses: "actions/checkout@v2"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
     - env:
         VK_SDK_PATH: ''
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -90,6 +108,15 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
       uses: "actions/checkout@v2"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
@@ -173,6 +200,15 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
       uses: "actions/checkout@v2"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
@@ -269,6 +305,15 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
       uses: "actions/checkout@v2"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
