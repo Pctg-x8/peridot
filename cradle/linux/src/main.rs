@@ -155,15 +155,11 @@ impl X11 {
     }
     /// Returns false if application has beed exited
     fn process_all_events(&self) -> bool {
-        while let Some(ev) = self.con.poll_for_event()
-        {
-            if (ev.response_type() & 0x7f) == xcb::CLIENT_MESSAGE
-            {
+        while let Some(ev) = self.con.poll_for_event() {
+            if (ev.response_type() & 0x7f) == xcb::CLIENT_MESSAGE {
                 let e: &xcb::ClientMessageEvent = unsafe { xcb::cast_event(&ev) };
                 if e.data().data32()[0] == self.wm_delete_window { return false; }
-            }
-            else
-            {
+            } else {
                 debug!("Generic Event: {:?}", ev.response_type());
             }
         }
