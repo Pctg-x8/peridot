@@ -62,9 +62,10 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - env:
-        VK_SDK_PATH: ''
-      if: 'true'
+    - if: 'true'
+      name: install dependencies
+      run: "apt-get update && apt-get install -y libudev-dev"
+    - if: 'true'
       name: cargo check
       run: "./build.sh linux examples/basic -RunTests -Features bedrock/DynamicLoaded"
     - env:
