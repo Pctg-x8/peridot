@@ -204,9 +204,12 @@ let checkCradleLinux = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , checkoutStep
             , cacheStep
             , GithubActions.Step::{
+                , name = "install dependencies"
+                , run = Some "apt-get update && apt-get install -y libudev-dev"
+                }
+            , GithubActions.Step::{
                 , name = "cargo check"
                 , run = Some "./build.sh linux examples/basic -RunTests -Features bedrock/DynamicLoaded"
-                , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-linux"))]
