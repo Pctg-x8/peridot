@@ -120,7 +120,12 @@ impl EventDeviceManager {
 
     /// Returns assigned id(in EventDeviceManager)
     pub fn add(&mut self, node: String, device: EventDevice, epoll: &Epoll) -> u64 {
-        let id = self.id_free_list.pop_first().unwrap_or_else(|| self.devices_by_id.len() as u64);
+        let id = if let Some(&n) = self.id_free_list.iter().next() {
+            self.id_free_list.remove(&n);
+            n
+        } else {
+            self.devices_by_id.len() as u64
+        };
         epoll.add_fd(device.fd, libc::EPOLLIN as _, id + self.epoll_id_resv)
             .expect("Failed to register device fd to epoll");
         self.devices_by_id.insert(id, device);

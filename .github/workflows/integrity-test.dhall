@@ -97,6 +97,14 @@ let checkWorkflowSync = GithubActions.Job::{
         ]
     }
 
+let successPrerequisites =
+    [ "preconditions"
+    , "check-examples"
+    , "check-formats"
+    , "check-sync-workflow"
+    , "check-cradle-windows"
+    ]
+
 in GithubActions.Workflow::{
     , name = Some "Integrity Check"
     , on = GithubActions.On.Detailed GithubActions.OnDetails::{
@@ -116,6 +124,6 @@ in GithubActions.Workflow::{
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-sync-workflow = CommonDefs.depends ["preconditions"] checkWorkflowSync
         , check-cradle-windows = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleWindows CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
-        , report-success = CommonDefs.depends ["preconditions", "check-examples", "check-formats", "check-sync-workflow", "check-cradle-windows"] (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
+        , report-success = CommonDefs.depends successPrerequisites (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
         }
     }
