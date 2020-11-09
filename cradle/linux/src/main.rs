@@ -1,4 +1,3 @@
-#![feature(map_first_last)]
 
 #[macro_use] extern crate log;
 
