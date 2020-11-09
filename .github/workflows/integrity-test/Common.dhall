@@ -195,26 +195,6 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-windows"))]
         ]
     }
-let checkCradleLinux = \(notifyProvider : SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
-    , name = Some "Cradle(Linux)"
-    , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
-    , steps = List/concat GithubActions.Step.Type [
-        , List/end_map GithubActions.Step.Type (withConditionStep precondition) [
-            , checkoutHeadStep
-            , checkoutStep
-            , cacheStep
-            , GithubActions.Step::{
-                , name = "install dependencies"
-                , run = Some "sudo apt-get update && sudo apt-get install -y libudev-dev"
-                }
-            , GithubActions.Step::{
-                , name = "cargo check"
-                , run = Some "./build.sh linux examples/basic -RunTests -Features bedrock/DynamicLoaded"
-                }
-            ]
-        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-linux"))]
-        ]
-    }
 
 let reportSuccessJob = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = Some "Report as Success"
@@ -247,7 +227,6 @@ in  { depends
     , checkModules
     , checkExamples
     , checkCradleWindows
-    , checkCradleLinux
     , reportSuccessJob
     , cacheStep
     }

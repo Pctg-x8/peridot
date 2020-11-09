@@ -23,7 +23,6 @@ in GithubActions.Workflow::{
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.weeklySlackNotifyProvider "true")
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.weeklySlackNotifyProvider "true")
         , check-cradle-windows = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleWindows CommonDefs.weeklySlackNotifyProvider "true")
-        , check-cradle-linux = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleLinux CommonDefs.weeklySlackNotifyProvider "true")
-        , report-success = CommonDefs.depends ["preconditions", "check-examples", "check-formats", "check-cradle-windows", "check-cradle-linux"] (CommonDefs.reportSuccessJob CommonDefs.weeklySlackNotifyProvider)
+        , report-success = CommonDefs.depends ["preconditions", "check-examples", "check-formats", "check-cradle-windows"] (CommonDefs.reportSuccessJob CommonDefs.weeklySlackNotifyProvider)
         }
     }

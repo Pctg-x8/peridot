@@ -42,53 +42,6 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         report_name: PR Integrity Check
         status: failure
-  "check-cradle-linux":
-    name: "Cradle(Linux)"
-    needs:
-    - preconditions
-    - "check-baselayer"
-    "runs-on": "ubuntu-latest"
-    steps:
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
-      with:
-        ref: "${{ github.event.pull_request.head.sha }}"
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: Checking out
-      uses: "actions/checkout@v2"
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: Initialize Cache
-      uses: "actions/cache@v2"
-      with:
-        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: install dependencies
-      run: "sudo apt-get update && sudo apt-get install -y libudev-dev"
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-      name: cargo check
-      run: "./build.sh linux examples/basic -RunTests -Features bedrock/DynamicLoaded"
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
-      name: Notify as Failure
-      uses: "Pctg-x8/ci-notifications-post-invoker@master"
-      with:
-        base_sha: "${{ github.event.pull_request.base.sha }}"
-        begintime: "${{ needs.preconditions.outputs.begintime }}"
-        failure_step: "check-cradle-linux"
-        head_sha: "${{ github.event.pull_request.head.sha }}"
-        mode: diff
-        pr_number: "${{ github.event.number }}"
-        pr_title: "${{ github.event.pull_request.title }}"
-        report_name: PR Integrity Check
-        status: failure
   "check-cradle-windows":
     name: "Cradle(Windows)"
     needs:
@@ -432,7 +385,6 @@ jobs:
     - "check-formats"
     - "check-sync-workflow"
     - "check-cradle-windows"
-    - "check-cradle-linux"
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
