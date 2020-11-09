@@ -205,7 +205,7 @@ let checkCradleLinux = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , cacheStep
             , GithubActions.Step::{
                 , name = "install dependencies"
-                , run = Some "apt-get update && apt-get install -y libudev-dev"
+                , run = Some "sudo apt-get update && sudo apt-get install -y libudev-dev"
                 }
             , GithubActions.Step::{
                 , name = "cargo check"

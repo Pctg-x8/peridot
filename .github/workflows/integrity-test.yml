@@ -68,7 +68,7 @@ jobs:
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: install dependencies
-      run: "apt-get update && apt-get install -y libudev-dev"
+      run: "sudo apt-get update && sudo apt-get install -y libudev-dev"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
       run: "./build.sh linux examples/basic -RunTests -Features bedrock/DynamicLoaded"
