@@ -14,6 +14,15 @@ jobs:
       name: Checking out
       uses: "actions/checkout@v2"
     - if: 'true'
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
     - env:
@@ -22,10 +31,59 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-baselayer"
+        mode: branch
+        report_name: Weekly Check
+        status: failure
+  "check-cradle-windows":
+    name: "Cradle(Windows)"
+    needs:
+    - preconditions
+    - "check-baselayer"
+    "runs-on": "windows-latest"
+    steps:
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
+    - if: 'true'
+      name: Checking out
+      uses: "actions/checkout@v2"
+    - if: 'true'
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - env:
+        VK_SDK_PATH: ''
+      if: 'true'
+      name: cargo check
+      run: "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
+    - env:
+        VK_SDK_PATH: ''
+      if: 'true'
+      name: "cargo check for transparent-back"
+      run: "./build.ps1 windows examples/basic -RunTests -Features \"transparent,bedrock/DynamicLoaded\""
+    - env:
+        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+        AWS_DEFAULT_REGION: "ap-northeast-1"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+      if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-cradle-windows"
+        mode: branch
+        report_name: Weekly Check
         status: failure
   "check-examples":
     name: Examples
@@ -43,6 +101,15 @@ jobs:
       name: Checking out
       uses: "actions/checkout@v2"
     - if: 'true'
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
@@ -53,10 +120,12 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-examples"
+        mode: branch
+        report_name: Weekly Check
         status: failure
   "check-formats":
     name: Code Formats
@@ -93,10 +162,12 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-formats"
+        mode: branch
+        report_name: Weekly Check
         status: failure
   "check-modules":
     name: Modules
@@ -114,6 +185,15 @@ jobs:
       name: Checking out
       uses: "actions/checkout@v2"
     - if: 'true'
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
@@ -124,10 +204,12 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-modules"
+        mode: branch
+        report_name: Weekly Check
         status: failure
   "check-tools":
     name: Tools
@@ -145,6 +227,15 @@ jobs:
       name: Checking out
       uses: "actions/checkout@v2"
     - if: 'true'
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
       with:
@@ -155,10 +246,12 @@ jobs:
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       if: "failure()"
       name: Notify as Failure
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
         failure_step: "check-tools"
+        mode: branch
+        report_name: Weekly Check
         status: failure
   preconditions:
     name: Preconditions
@@ -175,6 +268,7 @@ jobs:
     - preconditions
     - "check-examples"
     - "check-formats"
+    - "check-cradle-windows"
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
@@ -188,9 +282,11 @@ jobs:
         AWS_DEFAULT_REGION: "ap-northeast-1"
         AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
       name: Notify as Success
-      uses: "./.github/actions/weekly-integrity-check-slack-notifier"
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
+        mode: branch
+        report_name: Weekly Check
         status: success
 name: "Integrity Check (Weekly)"
 'on':

@@ -6,6 +6,7 @@ let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
 let SlackNotifierAction = https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
 let List/concat = https://prelude.dhall-lang.org/List/concat
 let List/map = https://prelude.dhall-lang.org/List/map
+let List/end_map = \(t: Type) -> \(f: t -> t) -> \(a: List t) -> List/map t t f a
 
 let eRepositoryOwnerLogin = GithubActions.mkExpression "github.event.repository.owner.login"
 let eRepositoryName = GithubActions.mkExpression "github.event.repository.name"
@@ -42,43 +43,55 @@ let checkoutHeadStep = (ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams:
     , name = "Checking out (HEAD commit)"
     }
 
+let cacheStep = GithubActions.Step::{
+    , name = "Initialize Cache"
+    , uses = Some "actions/cache@v2"
+    , `with` = Some (toMap {
+        , path =
+            ''
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            ''
+        , key = "${GithubActions.mkExpression "runner.os"}-cargo-${GithubActions.mkExpression "hashFiles('**/Cargo.lock')"}"
+        })
+    }
+
 let slackNotifyIfFailureStep = \(stepName: Text) -> SlackNotifierAction.step {
     , status = SlackNotifierAction.Status.Failure stepName
     , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-    , head_sha = ePullRequestHeadHash
-    , base_sha = ePullRequestBaseHash
-    , pr_number = ePullRequestNumber
-    , pr_title = ePullRequestTitle
+    , report_name = "PR Integrity Check"
+    , mode = SlackNotifierAction.Mode.Diff
+        { head_sha = ePullRequestHeadHash
+        , base_sha = ePullRequestBaseHash
+        , pr_number = ePullRequestNumber
+        , pr_title = ePullRequestTitle
+        }
     } awsAccessEnvParams
 let slackNotifySuccessStep = SlackNotifierAction.step {
     , status = SlackNotifierAction.Status.Success
     , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-    , head_sha = ePullRequestHeadHash
-    , base_sha = ePullRequestBaseHash
-    , pr_number = ePullRequestNumber
-    , pr_title = ePullRequestTitle
+    , report_name = "PR Integrity Check"
+    , mode = SlackNotifierAction.Mode.Diff
+        { head_sha = ePullRequestHeadHash
+        , base_sha = ePullRequestBaseHash
+        , pr_number = ePullRequestNumber
+        , pr_title = ePullRequestTitle
+        }
     } awsAccessEnvParams
 
-let weeklySlackNotifyAsFailureStep = \(stepName: Text) -> GithubActions.Step::{
-    , name = "Notify as Failure"
-    , uses = Some "./.github/actions/weekly-integrity-check-slack-notifier"
-    , `if` = Some "failure()"
-    , env = Some (toMap awsAccessEnvParams)
-    , `with` = Some (toMap {
-        , status = "failure"
-        , failure_step = stepName
-        , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        })
-    }
-let weeklySlackNotifyAsSuccessStep = GithubActions.Step::{
-    , name = "Notify as Success"
-    , uses = Some "./.github/actions/weekly-integrity-check-slack-notifier"
-    , env = Some (toMap awsAccessEnvParams)
-    , `with` = Some (toMap {
-        , status = "success"
-        , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        })
-    }
+let weeklySlackNotifyAsFailureStep = \(stepName: Text) -> SlackNotifierAction.step {
+    , status = SlackNotifierAction.Status.Failure stepName
+    , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
+    , report_name = "Weekly Check"
+    , mode = SlackNotifierAction.Mode.Branch
+    } awsAccessEnvParams
+let weeklySlackNotifyAsSuccessStep = SlackNotifierAction.step {
+    , status = SlackNotifierAction.Status.Success
+    , begintime = GithubActions.mkExpression "needs.preconditions.outputs.begintime"
+    , report_name = "Weekly Check"
+    , mode = SlackNotifierAction.Mode.Branch
+    } awsAccessEnvParams
 
 let SlackNotification = < Success | Failure : Text >
 let SlackNotifyProvider = { Success : GithubActions.Step.Type, Failure : Text -> GithubActions.Step.Type }
@@ -114,6 +127,7 @@ let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> \(precondition: T
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , GithubActions.Step::{ name = "Building as Checking", uses = Some "./.github/actions/checkbuild-baselayer" }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-baselayer"))]
@@ -127,6 +141,7 @@ let checkTools = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Text)
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , CheckBuildSubdirAction.step { path = "tools" }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-tools"))]
@@ -139,6 +154,7 @@ let checkModules = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Tex
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , CheckBuildSubdirAction.step { path = "." }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-modules"))]
@@ -151,9 +167,32 @@ let checkExamples = \(notifyProvider: SlackNotifyProvider) -> \(precondition: Te
         , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
+            , cacheStep
             , CheckBuildSubdirAction.step { path = "examples" }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure  "check-examples"))]
+        ]
+    }
+let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
+    , name = Some "Cradle(Windows)"
+    , runs-on = GithubActions.RunnerPlatform.windows-latest
+    , steps = List/concat GithubActions.Step.Type [
+        , List/end_map GithubActions.Step.Type (withConditionStep precondition) [
+            , checkoutHeadStep
+            , checkoutStep
+            , cacheStep
+            , GithubActions.Step::{
+                , name = "cargo check"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
+                , env = Some (toMap { VK_SDK_PATH = "" })
+                }
+            , GithubActions.Step::{
+                , name = "cargo check for transparent-back"
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features \"transparent,bedrock/DynamicLoaded\""
+                , env = Some (toMap { VK_SDK_PATH = "" })
+                }
+            ]
+        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-windows"))]
         ]
     }
 
@@ -181,10 +220,13 @@ in  { depends
     , slackNotifySuccessStep
     , prSlackNotifyProvider
     , weeklySlackNotifyProvider
+    , checkoutHeadStep
     , checkFormats
     , checkBaseLayer
     , checkTools
     , checkModules
     , checkExamples
+    , checkCradleWindows
     , reportSuccessJob
+    , cacheStep
     }

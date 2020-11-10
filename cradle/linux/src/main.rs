@@ -1,4 +1,3 @@
-#![feature(map_first_last)]
 
 #[macro_use] extern crate log;
 
@@ -65,7 +64,7 @@ impl Presenter {
 impl peridot::PlatformPresenter for Presenter {
     fn format(&self) -> br::vk::VkFormat { self.sc.format() }
     fn backbuffer_count(&self) -> usize { self.sc.backbuffer_count() }
-    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.sc.backbuffer(index) }
+    fn backbuffer(&self, index: usize) -> Option<std::rc::Rc<br::ImageView>> { self.sc.backbuffer(index) }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_backbuffer_layout()
     }
@@ -155,15 +154,11 @@ impl X11 {
     }
     /// Returns false if application has beed exited
     fn process_all_events(&self) -> bool {
-        while let Some(ev) = self.con.poll_for_event()
-        {
-            if (ev.response_type() & 0x7f) == xcb::CLIENT_MESSAGE
-            {
+        while let Some(ev) = self.con.poll_for_event() {
+            if (ev.response_type() & 0x7f) == xcb::CLIENT_MESSAGE {
                 let e: &xcb::ClientMessageEvent = unsafe { xcb::cast_event(&ev) };
                 if e.data().data32()[0] == self.wm_delete_window { return false; }
-            }
-            else
-            {
+            } else {
                 debug!("Generic Event: {:?}", ev.response_type());
             }
         }

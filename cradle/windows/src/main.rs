@@ -45,7 +45,7 @@ impl GameDriver {
         base.postinit();
 
         GameDriver {
-            base, usercode, current_size: init_size, rt_handler
+            base, usercode, current_size: init_size, ri_handler
         }
     }
 

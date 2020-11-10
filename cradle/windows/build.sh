@@ -17,6 +17,10 @@ while [ $# -gt 0 ]; do
             CARGO_SUBCOMMAND="run"
             shift
             ;;
+        "--RunTests" | "-t")
+            CARGO_SUBCOMMAND="test"
+            shift
+            ;;
         "-AssetDirectory" | "-a")
             export PERIDOT_EXTERNAL_ASSET_PATH=$(realpath $2)
             shift 2
