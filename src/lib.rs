@@ -451,7 +451,30 @@ impl RenderPassTemplates
         b.add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None));
         b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
 
-        return b;
+        b
+    }
+    pub fn single_render_with_depth_noread(
+        format: br::vk::VkFormat, depth_format: br::vk::VkFormat,
+        color_attachment_outer_requesting_layout: br::ImageLayout
+    ) -> br::RenderPassBuilder {
+        let mut b = br::RenderPassBuilder::new();
+        let adesc = br::AttachmentDescription::new(
+            format, color_attachment_outer_requesting_layout, color_attachment_outer_requesting_layout
+        )
+        .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        let addesc = br::AttachmentDescription::new(
+            depth_format, br::ImageLayout::DepthStencilAttachmentOpt, br::ImageLayout::DepthStencilAttachmentOpt
+        )
+        .load_op(br::LoadOp::Clear).store_op(br::StoreOp::DontCare);
+        b.add_attachments(vec![adesc, addesc]);
+        b.add_subpass(
+            br::SubpassDescription::new()
+                .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
+                .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt)
+        );
+        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true));
+
+        b
     }
 }
 

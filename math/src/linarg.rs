@@ -652,6 +652,9 @@ impl<T: Into<u32> + Copy> From<&'_ Vector4<T>> for br::Extent4D
 {
     fn from(v: &Vector4<T>) -> Self { br::Extent4D(v.0.into(), v.1.into(), v.2.into(), v.3.into()) }
 }
+impl br::AsFormat for Vector2<f32> { const FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R32G32_SFLOAT; }
+impl br::AsFormat for Vector3<f32> { const FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R32G32B32_SFLOAT; }
+impl br::AsFormat for Vector4<f32> { const FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R32G32B32A32_SFLOAT; }
 // euclid interops (for vg) //
 impl<T> Into<euclid::Point2D<T>> for Vector2<T>
 {
@@ -660,6 +663,39 @@ impl<T> Into<euclid::Point2D<T>> for Vector2<T>
 impl<T> Into<euclid::Vector2D<T>> for Vector2<T>
 {
     fn into(self) -> euclid::Vector2D<T> { euclid::Vector2D::new(self.0, self.1) }
+}
+
+// Random Helper //
+use rand::distributions::Distribution;
+impl<T: rand_distr::uniform::SampleUniform + rand_distr::num_traits::Float> Vector2<T> {
+    /// Random point inside of an unit circle
+    pub fn rand_unit_circle<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y]: [T; 2] = rand_distr::UnitCircle.sample(rng);
+        let s = rand_distr::Uniform::new_inclusive(T::zero(), T::one()).sample(rng);
+
+        Vector2(x * s, y * s)
+    }
+    /// Random point on edge of an unit circle
+    pub fn rand_unit_circle_edge<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y] = rand_distr::UnitCircle.sample(rng);
+
+        Vector2(x, y)
+    }
+}
+impl<T: rand_distr::uniform::SampleUniform + rand_distr::num_traits::Float> Vector3<T> {
+    /// Random point inside of an unit sphere
+    pub fn rand_unit_sphere<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y, z]: [T; 3] = rand_distr::UnitSphere.sample(rng);
+        let s = rand_distr::Uniform::new_inclusive(T::zero(), T::one()).sample(rng);
+
+        Vector3(x * s, y * s, z * s)
+    }
+    /// Random point on surface of an unit sphere
+    pub fn rand_unit_sphere_surface<R: rand::Rng>(rng: &mut R) -> Self {
+        let [x, y, z] = rand_distr::UnitSphere.sample(rng);
+
+        Vector3(x, y, z)
+    }
 }
 
 #[cfg(test)]
@@ -721,5 +757,13 @@ mod tests
         assert!(b.abs() <= std::f32::EPSILON);
         assert!(c.abs() <= std::f32::EPSILON);
         assert!((1.0 - d).abs() <= std::f32::EPSILON);
+    }
+
+    #[test]
+    fn is_edge() {
+        assert!((Vector2F32::rand_unit_circle_edge(&mut rand::thread_rng()).len() - 1.0).abs() <= std::f32::EPSILON);
+        assert!(
+            (Vector3F32::rand_unit_sphere_surface(&mut rand::thread_rng()).len() - 1.0).abs() <= std::f32::EPSILON
+        );
     }
 }

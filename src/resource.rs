@@ -81,6 +81,13 @@ impl BufferContent
         BufferContent::UniformTexel(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
     }
 
+    pub fn raw<T>() -> Self {
+        BufferContent::Raw(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn raw_multiple<T>(count: usize) -> Self {
+        BufferContent::Raw(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
+    }
+
     pub fn storage<T>() -> Self {
         BufferContent::Storage(size_of::<T>() as _, align_of::<T>() as _)
     }
