@@ -146,13 +146,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true))
             .create(&e.graphics())
             .expect("Create RenderPass");
-        let framebuffers = (0..e.backbuffer_count())
-            .map(|bb_index| {
-                let bb = e.backbuffer(bb_index).expect("no backbuffers");
-                br::Framebuffer::new(&renderpass, &[&bb], bb.size(), 1)
-            })
+        let framebuffers = e.iter_backbuffers()
+            .map(|b| br::Framebuffer::new(&renderpass, &[&b], b.size(), 1))
             .collect::<Result<Vec<_>, _>>()
-            .expect("Bind Framebuffer");
+            .expect("Bindg Framebuffer");
         
         let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
         let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &[
@@ -249,21 +246,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     }
     fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
-        self.framebuffers = (0..e.backbuffer_count())
-            .map(|bb_index| {
-                let bb = e.backbuffer(bb_index).expect("no backbuffer");
-                br::Framebuffer::new(&self.renderpass, &[&bb], bb.size(), 1)
-            })
-            .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
+        self.framebuffers = e.iter_backbuffers()
+            .map(|b| br::Framebuffer::new(&self.renderpass, &[&b], b.size(), 1))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Bind Framebuffers");
         self.populate_render_commands();
     }
 }
-impl<PL: peridot::NativeLinker> Game<PL>
-{
-    fn populate_render_commands(&mut self)
-    {
-        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers)
-        {
+impl<PL: peridot::NativeLinker> Game<PL> {
+    fn populate_render_commands(&mut self) {
+        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
             let mut cr = cb.begin().expect("Begin CmdRecord");
             cr.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
                 &[br::ClearValue::Color([0.0; 4])], true);
