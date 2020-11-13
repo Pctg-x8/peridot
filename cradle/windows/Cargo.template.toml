@@ -7,14 +7,18 @@ build = "build.rs"
 
 [features]
 UseExternalAssetPath = []
+transparent = ["winapi/handleapi", "winapi/synchapi", "winapi/winbase", "comdrive", "metrics", "widestring", "bedrock/VK_KHR_external_memory_win32", "bedrock/VK_KHR_external_semaphore_win32"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Presentation", "Implements", "VK_KHR_win32_surface"] }
 peridot = { path = "../.." }
 log = "0.4"
 env_logger = "0.5"
+comdrive = { git = "https://github.com/Pctg-x8/comdrive", optional = true }
+metrics = { git = "https://github.com/Pctg-x8/metrics", optional = true }
+widestring = { version = "0.4", optional = true }
 #%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
 
 [dependencies.winapi]
 version = "0.3"
-features = ["winuser", "libloaderapi", "shellscalingapi"]
+features = ["winuser", "libloaderapi", "shellscalingapi", "xinput"]

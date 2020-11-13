@@ -2,7 +2,7 @@
 
 use peridot::{
     LayoutedPipeline, ModelData, DefaultRenderCommands, Buffer, Engine, BufferPrealloc, BufferContent,
-    EngineEvents, NativeLinker
+    NativeLinker
 };
 use bedrock as br;
 use super::*;
@@ -143,7 +143,7 @@ impl DefaultRenderCommands for RendererParams
 {
     type Extras = RendererExternalInstances;
 
-    fn default_render_commands<EH: EngineEvents<NL>, NL: NativeLinker>(&self, e: &Engine<EH, NL>,
+    fn default_render_commands<NL: NativeLinker>(&self, e: &Engine<NL>,
         cmd: &mut br::CmdRecord, buffer: &Buffer, extras: &Self::Extras)
     {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();

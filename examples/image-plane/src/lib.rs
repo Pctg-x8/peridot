@@ -18,16 +18,12 @@ use std::ops::Range;
 use std::time::Duration;
 use log::*;
 
-pub struct IPFixedBufferInitializer
-{
+pub struct IPFixedBufferInitializer {
     vertices_offset: u64
 }
-impl FixedBufferInitializer for IPFixedBufferInitializer
-{
-    fn stage_data(&mut self, m: &br::MappedMemoryRange)
-    {
-        unsafe
-        {
+impl FixedBufferInitializer for IPFixedBufferInitializer {
+    fn stage_data(&mut self, m: &br::MappedMemoryRange) {
+        unsafe {
             m.slice_mut(self.vertices_offset as _, 4).clone_from_slice(&[
                 UVVert { pos: Vector3(-1.0, -1.0, 0.0), uv: Vector2(0.0, 0.0) },
                 UVVert { pos: Vector3( 1.0, -1.0, 0.0), uv: Vector2(1.0, 0.0) },
@@ -36,8 +32,7 @@ impl FixedBufferInitializer for IPFixedBufferInitializer
             ]);
         }
     }
-    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buffer: &Buffer, buffer_range: Range<u64>)
-    {
+    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buffer: &Buffer, buffer_range: Range<u64>) {
         tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_INPUT.vertex_shader(), buffer,
             buffer_range.start as _ .. buffer_range.end as _,
             br::AccessFlags::UNIFORM_READ | br::AccessFlags::VERTEX_ATTRIBUTE_READ);
@@ -63,9 +58,9 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self
+    fn init(e: &mut peridot::Engine<PL>) -> Self
     {
-        let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
+        let screen_size: br::Extent3D = e.backbuffer(0).expect("no backbuffers").size().clone().into();
         let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;
 
         let image_data: peridot::PNG = e.load("images.example").expect("No image found");
@@ -98,7 +93,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             depth_range: 1.0 .. 10.0
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
-        buffers.mut_buffer.0.guard_map(buffers.mut_buffer.1, |m| unsafe
+        buffers.mut_buffer.0.guard_map(0 .. buffers.mut_buffer.1, |m| unsafe
         {
             let (v, p) = cam.matrixes();
             let aspect = Matrix4::scale(Vector4(screen_aspect, 1.0, 1.0, 1.0));
@@ -111,14 +106,24 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let mut tfb_mut = TransferBatch::new();
         let dst_update_range = buffers.mut_buffer_placement ..
             buffers.mut_buffer_placement + size_of::<Uniform>() as u64;
-        tfb.add_copying_buffer((&buffers.mut_buffer.0, mut_uniform_offset),
-            (&buffers.buffer.0, dst_update_range.start), size_of::<Uniform>() as _);
-        tfb_mut.add_copying_buffer((&buffers.mut_buffer.0, mut_uniform_offset),
-            (&buffers.buffer.0, dst_update_range.start), size_of::<Uniform>() as _);
-        tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
-            dst_update_range.clone(), br::AccessFlags::UNIFORM_READ);
-        tfb_mut.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
-            dst_update_range, br::AccessFlags::UNIFORM_READ);
+        tfb.add_copying_buffer(
+            buffers.mut_buffer.0.with_dev_offset(mut_uniform_offset),
+            buffers.buffer.0.with_dev_offset(dst_update_range.start),
+            size_of::<Uniform>() as _
+        );
+        tfb_mut.add_copying_buffer(
+            buffers.mut_buffer.0.with_dev_offset(mut_uniform_offset),
+            buffers.buffer.0.with_dev_offset(dst_update_range.start),
+            size_of::<Uniform>() as _
+        );
+        tfb.add_buffer_graphics_ready(
+            br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
+            dst_update_range.clone(), br::AccessFlags::UNIFORM_READ
+        );
+        tfb_mut.add_buffer_graphics_ready(
+            br::PipelineStageFlags::VERTEX_SHADER, &buffers.buffer.0,
+            dst_update_range, br::AccessFlags::UNIFORM_READ
+        );
 
         e.submit_commands(|r|
         {
@@ -133,15 +138,19 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             tfb_mut.sink_graphics_ready_commands(&mut rec);
         }
 
-        let attdesc = br::AttachmentDescription::new(e.backbuffer_format(),
-            br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+        let outer_layout = e.requesting_backbuffer_layout().0;
+        let attdesc = br::AttachmentDescription::new(e.backbuffer_format(), outer_layout, outer_layout)
             .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
         let renderpass = br::RenderPassBuilder::new().add_attachment(attdesc)
             .add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None))
             .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true))
             .create(&e.graphics())
             .expect("Create RenderPass");
-        let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], v.size(), 1))
+        let framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffers");
+                br::Framebuffer::new(&renderpass, &[&bb], bb.size(), 1)
+            })
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
         
@@ -188,7 +197,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .expect("Create GraphicsPipeline");
         let gp = LayoutedPipeline::combine(gp, &pl);
 
-        let render_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, e.backbuffers().len())
+        let render_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, e.backbuffer_count())
             .expect("Alloc RenderCB");
         for (cb, fb) in render_cb.iter().zip(&framebuffers)
         {
@@ -211,12 +220,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }
     }
 
-    fn update(&mut self, _e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, delta_time: Duration)
+    fn update(&mut self, _e: &peridot::Engine<PL>, on_backbuffer_of: u32, delta_time: Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
         self.rot += dtsec * 15.0;
-        self.buffers.mut_buffer.0.guard_map(self.mut_uniform_offset + size_of::<Uniform>() as u64, |m| unsafe
+        self.buffers.mut_buffer.0.guard_map(0 .. self.mut_uniform_offset + size_of::<Uniform>() as u64, |m| unsafe
         {
             m.get_mut::<Uniform>(self.mut_uniform_offset as _).object
                 = Quaternion::new(self.rot, Vector3F32::up()).into();
@@ -238,9 +247,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         self.framebuffers.clear();
         self.render_cb.reset().expect("Resetting RenderCB");
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, _new_size: Vector2<usize>)
+    fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
-        self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
+        self.framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+                br::Framebuffer::new(&self.renderpass, &[&bb], bb.size(), 1)
+            })
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         self.populate_render_commands();
     }
