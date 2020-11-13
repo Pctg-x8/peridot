@@ -149,7 +149,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let framebuffers = e.iter_backbuffers()
             .map(|b| br::Framebuffer::new(&renderpass, &[&b], b.size(), 1))
             .collect::<Result<Vec<_>, _>>()
-            .expect("Bindg Framebuffer");
+            .expect("Bind Framebuffer");
         
         let smp = br::SamplerBuilder::default().create(&e.graphics()).expect("Creating Sampler");
         let descriptor_layout = br::DescriptorSetLayout::new(&e.graphics(), &[
