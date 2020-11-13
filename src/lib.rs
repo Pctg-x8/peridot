@@ -134,6 +134,9 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn backbuffer_format(&self) -> br::vk::VkFormat { self.presenter.format() }
     pub fn backbuffer_count(&self) -> usize { self.presenter.backbuffer_count() }
     pub fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.presenter.backbuffer(index) }
+    pub fn iter_backbuffers(&self) -> impl Iterator<Item = Rc<br::ImageView>> + '_ {
+        (0 .. self.backbuffer_count()).map(move |x| self.backbuffer(x).expect("unreachable while iteration"))
+    }
     pub fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.presenter.requesting_backbuffer_layout()
     }
