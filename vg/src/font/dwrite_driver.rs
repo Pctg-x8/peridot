@@ -14,6 +14,7 @@ use std::ptr::null_mut;
 use lyon_path::PathEvent;
 use euclid::point2;
 use comdrive::d2;
+use log::*;
 
 #[repr(C)] pub struct ComBase<VTable: 'static> { vtbl: &'static VTable, refcount: ULONG }
 impl<VTable: 'static> ComBase<VTable>

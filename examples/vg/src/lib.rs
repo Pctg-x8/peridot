@@ -1,7 +1,7 @@
 
 use std::marker::PhantomData;
-#[macro_use] extern crate log;
-#[macro_use] extern crate peridot_derive;
+use log::*;
+use peridot_derive::SpecConstantStorage;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
@@ -38,7 +38,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
-    fn init(e: &peridot::Engine<Self, PL>) -> Self
+    fn init(e: &mut peridot::Engine<PL>) -> Self
     {
         let font_provider = pvg::FontProvider::new().expect("FontProvider initialization error");
         let font = font_provider.best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
@@ -120,7 +120,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let buffer = mb.alloc().expect("Mem Allocation").pop().expect("no objects?").unwrap_buffer();
         let stg_buffer = mb_stg.alloc_upload().expect("StgMem Allocation").pop().expect("no objects?").unwrap_buffer();
         
-        let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(bp.total_size(), |m|
+        let (vg_renderer_params, vg_renderer_params2) = stg_buffer.guard_map(0 .. bp.total_size(), |m|
         {
             let p0 = ctx.stage_data_into(m, vg_offs);
             let p1 = ctx2.stage_data_into(m, vg_offs2);
@@ -143,10 +143,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             tfb.sink_graphics_ready_commands(rec);
         }).expect("ImmResource Initialization");
 
-        let screen_size = e.backbuffers()[0].size().clone();
-        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format())
+        let screen_size = e.backbuffer(0).expect("no backbuffer").size().clone();
+        let renderpass = RenderPassTemplates::single_render(e.backbuffer_format(), e.requesting_backbuffer_layout().0)
             .create(&e.graphics()).expect("RenderPass Creation");
-        let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], &screen_size, 1))
+        let framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+                br::Framebuffer::new(&renderpass, &[&bb], &screen_size, 1)
+            })
             .collect::<Result<Vec<_>, _>>().expect("Framebuffer Creation");
         
         let dsl = br::DescriptorSetLayout::new(&e.graphics(), &[
@@ -196,6 +200,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         curve_vertex_processing.fragment_shader_mut().expect("fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }.as_pair());
         let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), interior_vertex_processing);
+        gpb.multisample_state(Some(br::MultisampleState::new()));
         gpb.viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
             .multisample_state(Some(br::MultisampleState::new()));
@@ -240,7 +245,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         }
     }
 
-    fn update(&mut self, _e: &peridot::Engine<Self, PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
+    fn update(&mut self, _e: &peridot::Engine<PL>, on_backbuffer_of: u32, _dt: std::time::Duration)
         -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
     {
         (None, br::SubmissionBatch
@@ -255,9 +260,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<Self, PL>, _new_size: Vector2<usize>)
+    fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
-        self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
+        self.framebuffers = (0..e.backbuffer_count())
+            .map(|bb_index| {
+                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+                br::Framebuffer::new(&self.renderpass, &[&bb], bb.size(), 1)
+            })
             .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
         for (r, f) in self.render_cb.iter().zip(&self.framebuffers)
         {
@@ -269,7 +278,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
 impl<PL: peridot::NativeLinker> Game<PL>
 {
-    fn render_commands(&self, e: &peridot::Engine<Self, PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
+    fn render_commands(&self, e: &peridot::Engine<PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
     {
         cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
         self.vg_renderer_params2.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst2);

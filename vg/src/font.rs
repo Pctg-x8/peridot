@@ -213,9 +213,9 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
-    pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 * self.scale_value() }
+    pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 }
 
     pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
     {
@@ -224,7 +224,7 @@ impl Font
     pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
     {
         self.0.design_glyph_metrics(&[glyph as _], false)
-            .map(|m| self.scale_value() * m[0].advanceWidth as f32).map_err(From::from)
+            .map(|m| m[0].advanceWidth as f32).map_err(From::from)
     }
     pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
     {
@@ -238,7 +238,7 @@ impl Font
     pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
     {
         let sink = comdrive::ComPtr(PathEventReceiver::new());
-        self.0.sink_glyph_run_outline(self.1 as _, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 })?;
+        self.0.sink_glyph_run_outline(self.units_per_em() as _, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 })?;
         for pe in unsafe { sink.0.as_mut().expect("null sink").drain_all_paths() }
         {
             builder.path_event(pe);
@@ -279,7 +279,7 @@ impl FontProvider
         Ok(Font(face, size))
     }
     #[cfg(not(feature = "use-fontconfig"))]
-    pub fn best_match(_: &str, _: &FontProperties, _: f32) -> Result<Font, FontConstructionError>
+    pub fn best_match(&self, _: &str, _: &FontProperties, _: f32) -> Result<Font, FontConstructionError>
     {
         // no matching algorithm is available!
 
