@@ -144,7 +144,6 @@ fn process_message_all() -> bool
     true
 }
 
-use std::rc::Rc;
 use std::path::PathBuf;
 
 struct AssetProvider { base: PathBuf }
