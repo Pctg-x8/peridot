@@ -244,7 +244,7 @@ use br::vk::{
     VK_MEMORY_PROPERTY_PROTECTED_BIT
 };
 
-pub(crate) struct MemoryType(u32, VkMemoryType);
+pub struct MemoryType(u32, VkMemoryType);
 impl MemoryType
 {
     pub fn index(&self) -> u32 { self.0 }
@@ -302,17 +302,17 @@ impl MemoryTypeManager
         }
     }
 
-    pub(crate) fn exact_host_visible_index(&self, mask: u32, required: br::MemoryPropertyFlags) -> Option<&MemoryType>
+    pub fn exact_host_visible_index(&self, mask: u32, required: br::MemoryPropertyFlags) -> Option<&MemoryType>
     {
         self.host_memory_types.iter()
             .find(|mt| (mask & mt.corresponding_mask()) != 0 && mt.has_property_flags(required))
     }
-    pub(crate) fn host_visible_index(&self, mask: u32, preference: br::MemoryPropertyFlags) -> Option<&MemoryType>
+    pub fn host_visible_index(&self, mask: u32, preference: br::MemoryPropertyFlags) -> Option<&MemoryType>
     {
         self.exact_host_visible_index(mask, preference)
             .or_else(|| self.host_memory_types.iter().find(|mt| (mask & mt.corresponding_mask()) != 0))
     }
-    pub(crate) fn device_local_index(&self, mask: u32) -> Option<&MemoryType>
+    pub fn device_local_index(&self, mask: u32) -> Option<&MemoryType>
     {
         self.device_memory_types.iter().find(|mt| (mask & mt.corresponding_mask()) != 0)
     }
@@ -351,7 +351,7 @@ pub struct Graphics
     graphics_queue: Queue,
     #[cfg(debug_assertions)] _d: DebugReport,
     cp_onetime_submit: br::CommandPool,
-    pub(crate) memory_type_manager: MemoryTypeManager
+    pub memory_type_manager: MemoryTypeManager
 }
 impl Graphics
 {
