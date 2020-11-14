@@ -89,9 +89,12 @@ impl FontProvider
     }
 }
 
-#[cfg(all(target_os = "macos", not(feature = "use-freetype")))] type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))] type UnderlyingHandle = comdrive::dwrite::FontFace;
-#[cfg(feature = "use-freetype")] type UnderlyingHandle = self::ft_drivers::FaceGroup;
+#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
+type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
+type UnderlyingHandle = comdrive::dwrite::FontFace;
+#[cfg(feature = "use-freetype")]
+type UnderlyingHandle = self::ft_drivers::FaceGroup;
 pub struct Font(UnderlyingHandle, f32);
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 impl FontProvider
@@ -238,7 +241,9 @@ impl Font
     pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
     {
         let sink = comdrive::ComPtr(PathEventReceiver::new());
-        self.0.sink_glyph_run_outline(self.units_per_em() as _, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 })?;
+        self.0.sink_glyph_run_outline(
+            self.units_per_em() as _, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 }
+        )?;
         for pe in unsafe { sink.0.as_mut().expect("null sink").drain_all_paths() }
         {
             builder.path_event(pe);
