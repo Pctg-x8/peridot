@@ -219,6 +219,17 @@ impl InputProcess {
             fd.analog_values_abs[n] = a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
             // *f = (false, false);
         }
+        // ax_button_pressingがない分
+        if analog_values.len() > ax_button_pressing.len() {
+            for (n, &a) in analog_values.iter().enumerate().skip(ax_button_pressing.len()) {
+                fd.analog_values_abs[n] = a;
+            }
+        }
+        // analog_valuesがない分
+        if ax_button_pressing.len() > analog_values.len() {
+            for (n, &(pos, neg)) in ax_button_pressing.iter().enumerate().skip(analog_values.len()) {
+                fd.analog_values_abs[n] = (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
+            }
         }
     }
 
