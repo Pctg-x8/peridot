@@ -9,33 +9,38 @@ use std::rc::Rc;
 #[repr(C, align(4))]
 pub struct RGBA32(u8, u8, u8, u8);
 
-pub struct SkyboxPrecomputedTextures
-{
+pub struct SkyboxPrecomputedTextures {
     transmittance: peridot::DeviceWorkingTexture2DRef,
     scatter: peridot::DeviceWorkingTexture3DRef,
     gathered: peridot::DeviceWorkingTexture2DRef,
     k_scatter: peridot::DeviceWorkingTexture3DRef,
     k_gathered: peridot::DeviceWorkingTexture2DRef
 }
-impl SkyboxPrecomputedTextures
-{
+impl SkyboxPrecomputedTextures {
     const TRANSMITTANCE_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(128, 32);
     const SCATTER_SIZE: peridot::math::Vector3<u32> = peridot::math::Vector3(32, 64 * 2, 32);
     const GATHERED_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(32, 32);
 
-    pub fn prealloc(dwt_alloc: &mut peridot::DeviceWorkingTextureAllocator) -> Self
-    {
-        SkyboxPrecomputedTextures
-        {
-            transmittance: dwt_alloc.new2d(Self::TRANSMITTANCE_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()),
-            scatter: dwt_alloc.new3d(Self::SCATTER_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()),
-            gathered: dwt_alloc.new2d(Self::GATHERED_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()),
-            k_scatter: dwt_alloc.new3d(Self::SCATTER_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()),
-            k_gathered: dwt_alloc.new2d(Self::GATHERED_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled())
+    pub fn prealloc(dwt_alloc: &mut peridot::DeviceWorkingTextureAllocator) -> Self {
+        SkyboxPrecomputedTextures {
+            transmittance: dwt_alloc.new2d(
+                Self::TRANSMITTANCE_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()
+            ),
+            scatter: dwt_alloc.new3d(
+                Self::SCATTER_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()
+            ),
+            gathered: dwt_alloc.new2d(
+                Self::GATHERED_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()
+            ),
+            k_scatter: dwt_alloc.new3d(
+                Self::SCATTER_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()
+            ),
+            k_gathered: dwt_alloc.new2d(
+                Self::GATHERED_SIZE, peridot::PixelFormat::RGBA64F, br::ImageUsage::STORAGE.sampled()
+            )
         }
     }
-    pub fn init<NL: NativeLinker>(&self, e: &Engine<Game<NL>, NL>, dwt: &peridot::DeviceWorkingTextureStore)
-    {
+    pub fn init<NL: NativeLinker>(&self, e: &Engine<NL>, dwt: &peridot::DeviceWorkingTextureStore) {
         let linear_sampler = br::SamplerBuilder::default()
             .addressing(
                 br::AddressingMode::ClampToEdge,
@@ -216,38 +221,32 @@ impl SkyboxPrecomputedTextures
             .expect("Failed to load precompute shader for accumulation-3d")
             .instantiate(e.graphics())
             .expect("Compute shader Instantiation failed");
-        let transmittance_compute_pipeline = br::ComputePipelineBuilder::new(&inputonly_layout, br::PipelineShader
-        {
+        let transmittance_compute_pipeline = br::ComputePipelineBuilder::new(&inputonly_layout, br::PipelineShader {
             module: &transmittance_compute,
             entry_name: std::ffi::CString::new("main").expect("cstring failed"),
             specinfo: None
         });
-        let single_scatter_compute_pipeline = br::ComputePipelineBuilder::new(&texio_layout, br::PipelineShader
-        {
+        let single_scatter_compute_pipeline = br::ComputePipelineBuilder::new(&texio_layout, br::PipelineShader {
             module: &single_scatter_compute,
             entry_name: std::ffi::CString::new("main").expect("cstring failed"),
             specinfo: None
         });
-        let gather_compute_pipeline = br::ComputePipelineBuilder::new(&texio_layout, br::PipelineShader
-        {
+        let gather_compute_pipeline = br::ComputePipelineBuilder::new(&texio_layout, br::PipelineShader {
             module: &gather_compute,
             entry_name: std::ffi::CString::new("main").expect("cstring failed"),
             specinfo: None
         });
-        let multiple_scatter_compute_pipeline = br::ComputePipelineBuilder::new(&texi2o_layout, br::PipelineShader
-        {
+        let multiple_scatter_compute_pipeline = br::ComputePipelineBuilder::new(&texi2o_layout, br::PipelineShader {
             module: &multiple_scatter_compute,
             entry_name: std::ffi::CString::new("main").expect("cstring failed"),
             specinfo: None
         });
-        let accum2_pipeline = br::ComputePipelineBuilder::new(&texio_pure_layout, br::PipelineShader
-        {
+        let accum2_pipeline = br::ComputePipelineBuilder::new(&texio_pure_layout, br::PipelineShader {
             module: &accum2_compute,
             entry_name: std::ffi::CString::new("main").expect("cstring failed"),
             specinfo: None
         });
-        let accum3_pipeline = br::ComputePipelineBuilder::new(&texio_pure_layout, br::PipelineShader
-        {
+        let accum3_pipeline = br::ComputePipelineBuilder::new(&texio_pure_layout, br::PipelineShader {
             module: &accum3_compute,
             entry_name: std::ffi::CString::new("main").expect("cstring failed"),
             specinfo: None
@@ -261,8 +260,7 @@ impl SkyboxPrecomputedTextures
             None
         ).expect("Failed to create precomputation pipelines");
         
-        e.submit_commands(|rec|
-        {
+        e.submit_commands(|rec| {
             let transmittance_tex_area = br::ImageSubref::color(dwt.get(self.transmittance).underlying(), 0..1, 0..1);
             let scatter_tex_area = br::ImageSubref::color(dwt.get(self.scatter).underlying(), 0..1, 0..1);
             let gather_tex_area = br::ImageSubref::color(dwt.get(self.gathered).underlying(), 0..1, 0..1);
@@ -451,8 +449,7 @@ impl SkyboxPrecomputedTextures
             .dispatch(Self::SCATTER_SIZE.0 / 8, Self::SCATTER_SIZE.1 / 8, Self::SCATTER_SIZE.2 / 8);
 
             // multiple scatters after 2nd
-            for _ in 0..2
-            {
+            for _ in 0..2 {
                 // multiple scatter 2
                 rec.pipeline_barrier(
                     br::PipelineStageFlags::COMPUTE_SHADER,
@@ -497,8 +494,7 @@ impl SkyboxPrecomputedTextures
     }
 }
 
-pub struct SkyboxRenderer
-{
+pub struct SkyboxRenderer {
     main_render_shader: PvpShaderModules<'static>,
     _static_sampler: br::Sampler,
     input_layout: br::DescriptorSetLayout,
@@ -506,16 +502,15 @@ pub struct SkyboxRenderer
     descriptors: Vec<br::vk::VkDescriptorSet>,
     pipeline: peridot::LayoutedPipeline
 }
-impl SkyboxRenderer
-{
+impl SkyboxRenderer {
     fn new<NL: NativeLinker>(
-        e: &Engine<Game<NL>, NL>,
+        e: &Engine<NL>,
         drt: &DetailedRenderTargets,
         precomputes: &SkyboxPrecomputedTextures,
         dwt: &peridot::DeviceWorkingTextureStore,
         buf: &peridot::FixedMemory,
-        buf_offsets: &FixedBufferOffsets) -> Self
-    {
+        buf_offsets: &FixedBufferOffsets
+    ) -> Self {
         let linear_sampler = br::SamplerBuilder::default()
             .addressing(
                 br::AddressingMode::ClampToEdge,
@@ -567,7 +562,7 @@ impl SkyboxRenderer
             e.load("shaders.skybox").expect("Failed to load main shader")
         ).expect("Instantiating shader failed");
 
-        let backbuffer_size = e.backbuffers().first().expect("no backbuffers?").size().clone();
+        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
         let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(backbuffer_size.0, backbuffer_size.1))];
         let full_viewports = [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0 .. 1.0).into_inner()];
 
@@ -582,8 +577,7 @@ impl SkyboxRenderer
             .create(e.graphics(), None)
             .expect("Creating GraphicsPipeline failed");
 
-        SkyboxRenderer
-        {
+        SkyboxRenderer {
             main_render_shader,
             _static_sampler: linear_sampler,
             input_layout,
@@ -593,9 +587,8 @@ impl SkyboxRenderer
         }
     }
 
-    fn recreate_pipeline<NL: NativeLinker>(&mut self, e: &Engine<Game<NL>, NL>, drt: &DetailedRenderTargets)
-    {
-        let backbuffer_size = e.backbuffers().first().expect("no backbuffers?").size().clone();
+    fn recreate_pipeline<NL: NativeLinker>(&mut self, e: &Engine<NL>, drt: &DetailedRenderTargets) {
+        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
         let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(backbuffer_size.0, backbuffer_size.1))];
         let full_viewports = [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0 .. 1.0).into_inner()];
 
@@ -614,57 +607,44 @@ impl SkyboxRenderer
     }
 }
 
-pub struct DetailedRenderTargets
-{
+pub struct DetailedRenderTargets {
     rp: br::RenderPass,
     fb: Vec<br::Framebuffer>
 }
-impl DetailedRenderTargets
-{
-    pub fn new<NL: NativeLinker>(e: &Engine<Game<NL>, NL>) -> Self
-    {
-        let rp = peridot::RenderPassTemplates::single_render(e.backbuffer_format()).create(e.graphics())
+impl DetailedRenderTargets {
+    pub fn new<NL: NativeLinker>(e: &Engine<NL>) -> Self {
+        let rp = peridot::RenderPassTemplates::single_render(e.backbuffer_format(), e.requesting_backbuffer_layout().0)
+            .create(e.graphics())
             .expect("Creating RenderPass failed");
-        let backbuffer_size = e.backbuffers().first().expect("no backbuffers?").size().clone();
-        let fb = e.backbuffers().iter()
-            .map(|bb| br::Framebuffer::new(&rp, &[bb], &backbuffer_size, 1).expect("Creating Framebuffer failed"))
+        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
+        let fb = e.iter_backbuffers()
+            .map(|bb| br::Framebuffer::new(&rp, &[&bb], &backbuffer_size, 1).expect("Creating Framebuffer failed"))
             .collect();
         
-        DetailedRenderTargets
-        {
-            rp, fb
-        }
+        DetailedRenderTargets { rp, fb }
     }
 
     pub fn discard_framebuffers(&mut self) { self.fb.clear(); }
-    pub fn recreate_framebuffers<NL: NativeLinker>(&mut self,
-        e: &Engine<Game<NL>, NL>,
-        size: &peridot::math::Vector2<usize>)
-    {
+    pub fn recreate_framebuffers<NL: NativeLinker>(&mut self, e: &Engine<NL>, size: &peridot::math::Vector2<usize>) {
         let su32: br::Extent2D = peridot::math::Vector2::<u32>(size.0 as _, size.1 as _).into();
-        self.fb = e.backbuffers().iter()
-            .map(|bb| br::Framebuffer::new(&self.rp, &[bb], &su32, 1).expect("Recreating Framebuffer failed"))
+        self.fb = e.iter_backbuffers()
+            .map(|bb| br::Framebuffer::new(&self.rp, &[&bb], &su32, 1).expect("Recreating Framebuffer failed"))
             .collect();
     }
 }
 
-pub struct FixedBufferOffsets
-{
+pub struct FixedBufferOffsets {
     fill_plane: u64,
     mut_uniform_offset: u64,
     uniform_range: std::ops::Range<usize>
 }
-pub struct FixedBufferInitializer
-{
+pub struct FixedBufferInitializer {
     fill_plane: peridot::Primitive<peridot::VertexUV2D>,
     fill_plane_offset: u64
 }
-impl peridot::FixedBufferInitializer for FixedBufferInitializer
-{
-    fn stage_data(&mut self, m: &br::MappedMemoryRange)
-    {
-        unsafe
-        {
+impl peridot::FixedBufferInitializer for FixedBufferInitializer {
+    fn stage_data(&mut self, m: &br::MappedMemoryRange) {
+        unsafe {
             m.slice_mut(self.fill_plane_offset as _, self.fill_plane.vertices.len())
                 .clone_from_slice(&self.fill_plane.vertices);
         }
@@ -674,8 +654,8 @@ impl peridot::FixedBufferInitializer for FixedBufferInitializer
         &self,
         tfb: &mut peridot::TransferBatch,
         buf: &peridot::Buffer,
-        range: std::ops::Range<u64>)
-    {
+        range: std::ops::Range<u64>
+    ) {
         tfb.add_buffer_graphics_ready(
             br::PipelineStageFlags::VERTEX_INPUT.fragment_shader(),
             buf,
@@ -685,38 +665,33 @@ impl peridot::FixedBufferInitializer for FixedBufferInitializer
     }
 }
 
-pub struct RenderCommands
-{
+pub struct RenderCommands {
     main_commands: peridot::CommandBundle
 }
-impl RenderCommands
-{
-    fn new<NL: NativeLinker>(e: &Engine<Game<NL>, NL>) -> Self
-    {
-        RenderCommands
-        {
+impl RenderCommands {
+    fn new<NL: NativeLinker>(e: &Engine<NL>) -> Self {
+        RenderCommands {
             main_commands: peridot::CommandBundle::new(
                 e.graphics(),
                 peridot::CBSubmissionType::Graphics,
-                e.backbuffers().len()
+                e.backbuffer_count()
             ).expect("Failed to create Main CommandBundle")
         }
     }
 
     fn generate_commands<NL: NativeLinker>(
         &self,
-        e: &Engine<Game<NL>, NL>,
+        e: &Engine<NL>,
         skybox_renderer: &SkyboxRenderer,
         drt: &DetailedRenderTargets,
         buf: &peridot::FixedMemory,
-        buf_offsets: &FixedBufferOffsets)
-    {
+        buf_offsets: &FixedBufferOffsets
+    ) {
         let render_area = br::vk::VkRect2D::from(
-            AsRef::<br::Extent2D>::as_ref(e.backbuffers().first().expect("no backbuffers?").size()).clone()
+            AsRef::<br::Extent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()).clone()
         );
 
-        for (b, fb) in self.main_commands.iter().zip(&drt.fb)
-        {
+        for (b, fb) in self.main_commands.iter().zip(&drt.fb) {
             b.begin().expect("Failed to begin record main command")
                 .begin_render_pass(&drt.rp, fb, render_area.clone(), &[br::ClearValue::Color([0.0; 4])], true)
                 .bind_graphics_pipeline_pair(skybox_renderer.pipeline.pipeline(), skybox_renderer.pipeline.layout())
@@ -726,20 +701,17 @@ impl RenderCommands
                 .end_render_pass();
         }
     }
-    fn clear_commands(&self)
-    {
+    fn clear_commands(&self) {
         self.main_commands.reset().expect("Resetting failed");
     }
 }
 
 #[repr(C)]
-pub struct Uniform
-{
+pub struct Uniform {
     pub eye_height: f32, pub view_zenith_angle: f32
 }
 
-pub struct Game<NL>
-{
+pub struct Game<NL> {
     rt: DetailedRenderTargets,
     skybox_precomputed: SkyboxPrecomputedTextures,
     skybox: SkyboxRenderer,
@@ -751,16 +723,13 @@ pub struct Game<NL>
     total_time: f32,
     ph: std::marker::PhantomData<*const NL>
 }
-impl<NL> Game<NL>
-{
+impl<NL> Game<NL> {
     pub const NAME: &'static str = "pj-torchlight/procedural-skybox";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<NL> FeatureRequests for Game<NL> {}
-impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
-{
-    fn init(e: &Engine<Self, NL>) -> Self
-    {
+impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
+    fn init(e: &mut Engine<NL>) -> Self {
         let rt = DetailedRenderTargets::new(e);
 
         let mut precompute_textures = peridot::DeviceWorkingTextureAllocator::new();
@@ -775,8 +744,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         );
         let mut mbp = peridot::BufferPrealloc::new(e.graphics());
         let uniform_offset = mbp.add(peridot::BufferContent::uniform::<Uniform>());
-        let mut fb_data = FixedBufferInitializer
-        {
+        let mut fb_data = FixedBufferInitializer {
             fill_plane,
             fill_plane_offset
         };
@@ -789,24 +757,26 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
             &mut fb_data,
             &mut tfb
         ).expect("Failed to initialize fixed buffers");
-        let buf_offsets = FixedBufferOffsets
-        {
+        let buf_offsets = FixedBufferOffsets {
             fill_plane: fb_data.fill_plane_offset,
             mut_uniform_offset: uniform_offset,
-            uniform_range: (buf.mut_buffer_placement + uniform_offset) as usize .. (buf.mut_buffer_placement + uniform_offset) as usize + std::mem::size_of::<Uniform>()
+            uniform_range: (buf.mut_buffer_placement + uniform_offset) as usize ..
+                (buf.mut_buffer_placement + uniform_offset) as usize + std::mem::size_of::<Uniform>()
         };
-        buf.mut_buffer.0.guard_map(buf.mut_buffer.1, |m| unsafe
-        {
-            *m.get_mut(uniform_offset as _) = Uniform
-            {
-                eye_height: 100.0, view_zenith_angle: 90.0
-            };
-        }).expect("Staging MutBuffer failed");
+        buf.mut_buffer.0.guard_map(
+            buf.mut_buffer.1 .. buf.mut_buffer.1 + uniform_offset + std::mem::size_of::<Uniform>() as u64,
+            |m| unsafe {
+                *m.get_mut(uniform_offset as _) = Uniform {
+                    eye_height: 100.0, view_zenith_angle: 90.0
+                };
+            }
+        ).expect("Staging MutBuffer failed");
         let mut tfb_update = peridot::TransferBatch::new();
-        let mut_update_range = buf.mut_buffer_placement + uniform_offset .. buf.mut_buffer_placement + uniform_offset + std::mem::size_of::<Uniform>() as u64;
+        let mut_update_range = buf.mut_buffer_placement + uniform_offset ..
+            buf.mut_buffer_placement + uniform_offset + std::mem::size_of::<Uniform>() as u64;
         tfb_update.add_copying_buffer(
-            (&buf.mut_buffer.0, uniform_offset),
-            (&buf.buffer.0, mut_update_range.start),
+            buf.mut_buffer.0.with_dev_offset(uniform_offset),
+            buf.buffer.0.with_dev_offset(mut_update_range.start),
             std::mem::size_of::<Uniform>() as _
         );
         tfb_update.add_buffer_graphics_ready(
@@ -829,14 +799,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         let mut cmds = RenderCommands::new(e);
         cmds.generate_commands(e, &skybox, &rt, &buf, &buf_offsets);
 
-        e.submit_commands(|r|
-        {
-            tfb.sink_transfer_commands(r);
-            tfb.sink_graphics_ready_commands(r);
-        }).expect("Failed to resource memory initialization");
+        e.submit_commands(|r| { tfb.sink_transfer_commands(r); tfb.sink_graphics_ready_commands(r); })
+            .expect("Failed to resource memory initialization");
 
-        Game
-        {
+        Game {
             rt,
             skybox_precomputed,
             skybox,
@@ -849,25 +815,25 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
             ph: std::marker::PhantomData
         }
     }
-    fn update(&mut self, _e: &Engine<Self, NL>, on_backbuffer_of: u32, dt: std::time::Duration)
-        -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
-    {
+    fn update(
+        &mut self, _e: &Engine<NL>, on_backbuffer_of: u32, dt: std::time::Duration
+    ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         self.total_time += dt.as_secs() as f32 + dt.subsec_micros() as f32 / 10_000_000.0; 
-        self.buf.mut_buffer.0.guard_map(self.buf.mut_buffer.1, |m| unsafe
-        {
-            *m.get_mut(self.buf_offsets.mut_uniform_offset as _) = Uniform
-            {
-                eye_height: 10.0 + (self.total_time * 0.0).sin() * 1000.0,
-                view_zenith_angle: 90.0 - 30.0 + (self.total_time * 4.0).sin() * 20.0
-            };
-        }).expect("Staging MutBuffer failed");
+        self.buf.mut_buffer.0.guard_map(
+            self.buf.mut_buffer.1 ..
+                self.buf.mut_buffer.1 + self.buf_offsets.mut_uniform_offset + std::mem::size_of::<Uniform>() as u64,
+            |m| unsafe {
+                *m.get_mut(self.buf_offsets.mut_uniform_offset as _) = Uniform {
+                    eye_height: 10.0 + (self.total_time * 0.0).sin() * 1000.0,
+                    view_zenith_angle: 90.0 - 30.0 + (self.total_time * 4.0).sin() * 20.0
+                };
+            }
+        ).expect("Staging MutBuffer failed");
 
-        (br::SubmissionBatch
-        {
+        (br::SubmissionBatch {
             command_buffers: std::borrow::Cow::Borrowed(&self.update_cmds),
             .. Default::default()
-        }.into(), br::SubmissionBatch
-        {
+        }.into(), br::SubmissionBatch {
             command_buffers: std::borrow::Cow::Borrowed(
                 &self.cmds.main_commands[on_backbuffer_of as usize .. (on_backbuffer_of + 1) as usize]
             ),
@@ -875,13 +841,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL>
         })
     }
 
-    fn discard_backbuffer_resources(&mut self)
-    {
+    fn discard_backbuffer_resources(&mut self) {
         self.cmds.clear_commands();
         self.rt.discard_framebuffers();
     }
-    fn on_resize(&mut self, e: &Engine<Self, NL>, new_size: peridot::math::Vector2<usize>)
-    {
+    fn on_resize(&mut self, e: &Engine<NL>, new_size: peridot::math::Vector2<usize>) {
         self.rt.recreate_framebuffers(e, &new_size);
         self.skybox.recreate_pipeline(e, &self.rt);
         self.cmds.generate_commands(e, &self.skybox, &self.rt, &self.buf, &self.buf_offsets);
