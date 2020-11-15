@@ -178,6 +178,9 @@ impl peridot::PlatformPresenter for Presenter {
     fn format(&self) -> br::vk::VkFormat { self.sc.format() }
     fn backbuffer_count(&self) -> usize { self.sc.backbuffer_count() }
     fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.sc.backbuffer(index) }
+    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.sc.requesting_backbuffer_layout()
+    }
 
     fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
         self.sc.emit_initialize_backbuffer_commands(recorder);
