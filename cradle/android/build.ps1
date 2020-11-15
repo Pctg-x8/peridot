@@ -3,7 +3,9 @@ param(
     [parameter(HelpMessage="An structure name of entry point of the game")][String]$EntryTyName = "Game",
     [switch]$Run = $false,
     [parameter(Mandatory=$true, HelpMessage="Asset Directory")][String]$AssetDirectory,
-    [parameter(Mandatory=$true, HelpMessage="Package Bundle ID")][String]$AppPackageID
+    [parameter(Mandatory=$true, HelpMessage="Package Bundle ID")][String]$AppPackageID,
+    [parameter(HelpMessage="Additional Rust Features")][String[]]$Features = @(),
+    [parameter(HelpMessage="Update Cargo dependencies")][switch]$UpdateDeps = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,11 +85,18 @@ $template = Get-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest-templa
 $template = $template.Replace("**APKAPPID**", "$AppPackageID")
 $template | Set-Content $ScriptPath\apkbuild\app\src\main\AndroidManifest.xml -Encoding UTF8
 
+# Make Default Structure then mirrors the user-defined structure, results an user-customizable resource structure
+robocopy $ScriptPath\apkbuild\app\src\main\res-default $ScriptPath\apkbuild\app\src\main\res /MIR
+if (Test-Path $UserlibDirectory\android-res) {
+    robocopy $UserlibDirectory\android-res $ScriptPath\apkbuild\app\src\main\res /IS /E
+}
+
 # Build Userlib
-$features = "bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded"
+$ActiveFeatures = @("bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded") + $Features
 try {
     Push-Location; Set-Location $ScriptPath
-    cargo ndk --target aarch64-linux-android --android-platform $Env:NDK_PLATFORM_TARGET -- build --features $($features -join ",")
+    if ($UpdateDeps) { cargo update }
+    cargo ndk --target aarch64-linux-android --android-platform $Env:NDK_PLATFORM_TARGET -- build --features $($ActiveFeatures -join ",")
     if ($LASTEXITCODE -ne 0) { throw """cargo build"" failed with code $LASTEXITCODE" }
 }
 finally {
@@ -116,7 +125,7 @@ if ($Run) {
         Set-Location $ScriptPath/apkbuild
         RunADB uninstall $AppPackageID
         RunADB install app/build/outputs/apk/debug/app-debug.apk
-        RunADB shell am start -n $AppPackageID/com.cterm2.peridot.NativeActivity
+        RunADB shell am start -n $AppPackageID/jp.ct2.peridot.NativeActivity
     }
     finally { Pop-Location }
 }

@@ -5,3 +5,7 @@ target/
 android-build
 **/*.pvp
 **/*.spv
+
+## other artifacts
+peridot-sdk/
+peridot-sdk.zip

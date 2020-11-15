@@ -4,7 +4,10 @@ param(
     [switch]$Run = $false,
     [parameter(HelpMessage="Asset Directory")][String]$AssetDirectory,
     [parameter(HelpMessage="Package Bundle ID")][String]$AppPackageID = "com.cterm2.peridot",
-    [switch]$Release = $false
+    [switch]$Release = $false,
+    [parameter(HelpMessage="Additional Rust Features")][String[]]$Features = @(),
+    [parameter(HelpMessage="Update Cargo dependencies")][switch]$UpdateDeps = $false,
+    [parameter(HelpMessage="Run tests via cargo test")][switch]$RunTests = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,17 +77,18 @@ $ExternCrateName = $PackageName.Replace("-", "_")
 
 pub use $ExternCrateName::$EntryTyName as Game;" | Out-File $ScriptPath\src\userlib.rs -Encoding UTF8
 
-$CargoSubcommand = if ($Run) { "run" } else { "build" }
-$Features = @("bedrock/VK_KHR_win32_surface")
+$CargoSubcommand = if ($Run) { "run" } elseif ($RunTests) { "test" } else { "build" }
+$ActiveFeatures = @("bedrock/VK_KHR_win32_surface") + $Features
 $OptFlags = if ($Release) { "--release" } else { "" }
 if ($AssetDirectory) {
     $Env:PERIDOT_EXTERNAL_ASSET_PATH = $(Resolve-Path $AssetDirectory).Path
-    $Features += "UseExternalAssetPath"
+    $ActiveFeatures += "UseExternalAssetPath"
 }
 $Env:PERIDOT_WINDOWS_APPID = $AppPackageID
 try {
     Push-Location
     Set-Location $ScriptPath
-    cargo $CargoSubcommand --features $($Features -join ",") $OptFlags
+    if ($UpdateDeps) { cargo update }
+    cargo $CargoSubcommand --features $($ActiveFeatures -join ",") $OptFlags
 }
 finally { Pop-Location }

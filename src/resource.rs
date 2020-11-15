@@ -8,7 +8,8 @@ use num::Integer;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferContent
 {
-    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64)
+    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64),
+    Storage(u64, u64), StorageTexel(u64, u64)
 }
 impl BufferContent
 {
@@ -22,7 +23,9 @@ impl BufferContent
             Index(_, _) => src.index_buffer(),
             Uniform(_, _) => src.uniform_buffer(),
             Raw(_, _) => src,
-            UniformTexel(_, _) => src.uniform_texel_buffer()
+            UniformTexel(_, _) => src.uniform_texel_buffer(),
+            Storage(_, _) => src.storage_buffer(),
+            StorageTexel(_, _) => src.storage_texel_buffer()
         }
     }
     fn alignment(&self, pd: &br::PhysicalDevice) -> u64
@@ -34,6 +37,8 @@ impl BufferContent
             Vertex(_, a) | Index(_, a) | Raw(_, a) => a,
             Uniform(_, a) | UniformTexel(_, a) =>
                 u64::lcm(&pd.properties().limits.minUniformBufferOffsetAlignment as _, &a),
+            Storage(_, a) | StorageTexel(_, a) =>
+                u64::lcm(&pd.properties().limits.minStorageBufferOffsetAlignment as _, &a)
         }
     }
     fn size(&self) -> u64
@@ -42,54 +47,62 @@ impl BufferContent
 
         match *self
         {
-            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) => v
+            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) |
+            Storage(v, _) | StorageTexel(v, _) => v
         }
     }
 
     /// Generic Shorthands
-    pub fn vertex<T>() -> Self
-    {
+    pub fn vertex<T>() -> Self {
         BufferContent::Vertex(size_of::<T>() as _, align_of::<T>() as _)
     }
-    pub fn vertices<T>(count: usize) -> Self
-    {
+    pub fn vertices<T>(count: usize) -> Self {
         BufferContent::Vertex(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
     }
-    pub fn index<T>()  -> Self
-    {
+
+    pub fn index<T>()  -> Self {
         BufferContent::Index(size_of::<T>() as _, align_of::<T>() as _)
     }
-    pub fn indices<T>(count: usize) -> Self
-    {
+    pub fn indices<T>(count: usize) -> Self {
         BufferContent::Index(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
     }
-    pub fn uniform<T>() -> Self
-    {
+
+    pub fn uniform<T>() -> Self {
         BufferContent::Uniform(size_of::<T>() as _, align_of::<T>() as _)
     }
-    pub fn uniform_dynarray<T>(count: usize) -> Self
-    {
+    pub fn uniform_dynarray<T>(count: usize) -> Self {
         BufferContent::Uniform(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
     }
-    pub fn uniform_texel<T>() -> Self
-    {
+
+    pub fn uniform_texel<T>() -> Self {
         BufferContent::UniformTexel(size_of::<T>() as _, align_of::<T>() as _)
     }
-    pub fn uniform_texel_dynarray<T>(count: usize) -> Self
-    {
+    pub fn uniform_texel_dynarray<T>(count: usize) -> Self {
         BufferContent::UniformTexel(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
+    }
+
+    pub fn storage<T>() -> Self {
+        BufferContent::Storage(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn storage_dynarray<T>(count: usize) -> Self {
+        BufferContent::Storage(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
+    }
+
+    pub fn storage_texel<T>() -> Self {
+        BufferContent::StorageTexel(size_of::<T>() as _, align_of::<T>() as _)
+    }
+    pub fn storage_texel_dynarray<T>(count: usize) -> Self {
+        BufferContent::StorageTexel(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
     }
 }
 macro_rules! align2 {
     ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
 }
 #[derive(Clone)]
-pub struct BufferPrealloc<'g>
-{
+pub struct BufferPrealloc<'g> {
     g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64, common_align: u64
 }
-impl<'g> BufferPrealloc<'g>
-{
+impl<'g> BufferPrealloc<'g> {
     pub fn new(g: &'g Graphics) -> Self
     {
         BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0, common_align: 1 }
@@ -270,14 +283,14 @@ impl Buffer
     /// Reference to a memory object bound with this object.
     pub fn memory(&self) -> &Memory { &self.1 }
 
-    pub fn map(&self, size: u64) -> br::Result<br::MappedMemoryRange>
+    pub fn map(&self, range: Range<u64>) -> br::Result<br::MappedMemoryRange>
     {
-        self.1.map(self.2 as _ .. (self.2 + size) as _)
+        self.1.map((self.2 + range.start) as _ .. (self.2 + range.end) as _)
     }
     pub unsafe fn unmap(&self) { self.1.unmap() }
-    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, size: u64, f: F) -> br::Result<R>
+    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, range: Range<u64>, f: F) -> br::Result<R>
     {
-        Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(size)?))))
+        Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(range)?))))
     }
 }
 impl Image
@@ -308,6 +321,44 @@ impl br::VkHandle for Image
 {
     type Handle = <br::Image as br::VkHandle>::Handle;
     fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
+}
+
+/// A view of the buffer.
+#[derive(Clone, Copy)]
+pub struct BufferView<'b> { pub buffer: &'b Buffer, pub offset: usize }
+impl Buffer {
+    pub fn with_offset(&self, offset: usize) -> BufferView {
+        BufferView { buffer: self, offset }
+    }
+}
+impl BufferView<'_> {
+    pub fn with_offset(self, offset: usize) -> Self {
+        BufferView { buffer: self.buffer, offset: self.offset + offset }
+    }
+    pub fn range(&self, bytes: usize) -> std::ops::Range<usize> {
+        self.offset .. self.offset + bytes
+    }
+}
+/// Conversion for Bedrock bind_vertex_buffers form
+impl<'b> From<BufferView<'b>> for (&'b Buffer, usize) {
+    fn from(v: BufferView<'b>) -> Self { (v.buffer, v.offset) }
+}
+
+/// a view of the buffer in GPU Address.
+#[derive(Clone, Copy)]
+pub struct DeviceBufferView<'b> { pub buffer: &'b Buffer, pub offset: br::vk::VkDeviceSize }
+impl Buffer {
+    pub fn with_dev_offset(&self, offset: br::vk::VkDeviceSize) -> DeviceBufferView {
+        DeviceBufferView { buffer: self, offset }
+    }
+}
+impl DeviceBufferView<'_> {
+    pub fn with_offset(&self, offset: br::vk::VkDeviceSize) -> Self {
+        DeviceBufferView { buffer: self.buffer, offset: self.offset + offset }
+    }
+    pub fn range(&self, bytes: br::vk::VkDeviceSize) -> std::ops::Range<br::vk::VkDeviceSize> {
+        self.offset .. self.offset + bytes
+    }
 }
 
 #[derive(Clone, Copy)] #[repr(i32)]
@@ -448,7 +499,7 @@ impl TextureInstantiatedGroup
     {
         for (t, &(_, offs)) in self.1.iter().zip(self.0.iter())
         {
-            tb.init_image_from(t.image(), (stgbuf, offs));
+            tb.init_image_from(t.image(), stgbuf.with_dev_offset(offs));
             tb.add_image_graphics_ready(br::PipelineStageFlags::FRAGMENT_SHADER, t.image(),
                 br::ImageLayout::ShaderReadOnlyOpt);
         }
@@ -527,12 +578,12 @@ pub struct DeviceWorkingTexture2DRef(usize);
 #[derive(Clone, Copy)]
 pub struct DeviceWorkingTexture3DRef(usize);
 /// DeviceWorkingTexture Management Arena
-pub struct DeviceWorkingTextureAllocator
+pub struct DeviceWorkingTextureAllocator<'d>
 {
-    planes: Vec<br::ImageDesc>,
-    volumes: Vec<br::ImageDesc>
+    planes: Vec<br::ImageDesc<'d>>,
+    volumes: Vec<br::ImageDesc<'d>>
 }
-impl DeviceWorkingTextureAllocator
+impl DeviceWorkingTextureAllocator<'_>
 {
     /// Initializes the allocator
     pub fn new() -> Self
@@ -690,7 +741,7 @@ impl FixedMemory
         mb_stg.add(stg_buffer);
         let stg_buffer = mb_stg.alloc_upload()?.pop().expect("objectless").unwrap_buffer();
 
-        stg_buffer.guard_map(stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
+        stg_buffer.guard_map(0 .. stg_buffer_fullsize, |m| { textures.stage_data(m); initializer.stage_data(m); })?;
 
         textures.copy_from_stage_batches(tfb, &stg_buffer);
         tfb.add_mirroring_buffer(&stg_buffer, &buffer, 0, imm_buffer_size);
