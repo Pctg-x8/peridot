@@ -708,7 +708,19 @@ impl RenderCommands {
 
 #[repr(C)]
 pub struct Uniform {
-    pub eye_height: f32, pub view_zenith_angle: f32
+    pub eye_height: f32, pub view_zenith_angle: f32, pub azimuth_angle: f32
+}
+
+struct Differential<T> { old_value: T }
+impl<T> Differential<T> where T: std::ops::Sub<T, Output = T> + Copy {
+    pub fn new(init: T) -> Self {
+        Differential { old_value: init }
+    }
+    pub fn update(&mut self, new_value: T) -> T {
+        let diff = new_value - self.old_value;
+        self.old_value = new_value;
+        diff
+    }
 }
 
 pub struct Game<NL> {
@@ -721,6 +733,10 @@ pub struct Game<NL> {
     cmds: RenderCommands,
     update_cmds: peridot::CommandBundle,
     total_time: f32,
+    view_zenith_angle: f32,
+    azimuth_angle: f32,
+    mouse_x_diff: Differential<f32>,
+    mouse_y_diff: Differential<f32>,
     ph: std::marker::PhantomData<*const NL>
 }
 impl<NL> Game<NL> {
@@ -730,6 +746,10 @@ impl<NL> Game<NL> {
 impl<NL> FeatureRequests for Game<NL> {}
 impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
     fn init(e: &mut Engine<NL>) -> Self {
+        e.input_mut().map(peridot::NativeButtonInput::Mouse(0), 0);
+        e.input_mut().map(peridot::NativeAnalogInput::MouseY, 0);
+        e.input_mut().map(peridot::NativeAnalogInput::MouseX, 1);
+
         let rt = DetailedRenderTargets::new(e);
 
         let mut precompute_textures = peridot::DeviceWorkingTextureAllocator::new();
@@ -764,10 +784,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
                 (buf.mut_buffer_placement + uniform_offset) as usize + std::mem::size_of::<Uniform>()
         };
         buf.mut_buffer.0.guard_map(
-            buf.mut_buffer.1 .. buf.mut_buffer.1 + uniform_offset + std::mem::size_of::<Uniform>() as u64,
+            0 .. uniform_offset + std::mem::size_of::<Uniform>() as u64,
             |m| unsafe {
                 *m.get_mut(uniform_offset as _) = Uniform {
-                    eye_height: 100.0, view_zenith_angle: 90.0
+                    eye_height: 100.0, view_zenith_angle: 90.0, azimuth_angle: 0.0
                 };
             }
         ).expect("Staging MutBuffer failed");
@@ -776,7 +796,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             buf.mut_buffer_placement + uniform_offset + std::mem::size_of::<Uniform>() as u64;
         tfb_update.add_copying_buffer(
             buf.mut_buffer.0.with_dev_offset(uniform_offset),
-            buf.buffer.0.with_dev_offset(mut_update_range.start),
+            buf.buffer.0.with_dev_offset(buf.mut_buffer_placement + uniform_offset),
             std::mem::size_of::<Uniform>() as _
         );
         tfb_update.add_buffer_graphics_ready(
@@ -796,7 +816,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let skybox = SkyboxRenderer::new(e, &rt, &skybox_precomputed, &precompute_textures, &buf, &buf_offsets);
 
         skybox_precomputed.init(e, &precompute_textures);
-        let mut cmds = RenderCommands::new(e);
+        let cmds = RenderCommands::new(e);
         cmds.generate_commands(e, &skybox, &rt, &buf, &buf_offsets);
 
         e.submit_commands(|r| { tfb.sink_transfer_commands(r); tfb.sink_graphics_ready_commands(r); })
@@ -812,20 +832,31 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             cmds,
             update_cmds: update_cb,
             total_time: 0.0,
+            view_zenith_angle: 90.0,
+            azimuth_angle: 0.0,
+            mouse_x_diff: Differential::new(0.0),
+            mouse_y_diff: Differential::new(0.0),
             ph: std::marker::PhantomData
         }
     }
     fn update(
-        &mut self, _e: &Engine<NL>, on_backbuffer_of: u32, dt: std::time::Duration
+        &mut self, e: &Engine<NL>, on_backbuffer_of: u32, dt: std::time::Duration
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+        let my_diff = self.mouse_y_diff.update(e.input().analog_value_abs(0));
+        let mx_diff = self.mouse_x_diff.update(e.input().analog_value_abs(1));
+        if e.input().button_pressing_time(0) > std::time::Duration::new(0, 0) {
+            self.view_zenith_angle -= my_diff * 0.1;
+            self.azimuth_angle += mx_diff * 0.1;
+        }
+
         self.total_time += dt.as_secs() as f32 + dt.subsec_micros() as f32 / 10_000_000.0; 
         self.buf.mut_buffer.0.guard_map(
-            self.buf.mut_buffer.1 ..
-                self.buf.mut_buffer.1 + self.buf_offsets.mut_uniform_offset + std::mem::size_of::<Uniform>() as u64,
+            0 .. self.buf_offsets.mut_uniform_offset + std::mem::size_of::<Uniform>() as u64,
             |m| unsafe {
                 *m.get_mut(self.buf_offsets.mut_uniform_offset as _) = Uniform {
                     eye_height: 10.0 + (self.total_time * 0.0).sin() * 1000.0,
-                    view_zenith_angle: 90.0 - 30.0 + (self.total_time * 4.0).sin() * 20.0
+                    view_zenith_angle: self.view_zenith_angle,
+                    azimuth_angle: self.azimuth_angle
                 };
             }
         ).expect("Staging MutBuffer failed");

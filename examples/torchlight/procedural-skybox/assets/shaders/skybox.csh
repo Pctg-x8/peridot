@@ -13,7 +13,7 @@ Varyings VertexShader -> FragmentShader {
     uv: vec2;
 }
 
-Uniform[FragmentShader](0, 2) ViewUniform { float eyeHeight, viewZenithAngleIn; }
+Uniform[FragmentShader](0, 2) ViewUniform { float eyeHeight, viewZenithAngleIn, viewAzimuthAngleIn; }
 
 Header[FragmentShader] {
     layout(set = 0, binding = 0) uniform sampler3D scatter;
@@ -71,28 +71,38 @@ Header[FragmentShader] {
         vec3(-0.10208,  1.10813, -0.00605),
         vec3(-0.00327, -0.07276,  1.07602)
     );
-    vec3 fit(vec3 v)
-    {
+    vec3 fit(vec3 v) {
         const vec3 a = v * (v + 0.0245786) - 0.000090537;
         const vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
         
         return a / b;
     }
 
-    vec4 tonemap(vec4 i)
-    {
+    vec4 tonemap(vec4 i) {
         vec3 c = fit(i.xyz * INPUT_MATRIX) * OUTPUT_MATRIX;
         return vec4(clamp(c, 0.0, 1.0), i.w);
     }
+
+    float asRadians(float deg) { return deg * 3.1415926f / 180.0f; }
 }
 
 FragmentShader {
     const float aspect = 4.0 / 3.0;
     const float zd = 1.0 / tan(35.0 * 3.1415926 / 180.0);
-    const vec3 viewvec = normalize(vec3((2.0 * uv.x - 1.0) * aspect, -(2.0 * uv.y - 1.0), zd));
+    const mat3 viewVecRotX = mat3(
+        1.0, 0.0, 0.0,
+        0.0, cos(asRadians(90.0 - viewZenithAngleIn)), -sin(asRadians(90.0 - viewZenithAngleIn)),
+        0.0, sin(asRadians(90.0 - viewZenithAngleIn)), cos(asRadians(90.0 - viewZenithAngleIn))
+    );
+    const mat3 viewVecRotY = mat3(
+        cos(asRadians(viewAzimuthAngleIn)), 0.0, sin(asRadians(viewAzimuthAngleIn)),
+        0.0, 1.0, 0.0,
+        -sin(asRadians(viewAzimuthAngleIn)), 0.0, cos(asRadians(viewAzimuthAngleIn))
+    );
+    const vec3 viewvec = viewVecRotY * viewVecRotX * normalize(vec3((2.0 * uv.x - 1.0) * aspect, -(2.0 * uv.y - 1.0), zd));
     const float cv = dot(viewvec, vec3(0.0, 1.0, 0.0));
     const float camHeight = eyeHeight;
-    const vec3 incidentLightDir = normalize(vec3(0.0, -0.2, -0.8));
+    const vec3 incidentLightDir = normalize(vec3(0.0, -0.4, -0.8));
     const float cs = dot(-incidentLightDir, vec3(0.0, 1.0, 0.0));
     const float vs_cos = dot(incidentLightDir, -viewvec);
 
