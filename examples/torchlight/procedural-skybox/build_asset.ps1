@@ -9,6 +9,7 @@ try {
         & $ToolPath/peridot-shaderbuild $code
     }
     Write-Host "Compiling Precomputation Shaders......"
+    New-Item shaders/precompute -ItemType Directory -Force | Out-Null
     & glslc shaders/transmittance_precompute.comp -o shaders/precompute/transmittance.spv
     & glslc shaders/single_scatter_precompute.comp -o shaders/precompute/single_scatter.spv
     & glslc shaders/multiple_scatter_precompute.comp -o shaders/precompute/multiple_scatter.spv
