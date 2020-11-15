@@ -5,6 +5,7 @@ set -e
 SCRIPT_PATH=$(dirname $0)
 ENTRY_TY_NAME="Game"
 CARGO_SUBCOMMAND="build"
+NO_POSTLINK=0
 AFTER_RUN=0
 unset ASSET_PATH
 FEATURES=( "bedrock/VK_MVK_macos_surface" )
@@ -17,6 +18,17 @@ while [ $# -gt 0 ]; do
             ;;
         "--Run" | "-r")
             AFTER_RUN=1
+            NO_POSTLINK=0
+            shift
+            ;;
+        "--RunTests")
+            CARGO_SUBCOMMAND="test"
+            NO_POSTLINK=1
+            shift
+            ;;
+        "--RunChecks")
+            CARGO_SUBCOMMAND="check"
+            NO_POSTLINK=1
             shift
             ;;
         "-AssetDirectory" | "-a")
@@ -24,7 +36,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--Feature" | "-f")
-            FEATURES+=( $2 )
+            FEATURES+=" $2"
             shift 2
             ;;
         "--UpdateDeps" | "-u")
@@ -54,16 +66,19 @@ if [ ! -z ${ASSET_PATH+x} ]; then
 fi
 
 echo "Building GameCore..."
-FEATURE_STRING=($(echo "${FEATURES[@]}" | tr ' ' '¥n' | sort -u | tr '¥n' ','))
+FEATURE_STRING=($(echo "${FEATURES[@]}" | tr ' ' '\n' | sort -u | tr '\n' ','))
+echo $FEATURE_STRING
 if [ $UPDATE_DEPS -ne 0 ]; then (cd $SCRIPT_PATH; cargo update); fi
 (cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURE_STRING)
 
-echo "Building App Bundle..."
-[ ! -d $SCRIPT_PATH/peridot-cradle/rlibs ] && mkdir -p $SCRIPT_PATH/peridot-cradle/rlibs
-cp $SCRIPT_PATH/target/debug/libpegamelib.a $SCRIPT_PATH/peridot-cradle/rlibs/
-xcodebuild -project $SCRIPT_PATH/peridot-cradle/peridot-cradle.xcodeproj -configuration Debug build
+if [ $NO_POSTLINK -eq 0 ]; then
+    echo "Building App Bundle..."
+    [ ! -d $SCRIPT_PATH/peridot-cradle/rlibs ] && mkdir -p $SCRIPT_PATH/peridot-cradle/rlibs
+    cp $SCRIPT_PATH/target/debug/libpegamelib.a $SCRIPT_PATH/peridot-cradle/rlibs/
+    xcodebuild -project $SCRIPT_PATH/peridot-cradle/peridot-cradle.xcodeproj -configuration Debug build
 
-echo "💎  $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app"
+    echo "💎  $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app"
+fi
 
 if [ $AFTER_RUN -ne 0 ]; then
     lldb $SCRIPT_PATH/peridot-cradle/build/Debug/peridot-cradle.app
