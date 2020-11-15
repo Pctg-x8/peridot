@@ -62,6 +62,9 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
+    - if: 'true'
+      name: install requirements
+      run: brew install coreutils
     - env:
         VK_SDK_PATH: ''
       if: 'true'

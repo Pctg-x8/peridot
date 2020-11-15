@@ -204,6 +204,10 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , checkoutStep
             , cacheStep
             , GithubActions.Step::{
+                , name = "install requirements"
+                , run = Some "brew install coreutils"
+            }
+            , GithubActions.Step::{
                 , name = "cargo check"
                 , run = Some "./build.sh mac examples/basic -RunTests -Features bedrock/DynamicLoaded"
                 , env = Some (toMap { VK_SDK_PATH = "" })

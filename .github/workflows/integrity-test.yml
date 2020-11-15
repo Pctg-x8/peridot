@@ -66,6 +66,9 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: install requirements
+      run: brew install coreutils
     - env:
         VK_SDK_PATH: ''
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
