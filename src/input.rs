@@ -211,13 +211,11 @@ impl InputProcess {
             } else {
                 fd.button_press_time[n] = std::time::Duration::default();
             }
-            // *f = false;
         }
         let &mut AsyncCollectedData { ref analog_values, ref mut ax_button_pressing, .. } = &mut *cd;
         for (n, (&a, f)) in analog_values.iter().zip(ax_button_pressing.iter_mut()).enumerate() {
             let (pos, neg) = *f;
             fd.analog_values_abs[n] = a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
-            // *f = (false, false);
         }
         // ax_button_pressingがない分
         if analog_values.len() > ax_button_pressing.len() {
