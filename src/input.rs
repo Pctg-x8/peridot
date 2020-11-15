@@ -171,13 +171,13 @@ impl InputProcess {
     /// Cradle to Engine: Native Event Handler
     pub fn dispatch_button_event(&self, msg: NativeButtonInput, is_press: bool) {
         if let Some(&target_button_id) = self.buttonmap.get(&msg) {
-            self.collected.borrow_mut().button_pressing[target_button_id as usize] |= is_press;
+            self.collected.borrow_mut().button_pressing[target_button_id as usize] = is_press;
         }
         if let Some(&target_ax_button_id) = self.ax_pos_buttonmap.get(&msg) {
-            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].0 |= is_press;
+            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].0 = is_press;
         }
         if let Some(&target_ax_button_id) = self.ax_neg_buttonmap.get(&msg) {
-            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].1 |= is_press;
+            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].1 = is_press;
         }
     }
     /// Cradle to Engine: Native Event Handler
@@ -211,13 +211,14 @@ impl InputProcess {
             } else {
                 fd.button_press_time[n] = std::time::Duration::default();
             }
-            *f = false;
+            // *f = false;
         }
         let &mut AsyncCollectedData { ref analog_values, ref mut ax_button_pressing, .. } = &mut *cd;
-        for (n, (&a, f)) in analog_values.iter().zip(ax_button_pressing).enumerate() {
+        for (n, (&a, f)) in analog_values.iter().zip(ax_button_pressing.iter_mut()).enumerate() {
             let (pos, neg) = *f;
             fd.analog_values_abs[n] = a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
-            *f = (false, false);
+            // *f = (false, false);
+        }
         }
     }
 
