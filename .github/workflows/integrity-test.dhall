@@ -103,6 +103,7 @@ let successPrerequisites =
     , "check-formats"
     , "check-sync-workflow"
     , "check-cradle-windows"
+    , "check-cradle-macos"
     ]
 
 in GithubActions.Workflow::{
@@ -124,6 +125,7 @@ in GithubActions.Workflow::{
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-sync-workflow = CommonDefs.depends ["preconditions"] checkWorkflowSync
         , check-cradle-windows = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleWindows CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-cradle-macos = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleMacos CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , report-success = CommonDefs.depends successPrerequisites (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
         }
     }

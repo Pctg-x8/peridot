@@ -195,6 +195,27 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-windows"))]
         ]
     }
+let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition: Text) -> GithubActions.Job::{
+    , name = Some "Cradle(macOS)"
+    , runs-on = GithubActions.RunnerPlatform.macos-latest
+    , steps = List/concat GithubActions.Step.Type [
+        , List/end_map GithubActions.Step.Type (withConditionStep precondition) [
+            , checkoutHeadStep
+            , checkoutStep
+            , cacheStep
+            , GithubActions.Step::{
+                , name = "install requirements"
+                , run = Some "brew install coreutils"
+            }
+            , GithubActions.Step::{
+                , name = "cargo check"
+                , run = Some "./build.sh mac examples/basic --RunChecks"
+                , env = Some (toMap { VK_SDK_PATH = "" })
+                }
+            ]
+        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-macos"))]
+        ]
+    }
 
 let reportSuccessJob = \(notifyProvider: SlackNotifyProvider) -> GithubActions.Job::{
     , name = Some "Report as Success"
@@ -227,6 +248,7 @@ in  { depends
     , checkModules
     , checkExamples
     , checkCradleWindows
+    , checkCradleMacos
     , reportSuccessJob
     , cacheStep
     }

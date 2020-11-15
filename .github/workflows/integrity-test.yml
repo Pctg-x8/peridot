@@ -42,6 +42,55 @@ jobs:
         pr_title: "${{ github.event.pull_request.title }}"
         report_name: PR Integrity Check
         status: failure
+  "check-cradle-macos":
+    name: "Cradle(macOS)"
+    needs:
+    - preconditions
+    - "check-baselayer"
+    "runs-on": "macos-latest"
+    steps:
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v2"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
+      uses: "actions/checkout@v2"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: install requirements
+      run: brew install coreutils
+    - env:
+        VK_SDK_PATH: ''
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: cargo check
+      run: "./build.sh mac examples/basic --RunChecks"
+    - env:
+        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+        AWS_DEFAULT_REGION: "ap-northeast-1"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+      if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        base_sha: "${{ github.event.pull_request.base.sha }}"
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-cradle-macos"
+        head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
+        pr_number: "${{ github.event.number }}"
+        pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
+        status: failure
   "check-cradle-windows":
     name: "Cradle(Windows)"
     needs:
@@ -385,6 +434,7 @@ jobs:
     - "check-formats"
     - "check-sync-workflow"
     - "check-cradle-windows"
+    - "check-cradle-macos"
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
