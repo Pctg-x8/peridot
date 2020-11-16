@@ -91,6 +91,11 @@ if (Test-Path $UserlibDirectory\android-res) {
     robocopy $UserlibDirectory\android-res $ScriptPath\apkbuild\app\src\main\res /IS /E
 }
 
+# mirror extlib
+if (Test-Path $UserlibDirectory\extlib\android) {
+    robocopy $UserlibDirectory\extlib\android $ScriptPath\apkbuild\app\src\main\jniLibs /MIR /XF .*
+}
+
 # Build Userlib
 $ActiveFeatures = @("bedrock/VK_EXT_debug_report","bedrock/VK_KHR_android_surface","bedrock/DynamicLoaded") + $Features
 try {
