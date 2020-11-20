@@ -68,6 +68,11 @@ impl Camera {
     pub fn matrixes(&self) -> (Matrix4F32, Matrix4F32) {
         (self.view_matrix(), self.projection_matrix())
     }
+    /// calculates the camera view * projection matrix
+    pub fn view_projection_matrix(&self) -> Matrix4F32 {
+        let (v, p) = self.matrixes();
+        p * v
+    }
 
     /// Sets rotation of the camera to look at a point
     pub fn look_at(&mut self, target: Vector3F32) {
