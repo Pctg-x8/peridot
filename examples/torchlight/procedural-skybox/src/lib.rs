@@ -823,9 +823,10 @@ impl RenderCommands {
             AsRef::<br::Extent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()).clone()
         );
 
+        let clear_values = [br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(1.0, 0)];
         for (b, fb) in self.main_commands.iter().zip(&drt.fb) {
             b.begin().expect("Failed to begin record main command")
-                .begin_render_pass(&drt.rp, fb, render_area.clone(), &[br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(1.0, 0)], true)
+                .begin_render_pass(&drt.rp, fb, render_area.clone(), &clear_values, true)
                 .bind_graphics_pipeline_pair(grid_renderer.pipeline.pipeline(), grid_renderer.pipeline.layout())
                 .bind_graphics_descriptor_sets(0, &[descriptors.camera_uniform()], &[])
                 .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.grid_vertices as _)])
@@ -1052,7 +1053,9 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         self.rt.recreate_framebuffers(e, &new_size);
         self.skybox.recreate_pipeline(e, &self.rt);
         self.grid.recreate_pipeline(e, &self.rt);
-        self.cmds.generate_commands(e, &self.skybox, &self.grid, &self.descriptors, &self.rt, &self.buf, &self.buf_offsets);
+        self.cmds.generate_commands(
+            e, &self.skybox, &self.grid, &self.descriptors, &self.rt, &self.buf, &self.buf_offsets
+        );
 
         e.submit_commands(|r| {
             self.rt.postinit_commands(r);
