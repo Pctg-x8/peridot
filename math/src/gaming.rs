@@ -41,7 +41,7 @@ impl Camera {
                 let zscale = (self.depth_range.end / zdiff,
                     -(self.depth_range.end * self.depth_range.start) / zdiff);
                 
-                Matrix4([scaling, 0.0, 0.0, 0.0], [0.0, scaling, 0.0, 0.0],
+                Matrix4([scaling, 0.0, 0.0, 0.0], [0.0, -scaling, 0.0, 0.0],
                     [0.0, 0.0, zscale.0, zscale.1], [0.0, 0.0, 1.0, 0.0])
             },
             ProjectionMethod::Orthographic { size } => {
