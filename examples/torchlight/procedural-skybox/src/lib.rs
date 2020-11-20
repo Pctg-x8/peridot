@@ -494,69 +494,88 @@ impl SkyboxPrecomputedTextures {
     }
 }
 
+pub struct Descriptors {
+    camera_input_layout: br::DescriptorSetLayout,
+    skybox_renderer_input_layout: br::DescriptorSetLayout,
+    _static_sampler: br::Sampler,
+    _descriptors: br::DescriptorPool,
+    descriptors: Vec<br::vk::VkDescriptorSet>
+}
+impl Descriptors {
+    pub fn new(
+        g: &peridot::Graphics, dwt: &peridot::DeviceWorkingTextureStore, precomputes: &SkyboxPrecomputedTextures,
+        buf: &peridot::FixedMemory, buf_offsets: &FixedBufferOffsets
+    ) -> Self {
+        let linear_sampler = br::SamplerBuilder::default()
+            .addressing(
+                br::AddressingMode::ClampToEdge, br::AddressingMode::ClampToEdge, br::AddressingMode::ClampToEdge
+            )
+            .create(g)
+            .expect("Failed to create linear sampler");
+        let camera_input_layout = br::DescriptorSetLayout::new(g, &[
+            br::DescriptorSetLayoutBinding::UniformBuffer(1, br::ShaderStage::FRAGMENT.vertex())
+        ]).expect("Failed to create camera input layout");
+        let skybox_renderer_input_layout = br::DescriptorSetLayout::new(g, &[
+            br::DescriptorSetLayoutBinding::CombinedImageSampler(
+                1, br::ShaderStage::FRAGMENT, &[linear_sampler.native_ptr()]
+            ),
+            br::DescriptorSetLayoutBinding::CombinedImageSampler(
+                1, br::ShaderStage::FRAGMENT, &[linear_sampler.native_ptr()]
+            )
+        ]).expect("Failed to create skybox renderer input layout");
+        
+        let dp = br::DescriptorPool::new(g, 2, &[
+            br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 2),
+            br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1)
+        ], false).expect("Failed to create descriptor pool");
+        let descriptors = dp.alloc(&[
+            &camera_input_layout, &skybox_renderer_input_layout
+        ]).expect("Failed to alloc descriptor sets");
+        g.update_descriptor_sets(&[
+            br::DescriptorSetWriteInfo(
+                descriptors[0], 0, 0,
+                br::DescriptorUpdateInfo::UniformBuffer(vec![
+                    (buf.buffer.0.native_ptr(), buf_offsets.uniform_range.clone())
+                ])
+            ),
+            br::DescriptorSetWriteInfo(
+                descriptors[1], 0, 0,
+                br::DescriptorUpdateInfo::CombinedImageSampler(vec![
+                    (None, dwt.get(precomputes.scatter).native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)
+                ])
+            ),
+            br::DescriptorSetWriteInfo(
+                descriptors[1], 1, 0,
+                br::DescriptorUpdateInfo::CombinedImageSampler(vec![
+                    (None, dwt.get(precomputes.transmittance).native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)
+                ])
+            ),
+        ], &[]);
+
+        Descriptors {
+            camera_input_layout, skybox_renderer_input_layout,
+            _static_sampler: linear_sampler,
+            _descriptors: dp, descriptors
+        }
+    }
+
+    pub fn camera_uniform(&self) -> br::vk::VkDescriptorSet { self.descriptors[0] }
+    pub fn skybox_precomputed_textures(&self) -> br::vk::VkDescriptorSet { self.descriptors[1] }
+}
+
 pub struct SkyboxRenderer {
     main_render_shader: PvpShaderModules<'static>,
-    _static_sampler: br::Sampler,
-    input_layout: br::DescriptorSetLayout,
-    _descriptors: br::DescriptorPool,
-    descriptors: Vec<br::vk::VkDescriptorSet>,
     pipeline: peridot::LayoutedPipeline
 }
 impl SkyboxRenderer {
     fn new<NL: NativeLinker>(
         e: &Engine<NL>,
         drt: &DetailedRenderTargets,
-        precomputes: &SkyboxPrecomputedTextures,
-        dwt: &peridot::DeviceWorkingTextureStore,
-        buf: &peridot::FixedMemory,
-        buf_offsets: &FixedBufferOffsets
+        descriptors: &Descriptors
     ) -> Self {
-        let linear_sampler = br::SamplerBuilder::default()
-            .addressing(
-                br::AddressingMode::ClampToEdge,
-                br::AddressingMode::ClampToEdge,
-                br::AddressingMode::ClampToEdge
-            )
-            .create(e.graphics())
-            .expect("Failed to create linear_sampler");
-        let input_layout = br::DescriptorSetLayout::new(e.graphics(), &[
-            br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                1, br::ShaderStage::FRAGMENT, &[linear_sampler.native_ptr()]
-            ),
-            br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                1, br::ShaderStage::FRAGMENT, &[linear_sampler.native_ptr()]
-            ),
-            br::DescriptorSetLayoutBinding::UniformBuffer(1, br::ShaderStage::FRAGMENT)
-        ]).expect("Failed to create input_tex_layout");
-        let dp = br::DescriptorPool::new(e.graphics(), 1, &[
-            br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 2),
-            br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1)
-        ], false).expect("Failed to create descriptor pool");
-        let descriptors = dp.alloc(&[&input_layout]).expect("Failed to alloc descriptor sets");
-        e.graphics().update_descriptor_sets(&[
-            br::DescriptorSetWriteInfo(
-                descriptors[0], 0, 0,
-                br::DescriptorUpdateInfo::CombinedImageSampler(vec![
-                    (None, dwt.get(precomputes.scatter).native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)
-                ])
-            ),
-            br::DescriptorSetWriteInfo(
-                descriptors[0], 1, 0,
-                br::DescriptorUpdateInfo::CombinedImageSampler(vec![
-                    (None, dwt.get(precomputes.transmittance).native_ptr(), br::ImageLayout::ShaderReadOnlyOpt)
-                ])
-            ),
-            br::DescriptorSetWriteInfo(
-                descriptors[0], 2, 0,
-                br::DescriptorUpdateInfo::UniformBuffer(vec![
-                    (buf.buffer.0.native_ptr(), buf_offsets.uniform_range.clone())
-                ])
-            )
-        ], &[]);
-
-        let layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&input_layout], &[])
-            .expect("Faield to create empty pipeline")
-            .into();
+        let layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[
+            &descriptors.camera_input_layout, &descriptors.skybox_renderer_input_layout
+        ], &[]).expect("Faield to create SkyboxRender pipeline").into();
         let main_render_shader = PvpShaderModules::new(
             e.graphics(),
             e.load("shaders.skybox").expect("Failed to load main shader")
@@ -573,16 +592,13 @@ impl SkyboxRenderer {
                 br::DynamicArrayState::Static(&full_viewports),
                 br::DynamicArrayState::Static(&full_scissors))
             .multisample_state(Some(mp))
+            .depth_test_settings(Some(br::CompareOp::LessOrEqual), false)
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(e.graphics(), None)
             .expect("Creating GraphicsPipeline failed");
 
         SkyboxRenderer {
             main_render_shader,
-            _static_sampler: linear_sampler,
-            input_layout,
-            _descriptors: dp,
-            descriptors,
             pipeline: peridot::LayoutedPipeline::combine(pipeline, &layout)
         }
     }
@@ -599,6 +615,66 @@ impl SkyboxRenderer {
                 br::DynamicArrayState::Static(&full_viewports),
                 br::DynamicArrayState::Static(&full_scissors))
             .multisample_state(Some(mp))
+            .depth_test_settings(Some(br::CompareOp::LessOrEqual), false)
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+            .create(e.graphics(), None)
+            .expect("Creating GraphicsPipeline failed");
+        
+        self.pipeline = peridot::LayoutedPipeline::combine(pipeline, self.pipeline.layout());
+    }
+}
+
+pub struct GridRenderer {
+    main_render_shader: PvpShaderModules<'static>,
+    pipeline: peridot::LayoutedPipeline
+}
+impl GridRenderer {
+    pub fn new<NL: NativeLinker>(
+        e: &peridot::Engine<NL>,
+        drt: &DetailedRenderTargets,
+        descriptors: &Descriptors
+    ) -> Self {
+        let pl: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&descriptors.camera_input_layout], &[])
+            .expect("Failed to create GridRender pipeline layout")
+            .into();
+
+        let main_render_shader = PvpShaderModules::new(
+            e.graphics(),
+            e.load("shaders.colored").expect("Failed to load colored shader")
+        ).expect("Instantiating grid render shader failed");
+
+        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
+        let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(backbuffer_size.0, backbuffer_size.1))];
+        let full_viewports = [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0 .. 1.0).into_inner()];
+
+        let main_vps = main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
+        let mp = br::MultisampleState::new();
+        let pipeline = br::GraphicsPipelineBuilder::new(&pl, (&drt.rp, 0), main_vps)
+            .viewport_scissors(
+                br::DynamicArrayState::Static(&full_viewports),
+                br::DynamicArrayState::Static(&full_scissors))
+            .multisample_state(Some(mp))
+            .depth_test_settings(Some(br::CompareOp::Less), true)
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+            .create(e.graphics(), None)
+            .expect("Creating GraphicsPipeline failed");
+        
+        GridRenderer { main_render_shader, pipeline: peridot::LayoutedPipeline::combine(pipeline, &pl) }
+    }
+
+    fn recreate_pipeline<NL: NativeLinker>(&mut self, e: &Engine<NL>, drt: &DetailedRenderTargets) {
+        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
+        let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(backbuffer_size.0, backbuffer_size.1))];
+        let full_viewports = [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0 .. 1.0).into_inner()];
+
+        let main_vps = self.main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
+        let mp = br::MultisampleState::new();
+        let pipeline = br::GraphicsPipelineBuilder::new(self.pipeline.layout(), (&drt.rp, 0), main_vps)
+            .viewport_scissors(
+                br::DynamicArrayState::Static(&full_viewports),
+                br::DynamicArrayState::Static(&full_scissors))
+            .multisample_state(Some(mp))
+            .depth_test_settings(Some(br::CompareOp::Less), true)
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(e.graphics(), None)
             .expect("Creating GraphicsPipeline failed");
@@ -608,45 +684,99 @@ impl SkyboxRenderer {
 }
 
 pub struct DetailedRenderTargets {
+    depth_buffer: peridot::Image,
+    depth_buffer_view: br::ImageView,
     rp: br::RenderPass,
     fb: Vec<br::Framebuffer>
 }
 impl DetailedRenderTargets {
     pub fn new<NL: NativeLinker>(e: &Engine<NL>) -> Self {
-        let rp = peridot::RenderPassTemplates::single_render(e.backbuffer_format(), e.requesting_backbuffer_layout().0)
-            .create(e.graphics())
-            .expect("Creating RenderPass failed");
+        let depth_buffer = br::ImageDesc::new(
+            e.backbuffer(0).expect("no backbuffers?").size(),
+            br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+            br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            br::ImageLayout::Undefined
+        ).create(e.graphics()).expect("Failed to create depth buffer");
+        let mut mb = peridot::MemoryBadget::new(e.graphics());
+        mb.add(depth_buffer);
+        let depth_buffer = mb.alloc().expect("Failed to alloc depth buffer memory")
+            .pop().expect("no resources").unwrap_image();
+        let depth_buffer_view = depth_buffer.create_view(
+            None, None, &Default::default(), &br::ImageSubresourceRange::depth_stencil(0 .. 1, 0 .. 1)
+        ).expect("Failed to create depth buffer view");
+
+        let rp = peridot::RenderPassTemplates::single_render_with_depth(
+            e.backbuffer_format(), br::vk::VK_FORMAT_D24_UNORM_S8_UINT, e.requesting_backbuffer_layout().0, false
+        ).create(e.graphics()).expect("Creating RenderPass failed");
         let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
         let fb = e.iter_backbuffers()
-            .map(|bb| br::Framebuffer::new(&rp, &[&bb], &backbuffer_size, 1).expect("Creating Framebuffer failed"))
+            .map(|bb|
+                br::Framebuffer::new(&rp, &[&bb, &depth_buffer_view], &backbuffer_size, 1)
+                    .expect("Creating Framebuffer failed")
+            )
             .collect();
         
-        DetailedRenderTargets { rp, fb }
+        DetailedRenderTargets { rp, fb, depth_buffer, depth_buffer_view }
     }
 
     pub fn discard_framebuffers(&mut self) { self.fb.clear(); }
-    pub fn recreate_framebuffers<NL: NativeLinker>(&mut self, e: &Engine<NL>, size: &peridot::math::Vector2<usize>) {
+    pub fn recreate_framebuffers<NL: NativeLinker>(
+        &mut self, e: &Engine<NL>, size: &peridot::math::Vector2<usize>
+    ) {
         let su32: br::Extent2D = peridot::math::Vector2::<u32>(size.0 as _, size.1 as _).into();
+
+        let depth_buffer = br::ImageDesc::new(
+            e.backbuffer(0).expect("no backbuffers?").size(),
+            br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+            br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            br::ImageLayout::Undefined
+        ).create(e.graphics()).expect("Failed to create depth buffer");
+        let mut mb = peridot::MemoryBadget::new(e.graphics());
+        mb.add(depth_buffer);
+        self.depth_buffer = mb.alloc().expect("Failed to alloc depth buffer memory")
+            .pop().expect("no resources").unwrap_image();
+        self.depth_buffer_view = self.depth_buffer.create_view(
+            None, None, &Default::default(), &br::ImageSubresourceRange::depth_stencil(0 .. 1, 0 .. 1)
+        ).expect("Failed to create depth buffer view");
+
         self.fb = e.iter_backbuffers()
-            .map(|bb| br::Framebuffer::new(&self.rp, &[&bb], &su32, 1).expect("Recreating Framebuffer failed"))
-            .collect();
+            .map(|bb|
+                br::Framebuffer::new(&self.rp, &[&bb, &self.depth_buffer_view], &su32, 1)
+                    .expect("Recreating Framebuffer failed")
+            ).collect();
+    }
+
+    pub fn postinit_commands(&self, r: &mut br::CmdRecord) {
+        r.pipeline_barrier(
+            br::PipelineStageFlags::BOTTOM_OF_PIPE, br::PipelineStageFlags::EARLY_FRAGMENT_TESTS, true, &[], &[],&[
+                br::ImageMemoryBarrier::new_raw(
+                    &self.depth_buffer, &br::ImageSubresourceRange::depth_stencil(0 .. 1, 0 .. 1),
+                    br::ImageLayout::Undefined, br::ImageLayout::DepthStencilAttachmentOpt
+                )
+            ]
+        );
     }
 }
 
 pub struct FixedBufferOffsets {
     fill_plane: u64,
+    grid_vertices: u64, grid_vertex_count: u32,
     mut_uniform_offset: u64,
     uniform_range: std::ops::Range<usize>
 }
 pub struct FixedBufferInitializer {
     fill_plane: peridot::Primitive<peridot::VertexUV2D>,
-    fill_plane_offset: u64
+    fill_plane_offset: u64,
+    grid_vertices: peridot::Primitive<peridot::ColoredVertex>,
+    grid_vertices_offset: u64
 }
 impl peridot::FixedBufferInitializer for FixedBufferInitializer {
     fn stage_data(&mut self, m: &br::MappedMemoryRange) {
         unsafe {
             m.slice_mut(self.fill_plane_offset as _, self.fill_plane.vertices.len())
                 .clone_from_slice(&self.fill_plane.vertices);
+            m.slice_mut(self.grid_vertices_offset as _, self.grid_vertices.vertices.len())
+                .clone_from_slice(&self.grid_vertices.vertices);
         }
     }
 
@@ -683,6 +813,8 @@ impl RenderCommands {
         &self,
         e: &Engine<NL>,
         skybox_renderer: &SkyboxRenderer,
+        grid_renderer: &GridRenderer,
+        descriptors: &Descriptors,
         drt: &DetailedRenderTargets,
         buf: &peridot::FixedMemory,
         buf_offsets: &FixedBufferOffsets
@@ -693,9 +825,13 @@ impl RenderCommands {
 
         for (b, fb) in self.main_commands.iter().zip(&drt.fb) {
             b.begin().expect("Failed to begin record main command")
-                .begin_render_pass(&drt.rp, fb, render_area.clone(), &[br::ClearValue::Color([0.0; 4])], true)
+                .begin_render_pass(&drt.rp, fb, render_area.clone(), &[br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(1.0, 0)], true)
+                .bind_graphics_pipeline_pair(grid_renderer.pipeline.pipeline(), grid_renderer.pipeline.layout())
+                .bind_graphics_descriptor_sets(0, &[descriptors.camera_uniform()], &[])
+                .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.grid_vertices as _)])
+                .draw(buf_offsets.grid_vertex_count, 1, 0, 0)
                 .bind_graphics_pipeline_pair(skybox_renderer.pipeline.pipeline(), skybox_renderer.pipeline.layout())
-                .bind_graphics_descriptor_sets(0, &[skybox_renderer.descriptors[0]], &[])
+                .bind_graphics_descriptor_sets(1, &[descriptors.skybox_precomputed_textures()], &[])
                 .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.fill_plane as _)])
                 .draw(4, 1, 0, 0)
                 .end_render_pass();
@@ -708,7 +844,9 @@ impl RenderCommands {
 
 #[repr(C)]
 pub struct Uniform {
-    pub eye_height: f32, pub view_zenith_angle: f32, pub azimuth_angle: f32
+    pub main_view_projection: peridot::math::Matrix4F32,
+    pub main_view: peridot::math::Matrix4F32,
+    pub persp_fov_rad: f32
 }
 
 struct Differential<T> { old_value: T }
@@ -725,8 +863,10 @@ impl<T> Differential<T> where T: std::ops::Sub<T, Output = T> + Copy {
 
 pub struct Game<NL> {
     rt: DetailedRenderTargets,
-    skybox_precomputed: SkyboxPrecomputedTextures,
+    descriptors: Descriptors,
+    _skybox_precomputed: SkyboxPrecomputedTextures,
     skybox: SkyboxRenderer,
+    grid: GridRenderer,
     buf: peridot::FixedMemory,
     buf_offsets: FixedBufferOffsets,
     _precompute_textures: peridot::DeviceWorkingTextureStore,
@@ -735,6 +875,7 @@ pub struct Game<NL> {
     total_time: f32,
     view_zenith_angle: f32,
     azimuth_angle: f32,
+    main_camera: peridot::math::Camera,
     mouse_x_diff: Differential<f32>,
     mouse_y_diff: Differential<f32>,
     ph: std::marker::PhantomData<*const NL>
@@ -750,7 +891,12 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         e.input_mut().map(peridot::NativeAnalogInput::MouseY, 0);
         e.input_mut().map(peridot::NativeAnalogInput::MouseX, 1);
 
-        let rt = DetailedRenderTargets::new(e);
+        let main_camera = peridot::math::Camera {
+            projection: peridot::math::ProjectionMethod::Perspective { fov: 70.0 },
+            position: peridot::math::Vector3(0.0, 3.0, -5.0),
+            rotation: peridot::math::Quaternion::new(0.0, peridot::math::Vector3(0.0, 1.0, 0.0)),
+            depth_range: 0.1 .. 100.0
+        };
 
         let mut precompute_textures = peridot::DeviceWorkingTextureAllocator::new();
         let skybox_precomputed = SkyboxPrecomputedTextures::prealloc(&mut precompute_textures);
@@ -762,11 +908,20 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let fill_plane_offset = bp.add(
             peridot::BufferContent::vertices::<peridot::VertexUV2D>(fill_plane.vertices.len())
         );
+        let grid_vertices = peridot::Primitive {
+            vertices: peridot::Primitive::limited_xz_grid(10).vertices.into_iter()
+                .map(|v| peridot::ColoredVertex { pos: v, color: peridot::math::Vector4(0.6, 0.6, 0.6, 1.0) })
+                .chain(peridot::Primitive::limited_coordinate_axis(100).vertices)
+                .collect()
+        };
+        let grid_vertices_offset = bp.add(
+            peridot::BufferContent::vertices::<peridot::ColoredVertex>(grid_vertices.vertices.len())
+        );
         let mut mbp = peridot::BufferPrealloc::new(e.graphics());
         let uniform_offset = mbp.add(peridot::BufferContent::uniform::<Uniform>());
         let mut fb_data = FixedBufferInitializer {
-            fill_plane,
-            fill_plane_offset
+            fill_plane, fill_plane_offset,
+            grid_vertices, grid_vertices_offset
         };
         let mut tfb = peridot::TransferBatch::new();
         let buf = peridot::FixedMemory::new(
@@ -779,6 +934,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         ).expect("Failed to initialize fixed buffers");
         let buf_offsets = FixedBufferOffsets {
             fill_plane: fb_data.fill_plane_offset,
+            grid_vertices: fb_data.grid_vertices_offset,
+            grid_vertex_count: fb_data.grid_vertices.vertices.len() as _,
             mut_uniform_offset: uniform_offset,
             uniform_range: (buf.mut_buffer_placement + uniform_offset) as usize ..
                 (buf.mut_buffer_placement + uniform_offset) as usize + std::mem::size_of::<Uniform>()
@@ -787,7 +944,9 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             0 .. uniform_offset + std::mem::size_of::<Uniform>() as u64,
             |m| unsafe {
                 *m.get_mut(uniform_offset as _) = Uniform {
-                    eye_height: 100.0, view_zenith_angle: 90.0, azimuth_angle: 0.0
+                    main_view_projection: main_camera.view_projection_matrix(),
+                    main_view: main_camera.view_matrix(),
+                    persp_fov_rad: 70.0f32.to_radians()
                 };
             }
         ).expect("Staging MutBuffer failed");
@@ -812,20 +971,27 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             tfb_update.sink_transfer_commands(&mut r);
             tfb_update.sink_graphics_ready_commands(&mut r);
         }
+
+        let rt = DetailedRenderTargets::new(e);
         
-        let skybox = SkyboxRenderer::new(e, &rt, &skybox_precomputed, &precompute_textures, &buf, &buf_offsets);
+        let descriptors = Descriptors::new(e.graphics(), &precompute_textures, &skybox_precomputed, &buf, &buf_offsets);
+        let skybox = SkyboxRenderer::new(e, &rt, &descriptors);
+        let grid = GridRenderer::new(e, &rt, &descriptors);
 
         skybox_precomputed.init(e, &precompute_textures);
         let cmds = RenderCommands::new(e);
-        cmds.generate_commands(e, &skybox, &rt, &buf, &buf_offsets);
+        cmds.generate_commands(e, &skybox, &grid, &descriptors, &rt, &buf, &buf_offsets);
 
-        e.submit_commands(|r| { tfb.sink_transfer_commands(r); tfb.sink_graphics_ready_commands(r); })
-            .expect("Failed to resource memory initialization");
+        e.submit_commands(|r| {
+            tfb.sink_transfer_commands(r); tfb.sink_graphics_ready_commands(r);
+            rt.postinit_commands(r);
+        }).expect("Failed to resource memory initialization");
 
         Game {
-            rt,
-            skybox_precomputed,
+            rt, descriptors,
+            _skybox_precomputed: skybox_precomputed,
             skybox,
+            grid,
             buf,
             buf_offsets,
             _precompute_textures: precompute_textures,
@@ -834,6 +1000,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             total_time: 0.0,
             view_zenith_angle: 90.0,
             azimuth_angle: 0.0,
+            main_camera,
             mouse_x_diff: Differential::new(0.0),
             mouse_y_diff: Differential::new(0.0),
             ph: std::marker::PhantomData
@@ -846,7 +1013,12 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let mx_diff = self.mouse_x_diff.update(e.input().analog_value_abs(1));
         if e.input().button_pressing_time(0) > std::time::Duration::new(0, 0) {
             self.view_zenith_angle -= my_diff * 0.1;
-            self.azimuth_angle += mx_diff * 0.1;
+            self.azimuth_angle -= mx_diff * 0.1;
+            self.main_camera.rotation = peridot::math::Quaternion::new(
+                (self.view_zenith_angle - 90.0).to_radians(), peridot::math::Vector3::left()
+            ) * peridot::math::Quaternion::new(
+                self.azimuth_angle.to_radians(), peridot::math::Vector3::up()
+            );
         }
 
         self.total_time += dt.as_secs() as f32 + dt.subsec_micros() as f32 / 10_000_000.0; 
@@ -854,9 +1026,9 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             0 .. self.buf_offsets.mut_uniform_offset + std::mem::size_of::<Uniform>() as u64,
             |m| unsafe {
                 *m.get_mut(self.buf_offsets.mut_uniform_offset as _) = Uniform {
-                    eye_height: 10.0 + (self.total_time * 0.0).sin() * 1000.0,
-                    view_zenith_angle: self.view_zenith_angle,
-                    azimuth_angle: self.azimuth_angle
+                    main_view_projection: self.main_camera.view_projection_matrix(),
+                    main_view: self.main_camera.view_matrix(),
+                    persp_fov_rad: 70.0f32.to_radians()
                 };
             }
         ).expect("Staging MutBuffer failed");
@@ -879,6 +1051,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
     fn on_resize(&mut self, e: &Engine<NL>, new_size: peridot::math::Vector2<usize>) {
         self.rt.recreate_framebuffers(e, &new_size);
         self.skybox.recreate_pipeline(e, &self.rt);
-        self.cmds.generate_commands(e, &self.skybox, &self.rt, &self.buf, &self.buf_offsets);
+        self.grid.recreate_pipeline(e, &self.rt);
+        self.cmds.generate_commands(e, &self.skybox, &self.grid, &self.descriptors, &self.rt, &self.buf, &self.buf_offsets);
+
+        e.submit_commands(|r| {
+            self.rt.postinit_commands(r);
+        }).expect("Failed to execute resize commands");
     }
 }
