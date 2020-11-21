@@ -113,8 +113,8 @@ jobs:
       name: cargo check
       run: |
         $ErrorActionPreference = "Continue"
-        ./cradle/windows/build.ps1 examples/basic -RunTests -Features bedrock/DynamicLoaded *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
-        Write-Host $?
+        pwsh -c './cradle/windows/build.ps1 examples/basic -RunTests -Features bedrock/DynamicLoaded; $Env:Succ=$?' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        Write-Host $Env:Succ
     - env:
         VK_SDK_PATH: ''
       if: 'true'
