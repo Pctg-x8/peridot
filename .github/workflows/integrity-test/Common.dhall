@@ -186,7 +186,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
                 , run = Some
                     ''
                     $ErrorActionPreference = "Continue"
-                    pwsh -c './cradle/windows/build.ps1 examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | % { \"$_\" } | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                    pwsh -c './cradle/windows/build.ps1 examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | % { "$_" } | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                     ''
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
