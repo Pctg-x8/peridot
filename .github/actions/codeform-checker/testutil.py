@@ -1,6 +1,11 @@
 from glob import iglob
 import re
 from typing import Iterable, Tuple
+from pathlib import Path
+from os import environ
+
+def rawbuildlog_path() -> Path:
+    return Path(environ.get("GITHUB_WORKSPACE")).joinpath(".rawbuildlog")
 
 def target_sources(first_matcher: str = "**/*.rs"):
     return (p for p in iglob("**/*.rs", recursive=True) if not p.startswith("extras/") and not "target/" in p)
@@ -12,3 +17,4 @@ def available_lines(fp) -> Iterable[Tuple[int, str]]: return filter(lambda x: no
 
 def annotate_error(file: str, line: int, col: int, msg: str):
     print(f"::error file={file},line={line},col={col}::{msg}")
+    with open(rawbuildlog_path(), mode="wax") as f: f.write(f"* {msg} at {file} line {line} col {col}\n")

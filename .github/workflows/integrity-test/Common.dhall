@@ -124,7 +124,7 @@ let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> \(precondition: T
     , name = Some "Base Layer"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = List/concat GithubActions.Step.Type [
-        , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
+        , List/end_map GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
             , cacheStep
