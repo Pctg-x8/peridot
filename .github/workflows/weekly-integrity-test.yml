@@ -111,7 +111,7 @@ jobs:
         VK_SDK_PATH: ''
       if: 'true'
       name: cargo check
-      run: "pwsh -NonInteractive -c \"./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded\" *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      run: "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       shell: "pwsh -NonInteractive -Command \". '{0}'\""
     - env:
         VK_SDK_PATH: ''
