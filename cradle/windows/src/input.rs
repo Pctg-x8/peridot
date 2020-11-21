@@ -14,8 +14,7 @@ use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use peridot::{NativeButtonInput, NativeAnalogInput};
 use std::cell::RefCell;
 
-pub struct RawInputHandler {
-}
+pub struct RawInputHandler {x}
 impl RawInputHandler {
     pub fn init() -> Self {
         let ri_devices = [
