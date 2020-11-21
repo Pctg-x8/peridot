@@ -89,6 +89,9 @@ try {
     Push-Location
     Set-Location $ScriptPath
     if ($UpdateDeps) { cargo update }
-    cargo $CargoSubcommand --features $($ActiveFeatures -join ",") $OptFlags
+    $p = Start-Process "cargo" -ArgumentList @($CargoSubcommand, "--features", $ActiveFeatures -join ",", $OptFlags) -Wait -NoNewWindow -PassThru
+    if ($p.ExitCode -ne 0) {
+        throw "Cargo exited with code ${p.ExitCode}"
+    }
 }
 finally { Pop-Location }
