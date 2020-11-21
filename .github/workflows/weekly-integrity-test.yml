@@ -112,7 +112,7 @@ jobs:
       if: 'true'
       name: cargo check
       run: "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
-      shell: "pwsh -Command '. {0} 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog'"
+      shell: "pwsh -Command \". '{0}' 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog\""
     - env:
         VK_SDK_PATH: ''
       if: 'true'
