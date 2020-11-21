@@ -89,7 +89,7 @@ try {
     Push-Location
     Set-Location $ScriptPath
     if ($UpdateDeps) { cargo update }
-    $p = Start-Process "cargo" -ArgumentList @($CargoSubcommand, "--features", $ActiveFeatures -join ",", $OptFlags) -Wait -NoNewWindow -PassThru
+    $p = Start-Process "cargo" -ArgumentList @($CargoSubcommand "--features" $($ActiveFeatures -join ",") $OptFlags) -Wait -NoNewWindow -PassThru
     if ($p.ExitCode -ne 0) {
         throw "Cargo exited with code ${p.ExitCode}"
     }
