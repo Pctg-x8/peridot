@@ -62,13 +62,13 @@ function BuildCargoManifestFromTemplate([String]$PackageName) {
 }
 
 $PackageName = ParseProjectCrateName($UserlibDirectory)
-Write-Output -ForegroundColor White ">"
-Write-Output -ForegroundColor Gray ">"
-Write-Output -ForegroundColor DarkGray ">"
-Write-Output " Building Project "
-Write-Output -ForegroundColor Cyan $PackageName
-Write-Output " for "
-Write-Output -ForegroundColor Yellow "Win32"
+Write-Host -ForegroundColor White -NoNewLine ">"
+Write-Host -ForegroundColor Gray -NoNewLine ">"
+Write-Host -ForegroundColor DarkGray -NoNewLine ">"
+Write-Host -NoNewLine " Building Project "
+Write-Host -ForegroundColor Cyan -NoNewLine $PackageName
+Write-Host -NoNewLine " for "
+Write-Host -ForegroundColor Yellow -NoNewLine "Win32"
 Write-Host " Deployment..."
 BuildCargoManifestFromTemplate($PackageName)
 
@@ -89,9 +89,6 @@ try {
     Push-Location
     Set-Location $ScriptPath
     if ($UpdateDeps) { cargo update }
-    $p = Start-Process "cargo" -ArgumentList $CargoSubcommand,"--features",$($ActiveFeatures -join ","),$OptFlags -Wait -NoNewWindow -PassThru
-    if ($p.ExitCode -ne 0) {
-        throw "Cargo exited with code ${p.ExitCode}"
-    }
+    cargo $CargoSubcommand --features $($ActiveFeatures -join ",") $OptFlags
 }
 finally { Pop-Location }
