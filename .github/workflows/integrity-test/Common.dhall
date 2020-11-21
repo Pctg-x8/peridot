@@ -184,7 +184,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
             , GithubActions.Step::{
                 , name = "cargo check"
                 , run = Some "pwsh -NonInteractive -c \"./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded\" *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
-                , shell = Some (GithubActions.Shell.Custom "pwsh -NonInteractive -File {0}")
+                , shell = Some (GithubActions.Shell.Custom "pwsh -NonInteractive -Command \". '{0}'\"")
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             , GithubActions.Step::{
