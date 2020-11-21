@@ -187,6 +187,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
                 ''
                     pwsh -c './build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded' 2>&1
                 ''
+                , shell = Some (GithubActions.Shell.Custom "pwsh -File {0}")
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             , GithubActions.Step::{
@@ -195,6 +196,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
                 ''
                     pwsh -c './build.ps1 windows examples/basic -RunTests -Features "transparent,bedrock/DynamicLoaded"' 2>&1
                 ''
+                , shell = Some (GithubActions.Shell.Custom "pwsh -File {0}")
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]
