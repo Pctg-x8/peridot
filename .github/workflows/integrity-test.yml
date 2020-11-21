@@ -120,7 +120,9 @@ jobs:
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
       run: |
-        pwsh -c './cradle/windows/build.ps1 examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | % { "$_" } | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        $ErrorActionPreference = "Continue"
+        pwsh -c './cradle/windows/build.ps1 examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        Write-Host $LastExitCode
     - env:
         VK_SDK_PATH: ''
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
