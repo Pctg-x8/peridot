@@ -111,15 +111,13 @@ jobs:
         VK_SDK_PATH: ''
       if: 'true'
       name: cargo check
-      run: "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
-      shell: "pwsh -Command \". '{0}' 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog\""
+      run: "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
     - env:
         VK_SDK_PATH: ''
       if: 'true'
       name: "cargo check for transparent-back"
       run: |
-            pwsh -c './build.ps1 windows examples/basic -RunTests -Features "transparent,bedrock/DynamicLoaded"' 2>&1
-      shell: "pwsh -File {0}"
+            ./build.ps1 windows examples/basic -RunTests -Features "transparent,bedrock/DynamicLoaded" 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"

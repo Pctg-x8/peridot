@@ -183,17 +183,15 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
             , cacheStep
             , GithubActions.Step::{
                 , name = "cargo check"
-                , run = Some "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
-                , shell = Some (GithubActions.Shell.Custom "pwsh -Command \". '{0}' 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog\"")
+                , run = Some "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             , GithubActions.Step::{
                 , name = "cargo check for transparent-back"
                 , run = Some
                 ''
-                    pwsh -c './build.ps1 windows examples/basic -RunTests -Features "transparent,bedrock/DynamicLoaded"' 2>&1
+                    ./build.ps1 windows examples/basic -RunTests -Features "transparent,bedrock/DynamicLoaded" 2>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                 ''
-                , shell = Some (GithubActions.Shell.Custom "pwsh -File {0}")
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]
