@@ -7,7 +7,7 @@ $ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function BuildForTarget([String]$Target) {
     Write-Host "Building for target '$Target'..."
-    Invoke-Expression "$ScriptPath/cradle/$Target/build.ps1 $PassingArgs"
+    pwsh -NonInteractive -c "$ScriptPath/cradle/$Target/build.ps1 $PassingArgs"
 }
 
 $Targets | ForEach-Object { BuildForTarget($_) }
