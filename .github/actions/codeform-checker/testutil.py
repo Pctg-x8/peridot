@@ -17,4 +17,4 @@ def available_lines(fp) -> Iterable[Tuple[int, str]]: return filter(lambda x: no
 
 def annotate_error(file: str, line: int, col: int, msg: str):
     print(f"::error file={file},line={line},col={col}::{msg}")
-    with open(rawbuildlog_path(), mode="ax") as f: f.write(f"* {msg} at {file} line {line} col {col}\n")
+    with open(rawbuildlog_path(), mode="a+") as f: f.write(f"* {msg} at {file} line {line} col {col}\n")
