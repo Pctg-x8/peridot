@@ -91,9 +91,7 @@ try {
     if ($UpdateDeps) { cargo update }
     cargo $CargoSubcommand --features $($ActiveFeatures -join ",") $OptFlags
     if ($LastExitCode -ne 0) {
-        $c = $LastExitCode
-        Write-Error "cargo has exited with code $c"
-        exit $c
+        exit $LastExitCode
     }
 }
 finally { Pop-Location }
