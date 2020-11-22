@@ -8,6 +8,7 @@ $ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 function BuildForTarget([String]$Target) {
     Write-Host "Building for target '$Target'..."
     pwsh -NonInteractive -c "$ScriptPath/cradle/$Target/build.ps1 $PassingArgs"
+    if ($LastExitCode -ne 0) { exit $LastExitCode }
 }
 
 $Targets | ForEach-Object { BuildForTarget($_) }
