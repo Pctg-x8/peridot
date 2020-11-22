@@ -60,7 +60,7 @@ rsync -auz $SCRIPT_PATH/apkbuild/app/src/main/res-default/* $SCRIPT_PATH/apkbuil
 
 [ -d $SCRIPT_PATH/target/arm64-v8a-linux-android ] && mv $SCRIPT_PATH/target/arm64-v8a-linux-android $SCRIPT_PATH/target/aarch64-linux-android
 if [ $UPDATE_DEPS -ne 0 ]; then (cd $SCRIPT_PATH; cargo update); fi
-(cd $SCRIPT_PATH; cargo ndk --target aarch64-linux-android --android-platform $NDK_PLATFORM_TARGET -- build --features bedrock/VK_EXT_debug_report,bedrock/VK_KHR_android_surface,bedrock/DynamicLoaded)
+(cd $SCRIPT_PATH; cargo ndk --target aarch64-linux-android --android-platform $NDK_PLATFORM_TARGET -- build --features bedrock/VK_EXT_debug_report,bedrock/VK_KHR_android_surface,bedrock/DynamicLoaded) || exit $?
 [ ! -d $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a ] && mkdir -p $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a
 mv $SCRIPT_PATH/target/aarch64-linux-android/debug/libpegamelib.so $SCRIPT_PATH/apkbuild/app/src/main/jniLibs/arm64-v8a/
 
@@ -71,5 +71,5 @@ echo -e "💠  $SCRIPT_PATH/apkbuild/app/build/outputs/apk/debug/app-debug.apk"
 
 if [ $AFTER_RUN -ne 0 ]; then
     ADB=$ANDROID_HOME/platform-tools/adb
-	(cd $SCRIPT_PATH/apkbuild; $ADB uninstall $PACKAGE_ID; $ADB install app/build/outputs/apk/debug/app-debug.apk && $ADB shell am start -n $PACKAGE_ID/jp.ct2.peridot.NativeActivity)
+	(cd $SCRIPT_PATH/apkbuild; $ADB uninstall $PACKAGE_ID; $ADB install app/build/outputs/apk/debug/app-debug.apk && $ADB shell am start -n $PACKAGE_ID/jp.ct2.peridot.NativeActivity) || exit $?
 fi
