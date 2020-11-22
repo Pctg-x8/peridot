@@ -71,30 +71,22 @@ impl<R: Read + Seek> Seek for ReaderView<R>
     }
 }
 pub struct PlatformAssetLoader { par_path: CocoaObject<NSString> }
-impl PlatformAssetLoader
-{
-    fn new() -> Self
-    {
+impl PlatformAssetLoader {
+    fn new() -> Self {
         let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
         let mut pathext = NSString::from_str("par").expect("NSString for ext");
-        let par_path = unsafe
-        {
-            CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext)).expect("No Primary Asset")
-        };
+        let par_path = unsafe { CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext)).expect("No Primary Asset") };
 
         PlatformAssetLoader { par_path }
     }
 }
 use peridot::archive as par;
-impl peridot::PlatformAssetLoader for PlatformAssetLoader
-{
+impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = Cursor<Vec<u8>>;
     type StreamingAsset = ReaderView<par::EitherArchiveReader>;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>>
-    {
-        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).map_err(|e| match e
-        {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Cursor<Vec<u8>>> {
+        let mut arc = peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).map_err(|e| match e {
             peridot::archive::ArchiveReadError::IO(e) => e,
             peridot::archive::ArchiveReadError::IntegrityCheckFailed =>
             {
@@ -108,7 +100,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
             },
             peridot::archive::ArchiveReadError::Lz4DecompressError(e) =>
             {
-                error!("lz4 decompress error: {:?}", e);
+                error!("lz4 decompress error: {:?}", er);
                 IOError::new(ErrorKind::Other, "PrimaryArchive read error")
             },
             _ => IOError::new(ErrorKind::Other, "PrimaryArchive read error")
