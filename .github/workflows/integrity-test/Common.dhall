@@ -194,6 +194,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
                 , name = "cargo check for transparent-back"
                 , run = Some
                 ''
+                    $ErrorActionPreference = "Continue"
                     pwsh -c './build.ps1 windows examples/basic -RunTests -Features "transparent,bedrock/DynamicLoaded"' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                 ''
                 , env = Some (toMap { VK_SDK_PATH = "" })
