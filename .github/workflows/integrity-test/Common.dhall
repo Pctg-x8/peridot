@@ -218,6 +218,7 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , GithubActions.Step::{
                 , name = "cargo check"
                 , run = Some "./build.sh mac examples/basic --RunChecks 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+                , shell = Some GithubActions.Shell.bash
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]

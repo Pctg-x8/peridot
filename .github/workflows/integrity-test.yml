@@ -74,6 +74,7 @@ jobs:
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
       run: "./build.sh mac examples/basic --RunChecks 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      shell: bash
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
