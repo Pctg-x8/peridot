@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -o pipefail
 
 # ./build.sh に続けて,区切りでcradleの名前を指定する
 
