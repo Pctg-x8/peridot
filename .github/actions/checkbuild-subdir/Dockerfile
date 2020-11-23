@@ -7,4 +7,4 @@ RUN chmod +x /tester.sh
 RUN chmod +x /checker.sh
 RUN chmod +x /find-test-code.sh
 
-ENTRYPOINT ["sh", "-o", "pipefail", "-c", "/tester.sh 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"]
+ENTRYPOINT ["bash", "-o", "pipefail", "-c", "/tester.sh 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"]
