@@ -11,6 +11,7 @@ pub enum ProjectionMethod {
     /// The perspective projection. requires fov(unit: radians)
     Perspective { fov: f32 },
     /// UI layouting optimized projection: (0, 0)-(design_width, design_height) will be mapped to (-1, -1)-(1, 1)
+    /// This projection ignores aspect ratio.
     UI { design_width: f32, design_height: f32 }
 }
 /// A camera
@@ -27,7 +28,13 @@ pub enum ProjectionMethod {
 /// assert_eq!(mp * mv * Vector3(5.0, 0.0, 1.0), Vector4(1.0, 0.0, 0.0, 1.0));
 /// ```
 pub struct Camera {
-    pub projection: ProjectionMethod, pub position: Vector3F32, pub rotation: QuaternionF32,
+    /// Projection method of the camera. `None` indicates no projection(only adjust aspect ratio)
+    pub projection: Option<ProjectionMethod>,
+    /// Eye position of the camera.
+    pub position: Vector3F32,
+    /// Eye direction of the camera.
+    pub rotation: QuaternionF32,
+    /// Z range to be rendered.
     pub depth_range: Range<f32>
 }
 
@@ -35,7 +42,7 @@ impl Camera {
     /// calculates the camera projection matrix
     pub fn projection_matrix(&self, aspect_wh: f32) -> Matrix4F32 {
         match self.projection {
-            ProjectionMethod::Perspective { fov } => {
+            Some(ProjectionMethod::Perspective { fov }) => {
                 let scaling_tan = (fov / 2.0).tan();
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let zscale = (self.depth_range.end / zdiff,
@@ -46,20 +53,21 @@ impl Camera {
                     [0.0, 0.0, zscale.0, zscale.1], [0.0, 0.0, 1.0, 0.0]
                 )
             },
-            ProjectionMethod::Orthographic { size } => {
+            Some(ProjectionMethod::Orthographic { size }) => {
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let t = Matrix4::translation(Vector3(0.0, 0.0, -self.depth_range.start));
                 let s = Matrix4::scale(Vector4((aspect_wh * size).recip(), size.recip(), zdiff.recip(), 1.0));
 
                 s * t
             },
-            ProjectionMethod::UI { design_width, design_height } => {
+            Some(ProjectionMethod::UI { design_width, design_height }) => {
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let t = Matrix4::translation(Vector3(-1.0, -1.0, 0.0));
                 let s = Matrix4::scale(Vector4(2.0 / design_width, 2.0 / design_height, zdiff.recip(), 1.0));
 
                 t * s
-            }
+            },
+            None => Matrix4::scale(Vector4(aspect_wh.recip(), 1.0, 1.0, 1.0))
         }
     }
     /// calculates the camera view matrix
