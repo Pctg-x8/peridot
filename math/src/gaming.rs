@@ -93,7 +93,7 @@ impl Default for Camera {
     /// Default value of the Camera, that has identity view transform and Perspective projection with fov=60deg.
     fn default() -> Self {
         Camera {
-            projection: ProjectionMethod::Perspective { fov: (60.0 / 180.0) * std::f32::consts::PI },
+            projection: Some(ProjectionMethod::Perspective { fov: 60.0f32.to_radians() }),
             position: Vector3::ZERO,
             rotation: Quaternion::ONE,
             depth_range: 0.0 .. 1.0
