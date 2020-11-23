@@ -24,12 +24,9 @@ pub struct Context
     current_transform: Transform2D<f32>,
     screen_scaling: f32
 }
-impl Context
-{
-    pub fn new(screen_scaling: f32) -> Self
-    {
-        Context
-        {
+impl Context {
+    pub fn new(screen_scaling: f32) -> Self {
+        Context {
             meshes: Vec::new(), current_transform: Transform2D::identity(),
             screen_scaling
         }
@@ -45,7 +42,7 @@ impl Context
 
     pub fn translate(&mut self, Vector2(x, y): Vector2F32) -> &mut Self
     {
-        self.current_transform = self.current_transform.post_translate(Vector2D::new(x, y)); return self;
+        self.current_transform = self.current_transform.post_translate(Vector2D::new(x, yy)); return self;
     }
     pub fn rotate(&mut self, rad: f32) -> &mut Self
     {
