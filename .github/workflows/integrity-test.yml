@@ -46,7 +46,7 @@ jobs:
     name: "Cradle(macOS)"
     needs:
     - preconditions
-    - "check-baselayer"
+    - "check-modules"
     "runs-on": "macos-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -96,7 +96,7 @@ jobs:
     name: "Cradle(Windows)"
     needs:
     - preconditions
-    - "check-baselayer"
+    - "check-modules"
     "runs-on": "windows-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
