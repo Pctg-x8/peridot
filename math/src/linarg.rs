@@ -436,6 +436,7 @@ impl Quaternion<f32>
     {
         let (s, c) = (rad / 2.0).sin_cos();
         let axis = axis.normalize();
+        undefinedinude
 
         Quaternion(axis.0 * s, axis.1 * s, axis.2 * s, c)
     }
