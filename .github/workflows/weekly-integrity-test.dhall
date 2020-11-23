@@ -29,8 +29,8 @@ in GithubActions.Workflow::{
         , check-tools = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkTools CommonDefs.weeklySlackNotifyProvider "true")
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.weeklySlackNotifyProvider "true")
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.weeklySlackNotifyProvider "true")
-        , check-cradle-windows = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleWindows CommonDefs.weeklySlackNotifyProvider "true")
-        , check-cradle-macos = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleMacos CommonDefs.weeklySlackNotifyProvider "true")
+        , check-cradle-windows = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkCradleWindows CommonDefs.weeklySlackNotifyProvider "true")
+        , check-cradle-macos = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkCradleMacos CommonDefs.weeklySlackNotifyProvider "true")
         , report-success = CommonDefs.depends successPrerequisites (CommonDefs.reportSuccessJob CommonDefs.weeklySlackNotifyProvider)
         }
     }

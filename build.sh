@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -o pipefail
 
 # ./build.sh に続けて,区切りでcradleの名前を指定する
 
@@ -10,4 +10,6 @@ shift
 for t in $TARGETS; do
     echo "Building for target '$t'..."
     $SCRIPT_PATH/cradle/$t/build.sh $@
+    c=$?
+    if [[ "$c" != "0" ]]; then exit $c; fi
 done

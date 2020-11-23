@@ -124,7 +124,7 @@ let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> \(precondition: T
     , name = Some "Base Layer"
     , `runs-on` = GithubActions.RunnerPlatform.ubuntu-latest
     , steps = List/concat GithubActions.Step.Type [
-        , List/map GithubActions.Step.Type GithubActions.Step.Type (withConditionStep precondition) [
+        , List/end_map GithubActions.Step.Type (withConditionStep precondition) [
             , checkoutHeadStep
             , checkoutStep
             , cacheStep
@@ -183,12 +183,20 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
             , cacheStep
             , GithubActions.Step::{
                 , name = "cargo check"
-                , run = Some "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
+                , run = Some
+                    ''
+                    $ErrorActionPreference = "Continue"
+                    pwsh -c './build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                    ''
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             , GithubActions.Step::{
                 , name = "cargo check for transparent-back"
-                , run = Some "./build.ps1 windows examples/basic -RunTests -Features \"transparent,bedrock/DynamicLoaded\""
+                , run = Some
+                ''
+                    $ErrorActionPreference = "Continue"
+                    pwsh -c './build.ps1 windows examples/basic -RunTests -Features '''transparent,bedrock/DynamicLoaded'''' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                ''
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]
@@ -209,7 +217,8 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             }
             , GithubActions.Step::{
                 , name = "cargo check"
-                , run = Some "./build.sh mac examples/basic --RunChecks"
+                , run = Some "./build.sh mac examples/basic --RunChecks 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+                , shell = Some GithubActions.Shell.bash
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
             ]

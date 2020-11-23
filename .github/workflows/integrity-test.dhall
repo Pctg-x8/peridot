@@ -124,8 +124,8 @@ in GithubActions.Workflow::{
         , check-modules = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkModules CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-examples = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkExamples CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , check-sync-workflow = CommonDefs.depends ["preconditions"] checkWorkflowSync
-        , check-cradle-windows = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleWindows CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
-        , check-cradle-macos = CommonDefs.depends ["preconditions", "check-baselayer"] (CommonDefs.checkCradleMacos CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-cradle-windows = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkCradleWindows CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
+        , check-cradle-macos = CommonDefs.depends ["preconditions", "check-modules"] (CommonDefs.checkCradleMacos CommonDefs.prSlackNotifyProvider preconditionOutputHasChanges)
         , report-success = CommonDefs.depends successPrerequisites (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
         }
     }

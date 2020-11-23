@@ -69,7 +69,7 @@ echo "Building GameCore..."
 FEATURE_STRING=($(echo "${FEATURES[@]}" | tr ' ' '\n' | sort -u | tr '\n' ','))
 echo $FEATURE_STRING
 if [ $UPDATE_DEPS -ne 0 ]; then (cd $SCRIPT_PATH; cargo update); fi
-(cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURE_STRING)
+(cd $SCRIPT_PATH; cargo $CARGO_SUBCOMMAND --features $FEATURE_STRING) || exit $?
 
 if [ $NO_POSTLINK -eq 0 ]; then
     echo "Building App Bundle..."

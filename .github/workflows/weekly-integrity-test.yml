@@ -42,7 +42,7 @@ jobs:
     name: "Cradle(macOS)"
     needs:
     - preconditions
-    - "check-baselayer"
+    - "check-modules"
     "runs-on": "macos-latest"
     steps:
     - if: 'true'
@@ -69,7 +69,8 @@ jobs:
         VK_SDK_PATH: ''
       if: 'true'
       name: cargo check
-      run: "./build.sh mac examples/basic --RunChecks"
+      run: "./build.sh mac examples/basic --RunChecks 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      shell: bash
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -87,7 +88,7 @@ jobs:
     name: "Cradle(Windows)"
     needs:
     - preconditions
-    - "check-baselayer"
+    - "check-modules"
     "runs-on": "windows-latest"
     steps:
     - if: 'true'
@@ -111,12 +112,16 @@ jobs:
         VK_SDK_PATH: ''
       if: 'true'
       name: cargo check
-      run: "./build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded"
+      run: |
+        $ErrorActionPreference = "Continue"
+        pwsh -c './build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
         VK_SDK_PATH: ''
       if: 'true'
       name: "cargo check for transparent-back"
-      run: "./build.ps1 windows examples/basic -RunTests -Features \"transparent,bedrock/DynamicLoaded\""
+      run: |
+            $ErrorActionPreference = "Continue"
+            pwsh -c './build.ps1 windows examples/basic -RunTests -Features ''transparent,bedrock/DynamicLoaded''' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
