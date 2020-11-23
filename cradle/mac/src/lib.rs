@@ -75,7 +75,7 @@ impl PlatformAssetLoader {
     fn new() -> Self {
         let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
         let mut pathext = NSString::from_str("par").expect("NSString for ext");
-        let par_path = unsafe {a
+        let par_path = unsafe {
             CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext)).expect("No Primary Asset")
         };
 
@@ -102,7 +102,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             },
             peridot::archive::ArchiveReadError::Lz4DecompressError(e) =>
             {
-                error!("lz4 decompress error: {:?}", er);
+                error!("lz4 decompress error: {:?}", e);
                 IOError::new(ErrorKind::Other, "PrimaryArchive read error")
             },
             _ => IOError::new(ErrorKind::Other, "PrimaryArchive read error")
