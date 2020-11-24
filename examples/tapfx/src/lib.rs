@@ -189,11 +189,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let &br::Extent3D(bb_width, bb_height, _) = e.backbuffer(0).expect("empty backbuffers").size();
         let update_data = UniformValues {
             mat: peridot::math::Camera {
-                projection: peridot::math::ProjectionMethod::UI {
+                projection: Some(peridot::math::ProjectionMethod::UI {
                     design_width: bb_width as _, design_height: bb_height as _
-                },
+                }),
                 .. Default::default()
-            }.projection_matrix(),
+            }.projection_matrix(1.0),
             time: 1.0,
             offset: peridot::math::Vector2(0.0, 0.0),
             _resv: 0.0
