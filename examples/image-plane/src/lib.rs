@@ -93,13 +93,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             depth_range: 1.0 .. 10.0
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
-        buffers.mut_buffer.0.guard_map(0 .. buffers.mut_buffer.1, |m| unsafe
-        {
-            let (v, p) = cam.matrixes(screen_aspect);
-            let vp = p * v;
-            *m.get_mut(mut_uniform_offset as _) = Uniform
-            {
-                camera: vp, object: Matrix4::ONE
+        buffers.mut_buffer.0.guard_map(0 .. buffers.mut_buffer.1, |m| unsafe {
+            *m.get_mut(mut_uniform_offset as _) = Uniform {
+                camera: cam.view_projection_matrix(screen_aspect), object: Matrix4::ONE
             };
         }).expect("Staging MutBuffer");
         let mut tfb_mut = TransferBatch::new();
