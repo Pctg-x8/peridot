@@ -456,6 +456,45 @@ impl RenderPassTemplates
 
         return b;
     }
+    pub fn single_render_with_depth(
+        format: br::vk::VkFormat, depth_format: br::vk::VkFormat, outer_requesting_layout: br::ImageLayout,
+        read_depth_after: bool
+    ) -> br::RenderPassBuilder {
+        let mut b = br::RenderPassBuilder::new();
+        let adesc = br::AttachmentDescription::new(format, outer_requesting_layout, outer_requesting_layout)
+            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        let depth_layout = if read_depth_after {
+            br::ImageLayout::DepthStencilReadOnlyOpt
+        } else {
+            br::ImageLayout::DepthStencilAttachmentOpt
+        };
+        let store_depth = if read_depth_after { br::StoreOp::Store } else { br::StoreOp::DontCare };
+        let ddesc = br::AttachmentDescription::new(depth_format, depth_layout, depth_layout)
+            .load_op(br::LoadOp::Clear).store_op(store_depth);
+        b.add_attachments(vec![adesc, ddesc]);
+        b.add_subpass(
+            br::SubpassDescription::new()
+                .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
+                .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt)
+        );
+        b.add_dependency(br::vk::VkSubpassDependency {
+            srcSubpass: br::vk::VK_SUBPASS_EXTERNAL, dstSubpass: 0,
+            dstAccessMask: if read_depth_after {
+                br::AccessFlags::COLOR_ATTACHMENT.write | br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write
+            } else {
+                br::AccessFlags::COLOR_ATTACHMENT.write
+            },
+            dstStageMask: if read_depth_after {
+                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.early_fragment_tests().0
+            } else {
+                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0
+            },
+            srcStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
+            .. Default::default()
+        });
+
+        b
+    }
 }
 
 pub trait SpecConstantStorage
