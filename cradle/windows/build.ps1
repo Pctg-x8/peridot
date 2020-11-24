@@ -90,5 +90,8 @@ try {
     Set-Location $ScriptPath
     if ($UpdateDeps) { cargo update }
     cargo $CargoSubcommand --features $($ActiveFeatures -join ",") $OptFlags
+    if ($LastExitCode -ne 0) {
+        exit $LastExitCode
+    }
 }
 finally { Pop-Location }

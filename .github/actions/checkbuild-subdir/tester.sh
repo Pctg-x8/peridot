@@ -10,5 +10,5 @@ test_or_check() {
 }
 
 for c in */Cargo.toml; do
-    (cd $(dirname $c) && cargo `test_or_check` --verbose)
+    (cd $(dirname $c) && cargo `test_or_check` --verbose) || exit $?
 done
