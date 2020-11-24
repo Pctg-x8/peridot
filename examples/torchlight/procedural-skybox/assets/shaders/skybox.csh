@@ -92,7 +92,7 @@ FragmentShader {
     const float zd = 1.0 / tan(persp_fov_rad * 0.5);
     const vec3 viewvec = normalize((main_view * vec4((2.0 * uv.x - 1.0) * aspect_wh, -(2.0 * uv.y - 1.0), zd, 0.0)).xyz);
     const float cv = dot(viewvec, vec3(0.0, 1.0, 0.0));
-    const float camHeight = 2.0;
+    const float camHeight = (main_view * vec4(0.0, 0.0, 0.0, 1.0)).y;
     const vec3 incidentLightDir = normalize(vec3(0.0, -0.1, -0.8));
     const float cs = dot(-incidentLightDir, vec3(0.0, 1.0, 0.0));
     const float vs_cos = dot(incidentLightDir, -viewvec);
