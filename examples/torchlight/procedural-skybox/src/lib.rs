@@ -847,7 +847,8 @@ impl RenderCommands {
 pub struct Uniform {
     pub main_view_projection: peridot::math::Matrix4F32,
     pub main_view: peridot::math::Matrix4F32,
-    pub persp_fov_rad: f32
+    pub persp_fov_rad: f32,
+    pub aspect_wh: f32
 }
 
 struct Differential<T> { old_value: T }
@@ -877,6 +878,7 @@ pub struct Game<NL> {
     view_zenith_angle: f32,
     azimuth_angle: f32,
     main_camera: peridot::math::Camera,
+    aspect_wh: f32,
     mouse_x_diff: Differential<f32>,
     mouse_y_diff: Differential<f32>,
     ph: std::marker::PhantomData<*const NL>
@@ -892,8 +894,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         e.input_mut().map(peridot::NativeAnalogInput::MouseY, 0);
         e.input_mut().map(peridot::NativeAnalogInput::MouseX, 1);
 
+        let aspect_wh = e.backbuffer(0)
+            .map(|b| { let s = b.size(); s.0 as f32 / s.1 as f32 })
+            .expect("no backbuffers?");
         let main_camera = peridot::math::Camera {
-            projection: peridot::math::ProjectionMethod::Perspective { fov: 70.0 },
+            projection: Some(peridot::math::ProjectionMethod::Perspective { fov: 70.0f32.to_radians() }),
             position: peridot::math::Vector3(0.0, 3.0, -5.0),
             rotation: peridot::math::Quaternion::new(0.0, peridot::math::Vector3(0.0, 1.0, 0.0)),
             depth_range: 0.1 .. 100.0
@@ -945,9 +950,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             0 .. uniform_offset + std::mem::size_of::<Uniform>() as u64,
             |m| unsafe {
                 *m.get_mut(uniform_offset as _) = Uniform {
-                    main_view_projection: main_camera.view_projection_matrix(),
+                    main_view_projection: main_camera.view_projection_matrix(aspect_wh),
                     main_view: main_camera.view_matrix(),
-                    persp_fov_rad: 70.0f32.to_radians()
+                    persp_fov_rad: 70.0f32.to_radians(),
+                    aspect_wh
                 };
             }
         ).expect("Staging MutBuffer failed");
@@ -1002,6 +1008,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             view_zenith_angle: 90.0,
             azimuth_angle: 0.0,
             main_camera,
+            aspect_wh,
             mouse_x_diff: Differential::new(0.0),
             mouse_y_diff: Differential::new(0.0),
             ph: std::marker::PhantomData
@@ -1027,9 +1034,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             0 .. self.buf_offsets.mut_uniform_offset + std::mem::size_of::<Uniform>() as u64,
             |m| unsafe {
                 *m.get_mut(self.buf_offsets.mut_uniform_offset as _) = Uniform {
-                    main_view_projection: self.main_camera.view_projection_matrix(),
+                    main_view_projection: self.main_camera.view_projection_matrix(self.aspect_wh),
                     main_view: self.main_camera.view_matrix(),
-                    persp_fov_rad: 70.0f32.to_radians()
+                    persp_fov_rad: 70.0f32.to_radians(),
+                    aspect_wh: self.aspect_wh
                 };
             }
         ).expect("Staging MutBuffer failed");
@@ -1050,6 +1058,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         self.rt.discard_framebuffers();
     }
     fn on_resize(&mut self, e: &Engine<NL>, new_size: peridot::math::Vector2<usize>) {
+        self.aspect_wh = new_size.0 as f32 / new_size.1 as f32;
+
         self.rt.recreate_framebuffers(e, &new_size);
         self.skybox.recreate_pipeline(e, &self.rt);
         self.grid.recreate_pipeline(e, &self.rt);
