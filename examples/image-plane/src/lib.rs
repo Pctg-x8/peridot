@@ -2,7 +2,7 @@
 use std::marker::PhantomData;
 use bedrock as br; use bedrock::traits::*;
 use peridot::math::{
-    Vector3F32, Vector3, Vector2F32, Vector2, Camera, ProjectionMethod, Matrix4F32, Quaternion, Matrix4, Vector4, One
+    Vector3F32, Vector3, Vector2F32, Vector2, Camera, ProjectionMethod, Matrix4F32, Quaternion, Matrix4, One
 };
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
@@ -25,10 +25,10 @@ impl FixedBufferInitializer for IPFixedBufferInitializer {
     fn stage_data(&mut self, m: &br::MappedMemoryRange) {
         unsafe {
             m.slice_mut(self.vertices_offset as _, 4).clone_from_slice(&[
-                UVVert { pos: Vector3(-1.0, -1.0, 0.0), uv: Vector2(0.0, 0.0) },
-                UVVert { pos: Vector3( 1.0, -1.0, 0.0), uv: Vector2(1.0, 0.0) },
-                UVVert { pos: Vector3(-1.0,  1.0, 0.0), uv: Vector2(0.0, 1.0) },
-                UVVert { pos: Vector3( 1.0,  1.0, 0.0), uv: Vector2(1.0, 1.0) }
+                UVVert { pos: Vector3(-1.0,  1.0, 0.0), uv: Vector2(0.0, 0.0) },
+                UVVert { pos: Vector3( 1.0,  1.0, 0.0), uv: Vector2(1.0, 0.0) },
+                UVVert { pos: Vector3(-1.0, -1.0, 0.0), uv: Vector2(0.0, 1.0) },
+                UVVert { pos: Vector3( 1.0, -1.0, 0.0), uv: Vector2(1.0, 1.0) }
             ]);
         }
     }
