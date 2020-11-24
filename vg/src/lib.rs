@@ -24,12 +24,9 @@ pub struct Context
     current_transform: Transform2D<f32>,
     screen_scaling: f32
 }
-impl Context
-{
-    pub fn new(screen_scaling: f32) -> Self
-    {
-        Context
-        {
+impl Context {
+    pub fn new(screen_scaling: f32) -> Self {
+        Context {
             meshes: Vec::new(), current_transform: Transform2D::identity(),
             screen_scaling
         }
