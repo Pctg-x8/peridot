@@ -20,7 +20,8 @@ pub enum ProjectionMethod {
 /// ```
 /// # use peridot_math::*;
 /// let c = Camera {
-///     projection: ProjectionMethod::Orthographic { size: 5.0 }, position: Vector3::ZERO, rotation: Quaternion::ONE,
+///     projection: Some(ProjectionMethod::Orthographic { size: 5.0 }),
+///     position: Vector3::ZERO, rotation: Quaternion::ONE,
 ///     depth_range: 1.0 .. 9.0
 /// };
 /// let (mv, mp) = c.matrixes(1.0);
