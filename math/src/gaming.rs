@@ -49,14 +49,14 @@ impl Camera {
                     -(self.depth_range.end * self.depth_range.start) / zdiff);
                 
                 Matrix4(
-                    [(aspect_wh * scaling_tan).recip(), 0.0, 0.0, 0.0], [0.0, scaling_tan.recip(), 0.0, 0.0],
+                    [(aspect_wh * scaling_tan).recip(), 0.0, 0.0, 0.0], [0.0, -scaling_tan.recip(), 0.0, 0.0],
                     [0.0, 0.0, zscale.0, zscale.1], [0.0, 0.0, 1.0, 0.0]
                 )
             },
             Some(ProjectionMethod::Orthographic { size }) => {
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let t = Matrix4::translation(Vector3(0.0, 0.0, -self.depth_range.start));
-                let s = Matrix4::scale(Vector4((aspect_wh * size).recip(), size.recip(), zdiff.recip(), 1.0));
+                let s = Matrix4::scale(Vector4((aspect_wh * size).recip(), -size.recip(), zdiff.recip(), 1.0));
 
                 s * t
             },
