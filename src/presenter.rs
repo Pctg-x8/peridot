@@ -34,6 +34,8 @@ impl IntegratedSwapchainObject {
         let si = g.adapter.surface_capabilities(&surface_info.obj).expect("Failed to query Surface Capabilities");
         let ew = if si.currentExtent.width == 0xffff_ffff { default_extent.0 as _ } else { si.currentExtent.width };
         let eh = if si.currentExtent.height == 0xffff_ffff { default_extent.1 as _ } else { si.currentExtent.height };
+        let ew = ew.max(si.minImageExtent.width).min(si.maxImageExtent.width);
+        let eh = eh.max(si.minImageExtent.height).min(si.maxImageExtent.height);
         let ext = br::Extent2D(ew, eh);
         let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
         let pre_transform =
