@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::path::PathBuf;
 use std::io::Result as IOResult;
+use std::rc::Rc;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -43,8 +44,12 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> { self.get(path, ext) }
 }
-pub struct WindowHandler { dp: *mut xcb::ffi::xcb_connection_t, vis: xcb::Visualid, wid: xcb::Window }
+pub struct WindowHandler {
+    dp: *mut xcb::ffi::xcb_connection_t, vis: xcb::Visualid, wid: xcb::Window,
+    x11_ref: Rc<X11>
+}
 pub struct Presenter {
+    x11_ref: Rc<X11>,
     sc: peridot::IntegratedSwapchain
 }
 impl Presenter {
@@ -58,7 +63,7 @@ impl Presenter {
         }
         let sc = peridot::IntegratedSwapchain::new(g, so, peridot::math::Vector2(120, 120));
 
-        Presenter { sc }
+        Presenter { sc, x11_ref: w.x11_ref.clone() }
     }
 }
 impl peridot::PlatformPresenter for Presenter {
@@ -95,7 +100,8 @@ impl peridot::PlatformPresenter for Presenter {
     }
 
     fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
-        peridot::math::Vector2(120, 120)
+        let geom = self.x11_ref.mainwnd_geometry();
+        peridot::math::Vector2(geom.width() as _, geom.height() as _)
     }
 }
 
@@ -164,6 +170,12 @@ impl X11 {
         }
         return true;
     }
+
+    fn mainwnd_geometry(&self) -> xcb::GetGeometryReply {
+        let ck = xcb::get_geometry(&self.con, self.mainwnd_id);
+        self.con.flush();
+        ck.get_reply().expect("no geometry received")
+    }
 }
 
 pub struct GameDriver {
@@ -195,7 +207,7 @@ fn main() {
     let x11 = std::rc::Rc::new(X11::init());
 
     let mut gd = GameDriver::new(
-        WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id },
+        WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id, x11_ref: x11.clone() },
         &x11
     );
 
