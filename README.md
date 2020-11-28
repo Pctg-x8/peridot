@@ -7,3 +7,6 @@ Peridot-Engine
 Auto-built Documentation(dev branch): https://peridot.docs.ct2.jp/
 
 For new-generation game/multimedia development with arbitrary programming languages. Written in Rust.
+
+* [Cradle/Game Build Instruction](./build.md)
+  * [Prerequisites for Android building](./cradle/android/build.md)
