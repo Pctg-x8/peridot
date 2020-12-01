@@ -263,10 +263,12 @@ impl InputSystem {
 				_ => return
             };
             
+            let focus_ck = xcb::get_input_focus(&x11.con);
             let qp_cookie = xcb::query_pointer(&x11.con, x11.mainwnd_id);
             x11.flush();
             let ptr = qp_cookie.get_reply().expect("Failed to query pointer");
             let geometry = x11.mainwnd_geometry();
+            let focus = focus_ck.get_reply().expect("Failed to query focus info").focus();
 
 			if let Some(b) = map_key_button(ev.code) {
                 if matches!(b, peridot::NativeButtonInput::Mouse(_)) {
@@ -276,14 +278,32 @@ impl InputSystem {
                         // out of window
                         return;
                     }
+                } else if focus != x11.mainwnd_id {
+                    // Ignore if window doesn't have the input focus.
+                    return;
                 }
 				input.dispatch_button_event(b, is_press);
 			} else if let Some(a) = map_analog_key_emulation(ev.code) {
+                if focus != x11.mainwnd_id {
+                    // Ignore if window doesn't have the input focus.
+                    return;
+                }
 				input.dispatch_analog_event(a, if is_press { 1.0 } else { 0.0 }, true);
 			} else {
+                if focus != x11.mainwnd_id {
+                    // Ignore if window doesn't have the input focus.
+                    return;
+                }
 				debug!("key event: code={}", ev.code);
 			}
 		} else if ev.type_ == kernel_input::EventType::Relative as u16 {
+            let focus_ck = xcb::get_input_focus(&x11.con);
+            x11.flush();
+            let focus = focus_ck.get_reply().expect("Failed to query focus info").focus();
+            if focus != x11.mainwnd_id {
+                // Ignore if window doesn't have the input focus.
+                return;
+            }
 			if let Some(b) = if is_mouse { map_mouse_input_rel(ev.code) } else { map_input_rel(ev.code) } {
 				input.dispatch_analog_event(b, ev.value as _, false);
 			} else {
@@ -291,7 +311,15 @@ impl InputSystem {
 			}
 		} else if ev.type_ == kernel_input::EventType::Absolute as u16 {
 			// ignore misc event from mouse, bitmask of pressed buttons
-			if is_mouse && ev.code == kernel_input::AbsoluteAxes::Misc as u16 { return; }
+            if is_mouse && ev.code == kernel_input::AbsoluteAxes::Misc as u16 { return; }
+            
+            let focus_ck = xcb::get_input_focus(&x11.con);
+            x11.flush();
+            let focus = focus_ck.get_reply().expect("Failed to query focus info").focus();
+            if focus != x11.mainwnd_id {
+                // Ignore if window doesn't have the input focus.
+                return;
+            }
 
 			// Todo: hat -> pov button translation
 			if let Some(b) = if is_mouse { map_mouse_input_abs(ev.code) } else { map_input_abs(ev.code) } {
@@ -300,6 +328,14 @@ impl InputSystem {
 				debug!("absolute event: code={}, value={}", ev.code, ev.value);
 			}
 		} else {
+            let focus_ck = xcb::get_input_focus(&x11.con);
+            x11.flush();
+            let focus = focus_ck.get_reply().expect("Failed to query focus info").focus();
+            if focus != x11.mainwnd_id {
+                // Ignore if window doesn't have the input focus.
+                return;
+            }
+
 			// ignore keyscan misc
 			if ev.type_ == kernel_input::EventType::Misc as u16 && ev.code == 4 { return; }
 			debug!("Other event: type={}, code={}, value={}", ev.type_, ev.code, ev.value);
