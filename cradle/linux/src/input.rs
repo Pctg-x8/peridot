@@ -1,21 +1,26 @@
 //! Input Handlers
 
 use crate::{udev, kernel_input, epoll::Epoll};
+use std::rc::Rc;
+use std::cell::RefCell;
 
 pub struct InputNativeLink {
-    ws_ref: std::rc::Weak<super::X11>
+    ws_ref: std::rc::Weak<RefCell<super::X11>>
 }
 impl InputNativeLink {
-	pub fn new(ws: &std::rc::Rc<super::X11>) -> Self {
+	pub fn new(ws: &Rc<RefCell<super::X11>>) -> Self {
 		InputNativeLink { ws_ref: std::rc::Rc::downgrade(ws) }
 	}
 }
 impl peridot::NativeInput for InputNativeLink {
     fn get_pointer_position(&self, _index: u32) -> Option<(f32, f32)> {
         if let Some(ws) = self.ws_ref.upgrade() {
-            let ck = xcb::query_pointer(&ws.con, ws.mainwnd_id);
-            ws.con.flush();
-            let ptrinfo = ck.get_reply().expect("Failed to query pointer to xcb");
+            let ptrinfo = {
+                let wslock = ws.borrow();
+                let ck = xcb::query_pointer(&wslock.con, wslock.mainwnd_id);
+                wslock.flush();
+                ck.get_reply().expect("Failed to query pointer to xcb")
+            };
             if ptrinfo.same_screen() {
                 // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
                 Some((ptrinfo.win_x() as _, ptrinfo.win_y() as f32 - 5.0))
@@ -231,7 +236,7 @@ impl InputSystem {
 			a => debug!("Unknown device action: {:?}", a)
 		}
 	}
-	pub fn process_device_event(&mut self, input: &peridot::InputProcess, ep_value: u64) {
+	pub fn process_device_event(&mut self, input: &peridot::InputProcess, ep_value: u64, x11: &crate::X11) {
 		let (ev, is_mouse) = match self.devmgr.get_device(self.devmgr.translate_epoll_value(ep_value)) {
 			Some(d) => match d.read() {
 				Ok(ev) => (ev, d.is_mouse),
@@ -256,9 +261,22 @@ impl InputSystem {
 				0 => false,
 				1 => true,
 				_ => return
-			};
+            };
+            
+            let qp_cookie = xcb::query_pointer(&x11.con, x11.mainwnd_id);
+            x11.flush();
+            let ptr = qp_cookie.get_reply().expect("Failed to query pointer");
+            let geometry = x11.mainwnd_geometry();
 
 			if let Some(b) = map_key_button(ev.code) {
+                if matches!(b, peridot::NativeButtonInput::Mouse(_)) {
+                    debug!("testing {}x{} in client range {}x{}", ptr.win_x(), ptr.win_y(), geometry.0, geometry.1);
+                    if !(0 ..= geometry.0 as i16).contains(&ptr.win_x()) ||
+                       !(0 ..= geometry.1 as i16).contains(&ptr.win_y()) {
+                        // out of window
+                        return;
+                    }
+                }
 				input.dispatch_button_event(b, is_press);
 			} else if let Some(a) = map_analog_key_emulation(ev.code) {
 				input.dispatch_analog_event(a, if is_press { 1.0 } else { 0.0 }, true);

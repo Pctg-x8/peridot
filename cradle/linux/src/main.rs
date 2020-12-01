@@ -5,6 +5,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::io::Result as IOResult;
 use std::rc::Rc;
+use std::cell::RefCell;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -46,10 +47,10 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
 }
 pub struct WindowHandler {
     dp: *mut xcb::ffi::xcb_connection_t, vis: xcb::Visualid, wid: xcb::Window,
-    x11_ref: Rc<X11>
+    x11_ref: Rc<RefCell<X11>>
 }
 pub struct Presenter {
-    x11_ref: Rc<X11>,
+    x11_ref: Rc<RefCell<X11>>,
     sc: peridot::IntegratedSwapchain
 }
 impl Presenter {
@@ -100,8 +101,7 @@ impl peridot::PlatformPresenter for Presenter {
     }
 
     fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
-        let geom = self.x11_ref.mainwnd_geometry();
-        peridot::math::Vector2(geom.width() as _, geom.height() as _)
+        self.x11_ref.borrow().mainwnd_geometry().clone()
     }
 }
 
@@ -122,7 +122,8 @@ impl peridot::NativeLinker for NativeLink {
 #[allow(dead_code)]
 pub struct X11 {
     con: xcb::Connection, wm_protocols: xcb::Atom, wm_delete_window: xcb::Atom, vis: xcb::Visualid,
-    mainwnd_id: xcb::Window
+    mainwnd_id: xcb::Window,
+    cached_window_size: peridot::math::Vector2<usize>
 }
 impl X11 {
     fn init() -> Self {
@@ -144,26 +145,34 @@ impl X11 {
         );
         let mainwnd_id = con.generate_id();
         xcb::create_window(&con, s0.root_depth(), mainwnd_id, s0.root(), 0, 0, 640, 480, 0,
-            xcb::WINDOW_CLASS_INPUT_OUTPUT as _, vis, &[]);
+            xcb::WINDOW_CLASS_INPUT_OUTPUT as _, vis, &[(xcb::CW_EVENT_MASK, xcb::EVENT_MASK_RESIZE_REDIRECT)]);
         xcb::change_property(&con, xcb::PROP_MODE_REPLACE as _,
             mainwnd_id, xcb::ATOM_WM_NAME, xcb::ATOM_STRING, 8, title.as_bytes());
         xcb::change_property(&con, xcb::PROP_MODE_APPEND as _,
             mainwnd_id, wm_protocols, xcb::ATOM_ATOM, 32, &[wm_delete_window]);
         con.flush();
 
-        X11 { con, wm_protocols, wm_delete_window, vis, mainwnd_id }
+        X11 {
+            con, wm_protocols, wm_delete_window, vis, mainwnd_id,
+            cached_window_size: peridot::math::Vector2(640, 480)
+        }
     }
     fn fd(&self) -> RawFd { self.con.as_raw_fd() }
+    fn flush(&self) { if !self.con.flush() { panic!("Failed to flush"); } }
     fn show(&self) {
         xcb::map_window(&self.con, self.mainwnd_id);
         self.con.flush();
     }
     /// Returns false if application has beed exited
-    fn process_all_events(&self) -> bool {
+    fn process_all_events(&mut self) -> bool {
         while let Some(ev) = self.con.poll_for_event() {
-            if (ev.response_type() & 0x7f) == xcb::CLIENT_MESSAGE {
+            let event_type = ev.response_type() & 0x7f;
+            if event_type == xcb::CLIENT_MESSAGE {
                 let e: &xcb::ClientMessageEvent = unsafe { xcb::cast_event(&ev) };
                 if e.data().data32()[0] == self.wm_delete_window { return false; }
+            } else if event_type == xcb::RESIZE_REQUEST {
+                let e: &xcb::ResizeRequestEvent = unsafe { xcb::cast_event(&ev) };
+                self.cached_window_size = peridot::math::Vector2(e.width() as _, e.height() as _);
             } else {
                 debug!("Generic Event: {:?}", ev.response_type());
             }
@@ -171,10 +180,8 @@ impl X11 {
         return true;
     }
 
-    fn mainwnd_geometry(&self) -> xcb::GetGeometryReply {
-        let ck = xcb::get_geometry(&self.con, self.mainwnd_id);
-        self.con.flush();
-        ck.get_reply().expect("no geometry received")
+    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<usize> {
+        &self.cached_window_size
     }
 }
 
@@ -183,7 +190,7 @@ pub struct GameDriver {
     usercode: userlib::Game<NativeLink>
 }
 impl GameDriver {
-    fn new(wh: WindowHandler, x11: &std::rc::Rc<X11>) -> Self {
+    fn new(wh: WindowHandler, x11: &Rc<RefCell<X11>>) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
             wh
@@ -204,18 +211,21 @@ impl GameDriver {
 
 fn main() {
     env_logger::init();
-    let x11 = std::rc::Rc::new(X11::init());
+    let x11 = std::rc::Rc::new(RefCell::new(X11::init()));
 
     let mut gd = GameDriver::new(
-        WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id, x11_ref: x11.clone() },
+        WindowHandler {
+            dp: x11.borrow().con.get_raw_conn(), vis: x11.borrow().vis,
+            wid: x11.borrow().mainwnd_id, x11_ref: x11.clone()
+        },
         &x11
     );
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
-    ep.add_fd(x11.fd(), libc::EPOLLIN as _, 0).expect("Failed to add x11 fd");
+    ep.add_fd(x11.borrow().fd(), libc::EPOLLIN as _, 0).expect("Failed to add x11 fd");
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
-    x11.show();
+    x11.borrow().show();
     let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2 + input.managed_devices_count()];
     'app: loop {
         if events.len() != 2 + input.managed_devices_count() {
@@ -229,11 +239,11 @@ fn main() {
 
         for e in &events[..count as usize] {
             if e.u64 == 0 {
-                if !x11.process_all_events() { break 'app; }
+                if !x11.borrow_mut().process_all_events() { break 'app; }
             } else if e.u64 == 1 {
                 input.process_monitor_event(&ep);
             } else {
-                input.process_device_event(gd.engine.input(), e.u64);
+                input.process_device_event(gd.engine.input(), e.u64, &x11.borrow());
             }
         }
     }
