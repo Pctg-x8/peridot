@@ -272,7 +272,6 @@ impl InputSystem {
 
 			if let Some(b) = map_key_button(ev.code) {
                 if matches!(b, peridot::NativeButtonInput::Mouse(_)) {
-                    debug!("testing {}x{} in client range {}x{}", ptr.win_x(), ptr.win_y(), geometry.0, geometry.1);
                     if !(0 ..= geometry.0 as i16).contains(&ptr.win_x()) ||
                        !(0 ..= geometry.1 as i16).contains(&ptr.win_y()) {
                         // out of window
