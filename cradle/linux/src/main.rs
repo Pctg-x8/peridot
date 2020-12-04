@@ -126,7 +126,7 @@ pub struct X11 {
     cached_window_size: peridot::math::Vector2<usize>
 }
 impl X11 {
-    fn init() -> Self {
+    fn init(cfg: &peridot::cfg::App) -> Self {
         let (con, screen_index) = xcb::Connection::connect(None).expect("Connecting with xcb");
         let s0 = con.get_setup().roots().nth(screen_index as _).expect("No screen");
         let vis = s0.root_visual();
@@ -144,7 +144,8 @@ impl X11 {
             userlib::Game::<NativeLink>::VERSION.2
         );
         let mainwnd_id = con.generate_id();
-        xcb::create_window(&con, s0.root_depth(), mainwnd_id, s0.root(), 0, 0, 640, 480, 0,
+        xcb::create_window(&con, s0.root_depth(), mainwnd_id, s0.root(), 0, 0,
+            cfg.screen.width as _, cfg.screen.height as _, 0,
             xcb::WINDOW_CLASS_INPUT_OUTPUT as _, vis, &[(xcb::CW_EVENT_MASK, xcb::EVENT_MASK_RESIZE_REDIRECT)]);
         xcb::change_property(&con, xcb::PROP_MODE_REPLACE as _,
             mainwnd_id, xcb::ATOM_WM_NAME, xcb::ATOM_STRING, 8, title.as_bytes());
@@ -154,7 +155,7 @@ impl X11 {
 
         X11 {
             con, wm_protocols, wm_delete_window, vis, mainwnd_id,
-            cached_window_size: peridot::math::Vector2(640, 480)
+            cached_window_size: peridot::math::Vector2(cfg.screen.width as _, cfg.screen.height as _)
         }
     }
     fn fd(&self) -> RawFd { self.con.as_raw_fd() }
@@ -211,7 +212,8 @@ impl GameDriver {
 
 fn main() {
     env_logger::init();
-    let x11 = std::rc::Rc::new(RefCell::new(X11::init()));
+    let cfg = peridot::config::App::load_default().expect("Failed to load confi");
+    let x11 = std::rc::Rc::new(RefCell::new(X11::init(&cfg)));
 
     let mut gd = GameDriver::new(
         WindowHandler {
