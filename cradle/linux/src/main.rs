@@ -126,7 +126,7 @@ pub struct X11 {
     cached_window_size: peridot::math::Vector2<usize>
 }
 impl X11 {
-    fn init(cfg: &peridot::cfg::App) -> Self {
+    fn init(cfg: &peridot::config::App) -> Self {
         let (con, screen_index) = xcb::Connection::connect(None).expect("Connecting with xcb");
         let s0 = con.get_setup().roots().nth(screen_index as _).expect("No screen");
         let vis = s0.root_visual();
