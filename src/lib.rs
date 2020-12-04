@@ -28,6 +28,7 @@ mod input; pub use self::input::*;
 mod model; pub use self::model::*;
 mod layout_cache; pub use self::layout_cache::*;
 mod presenter; pub use self::presenter::*;
+pub mod config;
 
 pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;

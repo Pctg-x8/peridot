@@ -11,6 +11,8 @@ log = "*"
 libc = "*"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Presentation", "Implements"] }
 num = "*"
+serde = { version = "1.0", features = ["derive"] }
+serde_dhall = "0.9"
 
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
