@@ -130,14 +130,6 @@ impl<T: Div<T> + Copy> From<Vector4<T>> for Vector3<<T as Div>::Output>
     fn from(Vector4(x, y, z, w): Vector4<T>) -> Self { Vector3(x / w, y / w, z / w) }
 }
 
-// Vector as Fixed Arrays //
-#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
-impl<T> Into<[T; 2]> for Vector2<T> { fn into(self) -> [T; 2] { [self.0, self.1] } }
-#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
-impl<T> Into<[T; 3]> for Vector3<T> { fn into(self) -> [T; 3] { [self.0, self.1, self.2] } }
-#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
-impl<T> Into<[T; 4]> for Vector4<T> { fn into(self) -> [T; 4] { [self.0, self.1, self.2, self.3] } }
-
 // Safe Transmuting as Slice //
 impl<T> AsRef<[T; 2]> for Vector2<T> { fn as_ref(&self) -> &[T; 2] { unsafe { transmute(self) } } }
 impl<T> AsRef<[T; 3]> for Vector3<T> { fn as_ref(&self) -> &[T; 3] { unsafe { transmute(self) } } }
@@ -303,50 +295,39 @@ fn dotproduct4<T: Mul + Copy>(a: &[T; 4], b: &[T; 4]) -> <T as Mul>::Output
 }
 
 // Point Translation by Multiplication //
-impl<T: Mul + Copy> Mul<Vector2<T>> for Matrix2<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + Copy> Mul<Vector2<T>> for Matrix2<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector2<<T as Mul>::Output>;
-    fn mul(self, v: Vector2<T>) -> Self::Output
-    {
-        let va = v.into();
-        Vector2(dotproduct2(&va, &self.0), dotproduct2(&va, &self.1))
+    fn mul(self, v: Vector2<T>) -> Self::Output {
+        Vector2(dotproduct2(v.as_ref(), &self.0), dotproduct2(v.as_ref(), &self.1))
     }
 }
-impl<T: Mul + Copy> Mul<Vector3<T>> for Matrix3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + Copy> Mul<Vector3<T>> for Matrix3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector3<<T as Mul>::Output>;
-    fn mul(self, v: Vector3<T>) -> Self::Output
-    {
-        let va = v.into();
-        Vector3(dotproduct3(&va, &self.0), dotproduct3(&va, &self.1), dotproduct3(&va, &self.2))
+    fn mul(self, v: Vector3<T>) -> Self::Output {
+        Vector3(dotproduct3(v.as_ref(), &self.0), dotproduct3(v.as_ref(), &self.1), dotproduct3(v.as_ref(), &self.2))
     }
 }
-impl<T: Mul + Copy> Mul<Vector4<T>> for Matrix4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + Copy> Mul<Vector4<T>> for Matrix4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector4<<T as Mul>::Output>;
-    fn mul(self, v: Vector4<T>) -> Self::Output
-    {
-        let va = v.into();
-        Vector4(dotproduct4(&va, &self.0), dotproduct4(&va, &self.1),
-            dotproduct4(&va, &self.2), dotproduct4(&va, &self.3))
+    fn mul(self, v: Vector4<T>) -> Self::Output {
+        Vector4(
+            dotproduct4(v.as_ref(), &self.0), dotproduct4(v.as_ref(), &self.1),
+            dotproduct4(v.as_ref(), &self.2), dotproduct4(v.as_ref(), &self.3)
+        )
     }
 }
-impl<T: Mul + One + Copy> Mul<Vector2<T>> for Matrix2x3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + One + Copy> Mul<Vector2<T>> for Matrix2x3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector2<<T as Mul>::Output>;
-    fn mul(self, v: Vector2<T>) -> Self::Output
-    {
-        let va = Vector3::from(v).into();
-        Vector2(dotproduct3(&va, &self.0), dotproduct3(&va, &self.1))
+    fn mul(self, v: Vector2<T>) -> Self::Output {
+        let v3 = Vector3::from(v);
+        Vector2(dotproduct3(v3.as_ref(), &self.0), dotproduct3(v3.as_ref(), &self.1))
     }
 }
-impl<T: Mul + One + Copy> Mul<Vector3<T>> for Matrix3x4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + One + Copy> Mul<Vector3<T>> for Matrix3x4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector3<<T as Mul>::Output>;
-    fn mul(self, v: Vector3<T>) -> Self::Output
-    {
-        let va = Vector4::from(v).into();
-        Vector3(dotproduct4(&va, &self.0), dotproduct4(&va, &self.1), dotproduct4(&va, &self.2))
+    fn mul(self, v: Vector3<T>) -> Self::Output {
+        let v4 = Vector4::from(v);
+        Vector3(dotproduct4(v4.as_ref(), &self.0), dotproduct4(v4.as_ref(), &self.1), dotproduct4(v4.as_ref(), &self.2))
     }
 }
 // shortcuts //
