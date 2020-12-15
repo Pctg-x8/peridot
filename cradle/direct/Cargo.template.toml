@@ -16,4 +16,4 @@ xcb = "0.8"
 libc = "0.2"
 regex = "1.4"
 
-image-plane = { path = "/home/pctgx8/devel/peridot/examples/image-plane" }
+#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }

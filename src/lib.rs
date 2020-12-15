@@ -82,6 +82,7 @@ pub trait FeatureRequests
             geometryShader: Self::ENABLE_GEOMETRY_SHADER as _,
             tessellationShader: Self::ENABLE_TESSELLATION_SHADER as _,
             vertexPipelineStoresAndAtomics: Self::USE_STORAGE_BUFFERS_IN_VERTEX_SHADER as _,
+            sparseBinding: true as _, sparseResidencyImage2D: true as _,
             .. Default::default()
         }
     }
@@ -365,6 +366,7 @@ impl Graphics
     pub fn instance(&self) -> &br::Instance { &self.instance }
     pub fn adapter(&self) -> &br::PhysicalDevice { &self.adapter }
     pub fn graphics_queue_family_index(&self) -> u32 { self.graphics_queue.family }
+    pub fn queue_object(&self) -> &br::Queue { &self.graphics_queue.q }
 }
 impl Deref for Graphics
 {
