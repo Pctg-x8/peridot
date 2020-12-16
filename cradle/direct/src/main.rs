@@ -18,6 +18,8 @@ mod input;
 mod userlib;
 
 mod gbm;
+mod egl;
+mod gl;
 
 #[repr(C)]
 pub struct drmPciBusInfo {
@@ -250,7 +252,6 @@ extern "C" {
         fd: libc::c_int, crtc_id: u32, buffer_id: u32, x: u32, y: u32, connectors: *mut u32, count: libc::c_int,
         mode: *mut drmModeModeInfo
     ) -> libc::c_int;
-    fn drmPrimeHandleToFD(fd: libc::c_int, handle: u32, flags: u32, prime_fd: *mut libc::c_int) -> libc::c_int;
 }
 
 pub const fn fourcc_code(a: u8, b: u8, c: u8, d: u8) -> u32 {
@@ -266,100 +267,6 @@ pub struct OwnedFileDescriptor(libc::c_int);
 impl Drop for OwnedFileDescriptor {
     fn drop(&mut self) {
         unsafe { libc::close(self.0); }
-    }
-}
-
-const VT_OPENQRY: libc::c_ulong = 0x5600;
-const VT_ACTIVATE: libc::c_ulong = 0x5606;
-const VT_WAITACTIVE: libc::c_ulong = 0x5607;
-
-const KDGKBMODE: libc::c_ulong = 0x4b44;
-const KDSKBMODE: libc::c_ulong = 0x4b45;
-const K_OFF: libc::c_uint = 4;
-const KDSETMODE: libc::c_ulong = 0x4b3a;
-const KD_TEXT: libc::c_uint = 0;
-const KD_GRAPHICS: libc::c_uint = 1;
-
-const TTY_MAJOR: libc::c_int = 4;
-extern "C" {
-    fn gnu_dev_major(dev: libc::c_ulong) -> libc::c_int;
-    fn gnu_dev_minor(dev: libc::c_ulong) -> libc::c_int;
-}
-
-pub struct VTControl {
-    fd: OwnedFileDescriptor,
-    pub tty_number: libc::c_int
-}
-impl VTControl {
-    pub fn current() -> Option<Self> {
-        println!("tty: {}", unsafe { std::ffi::CStr::from_ptr(libc::ttyname(libc::STDIN_FILENO)).to_str().unwrap() });
-        let fd = unsafe { libc::open(libc::ttyname(libc::STDIN_FILENO).as_ref()?, libc::O_NOCTTY | libc::O_RDWR) };
-        if fd < 0 { panic!("Failed to open VT device: {:?}", std::io::Error::last_os_error()); }
-        let fd = OwnedFileDescriptor(fd);
-
-        let mut fdstat = std::mem::MaybeUninit::uninit();
-        if unsafe { libc::fstat(fd.0, fdstat.as_mut_ptr()) } < 0 {
-            panic!("Failed to query vt descriptor stat");
-        }
-        let fdstat = unsafe { fdstat.assume_init() };
-        if unsafe { gnu_dev_major(fdstat.st_rdev) != TTY_MAJOR } {
-            panic!("not a tty device?");
-        }
-        let tty_number = unsafe { gnu_dev_minor(fdstat.st_rdev) };
-
-        Some(VTControl { fd, tty_number })
-    }
-    pub fn open() -> Self {
-        let fd = unsafe { libc::open(b"/dev/tty0".as_ptr() as _, libc::O_WRONLY | libc::O_CLOEXEC) };
-        if fd < 0 { panic!("Failed to open VT device"); }
-        let fd = OwnedFileDescriptor(fd);
-        let mut open_vt_num = 0;
-        if unsafe { libc::ioctl(fd.0, VT_OPENQRY, &mut open_vt_num) } < 0 {
-            panic!("Failed to query unused tty index");
-        }
-        let tty_path = std::ffi::CString::new(format!("/dev/tty{}", open_vt_num)).expect("encoding failed");
-        let fd = unsafe { libc::open(tty_path.as_ptr(), libc::O_NOCTTY | libc::O_RDWR) };
-        if fd < 0 { panic!("Failed to open VT device"); }
-        let fd = OwnedFileDescriptor(fd);
-
-        VTControl { fd, tty_number: open_vt_num }
-    }
-
-    pub fn activate(&self, number: libc::c_int) -> std::io::Result<()> {
-        if unsafe { libc::ioctl(self.fd.0, VT_ACTIVATE, number) } < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-    pub fn wait_active(&self, number: libc::c_int) -> std::io::Result<()> {
-        if unsafe { libc::ioctl(self.fd.0, VT_WAITACTIVE, number) } < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-    pub fn get_kbd_mode(&self) -> std::io::Result<libc::c_uint> {
-        let mut mode = 0;
-        if unsafe { libc::ioctl(self.fd.0, KDGKBMODE, &mut mode) } < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(mode)
-        }
-    }
-    pub fn set_kbd_mode(&self, mode: libc::c_uint) -> std::io::Result<()> {
-        if unsafe { libc::ioctl(self.fd.0, KDSKBMODE, mode) } < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-    pub fn set_mode(&self, mode: libc::c_uint) -> std::io::Result<()> {
-        if unsafe { libc::ioctl(self.fd.0, KDSETMODE, mode) } < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
     }
 }
 
@@ -395,72 +302,38 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
 pub struct WindowHandler { device_fd: libc::c_int }
 pub struct DrmRenderBuffer {
     buffer_object: gbm::BufferObject,
-    map_data: *mut libc::c_void,
     framebuffer_id: u32,
-    dmabuf: br::DeviceMemory,
-    image: br::Image,
-    view: Rc<br::ImageView>
+    render_target_memory: br::DeviceMemory,
+    render_target_image: br::Image,
+    render_target_view: Rc<br::ImageView>,
+    readback_image: br::Image,
+    readback_memory: br::DeviceMemory,
+    readback_command_pool: br::CommandPool,
+    readback_command: br::CommandBuffer,
+    width: u32,
+    height: u32
 }
 impl DrmRenderBuffer {
-    pub fn flush(&mut self, g: &peridot::Graphics, fence: &br::Fence) {
-        use br::{Chainable, MemoryBound, VkHandle};
-
-        println!("old dmabuf: {:p}", self.dmabuf.native_ptr());
-/*
-        // unmap to flush writes
-        unsafe { self.buffer_object.unmap(self.map_data); }
-
-        // recreate bo image
-        let &br::Extent3D(w, h, _) = self.view.size();
-        let p = self.buffer_object.map(0, 0, w as _, h as _, gbm::BO_TRANSFER_WRITE)
-            .expect("Failed to map bo");
-        
-        let bo_image_ext = br::ExternalMemoryImageCreateInfo::new(br::ExternalMemoryHandleTypes::HOST_MAPPED_FOREIGN_MEMORY);
-        /*self.image = br::ImageDesc::new(
-            &br::Extent2D(w, h),
-            br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-            br::ImageUsage::COLOR_ATTACHMENT,
-            br::ImageLayout::Undefined
-        ).chain(&bo_image_ext).create(g).expect("Failed to create gbm_bo image");*/
-        let bo_image_requirements = self.image.requirements();
-        self.dmabuf = br::DeviceMemory::import_host_pointer(
-            g, bo_image_requirements.size as _,
-            g.memory_type_index_for(
-                br::MemoryPropertyFlags::DEVICE_LOCAL, bo_image_requirements.memoryTypeBits
-            ).expect("no suitable memory for bo image"),
-            br::ExternalMemoryHandleType::HostMappedForeignMemory,
-            p.pointer() as _
-        ).expect("Failed to import prime buffer");
-        // self.image.bind(&self.dmabuf, 0).expect("Failed to bind memory");
-        // self.view = self.image.create_view(None, None, &Default::default(), &br::ImageSubresourceRange::color(0..1, 0..1))
-        //     .expect("Failed to create image view").into();
-        self.map_data = p.map_data();
-
-        println!("new dmabuf: {:p}", self.dmabuf.native_ptr());
-
-        // rebind new dmabuf
-        let image_binds = br::vk::VkSparseImageMemoryBind {
-            subresource: br::vk::VkImageSubresource { aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT, mipLevel: 0, arrayLayer: 0 },
-            offset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-            extent: br::vk::VkExtent3D { width: w, height: h, depth: 1 },
-            memory: self.dmabuf.native_ptr(),
-            memoryOffset: 0,
-            flags: 0
-        };
-        let image_bind_info = br::vk::VkSparseImageMemoryBindInfo {
-            bindCount: 1, pBinds: &image_binds, image: self.image.native_ptr()
-        };
-        let sparse_bind_info = br::vk::VkBindSparseInfo {
-            imageBindCount: 1, pImageBinds: &image_bind_info,
+    pub fn sync(&mut self, q: &br::Queue, sem: &br::Semaphore, fence: &br::Fence) {
+        // readback then blit to mapped bo memory
+        q.submit(&[br::SubmissionBatch {
+            command_buffers: std::borrow::Cow::Borrowed(&[self.readback_command]),
+            wait_semaphores: std::borrow::Cow::Borrowed(&[(sem, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)]),
             .. Default::default()
-        };
-        let r = unsafe {
-            br::vk::vkQueueBindSparse(g.queue_object().native_ptr(), 1, &sparse_bind_info, fence.native_ptr())
-        };
-        br::VkResultHandler::into_result(r).expect("Failed to execute sparse binding");
+        }], Some(fence)).expect("Failed to send readback command");
+        fence.wait_timeout(std::u64::MAX).expect("Failed to wait readback fence");
+        fence.reset().expect("Failed to reset readback fence");
 
-        // no unmap occurs
-        std::mem::forget(p);*/
+        let bomap = self.buffer_object.map(0, 0, self.width, self.height, gbm::BO_TRANSFER_WRITE)
+            .expect("Failed to map bo");
+        let readbacked = self.readback_memory.map(0 .. self.width as usize * self.height as usize * 4)
+            .expect("Failed to map readbacked memory");
+        for y in 0 .. self.height as usize {
+            let src = unsafe { readbacked.slice::<u8>(y * self.width as usize * 4, self.width as usize * 4) };
+            let dst = unsafe { bomap.pointer().add(y * bomap.stride() as usize) as *mut u8 };
+            unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, self.width as usize * 4) };
+        }
+        unsafe { self.readback_memory.unmap(); }
     }
 }
 pub struct DrmPresenter {
@@ -479,7 +352,7 @@ impl DrmPresenter {
     const BUFFER_COUNT: usize = 2;
 
     pub fn new(g: &peridot::Graphics, drm_fd: libc::c_int) -> Self {
-        use br::{Chainable, MemoryBound, VkHandle};
+        use br::MemoryBound;
 
         let res = unsafe {
             drmModeGetResources(drm_fd).as_ref()
@@ -526,21 +399,22 @@ impl DrmPresenter {
         // Graphics Execution Managerの初期化(GEM_CREATE)がハードによって違うそうでだいぶ難しいので、バッファアロケーションはGBMに任せちゃう
         let gbm_device = gbm::Device::new(drm_fd).expect("Failed to initialize GBM");
         println!("GBM backend: {}", gbm_device.backend_name().to_string_lossy());
+
         let buffer_objects = (0 .. Self::BUFFER_COUNT)
             .map(|_| {
-                let mut bo = gbm_device.new_bo_with_modifiers(mode.hdisplay as _, mode.vdisplay as _, gbm::BO_FORMAT_XRGB8888, &[0])
+                let bo = gbm_device.new_bo_with_modifiers(mode.hdisplay as _, mode.vdisplay as _, gbm::BO_FORMAT_XRGB8888, &[0])
                     .or_else(|| gbm_device.new_bo(mode.hdisplay as _, mode.vdisplay as _, gbm::BO_FORMAT_XRGB8888, gbm::BO_USE_SCANOUT | gbm::BO_USE_RENDERING))
                     .expect("Failed to create bo");
                 
                 // create drm fb
                 let bo_format = bo.format();
+                let bo_modifier = bo.modifier();
                 let mut modifiers = [0u64; gbm::MAX_PLANES];
                 let mut handles = [0u32; gbm::MAX_PLANES];
                 let mut offsets = [0u32; gbm::MAX_PLANES];
                 let mut strides = [0u32; gbm::MAX_PLANES];
-                modifiers[0] = bo.modifier();
                 for p in 0 .. bo.plane_count() {
-                    modifiers[p] = modifiers[0];
+                    modifiers[p] = bo_modifier;
                     handles[p] = bo.handle(Some(p)) as u32;
                     offsets[p] = bo.offset(p);
                     strides[p] = bo.stride(Some(p));
@@ -567,68 +441,90 @@ impl DrmPresenter {
                     }
                 }
 
-                // create bo image
-                let p = bo.map(0, 0, mode.hdisplay as _, mode.vdisplay as _, gbm::BO_TRANSFER_WRITE)
-                    .expect("Failed to map bo");
-                let map_data = p.map_data();
-                
-                let bo_image_ext = br::ExternalMemoryImageCreateInfo::new(br::ExternalMemoryHandleTypes::HOST_MAPPED_FOREIGN_MEMORY);
-                let bo_image = br::ImageDesc::new(
+                // create vk color buffer image
+                let render_target_image = br::ImageDesc::new(
                     &br::Extent2D(mode.hdisplay as _, mode.vdisplay as _),
-                    br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-                    br::ImageUsage::COLOR_ATTACHMENT,
+                    br::vk::VK_FORMAT_B8G8R8A8_UNORM,
+                    br::ImageUsage::COLOR_ATTACHMENT.transfer_src(),
                     br::ImageLayout::Undefined
-                ).flags(br::ImageFlags::SPARSE_BINDING.sparse_residency()).chain(&bo_image_ext).create(g).expect("Failed to create gbm_bo image");
-                let bo_image_requirements = bo_image.requirements();
-                let dmabuf = br::DeviceMemory::import_host_pointer(
-                    g, bo_image_requirements.size as _,
+                ).create(g).expect("Failed to create color buffer image");
+                let req = render_target_image.requirements();
+                let render_target_memory = br::DeviceMemory::allocate(
+                    g, req.size as _,
                     g.memory_type_index_for(
-                        br::MemoryPropertyFlags::DEVICE_LOCAL, bo_image_requirements.memoryTypeBits
-                    ).expect("no suitable memory for bo image"),
-                    br::ExternalMemoryHandleType::HostMappedForeignMemory,
-                    p.pointer() as _
-                ).expect("Failed to import prime buffer");
-                
-                let image_binds = br::vk::VkSparseImageMemoryBind {
-                    subresource: br::vk::VkImageSubresource { aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT, mipLevel: 0, arrayLayer: 0 },
-                    offset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-                    extent: br::vk::VkExtent3D { width: mode.hdisplay as _, height: mode.vdisplay as _, depth: 1 },
-                    memory: dmabuf.native_ptr(),
-                    memoryOffset: 0,
-                    flags: 0
-                };
-                let image_bind_info = br::vk::VkSparseImageMemoryBindInfo {
-                    bindCount: 1, pBinds: &image_binds, image: bo_image.native_ptr()
-                };
-                let sparse_bind_info = br::vk::VkBindSparseInfo {
-                    imageBindCount: 1, pImageBinds: &image_bind_info,
-                    .. Default::default()
-                };
-                let r = unsafe {
-                    br::vk::vkQueueBindSparse(g.queue_object().native_ptr(), 1, &sparse_bind_info, std::ptr::null_mut())
-                };
-                br::VkResultHandler::into_result(r).expect("Failed to execute sparse binding");
-                br::Waitable::wait(g.queue_object()).expect("Failed to wait queue ops");
+                        br::MemoryPropertyFlags::DEVICE_LOCAL, req.memoryTypeBits
+                    ).expect("no suitable memory for color buffer image")
+                ).expect("Failed to allocate backing memory");
+                render_target_image.bind(&render_target_memory, 0).expect("Failed to bind image backing store");
 
-                /*let stride = p.stride();
-                for y in 0 .. mode.vdisplay as usize {
-                    for x in 0 .. mode.hdisplay as usize {
-                        unsafe { std::ptr::write((p.pointer() as *mut u32).add(x + y * (stride as usize >> 2)), 0xffffffff); }
-                    }
-                }*/
+                // create readback image
+                let readback_image = br::ImageDesc::new(
+                    &br::Extent2D(mode.hdisplay as _, mode.vdisplay as _),
+                    br::vk::VK_FORMAT_B8G8R8A8_UNORM,
+                    br::ImageUsage::TRANSFER_DEST,
+                    br::ImageLayout::Preinitialized
+                ).use_linear_tiling().create(g).expect("Failed to create readback image");
+                let req = readback_image.requirements();
+                let readback_memory = br::DeviceMemory::allocate(
+                    g, req.size as _,
+                    g.memory_type_index_for(
+                        br::MemoryPropertyFlags::HOST_VISIBLE.host_cached(), req.memoryTypeBits
+                    ).expect("no suitable memory for readback image")
+                ).expect("Failed to allocate readback backing memory");
+                readback_image.bind(&readback_memory, 0).expect("Failed to bind readback image backing store");
 
-                // no unmap occurs
-                std::mem::forget(p);
+                let readback_command_pool = br::CommandPool::new(g, g.graphics_queue_family_index(), false, false)
+                    .expect("Failed to create readback command pool");
+                let readback_command = readback_command_pool.alloc(1, true).expect("Failed to alloc readback cb")[0];
+                readback_command.begin().expect("Failed to begin recording command")
+                    .pipeline_barrier(
+                        br::PipelineStageFlags::HOST, br::PipelineStageFlags::TRANSFER, false,
+                        &[], &[], &[
+                            br::ImageMemoryBarrier::new(
+                                &br::ImageSubref::color(&readback_image, 0..1, 0..1),
+                                br::ImageLayout::General, br::ImageLayout::TransferDestOpt
+                            )
+                        ]
+                    )
+                    .copy_image(
+                        &render_target_image, br::ImageLayout::TransferSrcOpt,
+                        &readback_image, br::ImageLayout::TransferDestOpt,
+                        &[br::vk::VkImageCopy {
+                            srcOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
+                            dstOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
+                            srcSubresource: br::vk::VkImageSubresourceLayers {
+                                aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
+                                mipLevel: 0, baseArrayLayer: 0, layerCount: 1
+                            },
+                            dstSubresource: br::vk::VkImageSubresourceLayers {
+                                aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
+                                mipLevel: 0, baseArrayLayer: 0, layerCount: 1
+                            },
+                            extent: br::vk::VkExtent3D {
+                                width: mode.hdisplay as _, height: mode.vdisplay as _, depth: 1
+                            }
+                        }]
+                    )
+                    .pipeline_barrier(
+                        br::PipelineStageFlags::TRANSFER, br::PipelineStageFlags::HOST, false,
+                        &[], &[], &[
+                            br::ImageMemoryBarrier::new(
+                                &br::ImageSubref::color(&readback_image, 0..1, 0..1),
+                                br::ImageLayout::TransferDestOpt, br::ImageLayout::General
+                            )
+                        ]
+                    );
 
                 DrmRenderBuffer {
                     buffer_object: bo,
-                    map_data,
                     framebuffer_id: fbid,
-                    view: bo_image.create_view(
+                    render_target_view: render_target_image.create_view(
                         None, None, &Default::default(), &br::ImageSubresourceRange::color(0 .. 1, 0 .. 1)
                     ).expect("Failed to create image view").into(),
-                    image: bo_image,
-                    dmabuf
+                    render_target_image, render_target_memory,
+                    readback_image, readback_memory,
+                    readback_command_pool, readback_command,
+                    width: mode.hdisplay as _, height: mode.vdisplay as _
                 }
             }).collect::<Vec<_>>();
 
@@ -653,29 +549,33 @@ impl DrmPresenter {
     }
 }
 impl peridot::PlatformPresenter for DrmPresenter {
-    fn format(&self) -> br::vk::VkFormat { br::vk::VK_FORMAT_R8G8B8A8_UNORM }
+    fn format(&self) -> br::vk::VkFormat { br::vk::VK_FORMAT_B8G8R8A8_UNORM }
     fn backbuffer_count(&self) -> usize { Self::BUFFER_COUNT }
     fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> {
-        self.buffer_objects.get(index).map(|o| o.view.clone())
+        self.buffer_objects.get(index).map(|o| o.render_target_view.clone())
     }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
-        (br::ImageLayout::General, br::PipelineStageFlags::BOTTOM_OF_PIPE)
+        (br::ImageLayout::TransferSrcOpt, br::PipelineStageFlags::TRANSFER)
     }
     
     fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
-        let barriers = self.buffer_objects.iter().map(|o|
+        let barriers = self.buffer_objects.iter().flat_map(|o| vec![
             br::ImageMemoryBarrier::new(
-                &br::ImageSubref::color(&o.image, 0 .. 1, 0 .. 1),
-                br::ImageLayout::Undefined, br::ImageLayout::General
+                &br::ImageSubref::color(&o.render_target_image, 0 .. 1, 0 .. 1),
+                br::ImageLayout::Undefined, br::ImageLayout::TransferSrcOpt
+            ),
+            br::ImageMemoryBarrier::new(
+                &br::ImageSubref::color(&o.readback_image, 0 .. 1, 0 .. 1),
+                br::ImageLayout::Preinitialized, br::ImageLayout::General
             )
-        ).collect::<Vec<_>>();
+        ]).collect::<Vec<_>>();
         recorder.pipeline_barrier(
-            br::PipelineStageFlags::BOTTOM_OF_PIPE, br::PipelineStageFlags::BOTTOM_OF_PIPE, true,
+            br::PipelineStageFlags::BOTTOM_OF_PIPE, br::PipelineStageFlags::TRANSFER.host(), true,
             &[], &[], &barriers
         );
     }
     fn next_backbuffer_index(&mut self) -> br::Result<u32> {
-        if self.current_backbuffer_index > 0 { return Ok(self.current_backbuffer_index as _); }
+        // if self.current_backbuffer_index > 0 { return Ok(self.current_backbuffer_index as _); }
 
         let next = self.current_backbuffer_index;
         self.current_backbuffer_index = (self.current_backbuffer_index + 1) % Self::BUFFER_COUNT;
@@ -690,8 +590,6 @@ impl peridot::PlatformPresenter for DrmPresenter {
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>
     ) -> br::Result<()> {
-        if backbuffer_index != 0 { return Ok(()); }
-
         if let Some(mut cs) = update_submission {
             // copy -> render
             cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
@@ -699,22 +597,21 @@ impl peridot::PlatformPresenter for DrmPresenter {
                 // (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                 (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
             ]);
-            // render_submission.signal_semaphores.to_mut().push(&self.present_order);
-            g.submit_buffered_commands(&[cs, render_submission], &self.render_completion_await)
+            render_submission.signal_semaphores.to_mut().push(&self.present_order);
+            g.submit_buffered_commands(&[cs, render_submission], last_render_fence)
                 .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
-            // render_submission.signal_semaphores.to_mut().push(&self.present_order);
+            render_submission.signal_semaphores.to_mut().push(&self.present_order);
             /*render_submission.wait_semaphores.to_mut().push(
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
             );*/
-            g.submit_buffered_commands(&[render_submission], &self.render_completion_await)
+            g.submit_buffered_commands(&[render_submission], last_render_fence)
                 .expect("Failed to submit render commands");
         }
-        self.render_completion_await.wait_timeout(u64::MAX).expect("Failed to wait completion of rendering");
-        self.render_completion_await.reset().expect("Failed to reset completion fence");
-        println!("flush!");
-        self.buffer_objects[backbuffer_index as usize].flush(g, last_render_fence);
+        self.buffer_objects[backbuffer_index as usize].sync(present_queue, &self.present_order, &self.render_completion_await);
+        // println!("flush!");
+        // self.buffer_objects[backbuffer_index as usize].flush(g, last_render_fence);
 
         Ok(())
 
@@ -806,7 +703,7 @@ impl peridot::NativeLinker for NativeLink {
     type Presenter = DrmPresenter;
 
     fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_display", "VK_KHR_get_physical_device_properties2", "VK_KHR_external_memory_capabilities"] }
-    fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain", "VK_KHR_external_memory", "VK_EXT_external_memory_host"] }
+    fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain", "VK_KHR_external_memory", "VK_KHR_external_memory_fd"] }
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
     fn new_presenter(&self, g: &peridot::Graphics) -> DrmPresenter {
@@ -964,6 +861,4 @@ fn main() {
         }
     }
     info!("Terminating Program...");
-    // drop(graphics_teardown);
-//    drop(kbd_teardown);
 }

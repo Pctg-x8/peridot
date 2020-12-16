@@ -22,6 +22,7 @@ impl Device {
 	pub unsafe fn from_ptr(p: *mut self::raw::gbm_device) -> Option<Self> {
 		NonNull::new(p).map(Self)
 	}
+	pub fn as_ptr(&self) -> *mut self::raw::gbm_device { self.0.as_ptr() }
 
 	pub fn new(fd: libc::c_int) -> Option<Self> {
 		unsafe { Self::from_ptr(self::raw::gbm_create_device(fd)) }
