@@ -8,8 +8,7 @@ use std::io::Result as IOResult;
 use std::rc::Rc;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::ptr::NonNull;
+use std::os::unix::io::{RawFd, AsRawFd};
 
 mod udev;
 mod epoll;
@@ -17,263 +16,10 @@ mod kernel_input;
 mod input;
 mod userlib;
 
+mod drm;
 mod gbm;
 mod egl;
 mod gl;
-
-#[repr(C)]
-pub struct drmPciBusInfo {
-    pub domain: u16,
-    pub bus: u8,
-    pub dev: u8,
-    pub func: u8
-}
-#[repr(C)]
-pub struct drmPciDeviceInfo {
-    pub vendor_id: u16,
-    pub device_id: u16,
-    pub subvendor_id: u16,
-    pub subdevice_id: u16,
-    pub revision_id: u8
-}
-#[repr(C)]
-pub struct drmUsbBusInfo {
-    pub bus: u8,
-    pub dev: u8
-}
-#[repr(C)]
-pub struct drmUsbDeviceInfo {
-    pub vendor: u16,
-    pub product: u16
-}
-const DRM_PLATFORM_DEVICE_NAME_LEN: usize = 512;
-#[repr(C)]
-pub struct drmPlatformBusInfo {
-    pub fullname: [libc::c_char; DRM_PLATFORM_DEVICE_NAME_LEN]
-}
-#[repr(C)]
-pub struct drmPlatformDeviceInfo {
-    pub compatible: *mut *mut libc::c_char
-}
-const DRM_HOST1X_DEVICE_NAME_LEN: usize = 512;
-#[repr(C)]
-pub struct drmHost1xBusInfo {
-    pub fullname: [libc::c_char; DRM_HOST1X_DEVICE_NAME_LEN]
-}
-#[repr(C)]
-pub struct drmHost1xDeviceInfo {
-    pub compatible: *mut *mut libc::c_char
-}
-#[repr(C)]
-pub union drmDeviceBusInfo {
-    pub pci: *mut drmPciBusInfo,
-    pub usb: *mut drmUsbBusInfo,
-    pub platform: *mut drmPlatformBusInfo,
-    pub host1x: *mut drmHost1xBusInfo
-}
-#[repr(C)]
-pub union drmDeviceInfo {
-    pub pci: *mut drmPciDeviceInfo,
-    pub usb: *mut drmUsbDeviceInfo,
-    pub platform: *mut drmPlatformDeviceInfo,
-    pub host1x: *mut drmHost1xDeviceInfo
-}
-#[repr(C)]
-pub struct drmDevice {
-    pub nodes: *mut *mut libc::c_char,
-    pub available_nodes: libc::c_int,
-    pub bustype: libc::c_int,
-    pub businfo: drmDeviceBusInfo,
-    pub deviceinfo: drmDeviceInfo
-}
-
-#[repr(C)]
-pub struct drmModeRes {
-    pub count_fbs: libc::c_int,
-    pub fbs: *mut u32,
-    pub count_crtcs: libc::c_int,
-    pub crtcs: *mut u32,
-    pub count_connectors: libc::c_int,
-    pub connectors: *mut u32,
-    pub count_encoders: libc::c_int,
-    pub encoders: *mut u32,
-    pub min_width: u32,
-    pub max_width: u32,
-    pub min_height: u32,
-    pub max_height: u32
-}
-impl drmModeRes {
-    pub fn connectors(&self) -> &[u32] {
-        unsafe { std::slice::from_raw_parts(self.connectors, self.count_connectors as _) }
-    }
-    pub fn encoders(&self) -> &[u32] {
-        unsafe { std::slice::from_raw_parts(self.encoders, self.count_encoders as _) }
-    }
-    pub fn crtcs(&self) -> &[u32] {
-        unsafe { std::slice::from_raw_parts(self.crtcs, self.count_crtcs as _) }
-    }
-}
-
-const DRM_DISPLAY_MODE_LEN: usize = 32;
-const DRM_MODE_TYPE_PREFERRED: u32 = 1 << 3;
-#[repr(C)]
-pub struct drmModeModeInfo {
-    pub clock: u32,
-    pub hdisplay: u16,
-    pub hsync_start: u16,
-    pub hsync_end: u16,
-    pub htotal: u16,
-    pub hskew: u16,
-    pub vdisplay: u16,
-    pub vsync_start: u16,
-    pub vsync_end: u16,
-    pub vtotal: u16,
-    pub vscan: u16,
-    pub vrefresh: u32,
-    pub flags: u32,
-    pub r#type: u32,
-    pub name: [libc::c_char; DRM_DISPLAY_MODE_LEN]
-}
-impl drmModeModeInfo {
-    pub fn is_preferred(&self) -> bool {
-        (self.r#type & DRM_MODE_TYPE_PREFERRED) != 0
-    }
-}
-
-#[repr(C)]
-#[derive(PartialEq, Eq)]
-pub enum drmModeConnection {
-    Connected = 1,
-    Disconnected = 2,
-    UnknownConnection = 3
-}
-#[repr(C)]
-#[derive(PartialEq, Eq)]
-pub enum drmModeSubPixel {
-    Unknown = 1,
-    HorizontalRGB = 2,
-    HorizontalBGR = 3,
-    VerticalRGB = 4,
-    VerticalBGR = 5,
-    None = 6
-}
-#[repr(C)]
-pub struct drmModeConnector {
-    pub connector_id: u32,
-    pub encoder_id: u32,
-    pub connector_type: u32,
-    pub connector_type_id: u32,
-    pub connection: drmModeConnection,
-    pub mm_width: u32,
-    pub mm_height: u32,
-    pub subpixel: drmModeSubPixel,
-    pub count_modes: libc::c_int,
-    pub modes: *mut drmModeModeInfo,
-    pub count_props: libc::c_int,
-    pub props: *mut u32,
-    pub prop_values: *mut u64,
-    pub count_encoders: libc::c_int,
-    pub encoders: *mut u32
-}
-impl drmModeConnector {
-    pub fn modes(&self) -> &[drmModeModeInfo] {
-        unsafe { std::slice::from_raw_parts(self.modes, self.count_modes as _) }
-    }
-}
-pub struct DrmModeConnectorPtr(NonNull<drmModeConnector>);
-impl DrmModeConnectorPtr {
-    pub unsafe fn from_ptr(p: *mut drmModeConnector) -> Option<Self> { NonNull::new(p).map(Self) }
-
-    pub fn get(fd: libc::c_int, id: u32) -> Option<Self> {
-        unsafe { Self::from_ptr(drmModeGetConnector(fd, id)) }
-    }
-}
-impl std::ops::Deref for DrmModeConnectorPtr {
-    type Target = drmModeConnector;
-    fn deref(&self) -> &Self::Target { unsafe { self.0.as_ref() } }
-}
-impl Drop for DrmModeConnectorPtr {
-    fn drop(&mut self) {
-        unsafe { drmModeFreeConnector(self.0.as_ptr()); }
-    }
-}
-
-#[repr(C)]
-pub struct drmModeEncoder {
-    pub encoder_id: u32,
-    pub encoder_type: u32,
-    pub crtc_id: u32,
-    pub possible_crtcs: u32,
-    pub possible_clones: u32
-}
-impl drmModeEncoder {
-    pub fn has_possible_crtc_index_bit(&self, index: usize) -> bool {
-        // possible_crtcsはビットマスクらしい
-        // https://gitlab.freedesktop.org/mesa/kmscube/-/blob/master/drm-common.c#L132
-        (self.possible_crtcs & (1 << index)) != 0
-    }
-}
-pub struct DrmModeEncoderPtr(NonNull<drmModeEncoder>);
-impl DrmModeEncoderPtr {
-    pub unsafe fn from_ptr(p: *mut drmModeEncoder) -> Option<Self> { NonNull::new(p).map(Self) }
-
-    pub fn get(fd: libc::c_int, id: u32) -> Option<Self> {
-        unsafe { Self::from_ptr(drmModeGetEncoder(fd, id)) }
-    }
-}
-impl std::ops::Deref for DrmModeEncoderPtr {
-    type Target = drmModeEncoder;
-    fn deref(&self) -> &Self::Target { unsafe { self.0.as_ref() } }
-}
-impl Drop for DrmModeEncoderPtr {
-    fn drop(&mut self) { unsafe { drmModeFreeEncoder(self.0.as_ptr()); } }
-}
-
-#[repr(C)]
-pub struct drmEventContext {
-    pub version: libc::c_int,
-    pub vblank_handler: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, tv_sec: libc::c_uint, tv_usec: libc::c_uint, user_data: *mut libc::c_void)>,
-    pub page_flip_handler: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, tv_sec: libc::c_uint, tv_usec: libc::c_uint, user_data: *mut libc::c_void)>,
-    pub page_flip_handler2: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, tv_sec: libc::c_uint, tv_usec: libc::c_uint, crtc_id: libc::c_uint, user_data: *mut libc::c_void)>,
-    pub sequence_handler: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, ns: libc::c_uint, user_data: *mut libc::c_void)>
-}
-
-#[link(name = "drm")]
-extern "C" {
-    fn drmGetDevices2(flags: u32, devices: *mut *mut drmDevice, max_devices: libc::c_int) -> libc::c_int;
-    fn drmGetMagic(fd: libc::c_int, magic: *mut libc::c_uint) -> libc::c_int;
-    fn drmAuthMagic(fd: libc::c_int, magic: libc::c_uint) -> libc::c_int;
-    fn drmModeGetResources(fd: libc::c_int) -> *mut drmModeRes;
-    fn drmModeGetConnector(fd: libc::c_int, connector_id: u32) -> *mut drmModeConnector;
-    fn drmModeFreeConnector(ptr: *mut drmModeConnector);
-    fn drmModeGetEncoder(fd: libc::c_int, encoder_id: u32) -> *mut drmModeEncoder;
-    fn drmModeFreeEncoder(ptr: *mut drmModeEncoder);
-    fn drmModeAddFB2(
-        fd: libc::c_int, width: u32, height: u32, pixel_format: u32,
-        bo_handles: *const u32, pitches: *const u32, offsets: *const u32, buf_id: *mut u32, flags: u32
-    ) -> libc::c_int;
-    fn drmModeAddFB2WithModifiers(
-        fd: libc::c_int, width: u32, height: u32, pixel_format: u32,
-        bo_handles: *const u32, pitches: *const u32, offsets: *const u32, modifiers: *const u64,
-        buf_id: *mut u32, flags: u32
-    ) -> libc::c_int;
-    fn drmModeSetCrtc(
-        fd: libc::c_int, crtc_id: u32, buffer_id: u32, x: u32, y: u32, connectors: *mut u32, count: libc::c_int,
-        mode: *mut drmModeModeInfo
-    ) -> libc::c_int;
-    fn drmModePageFlip(fd: libc::c_int, crtc_id: u32, fb_id: u32, flags: u32, user_data: *mut libc::c_void) -> libc::c_int;
-    fn drmHandleEvent(fd: libc::c_int, evctx: *mut drmEventContext) -> libc::c_int;
-}
-
-pub const fn fourcc_code(a: u8, b: u8, c: u8, d: u8) -> u32 {
-    u32::from_le_bytes([a, b, c, d])
-}
-pub const DRM_FORMAT_ARGB8888: u32 = fourcc_code(b'A', b'R', b'2', b'4');
-pub const DRM_FORMAT_ABGR8888: u32 = fourcc_code(b'A', b'B', b'2', b'4');
-pub const DRM_FORMAT_RGBA8888: u32 = fourcc_code(b'R', b'A', b'2', b'4');
-pub const DRM_FORMAT_BGRA8888: u32 = fourcc_code(b'B', b'A', b'2', b'4');
-
-pub const DRM_MODE_PAGE_FLIP_EVENT: u32 = 0x01;
 
 #[repr(transparent)]
 pub struct OwnedFileDescriptor(libc::c_int);
@@ -354,7 +100,7 @@ pub struct DrmPresenter {
     buffer_objects: Vec<DrmRenderBuffer>,
     current_backbuffer_index: usize,
     drm_device_fd: libc::c_int,
-    connector: DrmModeConnectorPtr,
+    connector: drm::mode::ConnectorPtr,
     crtc_id: u32,
     extent: peridot::math::Vector2<usize>,
     rendering_order: br::Semaphore,
@@ -369,7 +115,7 @@ impl DrmPresenter {
         use br::MemoryBound;
 
         let res = unsafe {
-            drmModeGetResources(drm_fd).as_ref()
+            drm::raw::drmModeGetResources(drm_fd).as_ref()
                 .unwrap_or_else(|| panic!("Failed to drmModeGetResources: {}", std::io::Error::last_os_error()))
         };
         println!("Resources: ");
@@ -382,8 +128,8 @@ impl DrmPresenter {
 
         // find connected connector
         let connector = res.connectors().iter()
-            .filter_map(|&cid| DrmModeConnectorPtr::get(drm_fd, cid))
-            .find(|c| c.connection == drmModeConnection::Connected)
+            .filter_map(|&cid| drm::mode::ConnectorPtr::get(drm_fd, cid))
+            .find(|c| c.connection == drm::mode::Connection::Connected)
             .expect("no available connectors");
 
         // find preferred or highest-resolution mode
@@ -394,14 +140,14 @@ impl DrmPresenter {
 
         // find encoder
         let encoder = res.encoders().iter()
-            .filter_map(|&eid| DrmModeEncoderPtr::get(drm_fd, eid))
+            .filter_map(|&eid| drm::mode::EncoderPtr::get(drm_fd, eid))
             .find(|e| e.encoder_id == connector.encoder_id);
         
         // find crtc id
         let crtc_id = match encoder {
             Some(e) => e.crtc_id,
             None => res.encoders().iter()
-                .filter_map(|&eid| DrmModeEncoderPtr::get(drm_fd, eid))
+                .filter_map(|&eid| drm::mode::EncoderPtr::get(drm_fd, eid))
                 .filter_map(|e|
                     res.crtcs().iter().enumerate()
                         .find(|&(crx, _)| e.has_possible_crtc_index_bit(crx))
@@ -437,7 +183,7 @@ impl DrmPresenter {
                 let flags = if modifiers[0] != 0 { 1 << 1 } else { 0 };
                 let mut fbid = 0;
                 let r = unsafe {
-                    drmModeAddFB2WithModifiers(
+                    drm::raw::drmModeAddFB2WithModifiers(
                         drm_fd, mode.hdisplay as _, mode.vdisplay as _, bo_format,
                         handles.as_ptr(), strides.as_ptr(), offsets.as_ptr(), modifiers.as_ptr(),
                         &mut fbid, flags
@@ -445,7 +191,7 @@ impl DrmPresenter {
                 };
                 if r != 0 {
                     let r = unsafe {
-                        drmModeAddFB2(
+                        drm::raw::drmModeAddFB2(
                             drm_fd, mode.hdisplay as _, mode.vdisplay as _, bo_format,
                             handles.as_ptr(), strides.as_ptr(), offsets.as_ptr(), &mut fbid, 0
                         )
@@ -545,7 +291,7 @@ impl DrmPresenter {
         // modeset!
         let r = unsafe {
             let mut cid = connector.connector_id;
-            drmModeSetCrtc(drm_fd, crtc_id, buffer_objects[0].framebuffer_id, 0, 0, &mut cid, 1, mode as *const _ as *mut _)
+            drm::raw::drmModeSetCrtc(drm_fd, crtc_id, buffer_objects[0].framebuffer_id, 0, 0, &mut cid, 1, mode as *const _ as *mut _)
         };
         if r != 0 { panic!("Failed to drmModeSetCrtc: {}", r); }
 
@@ -629,16 +375,16 @@ impl peridot::PlatformPresenter for DrmPresenter {
 
         unsafe {
             let mut flip_event_completion = 0u32;
-            let r = drmModePageFlip(
+            let r = drm::raw::drmModePageFlip(
                 self.drm_device_fd, self.crtc_id,
-                self.buffer_objects[backbuffer_index as usize].framebuffer_id, DRM_MODE_PAGE_FLIP_EVENT,
+                self.buffer_objects[backbuffer_index as usize].framebuffer_id, drm::raw::DRM_MODE_PAGE_FLIP_EVENT,
                 &mut flip_event_completion as *mut _ as _
             );
             if r != 0 {
                 panic!("drmModePageFlip failed: {}", r);
             }
             
-            let mut drm_event_context = drmEventContext {
+            let mut drm_event_context = drm::raw::drmEventContext {
                 version: 2,
                 vblank_handler: None,
                 page_flip_handler: Some(page_flip_handler),
@@ -654,7 +400,7 @@ impl peridot::PlatformPresenter for DrmPresenter {
                     if e.u64 == 0 {
                         // readable drmfd
                         //println!("handle drm events");
-                        drmHandleEvent(self.drm_device_fd, &mut drm_event_context);
+                        drm::raw::drmHandleEvent(self.drm_device_fd, &mut drm_event_context);
                     }
                 }
             }
@@ -674,79 +420,6 @@ impl peridot::PlatformPresenter for DrmPresenter {
 extern "C" fn page_flip_handler(_: libc::c_int, _: libc::c_uint, _: libc::c_uint, _: libc::c_uint, userdata: *mut libc::c_void) {
     unsafe { *(userdata as *mut u32) = 1; }
 }
-/*pub struct Presenter {
-    sc: peridot::IntegratedSwapchain
-}
-impl Presenter {
-    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &WindowHandler) -> Self {
-
-        /*if !g.adapter().xcb_presentation_support(renderer_queue_family, w.dp, w.vis) {
-            panic!("Vulkan Presentation is not supported!");
-        }
-        let so = br::Surface::new_xcb(g.instance(), w.dp, w.wid).expect("Failed to create Surface object");
-        if !g.adapter().surface_support(renderer_queue_family, &so).expect("Failed to query surface support") {
-            panic!("Vulkan Surface is not supported");
-        }
-        let sc = peridot::IntegratedSwapchain::new(g, so, peridot::math::Vector2(120, 120));*/
-
-        let sc = DrmPresenter::new(g, w.device_fd);
-
-        let properties = g.adapter().display_properties().expect("Failed to get display properties");
-        let planes = g.adapter().display_plane_properties().expect("Failed to get display plane properties");
-        let display_modes = properties[0].display().mode_properties(g.adapter()).expect("Failed to get display modes");
-        let display_mode = &display_modes[0];
-        let ext: br::Extent2D = display_mode.parameters.visibleRegion.clone().into();
-        println!("display ext: {:?}", ext);
-
-        let surface = br::Surface::new_display_plane(
-            g.instance(), &display_modes[0].display_mode(), 0, 0, br::SurfaceTransform::Identity, 1.0,
-            br::DisplayPlaneAlpha::Opaque, ext.clone()
-        ).expect("Failed to create Display Plane Surface");
-        if !g.adapter().surface_support(renderer_queue_family, &surface).expect("Failed to query surface support") {
-            panic!("Vulkan Surface is not supported");
-        }
-        let sc = peridot::IntegratedSwapchain::new(g, surface, peridot::math::Vector2(ext.0 as _, ext.1 as _));
-
-        Presenter { sc }
-    }
-}
-impl peridot::PlatformPresenter for Presenter {
-    fn format(&self) -> br::vk::VkFormat { self.sc.format() }
-    fn backbuffer_count(&self) -> usize { self.sc.backbuffer_count() }
-    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> { self.sc.backbuffer(index) }
-    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
-        self.sc.requesting_backbuffer_layout()
-    }
-    
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
-        self.sc.emit_initialize_backbuffer_commands(recorder)
-    }
-    fn next_backbuffer_index(&mut self) -> br::Result<u32> {
-        self.sc.acquire_next_backbuffer_index()
-    }
-    fn render_and_present<'s>(
-        &'s mut self,
-        g: &peridot::Graphics,
-        last_render_fence: &br::Fence,
-        present_queue: &br::Queue,
-        backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>
-    ) -> br::Result<()> {
-        self.sc.render_and_present(
-            g, last_render_fence, present_queue, backbuffer_index, render_submission, update_submission
-        )
-    }
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
-        self.sc.resize(g, new_size);
-        // WSI integrated swapchain needs reinitializing backbuffer resource
-        true
-    }
-
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
-        peridot::math::Vector2(120, 120)
-    }
-}*/
 
 pub struct NativeLink { al: PlatformAssetLoader, wh: WindowHandler }
 impl peridot::NativeLinker for NativeLink {
@@ -847,12 +520,12 @@ impl<F: FnMut()> Drop for ScopeGuard<F> {
 fn main() {
     env_logger::init();
 
-    let device_count = unsafe { drmGetDevices2(0, std::ptr::null_mut(), 0) };
+    let device_count = unsafe { drm::raw::drmGetDevices2(0, std::ptr::null_mut(), 0) };
     if device_count <= 0 {
         panic!("no drm devices?");
     }
     let mut device_ptrs = vec![std::ptr::null_mut(); device_count as usize];
-    unsafe { drmGetDevices2(0, device_ptrs.as_mut_ptr(), device_count) };
+    unsafe { drm::raw::drmGetDevices2(0, device_ptrs.as_mut_ptr(), device_count) };
     for &dp in &device_ptrs {
         println!("Device: ");
         println!("- Available Nodes: {:08x}", unsafe { (*dp).available_nodes });
@@ -871,10 +544,10 @@ fn main() {
         panic!("failed to open primary device");
     }
     let mut magic = 0;
-    if unsafe { drmGetMagic(device_fd, &mut magic) } != 0 {
+    if unsafe { drm::raw::drmGetMagic(device_fd, &mut magic) } != 0 {
         panic!("failed to get drm magic");
     }
-    let r = unsafe { drmAuthMagic(device_fd, magic) };
+    let r = unsafe { drm::raw::drmAuthMagic(device_fd, magic) };
     if r != 0 {
         panic!("failed to get control of drm: {}", r);
     }
