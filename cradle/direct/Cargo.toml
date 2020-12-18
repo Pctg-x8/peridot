@@ -17,4 +17,4 @@ libc = "0.2"
 regex = "1.4"
 once_cell = "1.5"
 
-image-plane = { path = "/home/pctgx8/devel/peridot/examples/image-plane" }
+vg-example = { path = "/home/pctgx8/devel/peridot/examples/vg" }

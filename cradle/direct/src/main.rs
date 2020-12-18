@@ -229,6 +229,15 @@ impl Drop for DrmModeEncoderPtr {
     fn drop(&mut self) { unsafe { drmModeFreeEncoder(self.0.as_ptr()); } }
 }
 
+#[repr(C)]
+pub struct drmEventContext {
+    pub version: libc::c_int,
+    pub vblank_handler: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, tv_sec: libc::c_uint, tv_usec: libc::c_uint, user_data: *mut libc::c_void)>,
+    pub page_flip_handler: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, tv_sec: libc::c_uint, tv_usec: libc::c_uint, user_data: *mut libc::c_void)>,
+    pub page_flip_handler2: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, tv_sec: libc::c_uint, tv_usec: libc::c_uint, crtc_id: libc::c_uint, user_data: *mut libc::c_void)>,
+    pub sequence_handler: Option<extern "C" fn(fd: libc::c_int, sequence: libc::c_uint, ns: libc::c_uint, user_data: *mut libc::c_void)>
+}
+
 #[link(name = "drm")]
 extern "C" {
     fn drmGetDevices2(flags: u32, devices: *mut *mut drmDevice, max_devices: libc::c_int) -> libc::c_int;
@@ -252,6 +261,8 @@ extern "C" {
         fd: libc::c_int, crtc_id: u32, buffer_id: u32, x: u32, y: u32, connectors: *mut u32, count: libc::c_int,
         mode: *mut drmModeModeInfo
     ) -> libc::c_int;
+    fn drmModePageFlip(fd: libc::c_int, crtc_id: u32, fb_id: u32, flags: u32, user_data: *mut libc::c_void) -> libc::c_int;
+    fn drmHandleEvent(fd: libc::c_int, evctx: *mut drmEventContext) -> libc::c_int;
 }
 
 pub const fn fourcc_code(a: u8, b: u8, c: u8, d: u8) -> u32 {
@@ -261,6 +272,8 @@ pub const DRM_FORMAT_ARGB8888: u32 = fourcc_code(b'A', b'R', b'2', b'4');
 pub const DRM_FORMAT_ABGR8888: u32 = fourcc_code(b'A', b'B', b'2', b'4');
 pub const DRM_FORMAT_RGBA8888: u32 = fourcc_code(b'R', b'A', b'2', b'4');
 pub const DRM_FORMAT_BGRA8888: u32 = fourcc_code(b'B', b'A', b'2', b'4');
+
+pub const DRM_MODE_PAGE_FLIP_EVENT: u32 = 0x01;
 
 #[repr(transparent)]
 pub struct OwnedFileDescriptor(libc::c_int);
@@ -338,10 +351,11 @@ impl DrmRenderBuffer {
 }
 pub struct DrmPresenter {
     gbm_device: gbm::Device,
-    /// gbm_bo, drm_framebuffer_id
     buffer_objects: Vec<DrmRenderBuffer>,
     current_backbuffer_index: usize,
+    drm_device_fd: libc::c_int,
     connector: DrmModeConnectorPtr,
+    crtc_id: u32,
     extent: peridot::math::Vector2<usize>,
     rendering_order: br::Semaphore,
     buffer_ready_order: br::Semaphore,
@@ -540,7 +554,9 @@ impl DrmPresenter {
             buffer_objects,
             current_backbuffer_index: 0,
             extent: peridot::math::Vector2(mode.hdisplay as _, mode.vdisplay as _),
+            drm_device_fd: drm_fd,
             connector,
+            crtc_id,
             rendering_order: br::Semaphore::new(g).expect("Failed to create rendering order semaphore"),
             buffer_ready_order: br::Semaphore::new(g).expect("Failed to create buffer ready order semaphore"),
             present_order: br::Semaphore::new(g).expect("Failed to create present order semaphore"),
@@ -610,8 +626,39 @@ impl peridot::PlatformPresenter for DrmPresenter {
                 .expect("Failed to submit render commands");
         }
         self.buffer_objects[backbuffer_index as usize].sync(present_queue, &self.present_order, &self.render_completion_await);
-        // println!("flush!");
-        // self.buffer_objects[backbuffer_index as usize].flush(g, last_render_fence);
+
+        unsafe {
+            let mut flip_event_completion = 0u32;
+            let r = drmModePageFlip(
+                self.drm_device_fd, self.crtc_id,
+                self.buffer_objects[backbuffer_index as usize].framebuffer_id, DRM_MODE_PAGE_FLIP_EVENT,
+                &mut flip_event_completion as *mut _ as _
+            );
+            if r != 0 {
+                panic!("drmModePageFlip failed: {}", r);
+            }
+            
+            let mut drm_event_context = drmEventContext {
+                version: 2,
+                vblank_handler: None,
+                page_flip_handler: Some(page_flip_handler),
+                page_flip_handler2: None,
+                sequence_handler: None
+            };
+            let ep = epoll::Epoll::new().expect("Failed to create epoll instance");
+            ep.add_fd(self.drm_device_fd, libc::EPOLLIN as u32 | libc::EPOLLPRI as u32, 0).expect("Failed to add drm fd to poll");
+            let mut events = [std::mem::MaybeUninit::zeroed().assume_init(); 1];
+            while flip_event_completion == 0 {
+                let count = ep.wait(&mut events, None).expect("Failed to wait epoll");
+                for e in &events[..count as usize] {
+                    if e.u64 == 0 {
+                        // readable drmfd
+                        //println!("handle drm events");
+                        drmHandleEvent(self.drm_device_fd, &mut drm_event_context);
+                    }
+                }
+            }
+        }
 
         Ok(())
 
@@ -622,6 +669,10 @@ impl peridot::PlatformPresenter for DrmPresenter {
     }
 
     fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> { self.extent.clone() }
+}
+
+extern "C" fn page_flip_handler(_: libc::c_int, _: libc::c_uint, _: libc::c_uint, _: libc::c_uint, userdata: *mut libc::c_void) {
+    unsafe { *(userdata as *mut u32) = 1; }
 }
 /*pub struct Presenter {
     sc: peridot::IntegratedSwapchain

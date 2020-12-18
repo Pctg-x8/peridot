@@ -194,7 +194,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         for (cb, fb) in render_cb.iter().zip(&framebuffers)
         {
             let mut cr = cb.begin().expect("Begin CmdRecord");
-            cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.7; 4])], true);
+            cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
             gp.bind(&mut cr);
             cr.bind_graphics_descriptor_sets(0, &descriptor_main, &[]);
             cr.bind_vertex_buffers(0, &[(&buffers.buffer.0, vertices_offset as _)]);
