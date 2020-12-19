@@ -7,6 +7,14 @@ pub mod mode {
 	pub use super::raw::drmModeConnection as Connection;
 	pub use super::raw::drmModeSubPixel as SubPixel;
 
+	#[repr(C)]
+	#[derive(Clone, Copy)]
+	pub enum ObjectType {
+		CRTC = DRM_MODE_OBJECT_CRTC as _,
+		Connector = DRM_MODE_OBJECT_CONNECTOR as _,
+		Plane = DRM_MODE_OBJECT_PLANE as _
+	}
+
 	pub struct ConnectorPtr(NonNull<drmModeConnector>);
 	impl ConnectorPtr {
 		pub unsafe fn from_ptr(p: *mut drmModeConnector) -> Option<Self> { NonNull::new(p).map(Self) }
@@ -39,6 +47,89 @@ pub mod mode {
 	}
 	impl Drop for EncoderPtr {
 		fn drop(&mut self) { unsafe { drmModeFreeEncoder(self.0.as_ptr()); } }
+	}
+
+	pub struct PlaneResourcesPtr(NonNull<drmModePlaneRes>);
+	impl PlaneResourcesPtr {
+		pub unsafe fn from_ptr(p: *mut drmModePlaneRes) -> Option<Self> { NonNull::new(p).map(Self) }
+
+		pub fn get(fd: libc::c_int) -> Option<Self> {
+			unsafe { Self::from_ptr(drmModeGetPlaneResources(fd)) }
+		}
+	}
+	impl std::ops::Deref for PlaneResourcesPtr {
+		type Target = drmModePlaneRes;
+		fn deref(&self) -> &Self::Target { unsafe { self.0.as_ref() } }
+	}
+	impl Drop for PlaneResourcesPtr {
+		fn drop(&mut self) { unsafe { drmModeFreePlaneResources(self.0.as_ptr()); } }
+	}
+
+	pub struct PlanePtr(NonNull<drmModePlane>);
+	impl PlanePtr {
+		pub unsafe fn from_ptr(p: *mut drmModePlane) -> Option<Self> { NonNull::new(p).map(Self) }
+
+		pub fn get(fd: libc::c_int, id: u32) -> Option<Self> {
+			unsafe { Self::from_ptr(drmModeGetPlane(fd, id)) }
+		}
+	}
+	impl std::ops::Deref for PlanePtr {
+		type Target = drmModePlane;
+		fn deref(&self) -> &Self::Target { unsafe { self.0.as_ref() } }
+	}
+	impl Drop for PlanePtr {
+		fn drop(&mut self) { unsafe { drmModeFreePlane(self.0.as_ptr()); } }
+	}
+
+	pub struct ObjectProperties(NonNull<drmModeObjectProperties>);
+	impl ObjectProperties {
+		pub unsafe fn from_ptr(p: *mut drmModeObjectProperties) -> Option<Self> { NonNull::new(p).map(Self) }
+
+		pub fn get(fd: libc::c_int, id: u32, ty: ObjectType) -> Option<Self> {
+			unsafe { Self::from_ptr(drmModeObjectGetProperties(fd, id, ty as _)) }
+		}
+	}
+	impl std::ops::Deref for ObjectProperties {
+		type Target = drmModeObjectProperties;
+		fn deref(&self) -> &Self::Target { unsafe { self.0.as_ref() } }
+	}
+	impl Drop for ObjectProperties {
+		fn drop(&mut self) { unsafe { drmModeFreeObjectProperties(self.0.as_ptr()); } }
+	}
+
+	pub struct Property(NonNull<drmModeProperty>);
+	impl Property {
+		pub unsafe fn from_ptr(p: *mut drmModeProperty) -> Option<Self> { NonNull::new(p).map(Self) }
+
+		pub fn get(fd: libc::c_int, id: u32) -> Option<Self> {
+			unsafe { Self::from_ptr(drmModeGetProperty(fd, id)) }
+		}
+	}
+	impl std::ops::Deref for Property {
+		type Target = drmModeProperty;
+		fn deref(&self) -> &Self::Target { unsafe { self.0.as_ref() } }
+	}
+	impl Drop for Property {
+		fn drop(&mut self) { unsafe { drmModeFreeProperty(self.0.as_ptr()); } }
+	}
+
+	pub struct AtomicRequest(NonNull<drmModeAtomicReq>);
+	impl AtomicRequest {
+		pub fn new() -> Option<Self> {
+			unsafe { NonNull::new(drmModeAtomicAlloc()).map(Self) }
+		}
+
+		pub fn add_property(&mut self, object_id: u32, property_id: u32, value: u64) -> Result<(), libc::c_int> {
+			let r = unsafe { drmModeAtomicAddProperty(self.0.as_ptr(), object_id, property_id, value) };
+			if r < 0 { Err(r) } else { Ok(()) }
+		}
+		pub fn commit(self, fd: libc::c_int, flags: u32, user_data: *mut libc::c_void) -> Result<(), libc::c_int> {
+			let r = unsafe { drmModeAtomicCommit(fd, self.0.as_ptr(), flags, user_data) };
+			if r != 0 { Err(r) } else { Ok(()) }
+		}
+	}
+	impl Drop for AtomicRequest {
+		fn drop(&mut self) { unsafe { drmModeAtomicFree(self.0.as_ptr()); } }
 	}
 }
 
@@ -218,7 +309,83 @@ pub mod raw {
 			(self.possible_crtcs & (1 << index)) != 0
 		}
 	}
-	
+
+	#[repr(C)]
+	pub struct drmModePlaneRes {
+		pub count_planes: u32,
+		pub planes: *mut u32
+	}
+	impl drmModePlaneRes {
+		pub fn planes(&self) -> &[u32] {
+			unsafe { std::slice::from_raw_parts(self.planes, self.count_planes as _) }
+		}
+	}
+
+	#[repr(C)]
+	pub struct drmModePlane {
+		pub count_format: u32,
+		pub formats: *mut u32,
+		pub plane_id: u32,
+		pub crtc_id: u32,
+		pub fb_id: u32,
+		pub crtc_x: u32,
+		pub crtc_y: u32,
+		pub x: u32,
+		pub y: u32,
+		pub possible_crtcs: u32,
+		pub gamma_size: u32
+	}
+
+	pub const DRM_MODE_OBJECT_CRTC: u32 = 0xcccccccc;
+	pub const DRM_MODE_OBJECT_CONNECTOR: u32 = 0xc0c0c0c0;
+	pub const DRM_MODE_OBJECT_PLANE: u32 = 0xeeeeeeee;
+
+	#[repr(C)]
+	pub struct drmModeObjectProperties {
+		pub count_props: u32,
+		pub props: *mut u32,
+		pub prop_values: *mut u64
+	}
+	impl drmModeObjectProperties {
+		pub fn props(&self) -> &[u32] {
+			unsafe { std::slice::from_raw_parts(self.props, self.count_props as _) }
+		}
+		pub fn prop_values(&self) -> &[u64] {
+			unsafe { std::slice::from_raw_parts(self.prop_values, self.count_props as _) }
+		}
+		pub fn prop_pairs<'s>(&'s self) -> impl Iterator<Item = (u32, u64)> + 's {
+			self.props().iter().copied().zip(self.prop_values().iter().copied())
+		}
+	}
+
+	pub const DRM_PROP_NAME_LEN: usize = 32;
+	#[repr(C)]
+	pub struct drm_mode_property_enum {
+		pub value: u64,
+		pub name: [libc::c_char; DRM_PROP_NAME_LEN]
+	}
+	#[repr(C)]
+	pub struct drmModeProperty {
+		pub prop_id: u32,
+		pub flags: u32,
+		pub name: [libc::c_char; DRM_PROP_NAME_LEN],
+		pub count_values: libc::c_int,
+		pub values: *mut u64,
+		pub count_enums: libc::c_int,
+		pub enums: *mut drm_mode_property_enum,
+		pub count_blobs: libc::c_int,
+		pub blob_ids: *mut u32
+	}
+	impl drmModeProperty {
+		pub fn name(&self) -> &std::ffi::CStr {
+			unsafe { std::ffi::CStr::from_ptr(self.name.as_ptr()) }
+		}
+	}
+
+	pub const DRM_PLANE_TYPE_OVERLAY: u64 = 0;
+	pub const DRM_PLANE_TYPE_PRIMARY: u64 = 1;
+	pub const DRM_PLANE_TYPE_CURSOR: u64 = 2;
+
 	#[repr(C)]
 	pub struct drmEventContext {
 		pub version: libc::c_int,
@@ -237,6 +404,63 @@ pub mod raw {
 			fd: libc::c_int, sequence: libc::c_uint, ns: libc::c_uint, user_data: *mut libc::c_void
 		)>
 	}
+
+	#[repr(C)]
+	pub struct drm_mode_create_dumb {
+		pub height: u32,
+		pub width: u32,
+		pub bpp: u32,
+		pub flags: u32,
+		pub handle: u32,
+		pub pitch: u32,
+		pub size: u32
+	}
+	impl drm_mode_create_dumb {
+		pub fn new_request(width: u32, height: u32, bpp: u32, flags: u32) -> Self {
+			drm_mode_create_dumb {
+				height, width, bpp, flags,
+				handle: 0, pitch: 0, size: 0
+			}
+		}
+	}
+
+	#[repr(C)]
+	pub struct drm_mode_map_dumb {
+		pub handle: u32,
+		pub _pad: u32,
+		pub offset: u64
+	}
+
+	pub enum drmModeAtomicReq {}
+	pub const DRM_MODE_ATOMIC_ALLOW_MODESET: u32 = 0x0400;
+
+	pub const DRM_CLIENT_CAP_UNIVERSAL_PLANES: u64 = 2;
+	pub const DRM_CLIENT_CAP_ATOMIC: u64 = 3;
+
+	const _IOC_NRSHIFT: libc::c_ulong = 0;
+	const _IOC_NRBITS: libc::c_ulong = 8;
+	const _IOC_TYPESHIFT: libc::c_ulong = _IOC_NRSHIFT + _IOC_NRBITS;
+	const _IOC_TYPEBITS: libc::c_ulong = 8;
+	const _IOC_SIZESHIFT: libc::c_ulong = _IOC_TYPESHIFT + _IOC_TYPEBITS;
+	const _IOC_SIZEBITS: libc::c_ulong = 14;
+	const _IOC_DIRSHIFT: libc::c_ulong = _IOC_SIZESHIFT + _IOC_SIZEBITS;
+	const _IOC_DIRBITS: libc::c_ulong = 2;
+	const _IOC_WRITE: u8 = 1;
+	const _IOC_READ: u8 = 2;
+	const fn _IOC(dir: u8, ty: u8, nr: u8, size: u16) -> libc::c_ulong {
+		((dir as libc::c_ulong) << _IOC_DIRSHIFT) |
+		((ty as libc::c_ulong) << _IOC_TYPESHIFT) |
+		((nr as libc::c_ulong) << _IOC_NRSHIFT) |
+		((size as libc::c_ulong) << _IOC_SIZESHIFT)
+	}
+	const fn _IOWR<T>(ty: u8, nr: u8) -> libc::c_ulong {
+		_IOC(_IOC_READ | _IOC_WRITE, ty, nr, std::mem::size_of::<T>() as _)
+	}
+
+	pub const DRM_IOCTL_BASE: u8 = b'd';
+	pub const fn DRM_IOWR<T>(nr: u8) -> libc::c_ulong { _IOWR::<T>(DRM_IOCTL_BASE, nr) }
+	pub const DRM_IOCTL_MODE_CREATE_DUMB: libc::c_ulong = DRM_IOWR::<drm_mode_create_dumb>(0xb2);
+	pub const DRM_IOCTL_MODE_MAP_DUMB: libc::c_ulong = DRM_IOWR::<drm_mode_map_dumb>(0xb3);
 	
 	#[link(name = "drm")]
 	extern "C" {
@@ -248,6 +472,9 @@ pub mod raw {
 		pub fn drmModeFreeConnector(ptr: *mut drmModeConnector);
 		pub fn drmModeGetEncoder(fd: libc::c_int, encoder_id: u32) -> *mut drmModeEncoder;
 		pub fn drmModeFreeEncoder(ptr: *mut drmModeEncoder);
+		pub fn drmModeAddFB(
+			fd: libc::c_int, width: u32, height: u32, depth: u8, bpp: u8, pitch: u32, bo_handle: u32, buf_id: *mut u32
+		) -> libc::c_int;
 		pub fn drmModeAddFB2(
 			fd: libc::c_int, width: u32, height: u32, pixel_format: u32,
 			bo_handles: *const u32, pitches: *const u32, offsets: *const u32, buf_id: *mut u32, flags: u32
@@ -265,6 +492,24 @@ pub mod raw {
 			fd: libc::c_int, crtc_id: u32, fb_id: u32, flags: u32, user_data: *mut libc::c_void
 		) -> libc::c_int;
 		pub fn drmHandleEvent(fd: libc::c_int, evctx: *mut drmEventContext) -> libc::c_int;
+		pub fn drmModeGetPlaneResources(fd: libc::c_int) -> *mut drmModePlaneRes;
+		pub fn drmModeFreePlaneResources(ptr: *mut drmModePlaneRes);
+		pub fn drmModeGetPlane(fd: libc::c_int, plane_id: u32) -> *mut drmModePlane;
+		pub fn drmModeFreePlane(ptr: *mut drmModePlane);
+		pub fn drmModeObjectGetProperties(fd: libc::c_int, object_id: u32, object_type: u32) -> *mut drmModeObjectProperties;
+		pub fn drmModeFreeObjectProperties(ptr: *mut drmModeObjectProperties);
+		pub fn drmModeGetProperty(fd: libc::c_int, property_id: u32) -> *mut drmModeProperty;
+		pub fn drmModeFreeProperty(ptr: *mut drmModeProperty);
+
+		pub fn drmSetClientCap(fd: libc::c_int, capability: u64, value: u64) -> libc::c_int;
+		pub fn drmIoctl(fd: libc::c_int, request: libc::c_ulong, arg: *mut libc::c_void) -> libc::c_int;
+
+		pub fn drmModeAtomicAlloc() -> *mut drmModeAtomicReq;
+		pub fn drmModeAtomicFree(req: *mut drmModeAtomicReq);
+		pub fn drmModeAtomicAddProperty(req: *mut drmModeAtomicReq, object_id: u32, property_id: u32, value: u64) -> libc::c_int;
+		pub fn drmModeAtomicCommit(fd: libc::c_int, req: *mut drmModeAtomicReq, flags: u32, user_data: *mut libc::c_void) -> libc::c_int;
+		pub fn drmModeCreatePropertyBlob(fd: libc::c_int, data: *const libc::c_void, size: usize, id: *mut u32) -> libc::c_int;
+		pub fn drmModeDestroyPropertyBlob(fd: libc::c_int, id: u32) -> libc::c_int;
 	}
 	
 	pub const fn fourcc_code(a: u8, b: u8, c: u8, d: u8) -> u32 {

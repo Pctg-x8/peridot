@@ -451,36 +451,154 @@ impl<F: FnMut()> Drop for ScopeGuard<F> {
 fn main() {
     env_logger::init();
 
-    let device_count = unsafe { drm::raw::drmGetDevices2(0, std::ptr::null_mut(), 0) };
-    if device_count <= 0 {
-        panic!("no drm devices?");
+    let egl_device = egl::Device::query().into_iter()
+        .find(|d| d.get_string(egl::raw::EGL_EXTENSIONS)
+            .and_then(|exts| exts.to_str().expect("invalid sequence").split(' ').find(|&e| e == "EGL_EXT_device_drm"))
+            .is_some()
+        )
+        .expect("no available devices");
+    let device_file_name = egl_device.get_string(egl::raw::EGL_DRM_DEVICE_FILE_EXT)
+        .expect("no drm device file name");
+    println!("device drm file name: {}", device_file_name.to_str().expect("invalid sequence"));
+    let device_fd = unsafe { libc::open(device_file_name.as_ptr(), libc::O_RDWR) };
+    if device_fd < 0 {
+        panic!("Failed to open egl device drm");
     }
-    let mut device_ptrs = vec![std::ptr::null_mut(); device_count as usize];
-    unsafe { drm::raw::drmGetDevices2(0, device_ptrs.as_mut_ptr(), device_count) };
-    for &dp in &device_ptrs {
-        println!("Device: ");
-        println!("- Available Nodes: {:08x}", unsafe { (*dp).available_nodes });
-        println!("- bustype: {}", unsafe { (*dp).bustype });
 
-        if unsafe { ((*dp).available_nodes & 0x01) != 0 } {
-            // primary node
-            println!("- primary node str: {}", unsafe { std::ffi::CStr::from_ptr(*(*dp).nodes).to_str().expect("invalid utf-8 sequence") })
-        }
+    // DisplayやContextを作る前にDRM側の準備をしておく必要がある
+    // EGLStreamsを使う場合、以下のClient Capが必要になる
+    let res = unsafe { drm::raw::drmSetClientCap(device_fd, drm::raw::DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) };
+    if res != 0 {
+        panic!("Unable to set drm client capability");
     }
     
-    // Vulkan初期化より先にMaster取らないといけない説
-    // open first device and get admin
-    let device_fd = unsafe { libc::open(*(*device_ptrs[0]).nodes, libc::O_RDWR | libc::O_CLOEXEC) };
-    if device_fd < 0 {
-        panic!("failed to open primary device");
+    let res = unsafe {
+        drm::raw::drmModeGetResources(device_fd).as_ref()
+            .unwrap_or_else(|| panic!("Failed to drmModeGetResources: {}", std::io::Error::last_os_error()))
+    };
+    println!("Resources: ");
+    println!("- MinGeometry: {}x{}", res.min_width, res.min_height);
+    println!("- MaxGeometry: {}x{}", res.max_width, res.max_height);
+    println!("- fbs: {}", res.count_fbs);
+    println!("- crtcs: {}", res.count_crtcs);
+    println!("- connectors: {}", res.count_connectors);
+    println!("- encoders: {}", res.count_encoders);
+
+    // find connected connector
+    let connector = res.connectors().iter()
+        .filter_map(|&cid| drm::mode::ConnectorPtr::get(device_fd, cid))
+        .find(|c| c.connection == drm::mode::Connection::Connected)
+        .expect("no available connectors");
+    println!("connector id: {}", connector.connector_id);
+
+    // find preferred or highest-resolution mode
+    let mode = connector.modes().iter().find(|m| m.is_preferred()).or_else(||
+        connector.modes().iter().map(|x| (x, x.hdisplay * x.vdisplay)).max_by_key(|&(_, k)| k).map(|(m, _)| m)
+    ).expect("no available modes?");
+    println!("selected mode: {}x{}", mode.hdisplay, mode.vdisplay);
+
+    // find encoder
+    let encoder = res.encoders().iter()
+        .filter_map(|&eid| drm::mode::EncoderPtr::get(device_fd, eid))
+        .find(|e| e.encoder_id == connector.encoder_id);
+    
+    // find crtc id
+    let crtc_id = match encoder {
+        Some(e) => e.crtc_id,
+        None => res.encoders().iter()
+            .filter_map(|&eid| drm::mode::EncoderPtr::get(device_fd, eid))
+            .filter_map(|e|
+                res.crtcs().iter().enumerate()
+                    .find(|&(crx, _)| e.has_possible_crtc_index_bit(crx))
+                    .map(|(_, &id)| id)
+            )
+            .next().expect("no available crtc id")
+    };
+    let crtc_index = res.crtcs().iter().enumerate()
+        .find(|&(_, &cid)| cid == crtc_id)
+        .expect("Failed to find crtc index").0;
+    println!("crtc id: {}", crtc_id);
+    println!("crtc index: {}", crtc_index);
+
+    // find primary plane for crtc
+    let plane_id = drm::mode::PlaneResourcesPtr::get(device_fd).expect("Failed to get plane resources")
+        .planes()
+        .iter()
+        .copied()
+        .find(|&pid| drm::mode::PlanePtr::get(device_fd, pid).map_or(false, |p| {
+            if (p.possible_crtcs & (1 << crtc_index)) == 0 { return false; }
+            let props = drm::mode::ObjectProperties::get(device_fd, pid, drm::mode::ObjectType::Plane);
+            let (prop_ids, prop_values): (&[u32], &[u64]) = props.as_ref().map_or((&[], &[]), |p| (p.props(), p.prop_values()));
+            prop_ids.iter().copied().zip(prop_values.iter().copied())
+                .find(|&(propid, _)|
+                    drm::mode::Property::get(device_fd, propid)
+                        .map_or(false, |p| p.name().to_str().map_or(false, |s| s == "type"))
+                )
+                .map_or(false, |(_, v)| v == drm::raw::DRM_PLANE_TYPE_PRIMARY)
+        }))
+        .expect("no suitable primary plane");
+    println!("primary plane id: {}", plane_id);
+
+    // create dumb buffer and fb
+    let mut dumb_info = drm::raw::drm_mode_create_dumb::new_request(mode.hdisplay as _, mode.vdisplay as _, 32, 0);
+    let r = unsafe {
+        drm::raw::drmIoctl(device_fd, drm::raw::DRM_IOCTL_MODE_CREATE_DUMB, &mut dumb_info as *mut _ as _)
+    };
+    if r < 0 {
+        panic!("Failed to create dumb buffer: {}", r);
     }
-    let mut magic = 0;
-    if unsafe { drm::raw::drmGetMagic(device_fd, &mut magic) } != 0 {
-        panic!("failed to get drm magic");
-    }
-    let r = unsafe { drm::raw::drmAuthMagic(device_fd, magic) };
+    let mut fb = 0;
+    let r = unsafe {
+        drm::raw::drmModeAddFB(device_fd, mode.hdisplay as _, mode.vdisplay as _, 24, 32, dumb_info.pitch, dumb_info.handle, &mut fb)
+    };
     if r != 0 {
-        panic!("failed to get control of drm: {}", r);
+        panic!("Failed to add dumb buffer as FB: {}", r);
+    }
+    println!("fb: {}", fb);
+    
+    // 先にmodesetしておく必要がある
+    let r = unsafe {
+        let mut cid = connector.connector_id;
+        drm::raw::drmModeSetCrtc(device_fd, crtc_id, fb, 0, 0, &mut cid, 1, mode as *const _ as *mut _)
+    };
+    if r != 0 { panic!("Failed to drmModeSetCrtc: {}", r); }
+
+    let egl_display = egl::DisplayRef::from_device(
+        &egl_device,
+        &[egl::raw::EGL_DRM_MASTER_FD_EXT, device_fd, egl::raw::EGL_NONE as _]
+    ).expect("Failed to get display");
+    let (major, minor) = egl::initialize(egl_display).expect("Failed to initialize EGL");
+    println!("egl version: {}.{}", major, minor);
+    println!("egl vendor: {}", egl_display.vendor_name().expect("no vendor name").to_str().expect("invalid sequence"));
+
+    if !egl::bind_api(egl::API::OpenGL) { panic!("Failed to bind api"); }
+    let cfg = egl::Config::choose(egl_display, &[
+        egl::raw::EGL_SURFACE_TYPE as _, egl::raw::EGL_STREAM_BIT_KHR as _,
+        egl::raw::EGL_RENDERABLE_TYPE as _, egl::raw::EGL_OPENGL_BIT as _,
+        egl::raw::EGL_RED_SIZE as _, 1,
+        egl::raw::EGL_GREEN_SIZE as _, 1,
+        egl::raw::EGL_BLUE_SIZE as _, 1,
+        egl::raw::EGL_ALPHA_SIZE as _, 0,
+        egl::raw::EGL_DEPTH_SIZE as _, 1,
+        egl::raw::EGL_NONE as _
+    ]).expect("Failed to choose config");
+    let ctx = egl::Context::new(egl_display, Some(cfg), None, &[egl::raw::EGL_NONE as _])
+        .expect("Failed to create egl context");
+    
+    let output_layer = egl::OutputLayer::get_first_layer(egl_display, &[
+        egl::raw::EGL_DRM_PLANE_EXT as _, plane_id as _, egl::raw::EGL_NONE
+    ]).expect("Failed to get first output layer plane");
+    let stream = egl::Stream::new(egl_display, &[egl::raw::EGL_NONE as _]).expect("Failed to create stream");
+    if !stream.set_consumer_output(output_layer) {
+        panic!("Failed to set stream consumer output");
+    }
+    let surface = egl::Surface::new_stream_producer(egl_display, cfg, &stream, &[
+        egl::raw::EGL_WIDTH as _, mode.hdisplay as _,
+        egl::raw::EGL_HEIGHT as _, mode.vdisplay as _,
+        egl::raw::EGL_NONE as _
+    ]).expect("Failed to create producer surface");
+    if !ctx.make_current(Some(&surface), Some(&surface)) {
+        panic!("MakeCurrent failed");
     }
 
     let mut page_flip_completion_signal = false;
