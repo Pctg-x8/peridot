@@ -178,6 +178,10 @@ impl Surface {
 		let p = (*EGL_CREATE_STREAM_PRODUCER_SURFACE_KHR)(display.0, config.0, stream.0, attrib.as_ptr());
 		if p.is_null() { None } else { Some(Self(p, display)) }
 	}
+
+	pub fn swap_buffers(&self) -> bool {
+		unsafe { eglSwapBuffers(self.1 .0, self.0) != 0 }
+	}
 }
 impl Drop for Surface {
 	fn drop(&mut self) {
@@ -274,6 +278,7 @@ pub mod raw {
 			dpy: EGLDisplay, attrib_list: *const EGLint, configs: *mut EGLConfig, config_size: EGLint, num_config: *mut EGLint
 		) -> EGLBoolean;
 		pub fn eglDestroySurface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
+		pub fn eglSwapBuffers(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
 	}
 
 	pub const EGL_PLATFORM_DEVICE_EXT: EGLenum = 0x313f;

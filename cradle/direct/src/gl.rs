@@ -210,7 +210,7 @@ pub mod raw {
 	pub const GL_CLAMP_TO_EDGE: libc::c_uint = 0x812f;
 	pub const GL_COLOR_BUFFER_BIT: libc::c_uint = 0x00004000;
 	pub const GL_RGBA: libc::c_uint = 0x1908;
-    pub const GL_RGBA8: libc::c_uint = 0x8508;
+    pub const GL_RGBA8: libc::c_uint = 0x8058;
 	pub const GL_UNSIGNED_INT_8_8_8_8: libc::c_uint = 0x8035;
 	pub const GL_FLOAT: libc::c_uint = 0x1406;
 	pub const GL_TRIANGLE_STRIP: libc::c_uint = 0x0005;

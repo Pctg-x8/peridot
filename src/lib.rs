@@ -17,7 +17,7 @@ use std::cell::{Ref, RefMut, RefCell};
 use std::time::{Instant as InstantTimer, Duration};
 use std::ffi::CStr;
 
-mod window; use self::window::StateFence;
+mod window; pub use self::window::StateFence;
 pub use self::window::SurfaceInfo;
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
@@ -178,10 +178,9 @@ impl<PL: NativeLinker> Engine<PL> {
 
         let (copy_submission, fb_submission) = userlib.update(self, bb_index, dt);
         let pr = self.presenter.render_and_present(
-            &self.g, &self.last_rendering_completion.object(),
+            &self.g, &mut self.last_rendering_completion,
             &self.g.graphics_queue.q, bb_index, fb_submission, copy_submission
         );
-        unsafe { self.last_rendering_completion.signal(); }
 
         match pr {
             Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {

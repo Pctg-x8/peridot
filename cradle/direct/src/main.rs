@@ -60,6 +60,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
 }
 pub struct WindowHandler {
     device_fd: libc::c_int,
+    egl_device: egl::Device,
     page_flip_completion_signal: *mut bool
 }
 #[allow(dead_code)]
@@ -99,7 +100,367 @@ impl DrmRenderBuffer {
         unsafe { self.readback_memory.unmap(); }
     }
 }
-#[allow(dead_code)]
+const GL_BLIT_VERTEX_SHADER: &'static str = "#version 150
+in vec4 pos;
+out vec2 uv;
+void main() { gl_Position = pos; uv = pos.xy * 0.5 + 0.5; uv.y *= -1.0; }
+";
+const GL_BLIT_FRAGMENT_SHADER: &'static str = "#version 150
+in vec2 uv;
+uniform sampler2D tex;
+void main() { gl_FragColor = texture(tex, uv); }
+";
+const GL_BLIT_VERTICES: &'static [[f32; 4]; 4] = &[
+    [-1.0, -1.0, 0.0, 1.0],
+    [-1.0,  1.0, 0.0, 1.0],
+    [ 1.0, -1.0, 0.0, 1.0],
+    [ 1.0,  1.0, 0.0, 1.0]
+];
+pub struct GLBlit {
+    program: gl::Program,
+    vbo: gl::Buffer,
+    vao: gl::VertexArray,
+    uniform_location: usize
+}
+impl GLBlit {
+    pub fn new() -> Self {
+        let vsh = gl::Shader::new(gl::ShaderType::Vertex).expect("Failed to create vertex shader");
+        vsh.source(GL_BLIT_VERTEX_SHADER);
+        vsh.compile();
+        if vsh.compile_status() != 1 {
+            panic!("Failed to compile vertex shader: {}", vsh.info_log().to_str().expect("invalid sequence"));
+        }
+        let fsh = gl::Shader::new(gl::ShaderType::Fragment).expect("Failed to create fragment shader");
+        fsh.source(GL_BLIT_FRAGMENT_SHADER);
+        fsh.compile();
+        if fsh.compile_status() != 1 {
+            panic!("Failed to compile fragment shader: {}", fsh.info_log().to_str().expect("invalid seuqnece"));
+        }
+
+        let program = gl::Program::new().expect("Failed to create program");
+        program.attach(&vsh);
+        program.attach(&fsh);
+        program.link();
+        if program.link_status() != 1 {
+            panic!("Failed to link shaders: {}", program.info_log().to_str().expect("invalid sequence"));
+        }
+        let pos_location = program.get_attrib_location(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"pos\0") })
+            .expect("no pos in shader program");
+        let tex_location = program.get_uniform_location(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"tex\0") })
+            .expect("no tex in shader program");
+        
+        let vbo = gl::Buffer::new();
+        let vao = gl::VertexArray::new();
+        unsafe {
+            gl::raw::glBindBuffer(gl::raw::GL_ARRAY_BUFFER, vbo.id());
+            gl::raw::glBufferData(
+                gl::raw::GL_ARRAY_BUFFER, std::mem::size_of::<[f32; 4]>() * 4,
+                GL_BLIT_VERTICES.as_ptr() as _, gl::raw::GL_STATIC_DRAW
+            );
+            gl::raw::glBindVertexArray(vao.id());
+            gl::raw::glEnableVertexAttribArray(pos_location as _);
+            gl::raw::glVertexAttribPointer(pos_location as _, 4, gl::raw::GL_FLOAT, 0, 0, 0 as _);
+            gl::raw::glBindBuffer(gl::raw::GL_ARRAY_BUFFER, 0);
+            gl::raw::glBindVertexArray(0);
+        }
+
+        GLBlit {
+            program, vbo, vao, uniform_location: tex_location
+        }
+    }
+}
+pub struct VkBackbuffer {
+    image: peridot::Image,
+    view: Rc<br::ImageView>,
+    gl_tex: gl::Texture,
+    w: u32, h: u32
+}
+impl VkBackbuffer {
+    pub fn new(g: &peridot::Graphics, w: u32, h: u32) -> Self {
+        use br::MemoryBound;
+
+        let image = br::ImageDesc::new(
+            &br::Extent2D(w, h), br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+            br::ImageUsage::COLOR_ATTACHMENT, br::ImageLayout::Undefined
+        ).create(g).expect("Failed to create vk backbuffer");
+        let mreq = image.requirements();
+        let memory = br::DeviceMemory::allocate(
+            g, mreq.size as _,
+            g.memory_type_index_for(
+                br::MemoryPropertyFlags::DEVICE_LOCAL, mreq.memoryTypeBits
+            ).expect("no suitable memory for image backing store")
+        ).expect("Failed to allocate backing memory");
+        let memory_fd = g.get_memory_fd(&memory, br::ExternalMemoryHandleTypeFd::Opaque).expect("Failed to get memory fd");
+        let image = peridot::Image::bound(image, &Rc::new(memory), 0).expect("Failed to bind image backing store");
+
+        let gl_tex = gl::Texture::new();
+        let mo = gl::MemoryObject::new();
+        mo.import_fd(mreq.size, gl::HandleType::OpaqueFD, dbg!(memory_fd));
+        unsafe {
+            let tex_storage_mem_2d: gl::raw::PFNGLTEXSTORAGEMEM2DEXTPROC =
+                egl::get_fnptr(b"glTexStorageMem2DEXT\0").expect("no glTexStorageMem2DEXT found");
+            gl::raw::glBindTexture(gl::raw::GL_TEXTURE_2D, gl_tex.id());
+            tex_storage_mem_2d(gl::raw::GL_TEXTURE_2D, 1, gl::raw::GL_RGBA8, w as _, h as _, mo.id(), 0);
+            gl::raw::glBindTexture(gl::raw::GL_TEXTURE_2D, 0);
+        }
+
+        VkBackbuffer {
+            view: image.create_view(
+                None, None, &Default::default(), &br::ImageSubresourceRange::color(0..1, 0..1)
+            ).expect("Failed to create image view").into(),
+            image, gl_tex, w, h
+        }
+    }
+
+    pub fn present(&self, blitter: &GLBlit, egl_surface: &egl::Surface) {
+        unsafe {
+            gl::raw::glViewport(0, 0, self.w as _, self.h as _);
+            gl::raw::glUseProgram(blitter.program.id());
+            gl::raw::glBindVertexArray(blitter.vao.id());
+            gl::raw::glActiveTexture(gl::raw::GL_TEXTURE0);
+            gl::raw::glBindTexture(gl::raw::GL_TEXTURE_2D, self.gl_tex.id());
+            gl::raw::glUniform1i(blitter.uniform_location as _, 0);
+            gl::raw::glDrawArrays(gl::raw::GL_TRIANGLE_STRIP, 0, 4);
+            gl::raw::glBindTexture(gl::raw::GL_TEXTURE_2D, 0);
+            gl::raw::glBindVertexArray(0);
+            gl::raw::glUseProgram(0);
+            gl::raw::glFlush();
+        }
+
+        if !egl_surface.swap_buffers() {
+            panic!("Failed to swap egl buffers");
+        }
+    }
+}
+pub struct EGLStreamsPresenter {
+    context: egl::Context,
+    surface: egl::Surface,
+    stream: egl::Stream,
+    vk_buffer: VkBackbuffer,
+    blitter: GLBlit,
+    rendering_order: br::Semaphore,
+    buffer_ready_order: br::Semaphore,
+    present_order: br::Semaphore,
+    render_completion_fence: br::Fence,
+    extent: peridot::math::Vector2<usize>
+}
+impl EGLStreamsPresenter {
+    pub fn new(g: &peridot::Graphics, w: &WindowHandler) -> Self {
+        // DisplayやContextを作る前にDRM側の準備をしておく必要がある
+        // EGLStreamsを使う場合、以下のClient Capが必要になる
+        let res = unsafe { drm::raw::drmSetClientCap(w.device_fd, drm::raw::DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) };
+        if res != 0 {
+            panic!("Unable to set drm client capability");
+        }
+        
+        let res = unsafe {
+            drm::raw::drmModeGetResources(w.device_fd).as_ref()
+                .unwrap_or_else(|| panic!("Failed to drmModeGetResources: {}", std::io::Error::last_os_error()))
+        };
+        println!("Resources: ");
+        println!("- MinGeometry: {}x{}", res.min_width, res.min_height);
+        println!("- MaxGeometry: {}x{}", res.max_width, res.max_height);
+        println!("- fbs: {}", res.count_fbs);
+        println!("- crtcs: {}", res.count_crtcs);
+        println!("- connectors: {}", res.count_connectors);
+        println!("- encoders: {}", res.count_encoders);
+
+        // find connected connector
+        let connector = res.connectors().iter()
+            .filter_map(|&cid| drm::mode::ConnectorPtr::get(w.device_fd, cid))
+            .find(|c| c.connection == drm::mode::Connection::Connected)
+            .expect("no available connectors");
+        println!("connector id: {}", connector.connector_id);
+
+        // find preferred or highest-resolution mode
+        let mode = connector.modes().iter().find(|m| m.is_preferred()).or_else(||
+            connector.modes().iter().map(|x| (x, x.hdisplay * x.vdisplay)).max_by_key(|&(_, k)| k).map(|(m, _)| m)
+        ).expect("no available modes?");
+        println!("selected mode: {}x{}", mode.hdisplay, mode.vdisplay);
+
+        // find encoder
+        let encoder = res.encoders().iter()
+            .filter_map(|&eid| drm::mode::EncoderPtr::get(w.device_fd, eid))
+            .find(|e| e.encoder_id == connector.encoder_id);
+        
+        // find crtc id
+        let crtc_id = match encoder {
+            Some(e) => e.crtc_id,
+            None => res.encoders().iter()
+                .filter_map(|&eid| drm::mode::EncoderPtr::get(w.device_fd, eid))
+                .filter_map(|e|
+                    res.crtcs().iter().enumerate()
+                        .find(|&(crx, _)| e.has_possible_crtc_index_bit(crx))
+                        .map(|(_, &id)| id)
+                )
+                .next().expect("no available crtc id")
+        };
+        let crtc_index = res.crtcs().iter().enumerate()
+            .find(|&(_, &cid)| cid == crtc_id)
+            .expect("Failed to find crtc index").0;
+        println!("crtc id: {}", crtc_id);
+        println!("crtc index: {}", crtc_index);
+
+        // find primary plane for crtc
+        let plane_id = drm::mode::PlaneResourcesPtr::get(w.device_fd).expect("Failed to get plane resources")
+            .planes()
+            .iter()
+            .copied()
+            .find(|&pid| drm::mode::PlanePtr::get(w.device_fd, pid).map_or(false, |p| {
+                if (p.possible_crtcs & (1 << crtc_index)) == 0 { return false; }
+                let props = drm::mode::ObjectProperties::get(w.device_fd, pid, drm::mode::ObjectType::Plane);
+                let (prop_ids, prop_values): (&[u32], &[u64]) = props.as_ref().map_or((&[], &[]), |p| (p.props(), p.prop_values()));
+                prop_ids.iter().copied().zip(prop_values.iter().copied())
+                    .find(|&(propid, _)|
+                        drm::mode::Property::get(w.device_fd, propid)
+                            .map_or(false, |p| p.name().to_str().map_or(false, |s| s == "type"))
+                    )
+                    .map_or(false, |(_, v)| v == drm::raw::DRM_PLANE_TYPE_PRIMARY)
+            }))
+            .expect("no suitable primary plane");
+        println!("primary plane id: {}", plane_id);
+
+        // create dumb buffer and fb
+        let mut dumb_info = drm::raw::drm_mode_create_dumb::new_request(mode.hdisplay as _, mode.vdisplay as _, 32, 0);
+        let r = unsafe {
+            drm::raw::drmIoctl(w.device_fd, drm::raw::DRM_IOCTL_MODE_CREATE_DUMB, &mut dumb_info as *mut _ as _)
+        };
+        if r < 0 {
+            panic!("Failed to create dumb buffer: {}", r);
+        }
+        let mut fb = 0;
+        let r = unsafe {
+            drm::raw::drmModeAddFB(w.device_fd, mode.hdisplay as _, mode.vdisplay as _, 24, 32, dumb_info.pitch, dumb_info.handle, &mut fb)
+        };
+        if r != 0 {
+            panic!("Failed to add dumb buffer as FB: {}", r);
+        }
+        println!("fb: {}", fb);
+        
+        // 先にmodesetしておく必要がある
+        let r = unsafe {
+            let mut cid = connector.connector_id;
+            drm::raw::drmModeSetCrtc(w.device_fd, crtc_id, fb, 0, 0, &mut cid, 1, mode as *const _ as *mut _)
+        };
+        if r != 0 { panic!("Failed to drmModeSetCrtc: {}", r); }
+
+        let egl_display = egl::DisplayRef::from_device(
+            &w.egl_device,
+            &[egl::raw::EGL_DRM_MASTER_FD_EXT, w.device_fd, egl::raw::EGL_NONE as _]
+        ).expect("Failed to get display");
+        let (major, minor) = egl::initialize(egl_display).expect("Failed to initialize EGL");
+        println!("egl version: {}.{}", major, minor);
+        println!("egl vendor: {}", egl_display.vendor_name().expect("no vendor name").to_str().expect("invalid sequence"));
+
+        if !egl::bind_api(egl::API::OpenGL) { panic!("Failed to bind api"); }
+        let cfg = egl::Config::choose(egl_display, &[
+            egl::raw::EGL_SURFACE_TYPE as _, egl::raw::EGL_STREAM_BIT_KHR as _,
+            egl::raw::EGL_RENDERABLE_TYPE as _, egl::raw::EGL_OPENGL_BIT as _,
+            egl::raw::EGL_RED_SIZE as _, 1,
+            egl::raw::EGL_GREEN_SIZE as _, 1,
+            egl::raw::EGL_BLUE_SIZE as _, 1,
+            egl::raw::EGL_ALPHA_SIZE as _, 0,
+            egl::raw::EGL_DEPTH_SIZE as _, 1,
+            egl::raw::EGL_NONE as _
+        ]).expect("Failed to choose config");
+        let ctx = egl::Context::new(egl_display, Some(cfg), None, &[egl::raw::EGL_NONE as _])
+            .expect("Failed to create egl context");
+        
+        let output_layer = egl::OutputLayer::get_first_layer(egl_display, &[
+            egl::raw::EGL_DRM_PLANE_EXT as _, plane_id as _, egl::raw::EGL_NONE
+        ]).expect("Failed to get first output layer plane");
+        let stream = egl::Stream::new(egl_display, &[egl::raw::EGL_NONE as _]).expect("Failed to create stream");
+        if !stream.set_consumer_output(output_layer) {
+            panic!("Failed to set stream consumer output");
+        }
+        let surface = egl::Surface::new_stream_producer(egl_display, cfg, &stream, &[
+            egl::raw::EGL_WIDTH as _, mode.hdisplay as _,
+            egl::raw::EGL_HEIGHT as _, mode.vdisplay as _,
+            egl::raw::EGL_NONE as _
+        ]).expect("Failed to create producer surface");
+        if !ctx.make_current(Some(&surface), Some(&surface)) {
+            panic!("MakeCurrent failed");
+        }
+
+        EGLStreamsPresenter {
+            context: ctx,
+            surface,
+            stream,
+            vk_buffer: VkBackbuffer::new(g, mode.hdisplay as _, mode.vdisplay as _),
+            blitter: GLBlit::new(),
+            rendering_order: br::Semaphore::new(g).expect("Failed to create rendering order semaphore"),
+            buffer_ready_order: br::Semaphore::new(g).expect("Failed to create buffer ready order semaphore"),
+            present_order: br::Semaphore::new(g).expect("Failed to create present order semaphore"),
+            render_completion_fence: br::Fence::new(g, false).expect("Failed to create render completion fence"),
+            extent: peridot::math::Vector2(mode.hdisplay as _, mode.vdisplay as _)
+        }
+    }
+}
+impl peridot::PlatformPresenter for EGLStreamsPresenter {
+    fn format(&self) -> br::vk::VkFormat { br::vk::VK_FORMAT_R8G8B8A8_UNORM }
+    fn backbuffer_count(&self) -> usize { 1 }
+    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> {
+        if index == 0 { Some(self.vk_buffer.view.clone()) } else { None }
+    }
+    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        (br::ImageLayout::General, br::PipelineStageFlags::BOTTOM_OF_PIPE)
+    }
+    
+    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+        let barriers = [
+            br::ImageMemoryBarrier::new(
+                &br::ImageSubref::color(&self.vk_buffer.image, 0 .. 1, 0 .. 1),
+                br::ImageLayout::Undefined, br::ImageLayout::General
+            )
+        ];
+        recorder.pipeline_barrier(
+            br::PipelineStageFlags::BOTTOM_OF_PIPE, br::PipelineStageFlags::BOTTOM_OF_PIPE, true,
+            &[], &[], &barriers
+        );
+    }
+    fn next_backbuffer_index(&mut self) -> br::Result<u32> {
+        Ok(0)
+    }
+    fn render_and_present<'s>(
+        &'s mut self,
+        g: &peridot::Graphics,
+        _last_render_fence: &mut peridot::StateFence,
+        _present_queue: &br::Queue,
+        _backbuffer_index: u32,
+        mut render_submission: br::SubmissionBatch<'s>,
+        update_submission: Option<br::SubmissionBatch<'s>>
+    ) -> br::Result<()> {
+        if let Some(mut cs) = update_submission {
+            // copy -> render
+            cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
+            render_submission.wait_semaphores.to_mut().extend(vec![
+                // (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
+                (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
+            ]);
+            // render_submission.signal_semaphores.to_mut().push(&self.present_order);
+            g.submit_buffered_commands(&[cs, render_submission], &self.render_completion_fence)
+                .expect("Failed to submit render and update commands");
+        } else {
+            // render only (old logic)
+            // render_submission.signal_semaphores.to_mut().push(&self.present_order);
+            /*render_submission.wait_semaphores.to_mut().push(
+                (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            );*/
+            g.submit_buffered_commands(&[render_submission], &self.render_completion_fence)
+                .expect("Failed to submit render commands");
+        }
+        self.render_completion_fence.wait_timeout(std::u64::MAX).expect("Failed to wait render completion");
+        self.render_completion_fence.reset().expect("Failed to reset fence");
+        self.vk_buffer.present(&self.blitter, &self.surface);
+
+        Ok(())
+    }
+    fn resize(&mut self, _g: &peridot::Graphics, _new_size: peridot::math::Vector2<usize>) -> bool {
+        unimplemented!("no resizing will be occured in direct rendering");
+    }
+
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> { self.extent.clone() }
+}
 pub struct DrmPresenter {
     gbm_device: gbm::Device,
     buffer_objects: Vec<DrmRenderBuffer>,
@@ -354,7 +715,7 @@ impl peridot::PlatformPresenter for DrmPresenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &peridot::Graphics,
-        last_render_fence: &br::Fence,
+        last_render_fence: &mut peridot::StateFence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
@@ -368,7 +729,7 @@ impl peridot::PlatformPresenter for DrmPresenter {
                 (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
             ]);
             render_submission.signal_semaphores.to_mut().push(&self.present_order);
-            g.submit_buffered_commands(&[cs, render_submission], last_render_fence)
+            g.submit_buffered_commands(&[cs, render_submission], last_render_fence.object())
                 .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
@@ -376,9 +737,10 @@ impl peridot::PlatformPresenter for DrmPresenter {
             /*render_submission.wait_semaphores.to_mut().push(
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
             );*/
-            g.submit_buffered_commands(&[render_submission], last_render_fence)
+            g.submit_buffered_commands(&[render_submission], last_render_fence.object())
                 .expect("Failed to submit render commands");
         }
+        unsafe { last_render_fence.signal(); }
         self.buffer_objects[backbuffer_index as usize].sync(present_queue, &self.present_order, &self.render_completion_await);
 
         let r = unsafe {
@@ -408,14 +770,14 @@ extern "C" fn page_flip_handler(_: libc::c_int, _: libc::c_uint, _: libc::c_uint
 pub struct NativeLink { al: PlatformAssetLoader, wh: WindowHandler }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
-    type Presenter = DrmPresenter;
+    type Presenter = EGLStreamsPresenter;
 
     fn instance_extensions(&self) -> Vec<&str> { vec!["VK_KHR_surface", "VK_KHR_display", "VK_KHR_get_physical_device_properties2", "VK_KHR_external_memory_capabilities"] }
     fn device_extensions(&self) -> Vec<&str> { vec!["VK_KHR_swapchain", "VK_KHR_external_memory", "VK_KHR_external_memory_fd"] }
 
     fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
-    fn new_presenter(&self, g: &peridot::Graphics) -> DrmPresenter {
-        DrmPresenter::new(g, &self.wh)
+    fn new_presenter(&self, g: &peridot::Graphics) -> EGLStreamsPresenter {
+        EGLStreamsPresenter::new(g, &self.wh)
     }
 }
 
@@ -465,159 +827,19 @@ fn main() {
         panic!("Failed to open egl device drm");
     }
 
-    // DisplayやContextを作る前にDRM側の準備をしておく必要がある
-    // EGLStreamsを使う場合、以下のClient Capが必要になる
-    let res = unsafe { drm::raw::drmSetClientCap(device_fd, drm::raw::DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) };
-    if res != 0 {
-        panic!("Unable to set drm client capability");
-    }
-    
-    let res = unsafe {
-        drm::raw::drmModeGetResources(device_fd).as_ref()
-            .unwrap_or_else(|| panic!("Failed to drmModeGetResources: {}", std::io::Error::last_os_error()))
-    };
-    println!("Resources: ");
-    println!("- MinGeometry: {}x{}", res.min_width, res.min_height);
-    println!("- MaxGeometry: {}x{}", res.max_width, res.max_height);
-    println!("- fbs: {}", res.count_fbs);
-    println!("- crtcs: {}", res.count_crtcs);
-    println!("- connectors: {}", res.count_connectors);
-    println!("- encoders: {}", res.count_encoders);
-
-    // find connected connector
-    let connector = res.connectors().iter()
-        .filter_map(|&cid| drm::mode::ConnectorPtr::get(device_fd, cid))
-        .find(|c| c.connection == drm::mode::Connection::Connected)
-        .expect("no available connectors");
-    println!("connector id: {}", connector.connector_id);
-
-    // find preferred or highest-resolution mode
-    let mode = connector.modes().iter().find(|m| m.is_preferred()).or_else(||
-        connector.modes().iter().map(|x| (x, x.hdisplay * x.vdisplay)).max_by_key(|&(_, k)| k).map(|(m, _)| m)
-    ).expect("no available modes?");
-    println!("selected mode: {}x{}", mode.hdisplay, mode.vdisplay);
-
-    // find encoder
-    let encoder = res.encoders().iter()
-        .filter_map(|&eid| drm::mode::EncoderPtr::get(device_fd, eid))
-        .find(|e| e.encoder_id == connector.encoder_id);
-    
-    // find crtc id
-    let crtc_id = match encoder {
-        Some(e) => e.crtc_id,
-        None => res.encoders().iter()
-            .filter_map(|&eid| drm::mode::EncoderPtr::get(device_fd, eid))
-            .filter_map(|e|
-                res.crtcs().iter().enumerate()
-                    .find(|&(crx, _)| e.has_possible_crtc_index_bit(crx))
-                    .map(|(_, &id)| id)
-            )
-            .next().expect("no available crtc id")
-    };
-    let crtc_index = res.crtcs().iter().enumerate()
-        .find(|&(_, &cid)| cid == crtc_id)
-        .expect("Failed to find crtc index").0;
-    println!("crtc id: {}", crtc_id);
-    println!("crtc index: {}", crtc_index);
-
-    // find primary plane for crtc
-    let plane_id = drm::mode::PlaneResourcesPtr::get(device_fd).expect("Failed to get plane resources")
-        .planes()
-        .iter()
-        .copied()
-        .find(|&pid| drm::mode::PlanePtr::get(device_fd, pid).map_or(false, |p| {
-            if (p.possible_crtcs & (1 << crtc_index)) == 0 { return false; }
-            let props = drm::mode::ObjectProperties::get(device_fd, pid, drm::mode::ObjectType::Plane);
-            let (prop_ids, prop_values): (&[u32], &[u64]) = props.as_ref().map_or((&[], &[]), |p| (p.props(), p.prop_values()));
-            prop_ids.iter().copied().zip(prop_values.iter().copied())
-                .find(|&(propid, _)|
-                    drm::mode::Property::get(device_fd, propid)
-                        .map_or(false, |p| p.name().to_str().map_or(false, |s| s == "type"))
-                )
-                .map_or(false, |(_, v)| v == drm::raw::DRM_PLANE_TYPE_PRIMARY)
-        }))
-        .expect("no suitable primary plane");
-    println!("primary plane id: {}", plane_id);
-
-    // create dumb buffer and fb
-    let mut dumb_info = drm::raw::drm_mode_create_dumb::new_request(mode.hdisplay as _, mode.vdisplay as _, 32, 0);
-    let r = unsafe {
-        drm::raw::drmIoctl(device_fd, drm::raw::DRM_IOCTL_MODE_CREATE_DUMB, &mut dumb_info as *mut _ as _)
-    };
-    if r < 0 {
-        panic!("Failed to create dumb buffer: {}", r);
-    }
-    let mut fb = 0;
-    let r = unsafe {
-        drm::raw::drmModeAddFB(device_fd, mode.hdisplay as _, mode.vdisplay as _, 24, 32, dumb_info.pitch, dumb_info.handle, &mut fb)
-    };
-    if r != 0 {
-        panic!("Failed to add dumb buffer as FB: {}", r);
-    }
-    println!("fb: {}", fb);
-    
-    // 先にmodesetしておく必要がある
-    let r = unsafe {
-        let mut cid = connector.connector_id;
-        drm::raw::drmModeSetCrtc(device_fd, crtc_id, fb, 0, 0, &mut cid, 1, mode as *const _ as *mut _)
-    };
-    if r != 0 { panic!("Failed to drmModeSetCrtc: {}", r); }
-
-    let egl_display = egl::DisplayRef::from_device(
-        &egl_device,
-        &[egl::raw::EGL_DRM_MASTER_FD_EXT, device_fd, egl::raw::EGL_NONE as _]
-    ).expect("Failed to get display");
-    let (major, minor) = egl::initialize(egl_display).expect("Failed to initialize EGL");
-    println!("egl version: {}.{}", major, minor);
-    println!("egl vendor: {}", egl_display.vendor_name().expect("no vendor name").to_str().expect("invalid sequence"));
-
-    if !egl::bind_api(egl::API::OpenGL) { panic!("Failed to bind api"); }
-    let cfg = egl::Config::choose(egl_display, &[
-        egl::raw::EGL_SURFACE_TYPE as _, egl::raw::EGL_STREAM_BIT_KHR as _,
-        egl::raw::EGL_RENDERABLE_TYPE as _, egl::raw::EGL_OPENGL_BIT as _,
-        egl::raw::EGL_RED_SIZE as _, 1,
-        egl::raw::EGL_GREEN_SIZE as _, 1,
-        egl::raw::EGL_BLUE_SIZE as _, 1,
-        egl::raw::EGL_ALPHA_SIZE as _, 0,
-        egl::raw::EGL_DEPTH_SIZE as _, 1,
-        egl::raw::EGL_NONE as _
-    ]).expect("Failed to choose config");
-    let ctx = egl::Context::new(egl_display, Some(cfg), None, &[egl::raw::EGL_NONE as _])
-        .expect("Failed to create egl context");
-    
-    let output_layer = egl::OutputLayer::get_first_layer(egl_display, &[
-        egl::raw::EGL_DRM_PLANE_EXT as _, plane_id as _, egl::raw::EGL_NONE
-    ]).expect("Failed to get first output layer plane");
-    let stream = egl::Stream::new(egl_display, &[egl::raw::EGL_NONE as _]).expect("Failed to create stream");
-    if !stream.set_consumer_output(output_layer) {
-        panic!("Failed to set stream consumer output");
-    }
-    let surface = egl::Surface::new_stream_producer(egl_display, cfg, &stream, &[
-        egl::raw::EGL_WIDTH as _, mode.hdisplay as _,
-        egl::raw::EGL_HEIGHT as _, mode.vdisplay as _,
-        egl::raw::EGL_NONE as _
-    ]).expect("Failed to create producer surface");
-    if !ctx.make_current(Some(&surface), Some(&surface)) {
-        panic!("MakeCurrent failed");
-    }
-
     let mut page_flip_completion_signal = false;
     let mut gd = GameDriver::new(
-        WindowHandler { device_fd, page_flip_completion_signal: &mut page_flip_completion_signal as _ }
+        WindowHandler {
+            device_fd,
+            egl_device,
+            page_flip_completion_signal: &mut page_flip_completion_signal as _
+        }
     );
 
-    let mut drm_event_context = drm::raw::drmEventContext {
-        version: 2,
-        vblank_handler: None,
-        page_flip_handler: Some(page_flip_handler),
-        page_flip_handler2: None,
-        sequence_handler: None
-    };
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
-    ep.add_fd(device_fd, libc::EPOLLIN as _, 0).expect("Failed to add drm fd");
+    // ep.add_fd(device_fd, libc::EPOLLIN as _, 0).expect("Failed to add drm fd");
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
-    gd.update();
     let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2 + input.managed_devices_count()];
     'app: loop {
         if events.len() != 2 + input.managed_devices_count() {
@@ -626,14 +848,15 @@ fn main() {
         }
 
         let count = ep.wait(&mut events, Some(1)).expect("Failed to waiting epoll");
+        if count == 0 { gd.update(); }
         for e in &events[..count as usize] {
-            if e.u64 == 0 {
+            /*if e.u64 == 0 {
                 unsafe { drm::raw::drmHandleEvent(device_fd, &mut drm_event_context); }
                 if page_flip_completion_signal {
                     page_flip_completion_signal = false;
                     gd.update();
                 }
-            } else if e.u64 == 1 {
+            } else*/ if e.u64 == 1 {
                 input.process_monitor_event(&ep);
             } else {
                 input.process_device_event(gd.engine.input(), e.u64);

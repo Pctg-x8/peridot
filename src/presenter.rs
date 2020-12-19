@@ -14,7 +14,7 @@ pub trait PlatformPresenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &crate::Graphics,
-        last_render_fence: &br::Fence,
+        last_render_fence: &mut crate::StateFence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
         render_submission: br::SubmissionBatch<'s>,
@@ -114,7 +114,7 @@ impl IntegratedSwapchain {
     pub fn render_and_present<'s>(
         &'s mut self,
         g: &crate::Graphics,
-        last_render_fence: &br::Fence,
+        last_render_fence: &mut crate::StateFence,
         q: &br::Queue,
         bb_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
@@ -128,7 +128,7 @@ impl IntegratedSwapchain {
                 (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
             ]);
             render_submission.signal_semaphores.to_mut().push(&self.present_order);
-            g.submit_buffered_commands(&[cs, render_submission], last_render_fence)
+            g.submit_buffered_commands(&[cs, render_submission], last_render_fence.object())
                 .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
@@ -136,9 +136,10 @@ impl IntegratedSwapchain {
             render_submission.wait_semaphores.to_mut().push(
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
             );
-            g.submit_buffered_commands(&[render_submission], last_render_fence)
+            g.submit_buffered_commands(&[render_submission], last_render_fence.object())
                 .expect("Failed to submit render commands");
         }
+        unsafe { last_render_fence.signal(); }
 
         self.swapchain.get().swapchain.queue_present(q, bb_index, &[&self.present_order])
     }
