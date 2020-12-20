@@ -35,7 +35,7 @@ impl Default for RenderingConfigure {
         RenderingConfigure {
             primitive_type: PrimitiveType::TriangleList,
             is_wire_frame: false,
-            line_width: Real::from_valid_f32(1.0).unwrap()
+            line_width: Real::from_valid_f32(1.0).expect("condition failed")
         }
     }
 }
