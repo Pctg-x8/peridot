@@ -1,0 +1,11 @@
+[package]
+name = "peridot-scene-graph"
+description = "Peridot: Scene Graph Module"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+peridot-math = { path = "../math" }
