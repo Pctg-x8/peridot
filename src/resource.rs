@@ -190,6 +190,15 @@ impl BulkedResourceStorageAllocator {
 
         self.images.len() - 1
     }
+    pub fn add_images(&mut self, images: impl IntoIterator<Item = br::Image>) -> usize {
+        let iter = images.into_iter();
+        let (min, _) = iter.size_hint();
+        if self.images.capacity() < self.images.len() + min { self.images.reserve(min); }
+        let first_id = self.images.len();
+        for x in iter { self.add_image(x); }
+
+        first_id
+    }
 
     pub fn alloc(self, g: &Graphics) -> br::Result<ResourceStorage> {
         let mt = g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, self.memory_type_bitmask)
@@ -712,16 +721,15 @@ impl DeviceWorkingTextureAllocator<'_>
         let images2 = self.planes.iter().map(|d| d.create(g));
         let images3 = self.volumes.iter().map(|d| d.create(g));
         let images: Vec<_> = images2.chain(images3).collect::<Result<_, _>>()?;
-        let mut mb = MemoryBadget::new(g);
-        for img in images { mb.add(img); }
-        let mut bound_images = mb.alloc()?;
+        let mut storage_alloc = BulkedResourceStorageAllocator::new();
+        storage_alloc.add_images(images);
+        let ResourceStorage { images: mut bound_images, .. } = storage_alloc.alloc(g)?;
         
         let v3s = bound_images.split_off(bound_images.len() - self.volumes.len());
         Ok(DeviceWorkingTextureStore
         {
             planes: self.planes.into_iter().zip(bound_images.into_iter()).map(|(d, res)|
             {
-                let res = res.unwrap_image();
                 let view = res.create_view(
                     None, None, &br::ComponentMapping::default(),
                     &br::ImageSubresourceRange::color(0..1, 0..1)
@@ -737,7 +745,6 @@ impl DeviceWorkingTextureAllocator<'_>
             }).collect::<Result<_, _>>()?,
             volumes: self.volumes.into_iter().zip(v3s.into_iter()).map(|(d, res)|
             {
-                let res = res.unwrap_image();
                 let view = res.create_view(
                     None, None, &br::ComponentMapping::default(),
                     &br::ImageSubresourceRange::color(0..1, 0..1)
