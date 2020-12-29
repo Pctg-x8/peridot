@@ -244,6 +244,7 @@ impl ResourceStorage {
     pub fn get_image(&self, index: usize) -> Option<&Image> { self.images.get(index) }
 }
 
+#[deprecated = "use BulkedResourceStorageAllocator and ResourceStorage for more efficient memory allocation"]
 pub struct MemoryBadget<'g>
 {
     g: &'g Graphics, entries: Vec<(MemoryBadgetEntry, u64)>, total_size: u64,
@@ -282,6 +283,7 @@ impl MemoryBoundResource
         match self { MemoryBoundResource::Image(b) => b, _ => panic!("Not an image") }
     }
 }
+#[allow(deprecated)]
 impl<'g> MemoryBadget<'g>
 {
     pub fn new(g: &'g Graphics) -> Self
