@@ -22,6 +22,7 @@ pub use self::window::SurfaceInfo;
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
 pub mod utils; pub use self::utils::*;
+pub mod atlas;
 
 mod asset; pub use self::asset::*;
 mod input; pub use self::input::*;

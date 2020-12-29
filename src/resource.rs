@@ -180,7 +180,7 @@ impl BulkedResourceStorageAllocator {
         
         self.buffers.len() - 1
     }
-    pub fn add_images(&mut self, image: br::Image) -> usize {
+    pub fn add_image(&mut self, image: br::Image) -> usize {
         let req = image.requirements();
         let new_offset = align2!(self.images_top, req.alignment);
         self.images.push((image, new_offset));
