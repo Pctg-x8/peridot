@@ -2,7 +2,7 @@
 use bedrock as br;
 
 pub struct Game<NL> {
-    charatlas: peridot::atlas::DynamicTextureAtlas<peridot::atlas::BookshelfBinning>,
+    charatlas: peridot::DynamicTextureAtlas<peridot::BookshelfBinning>,
     res_storage: peridot::ResourceStorage,
     marker: std::marker::PhantomData<*const NL>
 }
@@ -14,7 +14,7 @@ impl<NL> peridot::FeatureRequests for Game<NL> {}
 impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn init(e: &mut peridot::Engine<NL>) -> Self {
         let mut res_storage_alloc = peridot::BulkedResourceStorageAllocator::new();
-        let charatlas = peridot::atlas::DynamicTextureAtlas::new(
+        let charatlas = peridot::DynamicTextureAtlas::new(
             e.graphics(), peridot::math::Vector2(1024, 1024), br::vk::VK_FORMAT_R8_UNORM,
             &mut res_storage_alloc
         ).expect("Failed to create Dynamic Texture Atlas for Characters");
