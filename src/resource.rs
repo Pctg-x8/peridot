@@ -96,7 +96,7 @@ impl BufferContent
     }
 }
 macro_rules! align2 {
-    ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
+    ($v: expr, $a: expr) => (if $a == 0 { $v } else { ($v + ($a - 1)) & !($a - 1) })
 }
 #[derive(Clone)]
 pub struct BufferPrealloc<'g> {
