@@ -28,7 +28,7 @@ impl<B: BinningAlgorithm> DynamicTextureAtlas<B> {
             size
         })
     }
-    pub fn resource_entity(&self, storage: &crate::ResourceStorage) -> &crate::Image {
+    pub fn resource_entity<'s>(&self, storage: &'s crate::ResourceStorage) -> &'s crate::Image {
         storage.get_image(self.resource_index).expect("invalid storage")
     }
 
