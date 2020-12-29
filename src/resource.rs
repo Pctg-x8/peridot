@@ -151,6 +151,99 @@ impl ResourceTiling
     fn is_additional_alignment_required(self, other: Self) -> bool { self != other }
 }
 
+pub struct BulkedResourceStorageAllocator {
+    buffers: Vec<(br::Buffer, u64)>,
+    images: Vec<(br::Image, u64)>,
+    buffers_top: u64,
+    images_top: u64,
+    images_align_requirement: u64,
+    memory_type_bitmask: u32
+}
+impl BulkedResourceStorageAllocator {
+    pub fn new() -> Self {
+        BulkedResourceStorageAllocator {
+            buffers: Vec::new(),
+            images: Vec::new(),
+            buffers_top: 0,
+            images_top: 0,
+            images_align_requirement: 0,
+            memory_type_bitmask: std::u32::MAX
+        }
+    }
+
+    pub fn add_buffer(&mut self, buffer: br::Buffer) -> usize {
+        let req = buffer.requirements();
+        let new_offset = align2!(self.buffers_top, req.alignment);
+        self.buffers.push((buffer, new_offset));
+        self.memory_type_bitmask &= req.memoryTypeBits;
+        self.buffers_top = new_offset + req.size;
+        
+        self.buffers.len() - 1
+    }
+    pub fn add_images(&mut self, image: br::Image) -> usize {
+        let req = image.requirements();
+        let new_offset = align2!(self.images_top, req.alignment);
+        self.images.push((image, new_offset));
+        self.memory_type_bitmask &= req.memoryTypeBits;
+        self.images_top = new_offset + req.size;
+        self.images_align_requirement = self.images_align_requirement.lcm(&req.alignment);
+
+        self.images.len() - 1
+    }
+
+    pub fn alloc(self, g: &Graphics) -> br::Result<ResourceStorage> {
+        let mt = g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, self.memory_type_bitmask)
+            .expect("No Device-Local Memory");
+        let images_base = align2!(self.buffers_top, self.images_align_requirement);
+        let total_size = images_base + self.images_top;
+        info!(
+            target: "peridot",
+            "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
+            total_size, mt, self.memory_type_bitmask
+        );
+        let mem = Rc::new(br::DeviceMemory::allocate(&g.device, total_size as _, mt)?);
+
+        Ok(ResourceStorage {
+            buffers: self.buffers.into_iter()
+                .map(|(b, o)| Buffer::bound(b, &mem, o))
+                .collect::<Result<_, _>>()?,
+            images: self.images.into_iter()
+                .map(|(i, o)| Image::bound(i, &mem, o + images_base))
+                .collect::<Result<_, _>>()?
+        })
+    }
+    pub fn alloc_upload(self, g: &Graphics) -> br::Result<ResourceStorage> {
+        let mt = g.memory_type_index_for(
+            br::MemoryPropertyFlags::HOST_VISIBLE.host_coherent(), self.memory_type_bitmask
+        ).expect("No Host-Visible Memory");
+        let images_base = align2!(self.buffers_top, self.images_align_requirement);
+        let total_size = images_base + self.images_top;
+        info!(
+            target: "peridot",
+            "Allocating Upload Memory: {} bytes in 0x{:x}(?0x{:x})",
+            total_size, mt, self.memory_type_bitmask
+        );
+        let mem = Rc::new(br::DeviceMemory::allocate(&g.device, total_size as _, mt)?);
+
+        Ok(ResourceStorage {
+            buffers: self.buffers.into_iter()
+                .map(|(b, o)| Buffer::bound(b, &mem, o))
+                .collect::<Result<_, _>>()?,
+            images: self.images.into_iter()
+                .map(|(i, o)| Image::bound(i, &mem, o + images_base))
+                .collect::<Result<_, _>>()?
+        })
+    }
+}
+pub struct ResourceStorage {
+    buffers: Vec<Buffer>,
+    images: Vec<Image>
+}
+impl ResourceStorage {
+    pub fn get_buffer(&self, index: usize) -> Option<&Buffer> { self.buffers.get(index) }
+    pub fn get_image(&self, index: usize) -> Option<&Image> { self.images.get(index) }
+}
+
 pub struct MemoryBadget<'g>
 {
     g: &'g Graphics, entries: Vec<(MemoryBadgetEntry, u64)>, total_size: u64,
