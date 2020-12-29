@@ -28,6 +28,9 @@ impl<B: BinningAlgorithm> DynamicTextureAtlas<B> {
             size
         })
     }
+    pub fn resource_entity(&self, storage: &crate::ResourceStorage) -> &crate::Image {
+        storage.get_image(self.resource_index).expect("invalid storage")
+    }
 
     pub fn request_rect(&mut self, size: &math::Vector2<u32>) -> Option<TextureSlice> {
         self.binning.request_rect(size)
