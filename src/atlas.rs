@@ -2,6 +2,7 @@
 
 use bedrock as br;
 
+#[derive(Clone, Debug)]
 pub struct TextureSlice {
     pub offset: math::Vector2<u32>,
     pub size: math::Vector2<u32>

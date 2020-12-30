@@ -465,6 +465,18 @@ impl DeviceBufferView<'_> {
     }
 }
 
+/// A view of the buffer in GPU Address, holds object reference count
+#[derive(Clone)]
+pub struct DeviceBufferViewHold { pub buffer: Buffer, pub offset: br::vk::VkDeviceSize }
+impl Buffer {
+    pub fn hold_with_dev_offset(&self, offset: br::vk::VkDeviceSize) -> DeviceBufferViewHold {
+        DeviceBufferViewHold { buffer: self.clone(), offset }
+    }
+}
+impl DeviceBufferViewHold {
+    pub fn to_unhold_view(&self) -> DeviceBufferView { DeviceBufferView { buffer: &self.buffer, offset: self.offset } }
+}
+
 #[derive(Clone, Copy)] #[repr(i32)]
 pub enum PixelFormat
 {

@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = "../.." }
+peridot-vg = { path = "../../vg" }
