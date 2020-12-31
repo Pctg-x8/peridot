@@ -1,12 +1,8 @@
 //! Peridot Vector Graphics Dept. powered by Pathfinder 2(lyon)
 
-extern crate bedrock;
-extern crate peridot;
-extern crate pathfinder_partitioner;
-extern crate lyon_path; extern crate euclid;
+use log::*;
 
-extern crate font_kit; mod font; pub use font::*;
-use font_kit::{error::GlyphLoadingError, hinting::HintingOptions};
+mod font; pub use font::*;
 
 use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, builder::Builder};
 // use lyon_path::PathEvent;
@@ -72,20 +68,24 @@ impl Context
 
     pub fn text(&mut self, font: &Font, text: &str) -> Result<&mut Self, GlyphLoadingError>
     {
-        let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or(0));
+        let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or_default());
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
         for g in glyphs
         {
-            let (adv, size) = (font.advance(g)?, font.bounds(g)?);
+            println!("Rendering Glyph: {:?}", g);
+            let (adv, size) = (font.advance_h(g)?, font.bounds(g)?);
             let mut g0 = Partitioner::new();
             let tf = self.current_transform.post_translate(Vector2D::new(left_offs, -font.ascent()))
                 .post_scale(font.scale_value() * self.screen_scaling, font.scale_value() * self.screen_scaling);
-            font.outline(g, HintingOptions::None, g0.builder_mut())?;
-            g0.partition(FillRule::Winding);
-            g0.builder_mut().build_and_reset();
-            let (st, ext) = tfconv_st_ext(tf);
-            self.meshes.push((g0.into_mesh(), st, ext));
-            left_offs += adv.x(); max_height = max_height.max(size.size.height);
+            if font.outline(g, g0.builder_mut()).is_ok()
+            {
+                g0.partition(FillRule::Winding);
+                g0.builder_mut().build_and_reset();
+                let (st, ext) = tfconv_st_ext(tf);
+                self.meshes.push((g0.into_mesh(), st, ext));
+            }
+            left_offs += adv; max_height = max_height.max(size.size.height);
+            info!("Advance: {}", adv);
         }
         return Ok(self);
     }

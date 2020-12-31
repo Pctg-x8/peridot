@@ -12,7 +12,7 @@ use winapi::shared::windef::{RECT, HWND};
 use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
 
 use std::mem::MaybeUninit;
-#[macro_use] extern crate log;
+use log::*;
 mod input;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
@@ -144,7 +144,6 @@ fn process_message_all() -> bool
     true
 }
 
-use std::rc::Rc;
 use std::path::PathBuf;
 
 struct AssetProvider { base: PathBuf }

@@ -235,6 +235,114 @@ impl<T> From<T> for Discardable<T>
     fn from(v: T) -> Self { Discardable(RefCell::new(Some(v))) }
 }
 
+use br::vk::{
+    VkMemoryType,
+    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+    VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+    VK_MEMORY_PROPERTY_PROTECTED_BIT
+};
+
+pub struct MemoryType(u32, VkMemoryType);
+impl MemoryType
+{
+    pub fn index(&self) -> u32 { self.0 }
+    pub fn corresponding_mask(&self) -> u32 { 0x01 << self.0 }
+    pub fn has_property_flags(&self, other: br::MemoryPropertyFlags) -> bool
+    {
+        (self.1.propertyFlags & other.bits()) != 0
+    }
+    pub fn is_host_coherent(&self) -> bool { self.has_property_flags(br::MemoryPropertyFlags::HOST_COHERENT) }
+    pub fn is_host_cached(&self) -> bool { self.has_property_flags(br::MemoryPropertyFlags::HOST_CACHED) }
+}
+impl std::fmt::Debug for MemoryType
+{
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
+    {
+        let mut flags = Vec::with_capacity(7);
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 { flags.push("DEVICE LOCAL"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 { flags.push("HOST VISIBLE"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 { flags.push("CACHED"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 { flags.push("COHERENT"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0
+        {
+            flags.push("LAZILY ALLOCATED");
+        }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
+
+        write!(fmt, "{}: [{}] in heap #{}", self.index(), flags.join("/"), self.1.heapIndex)
+    }
+}
+pub struct MemoryTypeManager
+{
+    device_memory_types: Vec<MemoryType>,
+    host_memory_types: Vec<MemoryType>
+}
+impl MemoryTypeManager
+{
+    pub fn new(pd: &br::PhysicalDevice) -> Self
+    {
+        let mem = pd.memory_properties();
+        let (device_memory_types, host_memory_types): (Vec<_>, Vec<_>) = mem.types().enumerate().map(|(n, mt)| {
+            let is_device_local = (mt.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+            let is_host_visible = (mt.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+
+            (
+                if is_device_local { MemoryType(n as _, mt.clone()).into() } else { None },
+                if is_host_visible { MemoryType(n as _, mt.clone()).into() } else { None }
+            )
+        }).unzip();
+
+        MemoryTypeManager
+        {
+            device_memory_types: device_memory_types.into_iter().filter_map(|x| x).collect(),
+            host_memory_types: host_memory_types.into_iter().filter_map(|x| x).collect()
+        }
+    }
+
+    pub fn exact_host_visible_index(&self, mask: u32, required: br::MemoryPropertyFlags) -> Option<&MemoryType>
+    {
+        self.host_memory_types.iter()
+            .find(|mt| (mask & mt.corresponding_mask()) != 0 && mt.has_property_flags(required))
+    }
+    pub fn host_visible_index(&self, mask: u32, preference: br::MemoryPropertyFlags) -> Option<&MemoryType>
+    {
+        self.exact_host_visible_index(mask, preference)
+            .or_else(|| self.host_memory_types.iter().find(|mt| (mask & mt.corresponding_mask()) != 0))
+    }
+    pub fn device_local_index(&self, mask: u32) -> Option<&MemoryType>
+    {
+        self.device_memory_types.iter().find(|mt| (mask & mt.corresponding_mask()) != 0)
+    }
+
+    fn diagnose_heaps(p: &br::PhysicalDevice)
+    {
+        info!("Memory Heaps: ");
+        for (n, &br::vk::VkMemoryHeap { size, flags }) in p.memory_properties().heaps().enumerate()
+        {
+            let (mut nb, mut unit) = (size as f32, "bytes");
+            if nb >= 10000.0 { nb /= 1024.0; unit = "KB"; }
+            if nb >= 10000.0 { nb /= 1024.0; unit = "MB"; }
+            if nb >= 10000.0 { nb /= 1024.0; unit = "GB"; }
+            if (flags & br::vk::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0
+            {
+                info!("  #{}: {} {} [DEVICE LOCAL]", n, nb, unit);
+            }
+            else { info!("  #{}: {} {}", n, nb, unit); }
+        }
+    }
+    fn diagnose_types(&self)
+    {
+        info!("Device Memory Types: ");
+        for mt in &self.device_memory_types { info!("  {:?}", mt); }
+        info!("Host Visible Memory Types: ");
+        for mt in &self.host_memory_types { info!("  {:?}", mt); }
+    }
+}
+
 /// Queue object with family index
 pub struct Queue { q: br::Queue, family: u32 }
 /// Graphics manager
@@ -244,7 +352,7 @@ pub struct Graphics
     graphics_queue: Queue,
     #[cfg(debug_assertions)] _d: DebugReport,
     cp_onetime_submit: br::CommandPool,
-    memory_type_index_cache: RefCell<BTreeMap<(u32, u32), u32>>
+    pub memory_type_manager: MemoryTypeManager
 }
 impl Graphics
 {
@@ -275,7 +383,9 @@ impl Graphics
         #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
         #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
-        Self::diag_memory_properties(&adapter.memory_properties());
+        let memory_type_manager = MemoryTypeManager::new(&adapter);
+        MemoryTypeManager::diagnose_heaps(&adapter);
+        memory_type_manager.diagnose_types();
         let gqf_index = adapter.queue_family_properties().find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("No graphics queue");
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
@@ -294,55 +404,8 @@ impl Graphics
             graphics_queue: Queue { q: device.queue(gqf_index, 0), family: gqf_index },
             instance, adapter, device,
             #[cfg(debug_assertions)] _d,
-            memory_type_index_cache: RefCell::new(BTreeMap::new())
+            memory_type_manager
         });
-    }
-
-    fn diag_memory_properties(mp: &br::MemoryProperties)
-    {
-        info!("Memory Heaps: ");
-        for (n, &br::vk::VkMemoryHeap { size, flags }) in mp.heaps().enumerate()
-        {
-            let (mut nb, mut unit) = (size as f32, "bytes");
-            if nb >= 10000.0 { nb /= 1024.0; unit = "KB"; }
-            if nb >= 10000.0 { nb /= 1024.0; unit = "MB"; }
-            if nb >= 10000.0 { nb /= 1024.0; unit = "GB"; }
-            if (flags & br::vk::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0
-            {
-                info!("  #{}: {} {} [DEVICE LOCAL]", n, nb, unit);
-            }
-            else { info!("  #{}: {} {}", n, nb, unit); }
-        }
-        info!("Memory Types: ");
-        for (n, ty) in mp.types().enumerate()
-        {
-            let mut flags = Vec::with_capacity(6);
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 { flags.push("DEVICE LOCAL"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 { flags.push("HOST VISIBLE"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 { flags.push("CACHED"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 { flags.push("COHERENT"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0
-            {
-                flags.push("LAZILY ALLOCATED");
-            }
-            info!("  {}: [{}] in heap #{}", n, flags.join("/"), ty.heapIndex);
-        }
-    }
-
-    pub fn memory_type_index_for(&self, mask: br::MemoryPropertyFlags, index_mask: u32) -> Option<u32>
-    {
-        if let Some(&mi) = self.memory_type_index_cache.borrow().get(&(mask.bits(), index_mask)) { return Some(mi); }
-        for (n, m) in self.adapter.memory_properties().types().enumerate()
-        {
-            let lazily_allocated = (m.propertyFlags & br::MemoryPropertyFlags::LAZILY_ALLOCATED.bits()) != 0;
-            if ((1 << n) & index_mask) != 0 && (m.propertyFlags & mask.bits()) == mask.bits() && !lazily_allocated
-            {
-                self.memory_type_index_cache.borrow_mut().insert((mask.bits(), index_mask), n as _);
-                return Some(n as _);
-            }
-        }
-        return None;
     }
     
     /// Submits any commands as transient commands.

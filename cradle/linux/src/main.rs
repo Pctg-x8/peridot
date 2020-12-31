@@ -1,5 +1,6 @@
 
 #[macro_use] extern crate log;
+#[macro_use] extern crate peridot_derive;
 
 use std::fs::File;
 use std::path::PathBuf;

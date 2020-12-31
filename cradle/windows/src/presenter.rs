@@ -113,9 +113,9 @@ impl InteropBackbufferResource {
         let memory = br::DeviceMemory::import_win32(
             &g,
             image_mreq.size as _,
-            g.memory_type_index_for(
-                br::MemoryPropertyFlags::DEVICE_LOCAL, image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits
-            ).expect("Failed to find matching memory type for importing"),
+            g.memory_type_manager.device_local_index(
+                image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits
+            ).expect("Failed to find matching memory type for importing").index(),
             br::ExternalMemoryHandleTypeWin32::D3D12Resource,
             shared_handle.handle(),
             &hname

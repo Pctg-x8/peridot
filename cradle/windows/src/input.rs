@@ -13,6 +13,7 @@ use winapi::shared::windef::{HWND, POINT};
 use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use peridot::{NativeButtonInput, NativeAnalogInput};
 use std::cell::RefCell;
+use log::*;
 
 pub struct RawInputHandler {}
 impl RawInputHandler {

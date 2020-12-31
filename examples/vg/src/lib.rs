@@ -1,7 +1,7 @@
 
 use std::marker::PhantomData;
-#[macro_use] extern crate log;
-#[macro_use] extern crate peridot_derive;
+use log::*;
+use peridot_derive::SpecConstantStorage;
 extern crate bedrock as br; use br::traits::*;
 use peridot::{CommandBundle, LayoutedPipeline, Buffer, BufferPrealloc, MemoryBadget, ModelData,
     TransferBatch, DescriptorSetUpdateBatch, CBSubmissionType, RenderPassTemplates, DefaultRenderCommands,
@@ -40,7 +40,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
     fn init(e: &mut peridot::Engine<PL>) -> Self
     {
-        let font = pvg::Font::best_match(&[pvg::FamilyName::SansSerif], &pvg::FontProperties::new(), 12.0)
+        let font_provider = pvg::FontProvider::new().expect("FontProvider initialization error");
+        let font = font_provider.best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
             .expect("No Fonts");
         let mut ctx = pvg::Context::new(2.0);
         ctx.text(&font, "Hello, World!|Opaque").expect("Text Rendering failed");
@@ -201,7 +202,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let mut gpb = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), interior_vertex_processing);
         gpb.multisample_state(Some(br::MultisampleState::new()));
         gpb.viewport_scissors(br::DynamicArrayState::Static(&vp), br::DynamicArrayState::Static(&sc))
-            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
+            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
+            .multisample_state(Some(br::MultisampleState::new()));
         let gp = LayoutedPipeline::combine(gpb.create(&e.graphics(), None).expect("Create GraphicsPipeline"), &pl);
         gpb.vertex_processing_mut().fragment_shader_mut().expect("Fragment shader not exist?").specinfo =
             Some(VgRendererFragmentFixedColor { r: 0.0, g: 0.5, b: 1.0, a: 1.0 }.as_pair());
