@@ -201,13 +201,14 @@ impl BulkedResourceStorageAllocator {
     }
 
     pub fn alloc(self, g: &Graphics) -> br::Result<ResourceStorage> {
-        let mt = g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, self.memory_type_bitmask)
-            .expect("No Device-Local Memory");
+        let mt = g.memory_type_manager.device_local_index(self.memory_type_bitmask)
+            .expect("No device-local memory")
+            .index();
         let images_base = align2!(self.buffers_top, self.images_align_requirement);
         let total_size = images_base + self.images_top;
         info!(
             target: "peridot",
-            "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
+            "Allocating Device Memory: {} bytes in {}(?0x{:x})",
             total_size, mt, self.memory_type_bitmask
         );
         let mem = Rc::new(br::DeviceMemory::allocate(&g.device, total_size as _, mt)?);
@@ -222,9 +223,10 @@ impl BulkedResourceStorageAllocator {
         })
     }
     pub fn alloc_upload(self, g: &Graphics) -> br::Result<ResourceStorage> {
-        let mt = g.memory_type_index_for(
-            br::MemoryPropertyFlags::HOST_VISIBLE.host_coherent(), self.memory_type_bitmask
-        ).expect("No Host-Visible Memory");
+        let mt = g.memory_type_manager
+            .exact_host_visible_index(self.memory_type_bitmask, br::MemoryPropertyFlags::HOST_COHERENT)
+            .expect("No host-visible memory")
+            .index();
         let images_base = align2!(self.buffers_top, self.images_align_requirement);
         let total_size = images_base + self.images_top;
         info!(
