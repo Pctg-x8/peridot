@@ -218,8 +218,9 @@ impl<'g> MemoryBadget<'g>
     }
     pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>>
     {
-        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::DEVICE_LOCAL, self.memory_type_bitmask)
-            .expect("No Device-Local Memory");
+        let mt = self.g.memory_type_manager.device_local_index(self.memory_type_bitmask)
+            .expect("No device-local memory")
+            .index();
         info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
@@ -230,16 +231,18 @@ impl<'g> MemoryBadget<'g>
             MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
         }).collect()
     }
-    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>>
-    {
-        let mt = self.g.memory_type_index_for(br::MemoryPropertyFlags::HOST_VISIBLE.host_coherent(),
-            self.memory_type_bitmask).expect("No Host-Visible memory");
+    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>> {
+        let mt = self.g.memory_type_manager.host_visible_index(
+            self.memory_type_bitmask, br::MemoryPropertyFlags::HOST_COHERENT
+        ).expect("No host-visible memory");
+        if !mt.is_host_coherent() {
+            warn!("ENGINE TODO: non-coherent memory requires expicit flushing operations");
+        }
         info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
-            self.total_size, mt, self.memory_type_bitmask);
-        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
+            self.total_size, mt.index(), self.memory_type_bitmask);
+        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt.index())?.into();
         
-        self.entries.into_iter().map(|(x, o)| match x
-        {
+        self.entries.into_iter().map(|(x, o)| match x {
             MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
             MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
         }).collect()
