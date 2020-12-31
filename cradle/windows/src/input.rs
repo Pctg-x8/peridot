@@ -15,8 +15,7 @@ use peridot::{NativeButtonInput, NativeAnalogInput};
 use std::cell::RefCell;
 use log::*;
 
-pub struct RawInputHandler {
-}
+pub struct RawInputHandler {}
 impl RawInputHandler {
     pub fn init() -> Self {
         let ri_devices = [

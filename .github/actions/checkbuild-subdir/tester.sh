@@ -13,5 +13,5 @@ run_test() {
 }
 
 for c in */Cargo.toml; do
-    (cd $(dirname $c) && run_test)
+    (cd $(dirname $c) && run_test) || exit $?
 done
