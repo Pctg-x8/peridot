@@ -200,11 +200,11 @@ impl FontProvider
         let family = collection.font_family(family_index)?;
         let font_style = if properties.italic
         {
-            comdrive::dwrite::FontStyle::Italic
+            comdrive::dwrite::FONT_STYLE_ITALIC
         }
         else
         {
-            comdrive::dwrite::FontStyle::None
+            comdrive::dwrite::FONT_STYLE_NORMAL
         };
         let font = family.first_matching_font(properties.weight as _, comdrive::dwrite::FONT_STRETCH_NORMAL,
             font_style)?;
