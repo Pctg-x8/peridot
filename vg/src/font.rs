@@ -295,20 +295,20 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; self.0.set_size(size); }
-    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     pub fn ascent(&self) -> f32 { self.0.ascender() as _ }
 
-    pub(crate) fn glyph_id(&self, c: char) -> Option<(usize, u32)>
+    pub fn glyph_id(&self, c: char) -> Option<(usize, u32)>
     {
         self.0.char_index(c)
     }
-    pub(crate) fn advance_h(&self, glyph: (usize, u32)) -> Result<f32, GlyphLoadingError>
+    pub fn advance_h(&self, glyph: (usize, u32)) -> Result<f32, GlyphLoadingError>
     {
         self.0.get(glyph.0).load_glyph(glyph.1)?;
 
         Ok(self.0.get(glyph.0).glyph_advance().x as f32 / 64.0)
     }
-    pub(crate) fn bounds(&self, glyph: (usize, u32)) -> Result<Rect<f32>, GlyphLoadingError>
+    pub fn bounds(&self, glyph: (usize, u32)) -> Result<Rect<f32>, GlyphLoadingError>
     {
         let fnt = self.0.get(glyph.0);
         fnt.load_glyph(glyph.1)?;
@@ -319,7 +319,7 @@ impl Font
             euclid::size2(m.width as f32 * 64.0, m.height as f32 * 64.0)
         ))
     }
-    pub(crate) fn outline<B: PathBuilder>(&self, glyph: (usize, u32), builder: &mut B) -> Result<(), GlyphLoadingError>
+    pub fn outline<B: PathBuilder>(&self, glyph: (usize, u32), builder: &mut B) -> Result<(), GlyphLoadingError>
     {
         self.0.get(glyph.0).load_glyph(glyph.1)?;
         self.0.get(glyph.0).decompose_outline(builder);

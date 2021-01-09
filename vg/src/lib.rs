@@ -3,6 +3,8 @@
 use log::*;
 
 mod font; pub use font::*;
+pub mod sdf_generator;
+pub use self::sdf_generator::SDFGenerator;
 
 use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, builder::Builder};
 // use lyon_path::PathEvent;
