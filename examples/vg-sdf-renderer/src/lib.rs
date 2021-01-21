@@ -47,7 +47,9 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
         let (figure_triangle_fans_count, figure_curve_triangles_count, outline_rects_count) = figure_vertices.iter()
-            .fold((0, 0, 0), |(t, t2, t3), f| (t + f.triangle_fans.len(), t2 + f.curve_triangles.len(), t3 + f.parabola_rects.len()));
+            .fold((0, 0, 0), |(t, t2, t3), f| (
+                t + f.triangle_fans.len(), t2 + f.curve_triangles.len(), t3 + f.parabola_rects.len()
+            ));
 
         let mut bp = peridot::BufferPrealloc::new(e.graphics());
         let flip_fill_rect = bp.add(
