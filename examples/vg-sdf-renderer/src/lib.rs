@@ -35,11 +35,12 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let backbuffer_size = AsRef::<br::Extent2D>::as_ref(e.backbuffer(0).expect("no backbuffer?").size()).clone();
 
         let font = peridot_vg::FontProvider::new().expect("Failed to create font provider")
-            .best_match("sans-serif", &peridot_vg::FontProperties::default(), 240.0)
+            .best_match("sans-serif", &peridot_vg::FontProperties::default(), 120.0)
             .expect("no suitable font");
-        let gid = font.glyph_id('る').expect("no glyph contained");
+        let gid = font.glyph_id('A').expect("no glyph contained");
         const SDF_SIZE: f32 = 32.0;
         let mut gen = peridot_vg::SDFGenerator::new(1.0, SDF_SIZE);
+        gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(0.0, -font.ascent() - SDF_SIZE));
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
         let (figure_triangle_fans_count, figure_curve_triangles_count, outline_rects_count) = figure_vertices.iter()

@@ -675,8 +675,8 @@ mod tests
         assert_eq!(Vector3(6, 7, 8) - Vector3(3, 4, 5), Vector3(3, 3, 3));
         assert_eq!(Vector3(0, 2, 4) * 3, Vector3(0, 6, 12));
         assert_eq!(-Vector3(1, 2, -1), Vector3(-1, -2, 1));
-        assert_eq!(Vector3(2, 3, 4).dot(&Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
-        assert_eq!(Vector2(0, 1).dot(&Vector2(1, 0)), 0);
+        assert_eq!(Vector3(2, 3, 4).dot(Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
+        assert_eq!(Vector2(0, 1).dot(Vector2(1, 0)), 0);
         assert_eq!(Vector3(1, 2, 3).len2(), 1 * 1 + 2 * 2 + 3 * 3);
         assert_eq!(Vector2(10, 3).cross(&Vector2(4, 30)), 10 * 30 - 3 * 4);
         assert_eq!(Vector3(2, 3, 4).cross(&Vector3(6, 7, 8)),
