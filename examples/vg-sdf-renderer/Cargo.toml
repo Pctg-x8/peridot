@@ -16,3 +16,4 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = "../.." }
 peridot-vg = { path = "../../vg" }
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-derive = { path = "../../derive" }

@@ -4,6 +4,13 @@ use peridot::{NativeLinker, EngineEvents, Engine, FeatureRequests};
 use peridot_vg::FlatPathBuilder;
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::rc::Rc;
+use peridot::SpecConstantStorage;
+
+#[derive(peridot_derive::SpecConstantStorage)]
+#[repr(C)]
+struct OutlineRendererParams {
+    line_width: f32
+}
 
 pub struct Game<NL> {
     buffer: peridot::Buffer,
@@ -13,6 +20,8 @@ pub struct Game<NL> {
     fb: Vec<br::Framebuffer>,
     triangle_fans_stencil_pipeline: peridot::LayoutedPipeline,
     curve_triangles_stencil_pipeline: peridot::LayoutedPipeline,
+    invert_pipeline: peridot::LayoutedPipeline,
+    outline_distance_pipeline: peridot::LayoutedPipeline,
     cmd: peridot::CommandBundle,
     ph: std::marker::PhantomData<*const NL>
 }
@@ -28,19 +37,26 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let font = peridot_vg::FontProvider::new().expect("Failed to create font provider")
             .best_match("sans-serif", &peridot_vg::FontProperties::default(), 240.0)
             .expect("no suitable font");
-        let gid = font.glyph_id('あ').expect("no glyph contained");
-        let mut gen = peridot_vg::SDFGenerator::new(1.0, 8.0);
+        let gid = font.glyph_id('る').expect("no glyph contained");
+        const SDF_SIZE: f32 = 32.0;
+        let mut gen = peridot_vg::SDFGenerator::new(1.0, SDF_SIZE);
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
-        let (figure_triangle_fans_count, figure_curve_triangles_count) = figure_vertices.iter()
-            .fold((0, 0), |(t, t2), f| (t + f.triangle_fans.len(), t2 + f.curve_triangles.len()));
+        let (figure_triangle_fans_count, figure_curve_triangles_count, outline_rects_count) = figure_vertices.iter()
+            .fold((0, 0, 0), |(t, t2, t3), f| (t + f.triangle_fans.len(), t2 + f.curve_triangles.len(), t3 + f.parabola_rects.len()));
 
         let mut bp = peridot::BufferPrealloc::new(e.graphics());
+        let flip_fill_rect = bp.add(
+            peridot::BufferContent::vertex::<[peridot::math::Vector2<f32>; 4]>()
+        );
         let figures_triangle_fan_offset = bp.add(
             peridot::BufferContent::vertices::<peridot::math::Vector2<f32>>(figure_triangle_fans_count)
         );
         let figure_curve_triangles_offset = bp.add(
             peridot::BufferContent::vertices::<peridot::VertexUV2D>(figure_curve_triangles_count)
+        );
+        let outline_rects_offset = bp.add(
+            peridot::BufferContent::vertices::<peridot_vg::sdf_generator::ParabolaRectVertex>(outline_rects_count * 6)
         );
         let buffer = bp.build_transferred().expect("Failed to allocate buffer");
         let buffer_init = bp.build_upload().expect("Failed to allocate init buffer");
@@ -67,12 +83,24 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         ).expect("Failed to create Stencil Buffer View");
         
         buffer_init.guard_map(0 .. bp.total_size(), |m| unsafe {
+            m.slice_mut(flip_fill_rect as _, 4).clone_from_slice(&[
+                peridot::math::Vector2(-640.0f32, -480.0),
+                peridot::math::Vector2( 640.0, -480.0),
+                peridot::math::Vector2(-640.0,  480.0),
+                peridot::math::Vector2( 640.0,  480.0)
+            ]);
+
             let s = m.slice_mut(figures_triangle_fan_offset as _, figure_triangle_fans_count);
             let c = m.slice_mut(figure_curve_triangles_offset as _, figure_curve_triangles_count);
-            let (mut s_offset, mut c_offset) = (0, 0);
+            let o = m.slice_mut(outline_rects_offset as _, outline_rects_count * 6);
+            let (mut s_offset, mut c_offset, mut o_offset) = (0, 0, 0);
             for f in figure_vertices.iter() {
                 s[s_offset..s_offset + f.triangle_fans.len()].clone_from_slice(&f.triangle_fans);
                 c[c_offset..c_offset + f.curve_triangles.len()].clone_from_slice(&f.curve_triangles);
+                for pr in f.parabola_rects.iter() {
+                    o[o_offset..o_offset + 6].clone_from_slice(&pr.make_vertices());
+                    o_offset += 6;
+                }
                 s_offset += f.triangle_fans.len();
                 c_offset += f.curve_triangles.len();
             }
@@ -100,9 +128,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
         let ad_stencil = br::AttachmentDescription::new(br::vk::VK_FORMAT_S8_UINT, br::ImageLayout::DepthStencilReadOnlyOpt, br::ImageLayout::DepthStencilReadOnlyOpt)
             .stencil_load_op(br::LoadOp::Clear).stencil_store_op(br::StoreOp::DontCare);
+        let sp_stencil = br::SubpassDescription::new()
+            .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt);
         let sp_main = br::SubpassDescription::new()
             .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
-            .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt);
+            .depth_stencil(1, br::ImageLayout::DepthStencilReadOnlyOpt);
         let spdep_color = br::vk::VkSubpassDependency {
             srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
             dstSubpass: 0,
@@ -112,10 +142,19 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write | br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write,
             dependencyFlags: br::vk::VK_DEPENDENCY_BY_REGION_BIT
         };
+        let spdep_stencil = br::vk::VkSubpassDependency {
+            srcSubpass: 0,
+            dstSubpass: 1,
+            srcStageMask: br::PipelineStageFlags::LATE_FRAGMENT_TESTS.0,
+            dstStageMask: br::PipelineStageFlags::EARLY_FRAGMENT_TESTS.0,
+            srcAccessMask: br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write,
+            dstAccessMask: br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.read,
+            dependencyFlags: br::vk::VK_DEPENDENCY_BY_REGION_BIT
+        };
         let rp = br::RenderPassBuilder::new()
             .add_attachments(vec![ad_main, ad_stencil])
-            .add_subpass(sp_main)
-            .add_dependency(spdep_color)
+            .add_subpasses(vec![sp_stencil, sp_main])
+            .add_dependencies(vec![spdep_color, spdep_stencil])
             .create(e.graphics())
             .expect("Failed to create RenderPass");
         let fb = e.iter_backbuffers().map(|bb| br::Framebuffer::new(
@@ -131,15 +170,18 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let viewports = [
             br::Viewport::from_rect_with_depth_range(&scissors[0], 0.0 .. 1.0).into()
         ];
-        let triangle_fans_shader = PvpShaderModules::new(
+        let fill_shader = PvpShaderModules::new(
             e.graphics(), e.load("shaders.triangle_fans").expect("Failed to load triangle_fans shader asset")
         ).expect("Failed to create triangle_fans shader modules");
         let curve_triangles_shader = PvpShaderModules::new(
             e.graphics(), e.load("shaders.curve_triangles").expect("Failed to load curve_triangles shader asset")
-        ).expect("Failed to create curve_triangles_shader_modules");
+        ).expect("Failed to create curve_triangles shader modules");
+        let outline_distance_shader = PvpShaderModules::new(
+            e.graphics(), e.load("shaders.outline_distance").expect("Failed to load outline_distance shader asset")
+        ).expect("Failed to create outline_disdtance shader modules");
         let empty_pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[], &[]).expect("Failed to create empty pipeline layout"));
         let mut pipebuild = br::GraphicsPipelineBuilder::new(
-            &empty_pl, (&rp, 0), triangle_fans_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
+            &empty_pl, (&rp, 0), fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
         );
         let stencil_ops = br::vk::VkStencilOpState {
             failOp: br::vk::VK_STENCIL_OP_INVERT,
@@ -148,6 +190,24 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             compareOp: br::vk::VK_COMPARE_OP_ALWAYS,
             compareMask: 0,
             writeMask: 0x01,
+            reference: 0
+        };
+        let stencil_noop_match = br::vk::VkStencilOpState {
+            failOp: br::vk::VK_STENCIL_OP_KEEP,
+            depthFailOp: br::vk::VK_STENCIL_OP_KEEP,
+            passOp: br::vk::VK_STENCIL_OP_ZERO,
+            compareOp: br::vk::VK_COMPARE_OP_EQUAL,
+            compareMask: 0x01,
+            writeMask: 0x01,
+            reference: 0x01
+        };
+        let stencil_noop = br::vk::VkStencilOpState {
+            failOp: br::vk::VK_STENCIL_OP_KEEP,
+            depthFailOp: br::vk::VK_STENCIL_OP_KEEP,
+            passOp: br::vk::VK_STENCIL_OP_KEEP,
+            compareOp: br::vk::VK_COMPARE_OP_ALWAYS,
+            compareMask: 0,
+            writeMask: 0,
             reference: 0
         };
         pipebuild
@@ -162,12 +222,54 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         pipebuild.vertex_processing(curve_triangles_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST));
         let curve_triangles_stencil_pipeline = pipebuild.create(e.graphics(), None)
             .expect("Failed to create Curve Triangles Stencil Pipeline");
+        pipebuild
+            .render_pass(&rp, 1)
+            .vertex_processing(fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
+            .stencil_control_front(stencil_noop_match.clone())
+            .stencil_control_back(stencil_noop_match)
+            .set_attachment_blends(vec![
+                br::vk::VkPipelineColorBlendAttachmentState {
+                    blendEnable: true as _,
+                    srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+                    dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
+                    colorBlendOp: br::vk::VK_BLEND_OP_ADD,
+                    srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+                    dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
+                    alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
+                    .. Default::default()
+                }
+            ]);
+        let invert_pipeline = pipebuild.create(e.graphics(), None).expect("Failed to create Invert Pipeline");
+        let outline_render_params = OutlineRendererParams { line_width: SDF_SIZE };
+        let mut outline_render_vps = outline_distance_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        outline_render_vps.vertex_shader_mut().specinfo = Some(outline_render_params.as_pair());
+        pipebuild
+            .render_pass(&rp, 1)
+            .vertex_processing(outline_render_vps)
+            .stencil_control_front(stencil_noop.clone())
+            .stencil_control_back(stencil_noop)
+            .stencil_test_enable(false)
+            .set_attachment_blends(vec![
+                br::vk::VkPipelineColorBlendAttachmentState {
+                    blendEnable: true as _,
+                    srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_COLOR,
+                    dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_DST_COLOR,
+                    colorBlendOp: br::vk::VK_BLEND_OP_MAX,
+                    srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
+                    dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
+                    alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
+                    .. Default::default()
+                }
+            ]);
+        let outline_distance_pipeline = pipebuild.create(e.graphics(), None)
+            .expect("Failed to create Outline Distance Pipeline");
         
         let cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffer_count()).expect("Failed to create CommandBundle");
         for (cx, (bb, fb)) in e.iter_backbuffers().zip(fb.iter()).enumerate() {
             let clear_values = &[br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(0.0, 0)];
 
             let mut rec = cmd[cx].begin().expect("Failed to begin recording commands");
+            // Stencil Pass
             rec
                 .begin_render_pass(&rp, fb, scissors[0].clone(), clear_values, true)
                 .bind_graphics_pipeline_pair(&triangle_fans_stencil_pipeline, &empty_pl)
@@ -185,6 +287,15 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
                 rec.draw(f.curve_triangles.len() as _, 1, co, 0);
                 co += f.curve_triangles.len() as u32;
             }
+            rec.next_subpass(true);
+            // Outline Distance and Invert Pass
+            rec
+                .bind_graphics_pipeline(&outline_distance_pipeline)
+                .bind_vertex_buffers(0, &[(&buffer, outline_rects_offset as _)])
+                .draw(outline_rects_count as u32 * 6, 1, 0, 0)
+                .bind_graphics_pipeline(&invert_pipeline)
+                .bind_vertex_buffers(0, &[(&buffer, flip_fill_rect as _)])
+                .draw(4, 1, 0, 0);
             rec.end_render_pass();
         }
 
@@ -199,6 +310,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             ),
             curve_triangles_stencil_pipeline: peridot::LayoutedPipeline::combine(
                 curve_triangles_stencil_pipeline, &empty_pl
+            ),
+            invert_pipeline: peridot::LayoutedPipeline::combine(invert_pipeline, &empty_pl),
+            outline_distance_pipeline: peridot::LayoutedPipeline::combine(
+                outline_distance_pipeline, &empty_pl
             ),
             cmd,
             ph: std::marker::PhantomData

@@ -5,19 +5,19 @@ use std::ops::{Mul, Div, Add, Sub, Neg};
 use std::mem::transmute;
 
 /// 2-dimensional vector
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Vector2<T>(pub T, pub T);
 /// 3-dimensional vector
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Vector3<T>(pub T, pub T, pub T);
 /// 4-dimensional vector
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Vector4<T>(pub T, pub T, pub T, pub T);
 /// Arbitrary rotating
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Quaternion<T>(pub T, pub T, pub T, pub T);
 
@@ -512,45 +512,25 @@ macro_rules! VariadicElementOps
             type Output = $e<<T as Add>::Output>;
             fn add(self, other: Self) -> Self::Output { $e($(self.$n + other.$n),*) }
         }
-        impl<'v, T> Add for &'v $e<T> where &'v T: Add
-        {
-            type Output = $e<<&'v T as Add>::Output>;
-            fn add(self, other: Self) -> Self::Output { $e($(&self.$n + &other.$n),*) }
-        }
         impl<T: Sub> Sub for $e<T>
         {
             type Output = $e<<T as Sub>::Output>;
             fn sub(self, other: Self) -> Self::Output { $e($(self.$n - other.$n),*) }
-        }
-        impl<'v, T> Sub for &'v $e<T> where &'v T: Sub
-        {
-            type Output = $e<<&'v T as Sub>::Output>;
-            fn sub(self, other: Self) -> Self::Output { $e($(&self.$n - &other.$n),*) }
         }
         impl<T: Mul + Copy> Mul<T> for $e<T>
         {
             type Output = $e<<T as Mul>::Output>;
             fn mul(self, other: T) -> Self::Output { $e($(self.$n * other),*) }
         }
-        impl<'v, T> Mul for &'v $e<T> where &'v T: Mul
-        {
-            type Output = $e<<&'v T as Mul>::Output>;
-            fn mul(self, other: Self) -> Self::Output { $e($(&self.$n * &other.$n),*) }
-        }
         impl<T: Neg> Neg for $e<T>
         {
             type Output = $e<<T as Neg>::Output>;
             fn neg(self) -> Self::Output { $e($(-self.$n),*) }
         }
-        impl<'v, T> Neg for &'v $e<T> where &'v T: Neg
-        {
-            type Output = $e<<&'v T as Neg>::Output>;
-            fn neg(self) -> Self::Output { $e($(-&self.$n),*) }
-        }
         impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T>
         {
             /// Calculates an inner product between 2 vectors
-            pub fn dot(&self, other: &Self) -> T
+            pub fn dot(self, other: Self) -> T
             {
                 CTSummation!($(self.$n * other.$n),*)
             }
@@ -558,9 +538,19 @@ macro_rules! VariadicElementOps
         impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T>
         {
             /// Calculates a squared length of a vector
-            pub fn len2(&self) -> T
+            pub fn len2(self) -> T
             {
                 CTSummation!($(self.$n * self.$n),*)
+            }
+        }
+        impl<T> $e<T> {
+            /// Calculates minimum value of each element
+            pub fn min(self, other: Self) -> Self where T: crate::numtraits::Min<Output = T> {
+                $e($(self.$n.min(other.$n)),*)
+            }
+            /// Calculates maximum value of each element
+            pub fn max(self, other: Self) -> Self where T: crate::numtraits::Max<Output = T> {
+                $e($(self.$n.max(other.$n)),*)
             }
         }
     }
