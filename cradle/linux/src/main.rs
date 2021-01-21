@@ -21,13 +21,10 @@ pub struct PlatformAssetLoader {
     #[cfg(feature = "IterationBuild")]
     builtin_asset_base_dir: PathBuf
 }
-impl PlatformAssetLoader
-{
-    fn new() -> Self
-    {
+impl PlatformAssetLoader {
+    fn new() -> Self {
         #[cfg(feature = "UseExternalAssetPath")] let basedir = PathBuf::from(env!("PERIDOT_EXTERNAL_ASSET_PATH"));
-        #[cfg(not(feature = "UseExternalAssetPath"))] let basedir =
-        {
+        #[cfg(not(feature = "UseExternalAssetPath"))] let basedir = {
             let mut binloc = std::env::current_exe().expect("Getting exe directory");
             binloc.pop(); binloc.push("assets"); binloc
         };
@@ -40,13 +37,11 @@ impl PlatformAssetLoader
         }
     }
 }
-impl peridot::PlatformAssetLoader for PlatformAssetLoader
-{
+impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = File;
     type StreamingAsset = File;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>
-    {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
         let path_segments: Vec<_> = path.split('.').collect();
         #[cfg(feature = "IterationBuild")]
         if path_segments.first().map_or(false, |&s| s == "builtin") {
