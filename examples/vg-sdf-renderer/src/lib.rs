@@ -40,7 +40,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let gid = font.glyph_id('A').expect("no glyph contained");
         const SDF_SIZE: f32 = 32.0;
         let mut gen = peridot_vg::SDFGenerator::new(1.0, SDF_SIZE);
-        gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(0.0, -font.ascent() - SDF_SIZE));
+        gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(0.0, -font.ascent() * font.scale_value() - SDF_SIZE));
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
         let (figure_triangle_fans_count, figure_curve_triangles_count, outline_rects_count) = figure_vertices.iter()
