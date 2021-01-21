@@ -1,7 +1,9 @@
 //! Bezier to SDF Generator: https://astiopin.github.io/2019/01/06/sdf-on-gpu.html
 
 use lyon_path::builder::{FlatPathBuilder, PathBuilder};
-use euclid::{Point2D, Vector2D, Angle};
+use euclid::{Point2D, Angle};
+
+pub use euclid::{Transform2D, Vector2D};
 
 #[repr(C)]
 #[derive(Clone, Debug)]
@@ -117,6 +119,7 @@ pub struct FigureVertices {
 pub struct SDFGenerator {
     figure_start: Point2D<f32>,
     current: Point2D<f32>,
+    transform: Transform2D<f32>,
     approval_tolerance: f32,
     max_distance: f32,
     figure_vertices: Vec<FigureVertices>
@@ -126,16 +129,23 @@ impl SDFGenerator {
         SDFGenerator {
             figure_start: Point2D::new(0.0, 0.0),
             current: Point2D::new(0.0, 0.0),
+            transform: Transform2D::identity(),
             approval_tolerance,
             max_distance,
             figure_vertices: Vec::new()
         }
+    }
+
+    pub fn set_transform(&mut self, t: Transform2D<f32>) {
+        self.transform = t;
     }
 }
 impl FlatPathBuilder for SDFGenerator {
     type PathType = Vec<FigureVertices>;
 
     fn move_to(&mut self, p: Point2D<f32>) {
+        let p = self.transform.transform_point(&p);
+
         self.figure_start = p;
         self.current = p;
         self.figure_vertices.push(FigureVertices {
@@ -145,17 +155,11 @@ impl FlatPathBuilder for SDFGenerator {
         });
     }
     fn line_to(&mut self, to: Point2D<f32>) {
-        let from = peridot::math::Vector2(self.current.x, self.current.y);
-        let tov = peridot::math::Vector2(to.x, to.y);
-
-        let current_figure = self.figure_vertices.last_mut().expect("no figure started?");
-        current_figure.parabola_rects.push(ParabolaRect::from_line(from, tov, self.max_distance));
-        current_figure.triangle_fans.extend(vec![from, tov]);
-
-        self.current = to;
+        let to = self.transform.transform_point(&to);
+        self.pretransformed_line_to(to);
     }
     fn close(&mut self) {
-        self.line_to(self.figure_start);
+        self.pretransformed_line_to(self.figure_start);
     }
     fn build(self) -> Self::PathType {
         self.figure_vertices
@@ -169,8 +173,18 @@ impl FlatPathBuilder for SDFGenerator {
         self.current
     }
 }
-impl PathBuilder for SDFGenerator {
-    fn quadratic_bezier_to(&mut self, c: Point2D<f32>, to: Point2D<f32>) {
+impl SDFGenerator {
+    fn pretransformed_line_to(&mut self, to: Point2D<f32>) {
+        let from = peridot::math::Vector2(self.current.x, self.current.y);
+        let tov = peridot::math::Vector2(to.x, to.y);
+
+        let current_figure = self.figure_vertices.last_mut().expect("no figure started?");
+        current_figure.parabola_rects.push(ParabolaRect::from_line(from, tov, self.max_distance));
+        current_figure.triangle_fans.extend(vec![from, tov]);
+
+        self.current = to;
+    }
+    fn pretransformed_quadratic_bezier_to(&mut self, c: Point2D<f32>, to: Point2D<f32>) {
         let from = peridot::math::Vector2(self.current.x, self.current.y);
         let ctrl = peridot::math::Vector2(c.x, c.y);
         let tov = peridot::math::Vector2(to.x, to.y);
@@ -184,17 +198,31 @@ impl PathBuilder for SDFGenerator {
             peridot::VertexUV2D { pos: tov, uv: peridot::math::Vector2(1.0, 1.0) }
         ]);
 
-        // todo: calc parabola parameters
         self.current = to;
+    }
+}
+impl PathBuilder for SDFGenerator {
+    fn quadratic_bezier_to(&mut self, c: Point2D<f32>, to: Point2D<f32>) {
+        let (c, to) = (self.transform.transform_point(&c), self.transform.transform_point(&to));
+        self.pretransformed_quadratic_bezier_to(c, to);
     }
     fn cubic_bezier_to(&mut self, ctrl1: Point2D<f32>, ctrl2: Point2D<f32>, to: Point2D<f32>) {
         lyon_geom::CubicBezierSegment {
-            from: self.current, ctrl1, ctrl2, to
-        }.for_each_quadratic_bezier(self.approval_tolerance, &mut |q| self.quadratic_bezier_to(q.ctrl, q.to));
+            from: self.current,
+            ctrl1: self.transform.transform_point(&ctrl1),
+            ctrl2: self.transform.transform_point(&ctrl2),
+            to: self.transform.transform_point(&to)
+        }.for_each_quadratic_bezier(
+            self.approval_tolerance, &mut |q| self.pretransformed_quadratic_bezier_to(q.ctrl, q.to)
+        );
     }
     fn arc(&mut self, center: Point2D<f32>, rad: Vector2D<f32>, sweeping_angle: Angle<f32>, x_rot: Angle<f32>) {
         lyon_geom::Arc {
-            center, radii: rad, sweep_angle: sweeping_angle, x_rotation: x_rot, start_angle: Angle::degrees(0.0)
-        }.for_each_quadratic_bezier(&mut |q| self.quadratic_bezier_to(q.ctrl, q.to));
+            center: self.transform.transform_point(&center),
+            radii: self.transform.transform_vector(&rad),
+            sweep_angle: sweeping_angle,
+            x_rotation: x_rot,
+            start_angle: Angle::degrees(0.0)
+        }.for_each_quadratic_bezier(&mut |q| self.pretransformed_quadratic_bezier_to(q.ctrl, q.to));
     }
 }

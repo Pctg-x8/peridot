@@ -200,11 +200,11 @@ impl FontProvider
         let family = collection.font_family(family_index)?;
         let font_style = if properties.italic
         {
-            comdrive::dwrite::FontStyle::Italic
+            comdrive::dwrite::FONT_STYLE_ITALIC
         }
         else
         {
-            comdrive::dwrite::FontStyle::None
+            comdrive::dwrite::FONT_STYLE_NORMAL
         };
         let font = family.first_matching_font(properties.weight as _, comdrive::dwrite::FONT_STRETCH_NORMAL,
             font_style)?;
@@ -216,20 +216,20 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 }
 
-    pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
+    pub fn glyph_id(&self, c: char) -> Option<u32>
     {
         self.0.glyph_indices(&[c]).ok().map(|x| x[0] as _)
     }
-    pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
+    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
     {
         self.0.design_glyph_metrics(&[glyph as _], false)
             .map(|m| m[0].advanceWidth as f32).map_err(From::from)
     }
-    pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
+    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
     {
         let m = self.0.design_glyph_metrics(&[glyph as _], false)?[0];
         
@@ -238,7 +238,7 @@ impl Font
             (m.topSideBearing + m.bottomSideBearing + m.advanceHeight as i32) as f32,
         )))
     }
-    pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
+    pub fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
     {
         let sink = comdrive::ComPtr(PathEventReceiver::new());
         self.0.sink_glyph_run_outline(
