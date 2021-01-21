@@ -315,8 +315,8 @@ impl Font
         let m = fnt.glyph_metrics();
         
         Ok(Rect::new(
-            euclid::point2(m.horiBearingX as f32 * 64.0, m.horiBearingY as f32 * 64.0),
-            euclid::size2(m.width as f32 * 64.0, m.height as f32 * 64.0)
+            euclid::point2(m.horiBearingX as f32 / 64.0, m.horiBearingY as f32 / 64.0),
+            euclid::size2(m.width as f32 / 64.0, m.height as f32 / 64.0)
         ))
     }
     pub fn outline<B: PathBuilder>(&self, glyph: (usize, u32), builder: &mut B) -> Result<(), GlyphLoadingError>
