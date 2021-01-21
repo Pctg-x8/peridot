@@ -31,6 +31,11 @@ while [ $# -gt 0 ]; do
             UPDATE_DEPS=1
             shift
             ;;
+        "--IterationBuild" | "-i")
+            FEATURES+=( "IterationBuild" )
+            export PERIDOT_BUILTIN_ASSET_PATH=$(realpath $SCRIPT_PATH/../../builtin-assets)
+            shift 1
+            ;;
         *)
             if [[ ! -v USERLIB_DIRECTORY ]]; then USERLIB_DIRECTORY=$1; fi
             shift

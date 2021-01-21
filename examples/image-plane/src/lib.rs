@@ -165,7 +165,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         ]));
         dsub.submit(&e.graphics());
 
-        let shaderfile = e.load("shaders.prim").expect("Loading prim");
+        let shaderfile = e.load("builtin.shaders.unlit_image").expect("Loading shader");
         let shader = PvpShaderModules::new(&e.graphics(), shaderfile).expect("Create ShaderModules");
         let vp = [br::vk::VkViewport
         {
