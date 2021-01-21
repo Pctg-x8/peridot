@@ -8,8 +8,8 @@ use peridot::SpecConstantStorage;
 
 #[derive(peridot_derive::SpecConstantStorage)]
 #[repr(C)]
-struct OutlineRendererParams {
-    line_width: f32
+pub struct FillFragmentShaderParameters {
+    enable_color_output: bool
 }
 
 pub struct Game<NL> {
@@ -161,6 +161,26 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             &rp, &[&bb, &stencil_buffer_view], &backbuffer_size, 1
         )).collect::<Result<Vec<_>, _>>().expect("Failed to create Framebuffers");
 
+        let vertex_shader_parameter_values = [backbuffer_size.0 as f32, backbuffer_size.1 as _, SDF_SIZE];
+        let vertex_shader_common_parameter_placements = [
+            br::vk::VkSpecializationMapEntry {
+                constantID: 0, offset: 0, size: std::mem::size_of::<f32>() as _
+            },
+            br::vk::VkSpecializationMapEntry {
+                constantID: 1, offset: std::mem::size_of::<f32>() as _, size: std::mem::size_of::<f32>() as _
+            }
+        ];
+        let outline_vsh_parameter_placements = [
+            vertex_shader_common_parameter_placements[0].clone(),
+            vertex_shader_common_parameter_placements[1].clone(),
+            br::vk::VkSpecializationMapEntry {
+                constantID: 2, offset: (std::mem::size_of::<f32>() * 2) as _, size: std::mem::size_of::<f32>() as _
+            }
+        ];
+        let fill_fsh_color_output = FillFragmentShaderParameters {
+            enable_color_output: true
+        };
+
         let scissors = [
             br::vk::VkRect2D {
                 offset: br::vk::VkOffset2D { x: 0, y: 0 },
@@ -180,9 +200,13 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             e.graphics(), e.load("shaders.outline_distance").expect("Failed to load outline_distance shader asset")
         ).expect("Failed to create outline_disdtance shader modules");
         let empty_pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[], &[]).expect("Failed to create empty pipeline layout"));
-        let mut pipebuild = br::GraphicsPipelineBuilder::new(
-            &empty_pl, (&rp, 0), fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
-        );
+
+        let mut stencil_triangle_shader = fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+        stencil_triangle_shader.vertex_shader_mut().specinfo = Some((
+            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
+            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
+        ));
+        let mut pipebuild = br::GraphicsPipelineBuilder::new(&empty_pl, (&rp, 0), stencil_triangle_shader);
         let stencil_ops = br::vk::VkStencilOpState {
             failOp: br::vk::VK_STENCIL_OP_INVERT,
             depthFailOp: br::vk::VK_STENCIL_OP_INVERT,
@@ -219,12 +243,25 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             .add_attachment_blend(br::AttachmentColorBlendState::noblend());
         let triangle_fans_stencil_pipeline = pipebuild.create(e.graphics(), None)
             .expect("Failed to create Triangle Fans Stencil Pipeline");
-        pipebuild.vertex_processing(curve_triangles_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST));
+        let mut stencil_curve_shader = curve_triangles_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        stencil_curve_shader.vertex_shader_mut().specinfo = Some((
+            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
+            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
+        ));
+        pipebuild.vertex_processing(stencil_curve_shader);
         let curve_triangles_stencil_pipeline = pipebuild.create(e.graphics(), None)
             .expect("Failed to create Curve Triangles Stencil Pipeline");
+        let mut invert_fill_shader = fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+        invert_fill_shader.vertex_shader_mut().specinfo = Some((
+            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
+            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
+        ));
+        invert_fill_shader.fragment_shader_mut().expect("no fragment shader?").specinfo = Some(
+            fill_fsh_color_output.as_pair()
+        );
         pipebuild
             .render_pass(&rp, 1)
-            .vertex_processing(fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP))
+            .vertex_processing(invert_fill_shader)
             .stencil_control_front(stencil_noop_match.clone())
             .stencil_control_back(stencil_noop_match)
             .set_attachment_blends(vec![
@@ -240,9 +277,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
                 }
             ]);
         let invert_pipeline = pipebuild.create(e.graphics(), None).expect("Failed to create Invert Pipeline");
-        let outline_render_params = OutlineRendererParams { line_width: SDF_SIZE };
         let mut outline_render_vps = outline_distance_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        outline_render_vps.vertex_shader_mut().specinfo = Some(outline_render_params.as_pair());
+        outline_render_vps.vertex_shader_mut().specinfo = Some((
+            std::borrow::Cow::Borrowed(&outline_vsh_parameter_placements),
+            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
+        ));
         pipebuild
             .render_pass(&rp, 1)
             .vertex_processing(outline_render_vps)
