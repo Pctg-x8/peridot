@@ -85,10 +85,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         
         buffer_init.guard_map(0 .. bp.total_size(), |m| unsafe {
             m.slice_mut(flip_fill_rect as _, 4).clone_from_slice(&[
-                peridot::math::Vector2(-640.0f32, -480.0),
-                peridot::math::Vector2( 640.0, -480.0),
-                peridot::math::Vector2(-640.0,  480.0),
-                peridot::math::Vector2( 640.0,  480.0)
+                peridot::math::Vector2(0.0f32, 0.0),
+                peridot::math::Vector2(1.0, 0.0),
+                peridot::math::Vector2(0.0, -1.0),
+                peridot::math::Vector2(1.0, -1.0)
             ]);
 
             let s = m.slice_mut(figures_triangle_fan_offset as _, figure_triangle_fans_count);
@@ -125,10 +125,13 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             );
         }).expect("Failed to initialize resources");
         
-        let ad_main = br::AttachmentDescription::new(e.backbuffer_format(), e.requesting_backbuffer_layout().0, e.requesting_backbuffer_layout().0)
-            .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
-        let ad_stencil = br::AttachmentDescription::new(br::vk::VK_FORMAT_S8_UINT, br::ImageLayout::DepthStencilReadOnlyOpt, br::ImageLayout::DepthStencilReadOnlyOpt)
-            .stencil_load_op(br::LoadOp::Clear).stencil_store_op(br::StoreOp::DontCare);
+        let ad_main = br::AttachmentDescription::new(
+            e.backbuffer_format(), e.requesting_backbuffer_layout().0, e.requesting_backbuffer_layout().0
+        ).load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
+        let ad_stencil = br::AttachmentDescription::new(
+            br::vk::VK_FORMAT_S8_UINT,
+            br::ImageLayout::DepthStencilReadOnlyOpt, br::ImageLayout::DepthStencilReadOnlyOpt
+        ).stencil_load_op(br::LoadOp::Clear).stencil_store_op(br::StoreOp::DontCare);
         let sp_stencil = br::SubpassDescription::new()
             .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt);
         let sp_main = br::SubpassDescription::new()
@@ -200,7 +203,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let outline_distance_shader = PvpShaderModules::new(
             e.graphics(), e.load("shaders.outline_distance").expect("Failed to load outline_distance shader asset")
         ).expect("Failed to create outline_disdtance shader modules");
-        let empty_pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[], &[]).expect("Failed to create empty pipeline layout"));
+        let empty_pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[], &[])
+            .expect("Failed to create empty pipeline layout"));
 
         let mut stencil_triangle_shader = fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
         stencil_triangle_shader.vertex_shader_mut().specinfo = Some((
@@ -253,10 +257,6 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let curve_triangles_stencil_pipeline = pipebuild.create(e.graphics(), None)
             .expect("Failed to create Curve Triangles Stencil Pipeline");
         let mut invert_fill_shader = fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        invert_fill_shader.vertex_shader_mut().specinfo = Some((
-            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
-            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
-        ));
         invert_fill_shader.fragment_shader_mut().expect("no fragment shader?").specinfo = Some(
             fill_fsh_color_output.as_pair()
         );
@@ -304,8 +304,9 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let outline_distance_pipeline = pipebuild.create(e.graphics(), None)
             .expect("Failed to create Outline Distance Pipeline");
         
-        let cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffer_count()).expect("Failed to create CommandBundle");
-        for (cx, (bb, fb)) in e.iter_backbuffers().zip(fb.iter()).enumerate() {
+        let cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffer_count())
+            .expect("Failed to create CommandBundle");
+        for (cx, fb) in fb.iter().enumerate() {
             let clear_values = &[br::ClearValue::Color([0.0; 4]), br::ClearValue::DepthStencil(0.0, 0)];
 
             let mut rec = cmd[cx].begin().expect("Failed to begin recording commands");
