@@ -16,3 +16,7 @@ inpkg==1 && $0 ~ /^[ \t]*name[ \t]*=[ \t]*/ {
 function gen_manifest() {
 	sed -e "s/#%KERNEL_CRATE_NAME%/$1/g" -e "s/%KERNEL_CRATE_PATH%/${2//\//\\/}/g" $3
 }
+
+function mirror_builtin_assets() {
+    rsync -auz --progress $1/../
+}
