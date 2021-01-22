@@ -15,8 +15,6 @@ num = "*"
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
 
-image = "*"
-
 [target.'cfg(debug_assertions)'.dependencies.bedrock]
 git = "https://github.com/Pctg-x8/bedrock"
 branch = "peridot"
@@ -25,6 +23,13 @@ features = ["Presentation", "Implements", "VK_EXT_debug_report"]
 [workspace]
 exclude = ["extras/", "cradle/", "examples/"]
 members = [
-    "archive", "serialization-utils", "vertex-processing-pack", "math", "vg", "derive",
-    "tools/shaderbuild", "tools/archiver"
+    "archive",
+    "serialization-utils",
+    "vertex-processing-pack",
+    "math",
+    "image",
+    "vg",
+    "derive",
+    "tools/shaderbuild",
+    "tools/archiver",
 ]

@@ -364,7 +364,8 @@ impl DeviceBufferView<'_> {
     }
 }
 
-#[derive(Clone, Copy)] #[repr(i32)]
+#[derive(Clone, Copy, Debug)]
+#[repr(i32)]
 pub enum PixelFormat
 {
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
@@ -430,16 +431,17 @@ impl Deref for Texture2D
     fn deref(&self) -> &br::ImageView { &self.0 }
 }
 
+pub struct DecodedPixelData {
+    pub pixels: Vec<u8>, pub size: math::Vector2<u32>,
+    pub format: PixelFormat, pub stride: usize
+}
+impl DecodedPixelData {
+    pub fn u8_pixels(&self) -> &[u8] { &self.pixels }
+}
 /// Low Dynamic Range(8bit colors) image asset
-pub trait LDRImageAsset
-{
+pub trait LDRImageAsset {
     fn into_pixel_data_info(self) -> DecodedPixelData;
 }
-impl LDRImageAsset for BMP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for PNG { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for TGA { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for TIFF { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for WebP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
 
 /// Stg1. Group what textures are being initialized
 pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<DecodedPixelData>);
@@ -462,7 +464,7 @@ impl<'g> TextureInitializationGroup<'g>
         let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
         for pd in self.1
         {
-            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
+            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format, prealloc)?;
             images.push(o); stage_info.push((pd, offs));
         }
         return Ok(TexturePreallocatedGroup(stage_info, images));
@@ -492,7 +494,7 @@ impl TextureInstantiatedGroup
         {
             let s = unsafe
             {
-                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
+                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format.bpp() >> 3) as usize)
             };
             s.copy_from_slice(pd.u8_pixels());
         }
