@@ -32,4 +32,5 @@ members = [
     "derive",
     "tools/shaderbuild",
     "tools/archiver",
+    "tools/cli",
 ]
