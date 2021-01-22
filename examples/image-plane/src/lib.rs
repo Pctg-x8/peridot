@@ -63,9 +63,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let screen_size: br::Extent3D = e.backbuffer(0).expect("no backbuffers").size().clone().into();
         let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-        let image_data: peridot::PNG = e.load("images.example").expect("No image found");
+        let image_data: peridot_image::PNG = e.load("images.example").expect("No image found");
         debug!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
-        debug!("ImageColor: {:?}", image_data.0.color);
+        debug!("ImageFormat: {:?}", image_data.0.format);
         debug!("ImageStride: {} bytes", image_data.0.stride);
 
         let mut bp = BufferPrealloc::new(e.graphics());
