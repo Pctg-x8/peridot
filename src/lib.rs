@@ -17,7 +17,9 @@ use std::cell::{Ref, RefMut, RefCell};
 use std::time::{Instant as InstantTimer, Duration};
 use std::ffi::CStr;
 
-mod window; use self::window::StateFence;
+mod state_track;
+use self::state_track::StateFence;
+mod window;
 pub use self::window::SurfaceInfo;
 mod resource; pub use self::resource::*;
 #[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
