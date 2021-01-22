@@ -298,9 +298,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let gid = font.glyph_id('る').expect("no glyph contained");
         const SDF_SIZE: f32 = 32.0;
         let mut gen = peridot_vg::SDFGenerator::new(1.0, SDF_SIZE);
+        let glyph_metrics = font.bounds(gid).expect("Failed to get glyph bounds");
         gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(
-            -font.bounds(gid).expect("Failed to get glyph bounds").origin.x + SDF_SIZE,
-            -font.ascent() * font.scale_value() - SDF_SIZE
+            -glyph_metrics.origin.x + SDF_SIZE,
+            -glyph_metrics.origin.y - SDF_SIZE
         ));
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
