@@ -1,5 +1,6 @@
 //! Batched Operation Helpers
 
+use log::*;
 use bedrock as br;
 use br::{VkHandle, vk::VkBufferCopy};
 use std::cmp::{PartialEq, Eq, PartialOrd, Ord, Ordering};

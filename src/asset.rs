@@ -19,7 +19,7 @@ pub trait FromAsset: LogicalAssetData
     type Error: From<IOError>;
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>;
     
-    fn from_archive(reader: &mut archive::ArchiveRead, path: &str) -> Result<Self, Self::Error>
+    fn from_archive(reader: &mut peridot_archive::ArchiveRead, path: &str) -> Result<Self, Self::Error>
     {
         match reader.read_bin(path)?
         {

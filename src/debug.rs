@@ -1,6 +1,7 @@
 use bedrock as br;
 use libc::{size_t, c_char, c_void};
 use std::ffi::CStr;
+use log::*;
 
 pub struct DebugReport(br::DebugReportCallback);
 impl DebugReport

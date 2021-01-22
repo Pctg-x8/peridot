@@ -1,14 +1,10 @@
 
-// extern crate font_kit;
-#[macro_use] extern crate log;
-extern crate libc;
+use log::*;
+pub use peridot_math as math;
+pub use peridot_archive as archive;
 
-extern crate pathfinder_partitioner;
-extern crate bedrock;
-pub extern crate peridot_math as math;
-pub extern crate peridot_archive as archive;
-
-use bedrock as br; use bedrock::traits::*;
+use bedrock as br;
+use br::traits::*;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
