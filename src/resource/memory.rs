@@ -95,7 +95,10 @@ impl<'g> MemoryBadget<'g> {
     }
 }
 
-pub struct AutocloseMappedMemoryRange<'m>(pub(super) &'m br::DeviceMemory, pub(super) std::mem::ManuallyDrop<br::MappedMemoryRange<'m>>);
+pub struct AutocloseMappedMemoryRange<'m>(
+    pub(super) &'m br::DeviceMemory,
+    pub(super) std::mem::ManuallyDrop<br::MappedMemoryRange<'m>>
+);
 impl<'m> std::ops::Deref for AutocloseMappedMemoryRange<'m> {
     type Target = br::MappedMemoryRange<'m>; fn deref(&self) -> &Self::Target { &self.1 }
 }
