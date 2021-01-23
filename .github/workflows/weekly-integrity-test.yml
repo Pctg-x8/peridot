@@ -57,7 +57,7 @@ jobs:
       name: install requirements
       run: brew install coreutils
     - env:
-        PERIDOT_CLI_CRADLE_BASE: "${{ join([github.workspace, '/cradle'], '') }}"
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VK_SDK_PATH: ''
       if: 'true'
       name: cargo check
@@ -105,7 +105,7 @@ jobs:
       run: "cargo build --release"
       "working-directory": tools/cli
     - env:
-        PERIDOT_CLI_CRADLE_BASE: "${{ join([github.workspace, '/cradle'], '') }}"
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VK_SDK_PATH: ''
       if: 'true'
       name: cargo check
@@ -113,7 +113,7 @@ jobs:
         $ErrorActionPreference = "Continue"
         pwsh -c 'target/release/peridot.exe test examples/basic -p windows -f bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
-        PERIDOT_CLI_CRADLE_BASE: "${{ join([github.workspace, '/cradle'], '') }}"
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VK_SDK_PATH: ''
       if: 'true'
       name: "cargo check for transparent-back"
