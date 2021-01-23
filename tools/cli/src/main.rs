@@ -1,4 +1,6 @@
 
+mod manifest;
+mod platform;
 mod subcommands;
 
 use structopt::StructOpt;
