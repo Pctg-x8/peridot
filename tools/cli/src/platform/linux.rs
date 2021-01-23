@@ -20,7 +20,7 @@ pub fn build(
     );
 
     print_step(format_args!("Generating manifest..."));
-    let cradle_directory = super::cradle_directory();
+    let cradle_directory = super::cradle_directory().join("linux");
     gen_manifest(
         &cradle_directory.join("Cargo.toml"),
         &cradle_directory.join("Cargo.template.toml"),
@@ -63,7 +63,7 @@ fn print_step(args: std::fmt::Arguments) {
 
 fn handle_process_result(e: ExitStatus) {
     if e.success() { return; }
-    
+
     if let Some(c) = e.code() {
         eprintln!(
             "{}: cargo build command failed with code {:?}",

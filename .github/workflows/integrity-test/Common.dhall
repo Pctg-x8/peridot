@@ -130,7 +130,6 @@ let checkBaseLayer = \(notifyProvider: SlackNotifyProvider) -> \(precondition: T
             , cacheStep
             , GithubActions.Step::{ name = "Building as Checking", uses = Some "./.github/actions/checkbuild-baselayer" }
             ]
-        , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-baselayer"))]
         ]
     }
 
@@ -181,12 +180,13 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
             , checkoutHeadStep
             , checkoutStep
             , cacheStep
+            , GithubActions.Step::{ name = "Build CLI", uses = Some "./.github/actions/build-cli" }
             , GithubActions.Step::{
                 , name = "cargo check"
                 , run = Some
                     ''
                     $ErrorActionPreference = "Continue"
-                    pwsh -c './build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                    pwsh -c 'target/release/peridot.exe test examples/basic -p windows -f bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                     ''
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
@@ -195,7 +195,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
                 , run = Some
                 ''
                     $ErrorActionPreference = "Continue"
-                    pwsh -c './build.ps1 windows examples/basic -RunTests -Features '''transparent,bedrock/DynamicLoaded'''' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                    pwsh -c 'target/release/peridot.exe test examples/basic -p windows -f transparent -f bedrock/DynamicLoaded *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                 ''
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }
@@ -211,13 +211,14 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , checkoutHeadStep
             , checkoutStep
             , cacheStep
+            , GithubActions.Step::{ name = "Build CLI", uses = Some "./.github/actions/build-cli" }
             , GithubActions.Step::{
                 , name = "install requirements"
                 , run = Some "brew install coreutils"
             }
             , GithubActions.Step::{
                 , name = "cargo check"
-                , run = Some "./build.sh mac examples/basic --RunChecks 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+                , run = Some "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
                 , shell = Some GithubActions.Shell.bash
                 , env = Some (toMap { VK_SDK_PATH = "" })
                 }

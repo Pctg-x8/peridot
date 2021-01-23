@@ -31,12 +31,10 @@ impl Platform {
 
 /// Find cradles base directory
 pub fn cradle_directory() -> PathBuf {
-    let base = if let Ok(b) = std::env::var("PERIDOT_CLI_CRADLE_BASE") {
+    if let Ok(b) = std::env::var("PERIDOT_CLI_CRADLE_BASE") {
         PathBuf::from(b)
     } else {
         // Note: dev-packageのフォルダ構造に依存しているので、そっちを変えたらこっちも変える
         std::env::current_exe().expect("Failed to query exe path").join("../cradle")
-    };
-
-    base.join("linux")
+    }
 }

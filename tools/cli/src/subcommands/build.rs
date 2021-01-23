@@ -20,7 +20,7 @@ pub struct Args {
     /// Asset Directory
     #[structopt(long, short = "a")]
     asset_directory: Option<PathBuf>,
-    /// Rust features
+    /// Userlib features
     #[structopt(long, short = "f")]
     feature: Vec<String>,
     /// Update dependencies(cargo update) before build

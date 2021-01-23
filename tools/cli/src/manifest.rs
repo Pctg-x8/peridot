@@ -47,7 +47,7 @@ pub enum CargoDependency<'s> {
         git: &'s str,
         branch: Option<&'s str>,
         #[serde(flatten, borrow = "'s")]
-        ops: CargoDependencyOptions<'s>
+        opts: CargoDependencyOptions<'s>
     }
 }
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
@@ -68,7 +68,7 @@ pub fn gen_manifest(
     userlib_features: Vec<&str>
 ) {
     use std::io::Write;
-    
+
     let manifest_content = std::fs::read_to_string(&manifest_template_path)
         .expect("Failed to load cradle manifest");
     let mut manifest: CargoManifest = toml::from_str(&manifest_content)
