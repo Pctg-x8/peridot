@@ -1,5 +1,6 @@
 
 mod linux;
+mod windows;
 
 use std::path::{Path, PathBuf};
 use structopt::clap::arg_enum;
@@ -27,10 +28,18 @@ impl Platform {
     pub fn build(
         self,
         userlib: &Path, features: &[String], update_deps: bool, after_run: bool,
-        ext_asset_path: Option<&Path>
+        ext_asset_path: Option<&Path>, entry_ty_name: &str, appid: &str
     ) {
         match self {
-            Self::Windows => todo!("Build Process for Windows"),
+            Self::Windows => self::windows::build(
+                userlib,
+                features,
+                update_deps,
+                if after_run { "run" } else { "build" },
+                ext_asset_path,
+                entry_ty_name,
+                appid
+            ),
             Self::Mac => todo!("Build Process for Mac"),
             Self::Linux => self::linux::build(userlib, features, update_deps, after_run, ext_asset_path),
             Self::Android => todo!("Build Process for Android")

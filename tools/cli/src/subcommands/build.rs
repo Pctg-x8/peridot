@@ -25,11 +25,22 @@ pub struct Args {
     feature: Vec<String>,
     /// Update dependencies(cargo update) before build
     #[structopt(long, short = "u")]
-    update_deps: bool
+    update_deps: bool,
+    /// Application Identifier
+    #[structopt(long, default_value = "jp.ct2.peridot")]
+    app_package_id: String
 }
 
 pub fn run(args: Args) {
     for p in args.platform {
-        p.build(&args.userlib_path, &args.feature, args.update_deps, args.run, args.asset_directory.as_deref());
+        p.build(
+            &args.userlib_path,
+            &args.feature,
+            args.update_deps,
+            args.run,
+            args.asset_directory.as_deref(),
+            &args.entry_ty_name,
+            &args.app_package_id
+        );
     }
 }
