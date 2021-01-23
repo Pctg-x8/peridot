@@ -44,7 +44,7 @@ pub fn run_steps<'s>(cradle_subdirectory_path: &str, steps: impl Iterator<Item =
                     .expect("Failed to spawn `cargo update`")
                     .wait()
                     .expect("Failed to wait `cargo update`");
-                handle_process_result(e);
+                handle_process_result("`cargo update`", e);
             },
             BuildStep::BuildWithCargo { subcmd, ext_features, env, target_spec } => {
                 print_step(cradle_subdirectory_path, format_args!("Compiling code..."));
@@ -64,7 +64,7 @@ pub fn run_steps<'s>(cradle_subdirectory_path: &str, steps: impl Iterator<Item =
                     .expect("Failed to spawn cargo build command")
                     .wait()
                     .expect("Failed to wait cargo build command");
-                handle_process_result(e);
+                handle_process_result("cargo build command", e);
             }
         }
     }
@@ -79,13 +79,14 @@ pub fn print_step(cradle_subdir_path: &str, args: std::fmt::Arguments) {
     );
 }
 
-fn handle_process_result(e: ExitStatus) {
+fn handle_process_result(msg_prefix: &str, e: ExitStatus) {
     if e.success() { return; }
 
     if let Some(c) = e.code() {
         eprintln!(
-            "{}: cargo build command failed with code {:?}",
+            "{}: {} failed with code {:?}",
             console::style("ERROR").bold().fg(console::Color::Red),
+            msg_prefix,
             c
         );
         std::process::exit(c);
