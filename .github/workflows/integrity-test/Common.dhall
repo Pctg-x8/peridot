@@ -180,7 +180,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
             , checkoutHeadStep
             , checkoutStep
             , cacheStep
-            , GithubActions.Step::{ name = "Build CLI", uses = Some "./.github/actions/build-cli" }
+            , GithubActions.Step::{ name = "Build CLI", run = Some "cargo build --release", working-directory = Some "tools/cli" }
             , GithubActions.Step::{
                 , name = "cargo check"
                 , run = Some
@@ -211,7 +211,7 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , checkoutHeadStep
             , checkoutStep
             , cacheStep
-            , GithubActions.Step::{ name = "Build CLI", uses = Some "./.github/actions/build-cli" }
+            , GithubActions.Step::{ name = "Build CLI", run = Some "cargo build --release", working-directory = Some "tools/cli" }
             , GithubActions.Step::{
                 , name = "install requirements"
                 , run = Some "brew install coreutils"
