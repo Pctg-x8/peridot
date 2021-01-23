@@ -455,7 +455,7 @@ jobs:
         report_name: PR Integrity Check
         status: success
 name: Integrity Check
-on:
+'on':
   pull_request:
     types:
     - opened
