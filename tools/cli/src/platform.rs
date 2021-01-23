@@ -15,6 +15,15 @@ arg_enum! {
 }
 
 impl Platform {
+    pub const fn cradle_subdir_path(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Mac => "mac",
+            Self::Linux => "linux",
+            Self::Android => "android"
+        }
+    }
+
     pub fn build(
         self,
         userlib: &Path, features: &[String], update_deps: bool, after_run: bool,
@@ -26,6 +35,21 @@ impl Platform {
             Self::Linux => self::linux::build(userlib, features, update_deps, after_run, ext_asset_path),
             Self::Android => todo!("Build Process for Android")
         }
+    }
+
+    pub fn gen_manifest(self, userlib: &Path, features: Vec<&str>) {
+        let user_manifest_loaded = std::fs::read_to_string(userlib.join("Cargo.toml"))
+            .expect("Failed to load Userlib Cargo.toml");
+        let user_manifest: crate::manifest::CargoManifest = toml::from_str(&user_manifest_loaded)
+            .expect("Failed to parse Userlib Cargo.toml");
+        let project_name = user_manifest.package.as_ref().and_then(|p| p.name.as_deref())
+            .unwrap_or("?Unnamed Project?");
+        
+        crate::steps::run_steps(self.cradle_subdir_path(), std::iter::once(crate::steps::BuildStep::GenManifest {
+            userlib_path: userlib,
+            userlib_name: project_name,
+            features
+        }));
     }
 }
 

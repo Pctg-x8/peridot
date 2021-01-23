@@ -1,6 +1,7 @@
 
-use std::{path::Path, process::ExitStatus};
+use std::path::Path;
 use crate::manifest::*;
+use crate::steps::{BuildStep, run_steps};
 
 pub fn build(
     userlib: &Path, features: &[String],
@@ -19,59 +20,29 @@ pub fn build(
         console::style("Linux").fg(console::Color::Yellow).bright()
     );
 
-    print_step(format_args!("Generating manifest..."));
-    let cradle_directory = super::cradle_directory().join("linux");
-    gen_manifest(
-        &cradle_directory.join("Cargo.toml"),
-        &cradle_directory.join("Cargo.template.toml"),
-        &std::fs::canonicalize(userlib).expect("Failed to canonicalize userlib path"),
-        project_name,
-        features.iter().map(|s| s as &str).collect()
-    );
-
-    std::env::set_current_dir(cradle_directory).expect("Failed to set working directory");
+    let mut steps = vec![
+        BuildStep::GenManifest {
+            userlib_path: userlib,
+            userlib_name: project_name,
+            features: features.iter().map(|s| s as &str).collect()
+        }
+    ];
     if update_deps {
-        print_step(format_args!("Updating dependencies..."));
-        let e = std::process::Command::new("cargo")
-            .args(&["update"])
-            .spawn()
-            .expect("Failed to spawn `cargo update`")
-            .wait()
-            .expect("Failed to wait `cargo update`");
-        handle_process_result(e);
+        steps.push(BuildStep::UpdateDeps);
     }
 
-    print_step(format_args!("Compiling code..."));
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.args(&[if after_run { "run" } else { "build" }, "--target", "x86_64-unknown-linux-gnu"]);
+    let mut env = std::collections::HashMap::new();
+    let mut ext_features = Vec::new();
     if let Some(p) = ext_asset_path {
-        cmd
-            .args(&["--features", "UseExternalAssetPath"])
-            .env("PERIDOT_EXTERNAL_ASSET_PATH", p);
+        env.insert("PERIDOT_EXTERNAL_ASSET_PATH", p.to_str().expect("invalid sequence in asset path"));
+        ext_features.push("UseExternalAssetPath");
     }
-    let e = cmd
-        .spawn()
-        .expect("Failed to spawn cargo build command")
-        .wait()
-        .expect("Failed to wait cargo build command");
-    handle_process_result(e);
-}
+    steps.push(BuildStep::BuildWithCargo {
+        subcmd: if after_run { "run" } else { "build" },
+        ext_features,
+        env,
+        target_spec: Some("x86_64-unknown-linux-gnu")
+    });
 
-fn print_step(args: std::fmt::Arguments) {
-    println!(" {} {}", console::style("*").fg(console::Color::Green).bold(), args);
-}
-
-fn handle_process_result(e: ExitStatus) {
-    if e.success() { return; }
-
-    if let Some(c) = e.code() {
-        eprintln!(
-            "{}: cargo build command failed with code {:?}",
-            console::style("ERROR").bold().fg(console::Color::Red),
-            c
-        );
-        std::process::exit(c);
-    } else {
-        panic!("Child process killed by signal");
-    }
+    run_steps("linux", steps.into_iter());
 }
