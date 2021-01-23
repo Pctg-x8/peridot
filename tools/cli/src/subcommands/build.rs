@@ -32,15 +32,16 @@ pub struct Args {
 }
 
 pub fn run(args: Args) {
+    let options = crate::platform::BuildOptions {
+        userlib: &args.userlib_path,
+        features: args.feature.iter().map(|s| s as &str).collect(),
+        update_deps: args.update_deps,
+        ext_asset_path: args.asset_directory.as_deref(),
+        entry_ty_name: &args.entry_ty_name,
+        appid: &args.app_package_id
+    };
+
     for p in args.platform {
-        p.build(
-            &args.userlib_path,
-            &args.feature,
-            args.update_deps,
-            args.run,
-            args.asset_directory.as_deref(),
-            &args.entry_ty_name,
-            &args.app_package_id
-        );
+        p.build(&options, args.run);
     }
 }

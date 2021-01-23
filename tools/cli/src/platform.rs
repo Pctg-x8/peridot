@@ -15,6 +15,27 @@ arg_enum! {
     }
 }
 
+pub struct BuildOptions<'s> {
+    pub userlib: &'s Path,
+    pub features: Vec<&'s str>,
+    pub update_deps: bool,
+    pub ext_asset_path: Option<&'s Path>,
+    pub entry_ty_name: &'s str,
+    pub appid: &'s str
+}
+impl<'s> Default for BuildOptions<'s> {
+    fn default() -> Self {
+        BuildOptions {
+            userlib: Path::new(""),
+            features: Vec::new(),
+            update_deps: false,
+            ext_asset_path: None,
+            entry_ty_name: "",
+            appid: ""
+        }
+    }
+}
+
 impl Platform {
     pub const fn cradle_subdir_path(self) -> &'static str {
         match self {
@@ -25,23 +46,11 @@ impl Platform {
         }
     }
 
-    pub fn build(
-        self,
-        userlib: &Path, features: &[String], update_deps: bool, after_run: bool,
-        ext_asset_path: Option<&Path>, entry_ty_name: &str, appid: &str
-    ) {
+    pub fn build(self, options: &BuildOptions, after_run: bool) {
         match self {
-            Self::Windows => self::windows::build(
-                userlib,
-                features,
-                update_deps,
-                if after_run { "run" } else { "build" },
-                ext_asset_path,
-                entry_ty_name,
-                appid
-            ),
+            Self::Windows => self::windows::build(options, if after_run { "run" } else { "build" }),
             Self::Mac => todo!("Build Process for Mac"),
-            Self::Linux => self::linux::build(userlib, features, update_deps, after_run, ext_asset_path),
+            Self::Linux => self::linux::build(options, if after_run { "run" } else { "build" }),
             Self::Android => todo!("Build Process for Android")
         }
     }
