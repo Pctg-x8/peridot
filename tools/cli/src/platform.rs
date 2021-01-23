@@ -46,11 +46,11 @@ impl Platform {
         }
     }
 
-    pub fn build(self, options: &BuildOptions, after_run: bool) {
+    pub fn build(self, options: &BuildOptions, final_cargo_cmd: &str) {
         match self {
-            Self::Windows => self::windows::build(options, if after_run { "run" } else { "build" }),
+            Self::Windows => self::windows::build(options, final_cargo_cmd),
             Self::Mac => todo!("Build Process for Mac"),
-            Self::Linux => self::linux::build(options, if after_run { "run" } else { "build" }),
+            Self::Linux => self::linux::build(options, final_cargo_cmd),
             Self::Android => todo!("Build Process for Android")
         }
     }

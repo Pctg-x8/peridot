@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use structopt::StructOpt;
 use crate::platform::Platform;
 
-/// Builds an game
+/// Test game code
 #[derive(StructOpt, Debug)]
 pub struct Args {
     /// Path to userlib crate
@@ -42,6 +42,6 @@ pub fn run(args: Args) {
     };
 
     for p in args.platform {
-        p.build(&options, if args.run { "run" } else { "build" });
+        p.build(&options, "test");
     }
 }
