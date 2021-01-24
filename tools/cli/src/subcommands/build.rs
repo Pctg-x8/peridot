@@ -27,7 +27,7 @@ pub struct Args {
     #[structopt(long, short = "u")]
     update_deps: bool,
     /// Application Identifier
-    #[structopt(long, default_value = "jp.ct2.peridot")]
+    #[structopt(long = "appid", default_value = "jp.ct2.peridot")]
     app_package_id: String
 }
 impl Args {

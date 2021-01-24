@@ -1,6 +1,7 @@
 
 mod linux;
 mod windows;
+mod android;
 
 use std::path::{Path, PathBuf};
 use structopt::clap::arg_enum;
@@ -39,7 +40,7 @@ impl<'s> Default for BuildOptions<'s> {
 }
 
 impl Platform {
-    pub const fn cradle_subdir_path(self) -> &'static str {
+    pub const fn cradle_name(self) -> &'static str {
         match self {
             Self::Windows => "windows",
             Self::Mac => "mac",
@@ -53,7 +54,7 @@ impl Platform {
             Self::Windows => self::windows::build(options, final_cargo_cmd),
             Self::Mac => todo!("Build Process for Mac"),
             Self::Linux => self::linux::build(options, final_cargo_cmd),
-            Self::Android => todo!("Build Process for Android")
+            Self::Android => self::android::build(options, final_cargo_cmd)
         }
     }
 
@@ -64,12 +65,13 @@ impl Platform {
             .expect("Failed to parse Userlib Cargo.toml");
         let project_name = user_manifest.package.as_ref().and_then(|p| p.name.as_deref())
             .unwrap_or("?Unnamed Project?");
-        
-        crate::steps::run_steps(self.cradle_subdir_path(), std::iter::once(crate::steps::BuildStep::GenManifest {
-            userlib_path: userlib,
-            userlib_name: project_name,
+
+        crate::steps::gen_manifest(
+            &crate::steps::BuildContext::new(self.cradle_name()),
+            userlib,
+            project_name,
             features
-        }));
+        );
     }
 }
 

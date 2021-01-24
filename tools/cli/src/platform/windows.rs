@@ -1,6 +1,6 @@
 
 use crate::manifest::*;
-use crate::steps::{BuildStep, run_steps};
+use crate::steps;
 
 pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
@@ -15,19 +15,12 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         console::style("Win32").fg(console::Color::Yellow).bright()
     );
 
-    let mut steps = vec![
-        BuildStep::GenManifest {
-            userlib_path: options.userlib,
-            userlib_name: project_name,
-            features: options.features.iter().map(|s| s as &str).collect()
-        },
-        BuildStep::GenUserlibImportCode {
-            userlib_name: project_name,
-            entry_ty_name: options.entry_ty_name
-        }
-    ];
+    let ctx = steps::BuildContext::new("windows");
+    steps::gen_manifest(&ctx, options.userlib, project_name, options.features.clone());
+    steps::gen_userlib_import_code(&ctx, project_name, options.entry_ty_name);
+    ctx.cwd_cradle_dir();
     if options.update_deps {
-        steps.push(BuildStep::UpdateDeps);
+        steps::update_deps(&ctx);
     }
 
     let mut env = std::collections::HashMap::new();
@@ -37,12 +30,5 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         env.insert("PERIDOT_EXTERNAL_ASSET_PATH", p.to_str().expect("invalid sequence in asset path"));
         ext_features.push("UseExternalAssetPath");
     }
-    steps.push(BuildStep::BuildWithCargo {
-        subcmd: cargo_cmd,
-        ext_features,
-        env,
-        target_spec: Some("x86_64-pc-windows-msvc")
-    });
-
-    run_steps("windows", steps.into_iter());
+    steps::cargo(&ctx, cargo_cmd, ext_features, env, Some("x86_64-pc-windows-msvc"));
 }
