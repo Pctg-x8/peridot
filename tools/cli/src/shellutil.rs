@@ -41,9 +41,10 @@ pub fn sh_mirror(source: &Path, target: &Path, excludes: &[&str]) -> Result<Exit
 }
 #[cfg(not(windows))]
 pub fn sh_mirror(source: &Path, target: &Path, excludes: &[&str]) -> Result<ExitStatus, std::io::Error> {
+    let source = source.join("*");
     let mut args = vec![
         "-auz",
-        source.join("*").to_str().expect("invalid sequence in source path"),
+        source.to_str().expect("invalid sequence in source path"),
         target.to_str().expect("invalid sequence in target path"),
     ];
     args.extend(excludes.iter().flat_map(|x| vec!["--exclude", x]));
