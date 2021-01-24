@@ -195,7 +195,7 @@ let checkCradleWindows = \(notifyProvider : SlackNotifyProvider) -> \(preconditi
                 , run = Some
                 ''
                     $ErrorActionPreference = "Continue"
-                    pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                    pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                 ''
                 , env = Some (toMap { VK_SDK_PATH = "", PERIDOT_CLI_CRADLE_BASE = GithubActions.mkExpression "format('{0}/cradle', github.workspace)" })
                 }
