@@ -18,6 +18,7 @@ arg_enum! {
 pub struct BuildOptions<'s> {
     pub userlib: &'s Path,
     pub features: Vec<&'s str>,
+    pub engine_features: Vec<&'s str>,
     pub update_deps: bool,
     pub ext_asset_path: Option<&'s Path>,
     pub entry_ty_name: &'s str,
@@ -28,6 +29,7 @@ impl<'s> Default for BuildOptions<'s> {
         BuildOptions {
             userlib: Path::new(""),
             features: Vec::new(),
+            engine_features: Vec::new(),
             update_deps: false,
             ext_asset_path: None,
             entry_ty_name: "",

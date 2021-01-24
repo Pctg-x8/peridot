@@ -31,7 +31,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     }
 
     let mut env = std::collections::HashMap::new();
-    let mut ext_features = Vec::new();
+    let mut ext_features = options.engine_features.clone();
     env.insert("PERIDOT_WINDOWS_APPID", options.appid);
     if let Some(p) = options.ext_asset_path {
         env.insert("PERIDOT_EXTERNAL_ASSET_PATH", p.to_str().expect("invalid sequence in asset path"));
