@@ -14,9 +14,6 @@ pub struct Args {
     /// Entry TypeName
     #[structopt(long, short = "e", default_value = "Game")]
     entry_ty_name: String,
-    /// Run after build
-    #[structopt(long, short = "r")]
-    run: bool,
     /// Asset Directory
     #[structopt(long, short = "a")]
     asset_directory: Option<PathBuf>,
@@ -47,10 +44,19 @@ impl Args {
     }
 }
 
-pub fn run(args: Args) {
-    let options = args.to_build_options();
+#[derive(StructOpt, Debug)]
+pub struct BuildArgs {
+    #[structopt(flatten)]
+    base: Args,
+    /// Run after build
+    #[structopt(long, short = "r")]
+    run: bool
+}
 
-    for p in &args.platform {
+pub fn run(args: BuildArgs) {
+    let options = args.base.to_build_options();
+
+    for p in &args.base.platform {
         p.build(&options, if args.run { "run" } else { "build" });
     }
 }

@@ -10,7 +10,7 @@ use structopt::StructOpt;
 #[derive(StructOpt)]
 #[structopt(name = "peridot")]
 pub enum SubCommands {
-    Build(subcommands::build::Args),
+    Build(subcommands::build::BuildArgs),
     /// Check game code
     Check(subcommands::build::Args),
     /// Test game code
