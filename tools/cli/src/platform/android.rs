@@ -12,11 +12,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         .expect("Failed to parse Userlib Cargo.toml");
     let project_name = user_manifest.package.as_ref().and_then(|p| p.name.as_deref())
         .unwrap_or("?Unnamed Project?");
-    println!(
-        "🛠  Building Project {} for {} Deployment...",
-        console::style(project_name).bold().fg(console::Color::Cyan),
-        console::style("Android").fg(console::Color::Yellow).bright()
-    );
+    super::print_start_build("Android", project_name);
 
     let ctx = steps::BuildContext::new("android");
     steps::gen_manifest(&ctx, options.userlib, project_name, options.features.clone());
