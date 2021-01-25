@@ -1,5 +1,6 @@
 
 mod shellutil;
+mod toolpath;
 mod manifest;
 mod steps;
 mod platform;

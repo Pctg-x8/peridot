@@ -2,6 +2,7 @@
 mod linux;
 mod windows;
 mod android;
+mod mac;
 
 use std::path::{Path, PathBuf};
 use structopt::clap::arg_enum;
@@ -52,7 +53,7 @@ impl Platform {
     pub fn build(self, options: &BuildOptions, final_cargo_cmd: &str) {
         match self {
             Self::Windows => self::windows::build(options, final_cargo_cmd),
-            Self::Mac => todo!("Build Process for Mac"),
+            Self::Mac => self::mac::build(options, final_cargo_cmd),
             Self::Linux => self::linux::build(options, final_cargo_cmd),
             Self::Android => self::android::build(options, final_cargo_cmd)
         }
@@ -83,4 +84,12 @@ pub fn cradle_directory() -> PathBuf {
         // Note: dev-packageのフォルダ構造に依存しているので、そっちを変えたらこっちも変える
         std::env::current_exe().expect("Failed to query exe path").join("../cradle")
     }
+}
+
+pub fn print_start_build(platform_name: &str, project_name: &str) {
+    println!(
+        "🛠  Building Project {} for {} Deployment...",
+        console::style(project_name).bold().fg(console::Color::Cyan),
+        console::style(platform_name).fg(console::Color::Yellow).bright()
+    );
 }

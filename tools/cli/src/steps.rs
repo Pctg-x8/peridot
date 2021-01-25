@@ -93,68 +93,23 @@ pub fn cargo(
         .expect("Failed to wait cargo build command");
     crate::shellutil::handle_process_result("cargo build command", e);
 }
+pub fn package_assets(ctx: &BuildContext, asset_path: &Path, output_path: &Path) {
+    ctx.print_step("Packaging assets...");
 
-/*
-pub fn run_steps<'s>(cradle_subdirectory_path: &str, steps: impl Iterator<Item = BuildStep<'s>>) {
-    let cradle_directory = crate::platform::cradle_directory().join(cradle_subdirectory_path);
-
-    for s in steps {
-        match s {
-            BuildStep::GenAndroidFiles { appid, asset_path } => {
-                print_step(cradle_subdirectory_path, format_args!("Generating Android build files..."));
-
-                let android_app_base = cradle_directory.join("apkbuild/app");
-                let c = std::fs::read_to_string(android_app_base.join("build-template.gradle"))
-                    .expect("Failed to read template gradle script");
-                let c = c.replace("**APKAPPID**", &format!("'{}'", appid));
-                let c = c.replace(
-                    "**ASSETDIR**",
-                    std::fs::canonicalize(asset_path)
-                        .expect("Failed to canonicalize asset path")
-                        .to_str()
-                        .expect("invalid sequence in asset path")
-                );
-                std::fs::write(android_app_base.join("build.gradle"), c).expect("Failed to write gradle script");
-
-                let c = std::fs::read_to_string(android_app_base.join("src/main/AndroidManifest-template.xml"))
-                    .expect("Failed to read template android manifest");
-                let c = c.replace("**APKAPPID**", appid);
-                std::fs::write(android_app_base.join("src/main/AndroidManifest.xml"), c)
-                    .expect("Failed to write android manifest");
-            },
-            BuildStep::MergeAndroidResourceDirectory { resource_path } => {
-                print_step(cradle_subdirectory_path, format_args!("Merging Customized resource directories..."));
-
-                let target_path = cradle_directory.join("apkbuild/app/src/main/res");
-                // Make default structure then mirrors the user-defined structure,
-                // results an user-customized resource structure
-                handle_process_result(
-                    "default sync command",
-                    sh_mirror(
-                        &cradle_directory.join("apkbuild/app/src/main/res-default"),
-                        &target_path,
-                        &[]
-                    ).expect("Failed to run default mirror command")
-                );
-                if resource_path.exists() {
-                    handle_process_result(
-                        "appending copy command",
-                        sh_append_copy(resource_path, &target_path).expect("Failed to run appending copy command")
-                    );
-                }
-            },
-            BuildStep::MirrorAndroidExtLibraries { extlib_path } => {
-                print_step(cradle_subdirectory_path, format_args!("Mirroring External libraries..."));
-
-                if extlib_path.exists() {
-                    let target_path = cradle_directory.join("apkbuild/app/src/main/jniLibs");
-                    handle_process_result(
-                        "sync command",
-                        sh_mirror(extlib_path, &target_path, &[".*"]).expect("Failed to run mirror command")
-                    );
-                }
-            }
-        }
-    }
+    let mut basedir_str = String::from(asset_path.to_str().expect("invalid sequence in asset path"));
+    if !basedir_str.ends_with("/") { basedir_str.push('/'); }
+    let e = std::process::Command::new(crate::toolpath::archiver_path())
+        .args(&[
+            "new",
+            asset_path.to_str().expect("invalid sequence in asset path"),
+            "-o",
+            output_path.to_str().expect("invalid sequence in output path"),
+            "-b",
+            &basedir_str
+        ])
+        .spawn()
+        .expect("Failed to spawn peridot-archive")
+        .wait()
+        .expect("Failed to wait peridot-archive");
+    crate::shellutil::handle_process_result("peridot-archive", e);
 }
-*/
