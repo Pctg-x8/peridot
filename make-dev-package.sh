@@ -35,6 +35,10 @@ done
 mkdir -p $OUT_DIRECTORY || true
 rm -rf $OUT_DIRECTORY/*
 
+# Copy builtin assets
+mkdir -p $OUT_DIRECTORY/builtin-assets
+rsync -auz --progress $SCRIPT_PATH/builtin-assets $OUT_DIRECTORY/ --exclude *.csh --exclude Makefile
+
 # Copy cradles
 mkdir -p $OUT_DIRECTORY/cradle/windows
 rsync -auz --progress $SCRIPT_PATH/cradle/windows $OUT_DIRECTORY/cradle/ --exclude target --exclude userlib.rs --exclude Cargo.toml --exclude Cargo.lock
