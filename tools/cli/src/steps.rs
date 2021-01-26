@@ -98,7 +98,7 @@ pub fn package_assets(ctx: &BuildContext, asset_path: &Path, output_path: &Path)
 
     let mut basedir_str = String::from(asset_path.to_str().expect("invalid sequence in asset path"));
     if !basedir_str.ends_with("/") { basedir_str.push('/'); }
-    let e = std::process::Command::new(crate::toolpath::archiver_path())
+    let e = std::process::Command::new(crate::path::archiver_path())
         .args(&[
             "new",
             asset_path.to_str().expect("invalid sequence in asset path"),
