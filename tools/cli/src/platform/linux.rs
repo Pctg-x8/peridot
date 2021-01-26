@@ -3,8 +3,6 @@ use crate::manifest::*;
 use crate::steps;
 
 pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
-    let builtin_assets_path = crate::path::builtin_assets_path();
-
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest = toml::from_str(&user_manifest_loaded)
@@ -26,13 +24,6 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     if let Some(p) = options.ext_asset_path {
         env.insert("PERIDOT_EXTERNAL_ASSET_PATH", p.to_str().expect("invalid sequence in asset path"));
         ext_features.push("UseExternalAssetPath");
-    }
-    if options.fast_build {
-        env.insert(
-            "PERIDOT_BUILTIN_ASSET_PATH",
-            builtin_assets_path.to_str().expect("invalid sequence in builtin asset path")
-        );
-        ext_features.push("IterationBuild");
     }
     steps::cargo(&ctx, cargo_cmd, ext_features, env, Some("x86_64-unknown-linux-gnu"));
 }

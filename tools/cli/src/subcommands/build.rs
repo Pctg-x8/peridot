@@ -28,10 +28,7 @@ pub struct Args {
     update_deps: bool,
     /// Application Identifier
     #[structopt(long = "appid", default_value = "jp.ct2.peridot")]
-    app_package_id: String,
-    /// Use fast build(no copy of builtin-assets)
-    #[structopt(long)]
-    fast_build: bool
+    app_package_id: String
 }
 impl Args {
     pub fn to_build_options(&self) -> crate::platform::BuildOptions {
@@ -42,8 +39,7 @@ impl Args {
             update_deps: self.update_deps,
             ext_asset_path: self.asset_directory.as_deref(),
             entry_ty_name: &self.entry_ty_name,
-            appid: &self.app_package_id,
-            fast_build: self.fast_build
+            appid: &self.app_package_id
         }
     }
 }
