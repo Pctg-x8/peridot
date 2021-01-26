@@ -24,7 +24,8 @@ pub struct BuildOptions<'s> {
     pub update_deps: bool,
     pub ext_asset_path: Option<&'s Path>,
     pub entry_ty_name: &'s str,
-    pub appid: &'s str
+    pub appid: &'s str,
+    pub fast_build: bool
 }
 impl<'s> Default for BuildOptions<'s> {
     fn default() -> Self {
@@ -35,7 +36,8 @@ impl<'s> Default for BuildOptions<'s> {
             update_deps: false,
             ext_asset_path: None,
             entry_ty_name: "",
-            appid: ""
+            appid: "",
+            fast_build: false
         }
     }
 }
