@@ -82,7 +82,7 @@ pub fn cradle_directory() -> PathBuf {
         PathBuf::from(b)
     } else {
         // Note: dev-packageのフォルダ構造に依存しているので、そっちを変えたらこっちも変える
-        std::env::current_exe().expect("Failed to query exe path").join("../cradle")
+        std::env::current_exe().expect("Failed to query exe path").parent().expect("no parent?").join("../cradle")
     }
 }
 
