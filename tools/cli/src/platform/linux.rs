@@ -13,6 +13,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
 
     let ctx = steps::BuildContext::new("linux");
     steps::gen_manifest(&ctx, options.userlib, project_name, options.features.clone());
+    steps::gen_userlib_import_code(&ctx, project_name, options.entry_ty_name);
     ctx.cwd_cradle_dir();
     if options.update_deps {
         steps::update_deps(&ctx);
