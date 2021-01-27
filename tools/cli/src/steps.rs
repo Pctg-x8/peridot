@@ -113,3 +113,22 @@ pub fn package_assets(ctx: &BuildContext, asset_path: &Path, output_path: &Path)
         .expect("Failed to wait peridot-archive");
     crate::shellutil::handle_process_result("peridot-archive", e);
 }
+pub fn merge_assets(ctx: &BuildContext, stg_directory_path: &Path, user_assets: Option<&Path>) {
+    ctx.print_step("Merging assets...");
+
+    if !stg_directory_path.exists() {
+        std::fs::create_dir_all(stg_directory_path).expect("Failed to create asset stg directory");
+    }
+    if let Some(p) = user_assets {
+        crate::shellutil::handle_process_result(
+            "asset sync command",
+            crate::shellutil::sh_mirror(p, stg_directory_path, &[]).expect("Failed to run mirror command")
+        );
+    }
+    crate::shellutil::handle_process_result(
+        "builtin asset sync command",
+        crate::shellutil::sh_mirror(
+            &crate::path::builtin_assets_path(), &stg_directory_path.join("builtin"), &["Makefile"]
+        ).expect("Failed to run mirror command")
+    );
+}

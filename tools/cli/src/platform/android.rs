@@ -18,7 +18,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     steps::gen_userlib_import_code(&ctx, project_name, options.entry_ty_name);
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
-    merge_assets(&ctx, options.ext_asset_path);
+    steps::merge_assets(&ctx, &ctx.cradle_directory.join("assets"), options.ext_asset_path);
 
     ctx.within_cradle_dir(|| {
         let gradle_build_target_path = ctx.cradle_directory.join("target/arm64-v8a-linux-android");
@@ -105,25 +105,6 @@ fn mirror_ext_libraries(ctx: &steps::BuildContext, userlib: &Path) {
             crate::shellutil::sh_mirror(&extlib_path, &target_path, &[".*"]).expect("Failed to run mirror command")
         );
     }
-}
-fn merge_assets(ctx: &steps::BuildContext, user_assets: Option<&Path>) {
-    ctx.print_step("Merging assets...");
-
-    let resource_path = ctx.cradle_directory.join("assets");
-    if !resource_path.exists() {
-        std::fs::create_dir_all(&resource_path).expect("Failed to create asset stg directory");
-    }
-    if let Some(p) = user_assets {
-        crate::shellutil::handle_process_result(
-            "asset sync command",
-            crate::shellutil::sh_mirror(p, &resource_path, &[]).expect("Failed to run mirror command")
-        );
-    }
-    crate::shellutil::handle_process_result(
-        "builtin asset sync command",
-        crate::shellutil::sh_mirror(&crate::path::builtin_assets_path(), &resource_path.join("builtin"), &["Makefile"])
-            .expect("Failed to run mirror command")
-    );
 }
 fn cargo_ndk(
     ctx: &steps::BuildContext,
