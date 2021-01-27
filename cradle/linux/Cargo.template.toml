@@ -16,5 +16,3 @@ env_logger = "0.5"
 xcb = "0.8"
 libc = "0.2"
 regex = "1.4"
-
-#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
