@@ -41,10 +41,14 @@ pub fn sh_mirror(source: &Path, target: &Path, excludes: &[&str]) -> Result<Exit
 }
 #[cfg(not(windows))]
 pub fn sh_mirror(source: &Path, target: &Path, excludes: &[&str]) -> Result<ExitStatus, std::io::Error> {
-    let source = source.join("*");
+    let mut source = String::from(source.to_str().expect("invalid sequence in source path"));
+    if !source.ends_with('/') {
+        source.push('/');
+    }
+
     let mut args = vec![
         "-auz",
-        source.to_str().expect("invalid sequence in source path"),
+        &source,
         target.to_str().expect("invalid sequence in target path"),
     ];
     args.extend(excludes.iter().flat_map(|x| vec!["--exclude", x]));
@@ -75,10 +79,15 @@ pub fn sh_append_copy(source: &Path, target: &Path) -> Result<ExitStatus, std::i
 }
 #[cfg(not(windows))]
 pub fn sh_append_copy(source: &Path, target: &Path) -> Result<ExitStatus, std::io::Error> {
+    let mut source = String::from(source.to_str().expect("invalid sequence in source path"));
+    if !source.ends_with('/') {
+        source.push('/');
+    }
+
     std::process::Command::new("rsync")
         .args(&[
             "-a",
-            source.join("*").to_str().expect("invalid sequence in source path"),
+            &source,
             target.to_str().expect("invalid sequence in target path")
         ])
         .spawn()?

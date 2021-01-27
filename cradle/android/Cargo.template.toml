@@ -16,5 +16,3 @@ log = "0.4"
 libc = "0.2"
 android_logger = "0.5"
 jni = "0.15"
-
-#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }

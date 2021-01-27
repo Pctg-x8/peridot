@@ -3,6 +3,9 @@ use crate::manifest::*;
 use crate::steps;
 
 pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
+    let builtin_assets_path = crate::path::builtin_assets_path();
+    let asset_path_abs = options.ext_asset_path.map(|x| x.canonicalize().expect("Failed to resolve ext asset path"));
+
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest = toml::from_str(&user_manifest_loaded)
@@ -22,9 +25,16 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     let mut env = std::collections::HashMap::new();
     let mut ext_features = options.engine_features.clone();
     env.insert("PERIDOT_WINDOWS_APPID", options.appid);
-    if let Some(p) = options.ext_asset_path {
+    if let Some(ref p) = asset_path_abs {
         env.insert("PERIDOT_EXTERNAL_ASSET_PATH", p.to_str().expect("invalid sequence in asset path"));
         ext_features.push("UseExternalAssetPath");
+    }
+    if options.fast_build {
+        env.insert(
+            "PERIDOT_BUILTIN_ASSET_PATH",
+            builtin_assets_path.to_str().expect("invalid sequence in builtin asset path")
+        );
+        ext_features.push("IterationBuild");
     }
     steps::cargo(&ctx, cargo_cmd, ext_features, env, Some("x86_64-pc-windows-msvc"));
 }

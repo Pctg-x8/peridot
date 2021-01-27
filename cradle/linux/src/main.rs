@@ -16,7 +16,11 @@ mod kernel_input;
 mod input;
 mod userlib;
 
-pub struct PlatformAssetLoader { basedir: PathBuf }
+pub struct PlatformAssetLoader {
+    basedir: PathBuf,
+    #[cfg(feature = "IterationBuild")]
+    builtin_asset_basedir: PathBuf
+}
 impl PlatformAssetLoader
 {
     fn new() -> Self
@@ -29,7 +33,11 @@ impl PlatformAssetLoader
         };
 
         trace!("Using Assets in {}", basedir.display());
-        PlatformAssetLoader { basedir }
+        PlatformAssetLoader {
+            basedir,
+            #[cfg(feature = "IterationBuild")]
+            builtin_asset_basedir: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH"))
+        }
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader
@@ -39,9 +47,25 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>
     {
+        #[allow(unused_mut)]
+        let mut path_segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if path_segments.peek().map_or(false, |&s| s == "builtin") {
+            // Switch base to external builtin path
+            path_segments.next();
+            let mut apath = self.builtin_asset_basedir.clone();
+            apath.extend(path_segments);
+            apath.set_extension(ext);
+            
+            return File::open(apath);
+        }
+
         let mut apath = self.basedir.clone();
-        apath.push(path.replace(".", "/")); apath.set_extension(ext);
-        return File::open(apath);
+        apath.extend(path_segments);
+        apath.set_extension(ext);
+
+        File::open(apath)
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> { self.get(path, ext) }
 }

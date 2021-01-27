@@ -21,5 +21,4 @@ objc = "*"
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 appkit-derive = { git = "https://github.com/Pctg-x8/appkit-rs" }
 libc = "0.2"
-#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
 
