@@ -21,8 +21,8 @@ pub trait PlatformPresenter {
         update_submission: Option<br::SubmissionBatch<'s>>
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for backbuffer resources
-    fn resize(&mut self, g: &crate::Graphics, new_size: math::Vector2<usize>) -> bool;
-    fn current_geometry_extent(&self) -> math::Vector2<usize>;
+    fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
+    fn current_geometry_extent(&self) -> peridot_math::Vector2<usize>;
 }
 
 struct IntegratedSwapchainObject {
@@ -30,7 +30,9 @@ struct IntegratedSwapchainObject {
     backbuffer_images: Vec<Rc<br::ImageView>>
 }
 impl IntegratedSwapchainObject {
-    pub fn new(g: &crate::Graphics, surface_info: &crate::SurfaceInfo, default_extent: math::Vector2<usize>) -> Self {
+    pub fn new(
+        g: &crate::Graphics, surface_info: &crate::SurfaceInfo, default_extent: peridot_math::Vector2<usize>
+    ) -> Self {
         let si = g.adapter.surface_capabilities(&surface_info.obj).expect("Failed to query Surface Capabilities");
         let ew = if si.currentExtent.width == 0xffff_ffff { default_extent.0 as _ } else { si.currentExtent.width };
         let eh = if si.currentExtent.height == 0xffff_ffff { default_extent.1 as _ } else { si.currentExtent.height };
@@ -74,7 +76,7 @@ pub struct IntegratedSwapchain {
     present_order: br::Semaphore,
 }
 impl IntegratedSwapchain {
-    pub fn new(g: &crate::Graphics, surface: br::Surface, default_extent: math::Vector2<usize>) -> Self {
+    pub fn new(g: &crate::Graphics, surface: br::Surface, default_extent: peridot_math::Vector2<usize>) -> Self {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, surface).expect("Failed to gather surface info");
         
         IntegratedSwapchain {
@@ -143,7 +145,7 @@ impl IntegratedSwapchain {
         self.swapchain.get().swapchain.queue_present(q, bb_index, &[&self.present_order])
     }
 
-    pub fn resize(&mut self, g: &crate::Graphics, new_size: math::Vector2<usize>) {
+    pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {
         self.swapchain.discard_lw();
         self.swapchain.set_lw(IntegratedSwapchainObject::new(g, &self.surface_info, new_size));
     }

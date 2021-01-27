@@ -146,7 +146,11 @@ fn process_message_all() -> bool
 
 use std::path::PathBuf;
 
-struct AssetProvider { base: PathBuf }
+struct AssetProvider {
+    base: PathBuf,
+    #[cfg(feature = "IterationBuild")]
+    builtin_assets_base: PathBuf
+}
 impl AssetProvider
 {
     fn new() -> Self
@@ -158,7 +162,11 @@ impl AssetProvider
             exe.pop(); exe.push("/assets"); exe
         };
         trace!("Asset BaseDirectory={}", base.display());
-        AssetProvider { base }
+        AssetProvider {
+            base,
+            #[cfg(feature = "IterationBuild")]
+            builtin_assets_base: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH"))
+        }
     }
 }
 impl peridot::PlatformAssetLoader for AssetProvider
@@ -168,17 +176,45 @@ impl peridot::PlatformAssetLoader for AssetProvider
 
     fn get(&self, path: &str, ext: &str) -> std::io::Result<Self::Asset>
     {
+        let mut segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if segments.peek().map_or(false, |&s| s == "builtin") {
+            let _ = segments.next();
+
+            let mut p = self.builtin_assets_base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+
+            return std::fs::File::open(&p);
+        }
+
         let mut p = self.base.clone();
-        p.push(path.replace('.', "/"));
+        p.extend(segments);
         p.set_extension(ext);
-        return std::fs::File::open(&p);
+
+        std::fs::File::open(&p)
     }
     fn get_streaming(&self, path: &str, ext: &str) -> std::io::Result<Self::StreamingAsset>
     {
+        let mut segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if segments.peek().map_or(false, |&s| s == "builtin") {
+            let _ = segments.next();
+
+            let mut p = self.builtin_assets_base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+
+            return std::fs::File::open(&p);
+        }
+        
         let mut p = self.base.clone();
-        p.push(path.replace('.', "/"));
+        p.extend(segments);
         p.set_extension(ext);
-        return std::fs::File::open(&p);
+
+        std::fs::File::open(&p)
     }
 }
 

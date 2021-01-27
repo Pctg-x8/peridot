@@ -9,5 +9,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = "../.." }
 peridot-math = { path = "../../math" }
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-image = { path = "../../image" }
 
 log = "0.4"
