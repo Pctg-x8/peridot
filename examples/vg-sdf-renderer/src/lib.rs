@@ -126,10 +126,12 @@ impl TwoPassStencilSDFRenderer {
             e.graphics(), e.load("builtin.shaders.triangle_fans").expect("Failed to load triangle_fans shader asset")
         ).expect("Failed to create triangle_fans shader modules");
         let curve_fill_shader = PvpShaderModules::new(
-            e.graphics(), e.load("builtin.shaders.curve_triangles").expect("Failed to load curve_triangles shader asset")
+            e.graphics(), e.load("builtin.shaders.curve_triangles")
+                .expect("Failed to load curve_triangles shader asset")
         ).expect("Failed to create curve_triangles shader modules");
         let outline_shader = PvpShaderModules::new(
-            e.graphics(), e.load("builtin.shaders.outline_distance").expect("Failed to load outline_distance shader asset")
+            e.graphics(), e.load("builtin.shaders.outline_distance")
+                .expect("Failed to load outline_distance shader asset")
         ).expect("Failed to create outline_disdtance shader modules");
         let empty_pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[], &[])
             .expect("Failed to create empty pipeline layout"));
