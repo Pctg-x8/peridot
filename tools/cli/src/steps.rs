@@ -94,14 +94,18 @@ pub fn cargo(
     crate::shellutil::handle_process_result("cargo build command", e);
 }
 pub fn package_assets(ctx: &BuildContext, asset_path: &Path, output_path: &Path) {
+    // Prerequired build step
+    let stg_path = std::env::temp_dir().join(".peridot/build/assets");
+    merge_assets(ctx, &stg_path, Some(asset_path));
+
     ctx.print_step("Packaging assets...");
 
-    let mut basedir_str = String::from(asset_path.to_str().expect("invalid sequence in asset path"));
+    let mut basedir_str = String::from(stg_path.to_str().expect("invalid sequence in asset path"));
     if !basedir_str.ends_with("/") { basedir_str.push('/'); }
     let e = std::process::Command::new(crate::path::archiver_path())
         .args(&[
             "new",
-            asset_path.to_str().expect("invalid sequence in asset path"),
+            stg_path.to_str().expect("invalid sequence in asset path"),
             "-o",
             output_path.to_str().expect("invalid sequence in output path"),
             "-b",
