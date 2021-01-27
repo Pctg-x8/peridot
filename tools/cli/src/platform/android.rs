@@ -4,8 +4,6 @@ use crate::steps;
 use std::path::Path;
 
 pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
-    let asset_path = options.ext_asset_path.expect("Asset Directory is required for Android build");
-
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest = toml::from_str(&user_manifest_loaded)
@@ -16,10 +14,11 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
 
     let ctx = steps::BuildContext::new("android");
     steps::gen_manifest(&ctx, options.userlib, project_name, options.features.clone());
-    gen_build_files(&ctx, options.appid, asset_path);
+    gen_build_files(&ctx, options.appid);
     steps::gen_userlib_import_code(&ctx, project_name, options.entry_ty_name);
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
+    merge_assets(&ctx, options.ext_asset_path);
 
     ctx.within_cradle_dir(|| {
         let gradle_build_target_path = ctx.cradle_directory.join("target/arm64-v8a-linux-android");
@@ -41,7 +40,6 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         let mut env = std::collections::HashMap::new();
         let ext_features = options.engine_features.clone();
         env.insert("PACKAGE_ID", options.appid);
-        env.insert("PERIDOT_EXTERNAL_ASSET_PATH", asset_path.to_str().expect("invalid sequence in asset path"));
         cargo_ndk(
             &ctx, if cargo_cmd == "run" { "build" } else { cargo_cmd },
             ext_features, env, "arm64-v8a", compile_version
@@ -61,17 +59,13 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     }
 }
 
-fn gen_build_files(ctx: &steps::BuildContext, appid: &str, asset_path: &Path) {
+fn gen_build_files(ctx: &steps::BuildContext, appid: &str) {
     ctx.print_step("Generating build files...");
 
-    let asset_path_abs = std::fs::canonicalize(asset_path).expect("Failed to canonicalize asset path");
-    let asset_path_abs_str = asset_path_abs.to_str().expect("invalid sequence in asset path");
-    let asset_path_abs = asset_path_abs_str.strip_prefix("\\\\?\\").unwrap_or(asset_path_abs_str).replace('\\', "\\\\");
     let android_app_base = ctx.cradle_directory.join("apkbuild/app");
     let c = std::fs::read_to_string(android_app_base.join("build-template.gradle"))
         .expect("Failed to read template gradle script");
     let c = c.replace("**APKAPPID**", &format!("'{}'", appid));
-    let c = c.replace("**ASSETDIR**", &asset_path_abs);
     std::fs::write(android_app_base.join("build.gradle"), c).expect("Failed to write gradle script");
 
     let c = std::fs::read_to_string(android_app_base.join("src/main/AndroidManifest-template.xml"))
@@ -111,6 +105,25 @@ fn mirror_ext_libraries(ctx: &steps::BuildContext, userlib: &Path) {
             crate::shellutil::sh_mirror(&extlib_path, &target_path, &[".*"]).expect("Failed to run mirror command")
         );
     }
+}
+fn merge_assets(ctx: &steps::BuildContext, user_assets: Option<&Path>) {
+    ctx.print_step("Merging assets...");
+
+    let resource_path = ctx.cradle_directory.join("assets");
+    if !resource_path.exists() {
+        std::fs::create_dir_all(&resource_path).expect("Failed to create asset stg directory");
+    }
+    if let Some(p) = user_assets {
+        crate::shellutil::handle_process_result(
+            "asset sync command",
+            crate::shellutil::sh_mirror(p, &resource_path, &[]).expect("Failed to run mirror command")
+        );
+    }
+    crate::shellutil::handle_process_result(
+        "builtin asset sync command",
+        crate::shellutil::sh_mirror(&crate::path::builtin_assets_path(), &resource_path.join("builtin"), &["Makefile"])
+            .expect("Failed to run mirror command")
+    );
 }
 fn cargo_ndk(
     ctx: &steps::BuildContext,
