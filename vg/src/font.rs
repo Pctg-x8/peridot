@@ -224,20 +224,18 @@ impl Font
     {
         self.0.glyph_indices(&[c]).ok().map(|x| x[0] as _)
     }
-    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
-    {
+    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
         self.0.design_glyph_metrics(&[glyph as _], false)
             .map(|m| m[0].advanceWidth as f32).map_err(From::from)
     }
-    /// in pixel
-    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
-    {
+    /// in dip
+    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
         let m = self.0.design_glyph_metrics(&[glyph as _], false)?[0];
         
         Ok(Rect::new(
             euclid::point2(
                 m.leftSideBearing as f32 * self.scale_value(),
-                (m.verticalOriginY + m.topSideBearing) as f32 * self.scale_value()
+                (m.verticalOriginY - m.topSideBearing) as f32 * self.scale_value()
             ),
             euclid::size2(
                 (m.leftSideBearing + m.rightSideBearing + m.advanceWidth as i32) as f32 * self.scale_value(),
