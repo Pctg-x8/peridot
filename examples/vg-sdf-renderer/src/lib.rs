@@ -297,7 +297,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let font = peridot_vg::FontProvider::new().expect("Failed to create font provider")
             .best_match("sans-serif", &peridot_vg::FontProperties::default(), 120.0)
             .expect("no suitable font");
-        let gid = font.glyph_id('る').expect("no glyph contained");
+        let gid = font.glyph_id('A').expect("no glyph contained");
         const SDF_SIZE: f32 = 32.0;
         let mut gen = peridot_vg::SDFGenerator::new(1.0, SDF_SIZE);
         let glyph_metrics = font.bounds(gid).expect("Failed to get glyph bounds");

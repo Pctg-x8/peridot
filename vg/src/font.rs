@@ -216,7 +216,7 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    pub fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub fn scale_value(&self) -> f32 { (96.0 * self.1 / 72.0) / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 }
 
@@ -229,20 +229,27 @@ impl Font
         self.0.design_glyph_metrics(&[glyph as _], false)
             .map(|m| m[0].advanceWidth as f32).map_err(From::from)
     }
+    /// in pixel
     pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
     {
         let m = self.0.design_glyph_metrics(&[glyph as _], false)?[0];
         
-        Ok(Rect::new(euclid::point2(m.leftSideBearing as _, m.topSideBearing as _), euclid::size2(
-            (m.leftSideBearing + m.rightSideBearing + m.advanceWidth as i32) as f32,
-            (m.topSideBearing + m.bottomSideBearing + m.advanceHeight as i32) as f32,
-        )))
+        Ok(Rect::new(
+            euclid::point2(
+                m.leftSideBearing as f32 * self.scale_value(),
+                (m.verticalOriginY + m.topSideBearing) as f32 * self.scale_value()
+            ),
+            euclid::size2(
+                (m.leftSideBearing + m.rightSideBearing + m.advanceWidth as i32) as f32 * self.scale_value(),
+                (m.topSideBearing + m.bottomSideBearing + m.advanceHeight as i32) as f32 * self.scale_value(),
+            )
+        ))
     }
     pub fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
     {
         let sink = comdrive::ComPtr(PathEventReceiver::new());
         self.0.sink_glyph_run_outline(
-            self.units_per_em() as _, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 }
+            96.0 * self.1 as f32 / 72.0, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 }
         )?;
         for pe in unsafe { sink.0.as_mut().expect("null sink").drain_all_paths() }
         {
