@@ -275,7 +275,7 @@ impl FontProvider
         pat.default_substitute();
         let fonts = self.fc.sort_fonts(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
 
-        let group_desc: Vec<(*const i8, i64)> = fonts.iter().map(|f|
+        let group_desc: Vec<(*const i8, freetype2::FT_Long)> = fonts.iter().map(|f|
         {
             let font_path = f.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
             let face_index = f.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
