@@ -295,7 +295,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let backbuffer_size = AsRef::<br::Extent2D>::as_ref(e.backbuffer(0).expect("no backbuffer?").size()).clone();
 
         let font = peridot_vg::FontProvider::new().expect("Failed to create font provider")
-            .best_match("MS UI Gothic", &peridot_vg::FontProperties::default(), 120.0)
+            .best_match("sans-serif", &peridot_vg::FontProperties::default(), 120.0)
             .expect("no suitable font");
         let gid = font.glyph_id('る').expect("no glyph contained");
         const SDF_SIZE: f32 = 32.0;
