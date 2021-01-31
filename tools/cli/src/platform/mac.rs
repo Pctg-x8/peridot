@@ -17,9 +17,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     let ctx = steps::BuildContext::new("mac");
     steps::gen_manifest(&ctx, options.userlib, project_name, options.features.clone());
     steps::gen_userlib_import_code(&ctx, project_name, options.entry_ty_name);
-    if let Some(a) = options.ext_asset_path {
-        steps::package_assets(&ctx, a, &ctx.cradle_directory.join("peridot-cradle/assets.par"));
-    }
+    steps::package_assets(&ctx, options.ext_asset_path, &ctx.cradle_directory.join("peridot-cradle/assets.par"));
 
     ctx.within_cradle_dir(|| {
         if options.update_deps {
