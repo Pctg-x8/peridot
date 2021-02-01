@@ -112,7 +112,8 @@ impl ParabolaRect {
 
 /// https://www.deepdyve.com/lp/association-for-computing-machinery/resolution-independent-rendering-of-deformable-vector-objects-using-YmvFNsOBWj
 pub struct FigureVertices {
-    pub triangle_fans: Vec<peridot::math::Vector2<f32>>,
+    pub fill_triangle_points: Vec<peridot::math::Vector2<f32>>,
+    pub fill_triangle_indices: Vec<u16>,
     pub curve_triangles: Vec<peridot::VertexUV2D>,
     pub parabola_rects: Vec<ParabolaRect>
 }
@@ -149,7 +150,8 @@ impl FlatPathBuilder for SDFGenerator {
         self.figure_start = p;
         self.current = p;
         self.figure_vertices.push(FigureVertices {
-            triangle_fans: vec![peridot::math::Vector2(p.x, p.y)],
+            fill_triangle_points: vec![peridot::math::Vector2(p.x, p.y)],
+            fill_triangle_indices: vec![],
             curve_triangles: Vec::new(),
             parabola_rects: Vec::new()
         });
@@ -180,7 +182,11 @@ impl SDFGenerator {
 
         let current_figure = self.figure_vertices.last_mut().expect("no figure started?");
         current_figure.parabola_rects.push(ParabolaRect::from_line(from, tov, self.max_distance));
-        current_figure.triangle_fans.extend(vec![from, tov]);
+        let from_point_index = current_figure.fill_triangle_points.len() as u16 - 1;
+        current_figure.fill_triangle_points.push(tov);
+        current_figure.fill_triangle_indices.extend(vec![
+            0, from_point_index, current_figure.fill_triangle_points.len() as u16 - 1
+        ]);
 
         self.current = to;
     }
@@ -191,7 +197,11 @@ impl SDFGenerator {
 
         let current_figure = self.figure_vertices.last_mut().expect("no figure started?");
         current_figure.parabola_rects.push(ParabolaRect::from_quadratic_bezier(from, ctrl, tov, self.max_distance));
-        current_figure.triangle_fans.extend(vec![from, tov]);
+        let from_point_index = current_figure.fill_triangle_points.len() as u16 - 1;
+        current_figure.fill_triangle_points.push(tov);
+        current_figure.fill_triangle_indices.extend(vec![
+            0, from_point_index, current_figure.fill_triangle_points.len() as u16 - 1
+        ]);
         current_figure.curve_triangles.extend(vec![
             peridot::VertexUV2D { pos: from, uv: peridot::math::Vector2(0.0, 0.0) },
             peridot::VertexUV2D { pos: ctrl, uv: peridot::math::Vector2(0.5, 0.0) },

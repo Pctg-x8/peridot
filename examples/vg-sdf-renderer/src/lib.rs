@@ -136,7 +136,7 @@ impl TwoPassStencilSDFRenderer {
         let empty_pl = Rc::new(br::PipelineLayout::new(e.graphics(), &[], &[])
             .expect("Failed to create empty pipeline layout"));
 
-        let mut stencil_triangle_shader = fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+        let mut stencil_triangle_shader = fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         stencil_triangle_shader.vertex_shader_mut().specinfo = Some((
             std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
             br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
@@ -255,7 +255,7 @@ impl TwoPassStencilSDFRenderer {
             br::Viewport::from_rect_with_depth_range(&scissors[0], 0.0 .. 1.0).into()
         ];
 
-        let mut stencil_triangle_shader = self.fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+        let mut stencil_triangle_shader = self.fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         stencil_triangle_shader.vertex_shader_mut().specinfo = Some((
             std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
             br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
@@ -355,8 +355,9 @@ impl TwoPassStencilSDFRenderer {
 }
 pub struct TwoPassStencilSDFRendererBuffers<'b> {
     buffer: &'b br::Buffer,
-    fill_triangle_fans_offset: u64,
-    fill_triangle_fan_groups: &'b [u32],
+    fill_triangle_points_offset: u64,
+    fill_triangle_indices_offset: u64,
+    fill_triangle_groups: &'b [(u32, u32)],
     curve_triangles_offset: u64,
     curve_triangles_count: u32,
     outline_rects_offset: u64,
@@ -370,11 +371,13 @@ impl TwoPassStencilSDFRenderer {
         // Stencil Pass
         rec.begin_render_pass(&self.render_pass, framebuffer, self.render_area(), Self::CLEAR_VALUES, true);
         self.triangle_fans_stencil_pipeline.bind(rec);
-        rec.bind_vertex_buffers(0, &[(&buffers.buffer, buffers.fill_triangle_fans_offset as _)]);
+        rec
+            .bind_vertex_buffers(0, &[(&buffers.buffer, buffers.fill_triangle_points_offset as _)])
+            .bind_index_buffer(buffers.buffer, buffers.fill_triangle_indices_offset as _, br::IndexType::U16);
         let mut vo = 0;
-        for &f in buffers.fill_triangle_fan_groups.iter() {
-            rec.draw(f, 1, vo, 0);
-            vo += f;
+        for &(vertices, indices) in buffers.fill_triangle_groups.iter() {
+            rec.draw_indexed(indices, 1, 0, vo as i32, 0);
+            vo += vertices;
         }
         rec
             .bind_graphics_pipeline(self.curve_triangles_stencil_pipeline.pipeline())
@@ -425,17 +428,28 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         ));
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
-        let (figure_triangle_fans_count, figure_curve_triangles_count, outline_rects_count) = figure_vertices.iter()
-            .fold((0, 0, 0), |(t, t2, t3), f| (
-                t + f.triangle_fans.len(), t2 + f.curve_triangles.len(), t3 + f.parabola_rects.len()
+        let (
+            figure_fill_triangle_points_count,
+            figure_fill_triangle_indices_count,
+            figure_curve_triangles_count,
+            outline_rects_count
+        ) = figure_vertices.iter()
+            .fold((0, 0, 0, 0), |(t, t2, t3, t4), f| (
+                t + f.fill_triangle_points.len(),
+                t2 + f.fill_triangle_indices.len(),
+                t3 + f.curve_triangles.len(),
+                t4 + f.parabola_rects.len()
             ));
 
         let mut bp = peridot::BufferPrealloc::new(e.graphics());
         let flip_fill_rect = bp.add(
             peridot::BufferContent::vertex::<[peridot::math::Vector2<f32>; 4]>()
         );
-        let figures_triangle_fan_offset = bp.add(
-            peridot::BufferContent::vertices::<peridot::math::Vector2<f32>>(figure_triangle_fans_count)
+        let figures_fill_triangle_points_offset = bp.add(
+            peridot::BufferContent::vertices::<peridot::math::Vector2<f32>>(figure_fill_triangle_points_count)
+        );
+        let figures_fill_triangle_indices_offset = bp.add(
+            peridot::BufferContent::indices::<u16>(figure_fill_triangle_indices_count)
         );
         let figure_curve_triangles_offset = bp.add(
             peridot::BufferContent::vertices::<peridot::VertexUV2D>(figure_curve_triangles_count)
@@ -476,18 +490,21 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
                 peridot::math::Vector2(1.0, -1.0)
             ]);
 
-            let s = m.slice_mut(figures_triangle_fan_offset as _, figure_triangle_fans_count);
+            let s = m.slice_mut(figures_fill_triangle_points_offset as _, figure_fill_triangle_points_count);
+            let si = m.slice_mut(figures_fill_triangle_indices_offset as _, figure_fill_triangle_indices_count);
             let c = m.slice_mut(figure_curve_triangles_offset as _, figure_curve_triangles_count);
             let o = m.slice_mut(outline_rects_offset as _, outline_rects_count * 6);
-            let (mut s_offset, mut c_offset, mut o_offset) = (0, 0, 0);
+            let (mut s_offset, mut si_offset, mut c_offset, mut o_offset) = (0, 0, 0, 0);
             for f in figure_vertices.iter() {
-                s[s_offset..s_offset + f.triangle_fans.len()].clone_from_slice(&f.triangle_fans);
+                s[s_offset..s_offset + f.fill_triangle_points.len()].clone_from_slice(&f.fill_triangle_points);
+                si[si_offset..si_offset + f.fill_triangle_indices.len()].copy_from_slice(&f.fill_triangle_indices);
                 c[c_offset..c_offset + f.curve_triangles.len()].clone_from_slice(&f.curve_triangles);
                 for pr in f.parabola_rects.iter() {
                     o[o_offset..o_offset + 6].clone_from_slice(&pr.make_vertices());
                     o_offset += 6;
                 }
-                s_offset += f.triangle_fans.len();
+                s_offset += f.fill_triangle_points.len();
+                si_offset += f.fill_triangle_indices.len();
                 c_offset += f.curve_triangles.len();
             }
         }).expect("Failed to set init data");
@@ -519,11 +536,14 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             &sdf_renderer.render_pass, &[&bb, &stencil_buffer_view], &backbuffer_size, 1
         )).collect::<Result<Vec<_>, _>>().expect("Failed to create Framebuffers");
         
-        let triangle_fan_groups: Vec<_> = figure_vertices.iter().map(|f| f.triangle_fans.len() as u32).collect();
+        let fill_triangle_groups: Vec<_> = figure_vertices.iter()
+            .map(|f| (f.fill_triangle_points.len() as u32, f.fill_triangle_indices.len() as u32))
+            .collect();
         let buffers = TwoPassStencilSDFRendererBuffers {
             buffer: &buffer,
-            fill_triangle_fans_offset: figures_triangle_fan_offset,
-            fill_triangle_fan_groups: &triangle_fan_groups,
+            fill_triangle_points_offset: figures_fill_triangle_points_offset,
+            fill_triangle_indices_offset: figures_fill_triangle_indices_offset,
+            fill_triangle_groups: &fill_triangle_groups,
             curve_triangles_offset: figure_curve_triangles_offset,
             curve_triangles_count: figure_curve_triangles_count as _,
             outline_rects_offset,
@@ -577,17 +597,28 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         ));
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
-        let (figure_triangle_fans_count, figure_curve_triangles_count, outline_rects_count) = figure_vertices.iter()
-            .fold((0, 0, 0), |(t, t2, t3), f| (
-                t + f.triangle_fans.len(), t2 + f.curve_triangles.len(), t3 + f.parabola_rects.len()
+        let (
+            figure_fill_triangle_points_count,
+            figure_fill_triangle_indices_count,
+            figure_curve_triangles_count,
+            outline_rects_count
+        ) = figure_vertices.iter()
+            .fold((0, 0, 0, 0), |(t, t2, t3, t4), f| (
+                t + f.fill_triangle_points.len(),
+                t2 + f.fill_triangle_indices.len(),
+                t3 + f.curve_triangles.len(),
+                t4 + f.parabola_rects.len()
             ));
 
         let mut bp = peridot::BufferPrealloc::new(e.graphics());
         let flip_fill_rect = bp.add(
             peridot::BufferContent::vertex::<[peridot::math::Vector2<f32>; 4]>()
         );
-        let figures_triangle_fan_offset = bp.add(
-            peridot::BufferContent::vertices::<peridot::math::Vector2<f32>>(figure_triangle_fans_count)
+        let figures_fill_triangle_points_offset = bp.add(
+            peridot::BufferContent::vertices::<peridot::math::Vector2<f32>>(figure_fill_triangle_points_count)
+        );
+        let figures_fill_triangle_indices_offset = bp.add(
+            peridot::BufferContent::indices::<u16>(figure_fill_triangle_indices_count)
         );
         let figure_curve_triangles_offset = bp.add(
             peridot::BufferContent::vertices::<peridot::VertexUV2D>(figure_curve_triangles_count)
@@ -630,18 +661,21 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
                 peridot::math::Vector2(1.0, -1.0)
             ]);
 
-            let s = m.slice_mut(figures_triangle_fan_offset as _, figure_triangle_fans_count);
+            let s = m.slice_mut(figures_fill_triangle_points_offset as _, figure_fill_triangle_points_count);
+            let si = m.slice_mut(figures_fill_triangle_indices_offset as _, figure_fill_triangle_indices_count);
             let c = m.slice_mut(figure_curve_triangles_offset as _, figure_curve_triangles_count);
             let o = m.slice_mut(outline_rects_offset as _, outline_rects_count * 6);
-            let (mut s_offset, mut c_offset, mut o_offset) = (0, 0, 0);
+            let (mut s_offset, mut si_offset, mut c_offset, mut o_offset) = (0, 0, 0, 0);
             for f in figure_vertices.iter() {
-                s[s_offset..s_offset + f.triangle_fans.len()].clone_from_slice(&f.triangle_fans);
+                s[s_offset..s_offset + f.fill_triangle_points.len()].clone_from_slice(&f.fill_triangle_points);
+                si[si_offset..si_offset + f.fill_triangle_indices.len()].copy_from_slice(&f.fill_triangle_indices);
                 c[c_offset..c_offset + f.curve_triangles.len()].clone_from_slice(&f.curve_triangles);
                 for pr in f.parabola_rects.iter() {
                     o[o_offset..o_offset + 6].clone_from_slice(&pr.make_vertices());
                     o_offset += 6;
                 }
-                s_offset += f.triangle_fans.len();
+                s_offset += f.fill_triangle_points.len();
+                si_offset += f.fill_triangle_indices.len();
                 c_offset += f.curve_triangles.len();
             }
         }).expect("Failed to set init data");
@@ -669,11 +703,14 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             e.graphics(), peridot::math::Vector2(new_size.0 as _, new_size.1 as _), Self::SDF_SIZE
         );
 
-        let triangle_fan_groups: Vec<_> = figure_vertices.iter().map(|f| f.triangle_fans.len() as u32).collect();
+        let fill_triangle_groups: Vec<_> = figure_vertices.iter()
+            .map(|f| (f.fill_triangle_points.len() as u32, f.fill_triangle_indices.len() as u32))
+            .collect();
         let buffers = TwoPassStencilSDFRendererBuffers {
             buffer: &self.buffer,
-            fill_triangle_fans_offset: figures_triangle_fan_offset,
-            fill_triangle_fan_groups: &triangle_fan_groups,
+            fill_triangle_points_offset: figures_fill_triangle_points_offset,
+            fill_triangle_indices_offset: figures_fill_triangle_indices_offset,
+            fill_triangle_groups: &fill_triangle_groups,
             curve_triangles_offset: figure_curve_triangles_offset,
             curve_triangles_count: figure_curve_triangles_count as _,
             outline_rects_offset,
