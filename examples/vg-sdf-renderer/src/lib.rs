@@ -224,6 +224,123 @@ impl TwoPassStencilSDFRenderer {
             )
         }
     }
+    pub fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>, sdf_max_distance: f32) {
+        let vertex_shader_parameter_values = [new_size.0 as f32, new_size.1 as _, sdf_max_distance];
+        let vertex_shader_common_parameter_placements = [
+            br::vk::VkSpecializationMapEntry {
+                constantID: 0, offset: 0, size: std::mem::size_of::<f32>() as _
+            },
+            br::vk::VkSpecializationMapEntry {
+                constantID: 1, offset: std::mem::size_of::<f32>() as _, size: std::mem::size_of::<f32>() as _
+            }
+        ];
+        let outline_vsh_parameter_placements = [
+            vertex_shader_common_parameter_placements[0].clone(),
+            vertex_shader_common_parameter_placements[1].clone(),
+            br::vk::VkSpecializationMapEntry {
+                constantID: 2, offset: (std::mem::size_of::<f32>() * 2) as _, size: std::mem::size_of::<f32>() as _
+            }
+        ];
+        let fill_fsh_color_output = FillFragmentShaderParameters {
+            enable_color_output: true
+        };
+
+        let scissors = [
+            br::vk::VkRect2D {
+                offset: br::vk::VkOffset2D { x: 0, y: 0 },
+                extent: br::vk::VkExtent2D { width: new_size.0, height: new_size.1 }
+            }
+        ];
+        let viewports = [
+            br::Viewport::from_rect_with_depth_range(&scissors[0], 0.0 .. 1.0).into()
+        ];
+
+        let mut stencil_triangle_shader = self.fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+        stencil_triangle_shader.vertex_shader_mut().specinfo = Some((
+            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
+            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
+        ));
+        let mut pipebuild = br::GraphicsPipelineBuilder::new(
+            self.triangle_fans_stencil_pipeline.layout(), (&self.render_pass, 0), stencil_triangle_shader
+        );
+        pipebuild
+            .viewport_scissors(br::DynamicArrayState::Static(&viewports), br::DynamicArrayState::Static(&scissors))
+            .multisample_state(Some(br::MultisampleState::new()))
+            .stencil_control_front(Self::STENCIL_INVERT)
+            .stencil_control_back(Self::STENCIL_INVERT)
+            .stencil_test_enable(true)
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend());
+        let triangle_fans_stencil_pipeline = pipebuild.create(g, None)
+            .expect("Failed to recreate Triangle Fans Stencil Pipeline");
+        let mut stencil_curve_shader = self.curve_fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        stencil_curve_shader.vertex_shader_mut().specinfo = Some((
+            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
+            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
+        ));
+        pipebuild.vertex_processing(stencil_curve_shader);
+        let curve_triangles_stencil_pipeline = pipebuild.create(g, None)
+            .expect("Failed to create Curve Triangles Stencil Pipeline");
+        let mut invert_fill_shader = self.fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+        invert_fill_shader.fragment_shader_mut().expect("no fragment shader?").specinfo = Some(
+            fill_fsh_color_output.as_pair()
+        );
+        pipebuild
+            .render_pass(&self.render_pass, 1)
+            .vertex_processing(invert_fill_shader)
+            .stencil_control_front(Self::STENCIL_MATCH)
+            .stencil_control_back(Self::STENCIL_MATCH)
+            .set_attachment_blends(vec![
+                br::vk::VkPipelineColorBlendAttachmentState {
+                    blendEnable: true as _,
+                    srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+                    dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
+                    colorBlendOp: br::vk::VK_BLEND_OP_ADD,
+                    srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+                    dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
+                    alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
+                    .. Default::default()
+                }
+            ]);
+        let invert_pipeline = pipebuild.create(g, None).expect("Failed to create Invert Pipeline");
+        let mut outline_render_vps = self.outline_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        outline_render_vps.vertex_shader_mut().specinfo = Some((
+            std::borrow::Cow::Borrowed(&outline_vsh_parameter_placements),
+            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values)
+        ));
+        pipebuild
+            .vertex_processing(outline_render_vps)
+            .stencil_control_front(Self::STENCIL_NOOP)
+            .stencil_control_back(Self::STENCIL_NOOP)
+            .stencil_test_enable(false)
+            .set_attachment_blends(vec![
+                br::vk::VkPipelineColorBlendAttachmentState {
+                    blendEnable: true as _,
+                    srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_COLOR,
+                    dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_DST_COLOR,
+                    colorBlendOp: br::vk::VK_BLEND_OP_MAX,
+                    srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
+                    dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
+                    alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
+                    .. Default::default()
+                }
+            ]);
+        let outline_distance_pipeline = pipebuild.create(g, None)
+            .expect("Failed to create Outline Distance Pipeline");
+        
+        self.target_size = new_size;
+        self.triangle_fans_stencil_pipeline = peridot::LayoutedPipeline::combine(
+            triangle_fans_stencil_pipeline, self.triangle_fans_stencil_pipeline.layout()
+        );
+        self.curve_triangles_stencil_pipeline = peridot::LayoutedPipeline::combine(
+            curve_triangles_stencil_pipeline, self.curve_triangles_stencil_pipeline.layout()
+        );
+        self.invert_pipeline = peridot::LayoutedPipeline::combine(
+            invert_pipeline, self.invert_pipeline.layout()
+        );
+        self.outline_distance_pipeline = peridot::LayoutedPipeline::combine(
+            outline_distance_pipeline, self.outline_distance_pipeline.layout()
+        );
+    }
 
     pub const fn render_area(&self) -> br::vk::VkRect2D {
         br::vk::VkRect2D {
@@ -288,6 +405,8 @@ pub struct Game<NL> {
 impl<NL> Game<NL> {
     pub const NAME: &'static str = "peridot-vg SDF Renderer";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
+
+    const SDF_SIZE: f32 = 32.0;
 }
 impl<NL> FeatureRequests for Game<NL> {}
 impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
@@ -298,12 +417,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             .best_match("MS UI Gothic", &peridot_vg::FontProperties::default(), 120.0)
             .expect("no suitable font");
         let gid = font.glyph_id('る').expect("no glyph contained");
-        const SDF_SIZE: f32 = 32.0;
-        let mut gen = peridot_vg::SDFGenerator::new(1.0, SDF_SIZE);
+        let mut gen = peridot_vg::SDFGenerator::new(1.0, Self::SDF_SIZE);
         let glyph_metrics = font.bounds(gid).expect("Failed to get glyph bounds");
         gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(
-            -glyph_metrics.origin.x + SDF_SIZE,
-            -glyph_metrics.origin.y - SDF_SIZE
+            -glyph_metrics.origin.x + Self::SDF_SIZE,
+            -glyph_metrics.origin.y - Self::SDF_SIZE
         ));
         font.outline(gid, &mut gen).expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
@@ -336,14 +454,15 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
 
         let mut mb = peridot::MemoryBadget::new(e.graphics());
         mb.add(buffer);
-        mb.add(stencil_buffer);
-        let mut objects = mb.alloc().expect("Failed to allocate memory");
-        let stencil_buffer = objects.pop().expect("no objects?").unwrap_image();
-        let buffer = objects.pop().expect("no objects?").unwrap_buffer();
+        let buffer = mb.alloc().expect("Failed to allocate memory").pop().expect("no objects?").unwrap_buffer();
         let mut mb_upload = peridot::MemoryBadget::new(e.graphics());
         mb_upload.add(buffer_init);
         let buffer_init = mb_upload.alloc_upload().expect("Failed to allocate init buffer memory")
             .pop().expect("no objects?").unwrap_buffer();
+        let mut mb_tex = peridot::MemoryBadget::new(e.graphics());
+        mb_tex.add(stencil_buffer);
+        let stencil_buffer = mb_tex.alloc().expect("Failed to allocate Texture Memory").pop().expect("no objects?")
+            .unwrap_image();
         
         let stencil_buffer_view = stencil_buffer.create_view(
             None, None, &Default::default(), &br::ImageSubresourceRange::stencil(0 .. 1, 0 .. 1)
@@ -393,7 +512,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
 
         let sdf_renderer = TwoPassStencilSDFRenderer::new(
             e, e.backbuffer_format(), e.requesting_backbuffer_layout().0, e.requesting_backbuffer_layout().1,
-            peridot::math::Vector2(backbuffer_size.0, backbuffer_size.1), SDF_SIZE
+            peridot::math::Vector2(backbuffer_size.0, backbuffer_size.1), Self::SDF_SIZE
         );
 
         let fb = e.iter_backbuffers().map(|bb| br::Framebuffer::new(
@@ -439,5 +558,134 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             ),
             .. Default::default()
         })
+    }
+
+    fn discard_backbuffer_resources(&mut self) {
+        self.fb.clear();
+    }
+    fn on_resize(&mut self, e: &peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
+        // rebuild font meshes
+        let font = peridot_vg::FontProvider::new().expect("Failed to create font provider")
+            .best_match("MS UI Gothic", &peridot_vg::FontProperties::default(), 120.0)
+            .expect("no suitable font");
+        let gid = font.glyph_id('る').expect("no glyph contained");
+        let mut gen = peridot_vg::SDFGenerator::new(1.0, Self::SDF_SIZE);
+        let glyph_metrics = font.bounds(gid).expect("Failed to get glyph bounds");
+        gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(
+            -glyph_metrics.origin.x + Self::SDF_SIZE,
+            -glyph_metrics.origin.y - Self::SDF_SIZE
+        ));
+        font.outline(gid, &mut gen).expect("Failed to render glyph outline");
+        let figure_vertices = gen.build();
+        let (figure_triangle_fans_count, figure_curve_triangles_count, outline_rects_count) = figure_vertices.iter()
+            .fold((0, 0, 0), |(t, t2, t3), f| (
+                t + f.triangle_fans.len(), t2 + f.curve_triangles.len(), t3 + f.parabola_rects.len()
+            ));
+
+        let mut bp = peridot::BufferPrealloc::new(e.graphics());
+        let flip_fill_rect = bp.add(
+            peridot::BufferContent::vertex::<[peridot::math::Vector2<f32>; 4]>()
+        );
+        let figures_triangle_fan_offset = bp.add(
+            peridot::BufferContent::vertices::<peridot::math::Vector2<f32>>(figure_triangle_fans_count)
+        );
+        let figure_curve_triangles_offset = bp.add(
+            peridot::BufferContent::vertices::<peridot::VertexUV2D>(figure_curve_triangles_count)
+        );
+        let outline_rects_offset = bp.add(
+            peridot::BufferContent::vertices::<peridot_vg::sdf_generator::ParabolaRectVertex>(outline_rects_count * 6)
+        );
+        let buffer = bp.build_transferred().expect("Failed to allocate buffer");
+        let buffer_init = bp.build_upload().expect("Failed to allocate init buffer");
+        let mut mb = peridot::MemoryBadget::new(e.graphics());
+        mb.add(buffer);
+        self.buffer = mb.alloc().expect("Failed to allocate memory").pop().expect("no objects?").unwrap_buffer();
+        let mut mb_upload = peridot::MemoryBadget::new(e.graphics());
+        mb_upload.add(buffer_init);
+        let buffer_init = mb_upload.alloc_upload().expect("Failed to allocate init buffer memory")
+            .pop().expect("no objects?").unwrap_buffer();
+
+        let stencil_buffer = br::ImageDesc::new(
+            &br::Extent2D(new_size.0 as _, new_size.1 as _),
+            br::vk::VK_FORMAT_S8_UINT,
+            br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            br::ImageLayout::Undefined
+        ).create(e.graphics()).expect("Failed to create stencil buffer");
+        let mut mb_tex = peridot::MemoryBadget::new(e.graphics());
+        mb_tex.add(stencil_buffer);
+        self.stencil_buffer = mb_tex.alloc().expect("Failed to allocate Texture Memory").pop().expect("no objects?")
+            .unwrap_image();
+        self.stencil_buffer_view = self.stencil_buffer.create_view(
+            None, None, &Default::default(), &br::ImageSubresourceRange::stencil(0 .. 1, 0 .. 1)
+        ).expect("Failed to create Stencil Buffer View");
+        self.fb = e.iter_backbuffers().map(|bb| br::Framebuffer::new(
+            &self.sdf_renderer.render_pass, &[&bb, &self.stencil_buffer_view], bb.size(), 1
+        )).collect::<Result<Vec<_>, _>>().expect("Failed to create Framebuffers");
+
+        buffer_init.guard_map(0 .. bp.total_size(), |m| unsafe {
+            m.slice_mut(flip_fill_rect as _, 4).clone_from_slice(&[
+                peridot::math::Vector2(0.0f32, 0.0),
+                peridot::math::Vector2(1.0, 0.0),
+                peridot::math::Vector2(0.0, -1.0),
+                peridot::math::Vector2(1.0, -1.0)
+            ]);
+
+            let s = m.slice_mut(figures_triangle_fan_offset as _, figure_triangle_fans_count);
+            let c = m.slice_mut(figure_curve_triangles_offset as _, figure_curve_triangles_count);
+            let o = m.slice_mut(outline_rects_offset as _, outline_rects_count * 6);
+            let (mut s_offset, mut c_offset, mut o_offset) = (0, 0, 0);
+            for f in figure_vertices.iter() {
+                s[s_offset..s_offset + f.triangle_fans.len()].clone_from_slice(&f.triangle_fans);
+                c[c_offset..c_offset + f.curve_triangles.len()].clone_from_slice(&f.curve_triangles);
+                for pr in f.parabola_rects.iter() {
+                    o[o_offset..o_offset + 6].clone_from_slice(&pr.make_vertices());
+                    o_offset += 6;
+                }
+                s_offset += f.triangle_fans.len();
+                c_offset += f.curve_triangles.len();
+            }
+        }).expect("Failed to set init data");
+        let mut tfb = peridot::TransferBatch::new();
+        tfb.add_mirroring_buffer(&buffer_init, &self.buffer, 0, bp.total_size());
+        tfb.add_buffer_graphics_ready(
+            br::PipelineStageFlags::VERTEX_INPUT, &self.buffer,
+            0 .. bp.total_size(), br::AccessFlags::VERTEX_ATTRIBUTE_READ
+        );
+
+        e.submit_commands(|r| {
+            tfb.sink_transfer_commands(r); tfb.sink_graphics_ready_commands(r);
+            r.pipeline_barrier(
+                br::PipelineStageFlags::BOTTOM_OF_PIPE, br::PipelineStageFlags::LATE_FRAGMENT_TESTS, true,
+                &[], &[], &[
+                    br::ImageMemoryBarrier::new(
+                        &br::ImageSubref::stencil(&self.stencil_buffer, 0 .. 1, 0 .. 1),
+                        br::ImageLayout::Undefined, br::ImageLayout::DepthStencilReadOnlyOpt
+                    )
+                ]
+            );
+        }).expect("Failed to initialize resources");
+
+        self.sdf_renderer.resize(
+            e.graphics(), peridot::math::Vector2(new_size.0 as _, new_size.1 as _), Self::SDF_SIZE
+        );
+
+        let triangle_fan_groups: Vec<_> = figure_vertices.iter().map(|f| f.triangle_fans.len() as u32).collect();
+        let buffers = TwoPassStencilSDFRendererBuffers {
+            buffer: &self.buffer,
+            fill_triangle_fans_offset: figures_triangle_fan_offset,
+            fill_triangle_fan_groups: &triangle_fan_groups,
+            curve_triangles_offset: figure_curve_triangles_offset,
+            curve_triangles_count: figure_curve_triangles_count as _,
+            outline_rects_offset,
+            outline_rects_count: outline_rects_count as _,
+            invert_fill_rect_offset: flip_fill_rect
+        };
+        let cmd = peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, e.backbuffer_count())
+            .expect("Failed to create CommandBundle");
+        for (cx, fb) in self.fb.iter().enumerate() {
+            let mut rec = cmd[cx].begin().expect("Failed to begin recording commands");
+            self.sdf_renderer.populate_commands(&mut rec, fb, &buffers);
+            rec.end_render_pass();
+        }
     }
 }
