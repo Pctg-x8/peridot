@@ -93,10 +93,10 @@ pub fn cargo(
         .expect("Failed to wait cargo build command");
     crate::shellutil::handle_process_result("cargo build command", e);
 }
-pub fn package_assets(ctx: &BuildContext, asset_path: &Path, output_path: &Path) {
+pub fn package_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
     // Prerequired build step
     let stg_path = std::env::temp_dir().join(".peridot/build/assets");
-    merge_assets(ctx, &stg_path, Some(asset_path));
+    merge_assets(ctx, &stg_path, asset_path);
 
     ctx.print_step("Packaging assets...");
 

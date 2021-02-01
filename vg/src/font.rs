@@ -128,54 +128,44 @@ impl FontProvider
     }
 }
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-impl Font
-{
+impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    pub(crate) fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
+    pub fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
     pub fn ascent(&self) -> f32 { self.0.ascent() as _ }
 
-    pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
-    {
+    pub fn glyph_id(&self, c: char) -> Option<u32> {
         let mut u16s = [0u16; 2];
         c.encode_utf16(&mut u16s);
         // remove surrogate paired codepoint
         self.0.glyphs_for_characters(&u16s[..1]).ok().map(|x| x[0] as _)
     }
-    pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
-    {
+    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
         Ok(self.0.advances_for_glyphs(appkit::CTFontOrientation::Horizontal, &[glyph as _], None) as _)
     }
-    pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
-    {
+    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
         let r = self.0.bounding_rects_for_glyphs(appkit::CTFontOrientation::Horizontal, &[glyph as _], None);
         Ok(Rect::new(euclid::point2(r.origin.x as _, r.origin.y as _),
             euclid::size2(r.size.width as _, r.size.height as _)))
     }
-    pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
-    {
+    pub fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError> {
         let path = self.0.create_path_for_glyph(glyph as _, None)
             .map_err(|_| GlyphLoadingError::SysAPICallError("CTFont::create_path_for_glyph"))?;
-        path.apply(|e| match e.type_
-        {
-            appkit::CGPathElementType::MoveToPoint => unsafe
-            {
+        path.apply(|e| match e.type_ {
+            appkit::CGPathElementType::MoveToPoint => unsafe {
                 builder.move_to(euclid::point2((*e.points).x as _, (*e.points).y as _));
             },
             appkit::CGPathElementType::CloseSubpath => builder.close(),
-            appkit::CGPathElementType::AddLineToPoint => unsafe
-            {
+            appkit::CGPathElementType::AddLineToPoint => unsafe {
                 builder.line_to(euclid::point2((*e.points).x as _, (*e.points).y as _));
             },
-            appkit::CGPathElementType::AddCurveToPoint => unsafe
-            {
+            appkit::CGPathElementType::AddCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 3);
                 builder.cubic_bezier_to(
                     euclid::point2(points[0].x as _, points[0].y as _),
                     euclid::point2(points[1].x as _, points[1].y as _),
                     euclid::point2(points[2].x as _, points[2].y as _));
             },
-            appkit::CGPathElementType::AddQuadCurveToPoint => unsafe
-            {
+            appkit::CGPathElementType::AddQuadCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 2);
                 builder.quadratic_bezier_to(
                     euclid::point2(points[0].x as _, points[0].y as _),
@@ -275,7 +265,7 @@ impl FontProvider
         pat.default_substitute();
         let fonts = self.fc.sort_fonts(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
 
-        let group_desc: Vec<(*const i8, i64)> = fonts.iter().map(|f|
+        let group_desc: Vec<(*const i8, freetype2::FT_Long)> = fonts.iter().map(|f|
         {
             let font_path = f.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
             let face_index = f.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
