@@ -131,7 +131,7 @@ impl FontProvider
 impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
     pub fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
-    pub fn ascent(&self) -> f32 { self.0.ascent() as _ }
+    pub fn ascent(&self) -> f32 { self.0.ascent() as f32 * self.scale_value() }
 
     pub fn glyph_id(&self, c: char) -> Option<u32> {
         let mut u16s = [0u16; 2];
@@ -144,32 +144,32 @@ impl Font {
     }
     pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
         let r = self.0.bounding_rects_for_glyphs(appkit::CTFontOrientation::Horizontal, &[glyph as _], None);
-        Ok(Rect::new(euclid::point2(r.origin.x as _, r.origin.y as _),
-            euclid::size2(r.size.width as _, r.size.height as _)))
+        Ok(Rect::new(euclid::point2(r.origin.x as f32 * self.scale_value(), r.origin.y as f32 * self.scale_value()),
+            euclid::size2(r.size.width as f32 * self.scale_value(), r.size.height as f32 * self.scale_value())))
     }
     pub fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError> {
         let path = self.0.create_path_for_glyph(glyph as _, None)
             .map_err(|_| GlyphLoadingError::SysAPICallError("CTFont::create_path_for_glyph"))?;
         path.apply(|e| match e.type_ {
             appkit::CGPathElementType::MoveToPoint => unsafe {
-                builder.move_to(euclid::point2((*e.points).x as _, (*e.points).y as _));
+                builder.move_to(euclid::point2((*e.points).x as f32 * self.scale_value(), (*e.points).y as f32 * self.scale_value() - self.ascent()));
             },
             appkit::CGPathElementType::CloseSubpath => builder.close(),
             appkit::CGPathElementType::AddLineToPoint => unsafe {
-                builder.line_to(euclid::point2((*e.points).x as _, (*e.points).y as _));
+                builder.line_to(euclid::point2((*e.points).x as f32 * self.scale_value(), (*e.points).y as f32 * self.scale_value() - self.ascent()));
             },
             appkit::CGPathElementType::AddCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 3);
                 builder.cubic_bezier_to(
-                    euclid::point2(points[0].x as _, points[0].y as _),
-                    euclid::point2(points[1].x as _, points[1].y as _),
-                    euclid::point2(points[2].x as _, points[2].y as _));
+                    euclid::point2(points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()),
+                    euclid::point2(points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()),
+                    euclid::point2(points[2].x as f32 * self.scale_value(), points[2].y as f32 * self.scale_value() - self.ascent()));
             },
             appkit::CGPathElementType::AddQuadCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 2);
                 builder.quadratic_bezier_to(
-                    euclid::point2(points[0].x as _, points[0].y as _),
-                    euclid::point2(points[1].x as _, points[1].y as _));
+                    euclid::point2(points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()),
+                    euclid::point2(points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()));
             }
         });
 
