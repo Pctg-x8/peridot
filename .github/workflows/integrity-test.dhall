@@ -64,6 +64,7 @@ let installDhallScript =
     QUERY_CURSOR='null'
     TARGET_FILE=""
     while :; do
+      echo $QUERY_CURSOR
       POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR } }"
       API_RESPONSE=$(curl -s -H "Authorization: Bearer ${ CommonDefs.eSecretGithubToken }" -X POST -d "$POSTDATA" https://api.github.com/graphql)
       echo $API_RESPONSE
