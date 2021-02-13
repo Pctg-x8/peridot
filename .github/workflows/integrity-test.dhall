@@ -77,7 +77,7 @@ let installDhallScript =
         echo "Latest dhall release does not contains dhall-yaml for linux platform!"
         exit 1
       fi
-    done < <(cat)
+    done < <(echo -e $lines)
     echo "$TARGET_FILE"
     mkdir $HOME/dhall
     curl -L $TARGET_FILE | tar x --bzip2 -C $HOME/dhall
