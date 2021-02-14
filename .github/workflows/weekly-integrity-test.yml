@@ -58,7 +58,7 @@ jobs:
       run: brew install coreutils
     - env:
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
-        VK_SDK_PATH: ''
+        VULKAN_SDK: /Users
       if: 'true'
       name: cargo check
       run: "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
