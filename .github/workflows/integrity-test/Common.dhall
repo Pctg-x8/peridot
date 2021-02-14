@@ -220,7 +220,7 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
                 , name = "cargo check"
                 , run = Some "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
                 , shell = Some GithubActions.Shell.bash
-                , env = Some (toMap { VK_SDK_PATH = "", PERIDOT_CLI_CRADLE_BASE = GithubActions.mkExpression "format('{0}/cradle', github.workspace)" })
+                , env = Some (toMap { VULKAN_SDK = "/Users", PERIDOT_CLI_CRADLE_BASE = GithubActions.mkExpression "format('{0}/cradle', github.workspace)" })
                 }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-macos"))]
