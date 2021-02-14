@@ -70,7 +70,7 @@ let installDhallScript =
       if [[ $TARGET_FILE != "" ]]; then break; fi
       HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.hasNextPage")
       if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
-        QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageINfo.endCursor")
+        QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.endCursor")
       else
         echo "Latest dhall release does not contains dhall-yaml for linux platform!"
         exit 1

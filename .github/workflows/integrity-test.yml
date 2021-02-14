@@ -61,7 +61,7 @@ jobs:
         PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/target/release/peridot-archiver', github.workspace) }}"
         PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
-        VK_SDK_PATH: ''
+        VULKAN_SDK: /Users
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
       run: "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
@@ -310,7 +310,7 @@ jobs:
           if [[ $TARGET_FILE != "" ]]; then break; fi
           HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.hasNextPage")
           if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
-            QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageINfo.endCursor")
+            QUERY_CURSOR=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.endCursor")
           else
             echo "Latest dhall release does not contains dhall-yaml for linux platform!"
             exit 1
