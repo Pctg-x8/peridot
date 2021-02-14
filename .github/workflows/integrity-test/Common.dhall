@@ -212,6 +212,7 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , checkoutStep
             , cacheStep
             , GithubActions.Step::{ name = "Build CLI", run = Some "cargo build --release", working-directory = Some "tools/cli" }
+            , GithubActions.Step::{ name = "Build archiver", run = Some "cargo build --release", working-directory = Some "tools/archiver" }
             , GithubActions.Step::{
                 , name = "install requirements"
                 , run = Some "brew install coreutils"
