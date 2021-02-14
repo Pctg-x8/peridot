@@ -152,24 +152,42 @@ impl Font {
             .map_err(|_| GlyphLoadingError::SysAPICallError("CTFont::create_path_for_glyph"))?;
         path.apply(|e| match e.type_ {
             appkit::CGPathElementType::MoveToPoint => unsafe {
-                builder.move_to(euclid::point2((*e.points).x as f32 * self.scale_value(), (*e.points).y as f32 * self.scale_value() - self.ascent()));
+                builder.move_to(euclid::point2(
+                    (*e.points).x as f32 * self.scale_value(),
+                    (*e.points).y as f32 * self.scale_value() - self.ascent()
+                ));
             },
             appkit::CGPathElementType::CloseSubpath => builder.close(),
             appkit::CGPathElementType::AddLineToPoint => unsafe {
-                builder.line_to(euclid::point2((*e.points).x as f32 * self.scale_value(), (*e.points).y as f32 * self.scale_value() - self.ascent()));
+                builder.line_to(euclid::point2(
+                    (*e.points).x as f32 * self.scale_value(),
+                    (*e.points).y as f32 * self.scale_value() - self.ascent()
+                ));
             },
             appkit::CGPathElementType::AddCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 3);
                 builder.cubic_bezier_to(
-                    euclid::point2(points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()),
-                    euclid::point2(points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()),
-                    euclid::point2(points[2].x as f32 * self.scale_value(), points[2].y as f32 * self.scale_value() - self.ascent()));
+                    euclid::point2(
+                        points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()
+                    ),
+                    euclid::point2(
+                        points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()
+                    ),
+                    euclid::point2(
+                        points[2].x as f32 * self.scale_value(), points[2].y as f32 * self.scale_value() - self.ascent()
+                    )
+                );
             },
             appkit::CGPathElementType::AddQuadCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 2);
                 builder.quadratic_bezier_to(
-                    euclid::point2(points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()),
-                    euclid::point2(points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()));
+                    euclid::point2(
+                        points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()
+                    ),
+                    euclid::point2(
+                        points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()
+                    )
+                );
             }
         });
 
