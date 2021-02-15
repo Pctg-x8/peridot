@@ -8,6 +8,7 @@ mod buffer;
 pub use self::buffer::*;
 mod image;
 pub use self::image::*;
+use num::Integer;
 
 #[macro_export]
 macro_rules! align2 {
@@ -18,25 +19,20 @@ pub struct BufferPrealloc<'g> {
     g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64, common_align: u64
 }
 impl<'g> BufferPrealloc<'g> {
-    pub fn new(g: &'g Graphics) -> Self
-    {
+    pub fn new(g: &'g Graphics) -> Self {
         BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0, common_align: 1 }
     }
-    pub fn build(&self) -> br::Result<br::Buffer>
-    {
+    pub fn build(&self) -> br::Result<br::Buffer> {
         br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
     }
-    pub fn build_transferred(&self) -> br::Result<br::Buffer>
-    {
+    pub fn build_transferred(&self) -> br::Result<br::Buffer> {
         br::BufferDesc::new(self.total as _, self.usage.transfer_dest()).create(&self.g.device)
     }
-    pub fn build_upload(&self) -> br::Result<br::Buffer>
-    {
+    pub fn build_upload(&self) -> br::Result<br::Buffer> {
         br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(&self.g.device)
     }
 
-    pub fn add(&mut self, content: BufferContent) -> u64
-    {
+    pub fn add(&mut self, content: BufferContent) -> u64 {
         self.usage = content.usage(self.usage);
         let content_align = content.alignment(&self.g.adapter);
         self.common_align = self.common_align.lcm(&content_align);
@@ -48,8 +44,7 @@ impl<'g> BufferPrealloc<'g> {
     pub fn total_size(&self) -> u64 { self.total }
 
     /// Returns first offset of merged(other's) prealloc-ed block
-    pub fn merge(&mut self, other: &Self) -> u64
-    {
+    pub fn merge(&mut self, other: &Self) -> u64 {
         self.common_align = self.common_align.lcm(&other.common_align);
         let offs = align2!(self.total, other.common_align);
         self.usage |= other.usage;
@@ -57,13 +52,6 @@ impl<'g> BufferPrealloc<'g> {
         self.offsets.extend(other.offsets.iter().map(|&o| o + offs));
         return offs;
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ResourceTiling { Linear, NonLinear }
-impl ResourceTiling
-{
-    fn is_additional_alignment_required(self, other: Self) -> bool { self != other }
 }
 
 pub struct BulkedResourceStorageAllocator {
@@ -170,106 +158,6 @@ impl ResourceStorage {
     pub fn get_image(&self, index: usize) -> Option<&Image> { self.images.get(index) }
 }
 
-#[deprecated = "use BulkedResourceStorageAllocator and ResourceStorage for more efficient memory allocation"]
-pub struct MemoryBadget<'g>
-{
-    g: &'g Graphics, entries: Vec<(MemoryBadgetEntry, u64)>, total_size: u64,
-    memory_type_bitmask: u32, last_resource_tiling: Option<ResourceTiling>
-}
-pub enum MemoryBadgetEntry { Buffer(br::Buffer), Image(br::Image) }
-pub enum MemoryBoundResource { Buffer(Buffer), Image(Image) }
-impl From<br::Buffer> for MemoryBadgetEntry
-{
-    fn from(v: br::Buffer) -> Self { MemoryBadgetEntry::Buffer(v) }
-}
-impl From<br::Image> for MemoryBadgetEntry
-{
-    fn from(v: br::Image) -> Self { MemoryBadgetEntry::Image(v) }
-}
-impl MemoryBadgetEntry
-{
-    fn tiling(&self) -> ResourceTiling
-    {
-        match self
-        {
-            MemoryBadgetEntry::Buffer(_) => ResourceTiling::Linear,
-            // Note: Peridotが扱うImageは全てNonLinearTiling
-            MemoryBadgetEntry::Image(_) => ResourceTiling::NonLinear
-        }
-    }
-}
-impl MemoryBoundResource
-{
-    pub fn unwrap_buffer(self) -> Buffer
-    {
-        match self { MemoryBoundResource::Buffer(b) => b, _ => panic!("Not a buffer") }
-    }
-    pub fn unwrap_image(self) -> Image
-    {
-        match self { MemoryBoundResource::Image(b) => b, _ => panic!("Not an image") }
-    }
-}
-#[allow(deprecated)]
-impl<'g> MemoryBadget<'g>
-{
-    pub fn new(g: &'g Graphics) -> Self
-    {
-        MemoryBadget
-        {
-            g, entries: Vec::new(), total_size: 0, memory_type_bitmask: 0, last_resource_tiling: None
-        }
-    }
-    pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64
-    {
-        let req = v.requirements();
-        let new_offset = align2!(self.total_size, req.alignment);
-        let entry = v.into();
-        let align_required = self.last_resource_tiling
-            .map_or(false, |t| t.is_additional_alignment_required(entry.tiling()));
-        let new_offset = if align_required
-        {
-            align2!(new_offset, self.g.adapter.properties().limits.bufferImageGranularity)
-        }
-        else { new_offset };
-        self.last_resource_tiling = Some(entry.tiling());
-        self.entries.push((entry, new_offset));
-        self.total_size = new_offset + req.size;
-        self.memory_type_bitmask |= req.memoryTypeBits;
-        return new_offset;
-    }
-    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>>
-    {
-        let mt = self.g.memory_type_manager.device_local_index(self.memory_type_bitmask)
-            .expect("No device-local memory")
-            .index();
-        info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
-            self.total_size, mt, self.memory_type_bitmask);
-        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt)?.into();
-
-        self.entries.into_iter().map(|(x, o)| match x
-        {
-            MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
-            MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
-        }).collect()
-    }
-    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>> {
-        let mt = self.g.memory_type_manager.host_visible_index(
-            self.memory_type_bitmask, br::MemoryPropertyFlags::HOST_COHERENT
-        ).expect("No host-visible memory");
-        if !mt.is_host_coherent() {
-            warn!("ENGINE TODO: non-coherent memory requires expicit flushing operations");
-        }
-        info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
-            self.total_size, mt.index(), self.memory_type_bitmask);
-        let mem: Rc<_> = br::DeviceMemory::allocate(&self.g.device, self.total_size as _, mt.index())?.into();
-        
-        self.entries.into_iter().map(|(x, o)| match x {
-            MemoryBadgetEntry::Buffer(b) => Buffer::bound(b, &mem, o as _).map(MemoryBoundResource::Buffer),
-            MemoryBadgetEntry::Image(b) => Image::bound(b, &mem, o as _).map(MemoryBoundResource::Image)
-        }).collect()
-    }
-}
-
 use std::mem::ManuallyDrop;
 pub struct AutocloseMappedMemoryRange<'m>(&'m br::DeviceMemory, ManuallyDrop<br::MappedMemoryRange<'m>>);
 impl<'m> Deref for AutocloseMappedMemoryRange<'m>
@@ -286,102 +174,6 @@ impl<'m> Drop for AutocloseMappedMemoryRange<'m>
             ManuallyDrop::drop(&mut self.1);
             self.0.unmap();
         }
-    }
-}
-
-/// A refcounted memory object.
-/// Convertable from `br::DeviceMemory` via `Into::into`
-pub type Memory = Rc<br::DeviceMemory>;
-/// A refcounted buffer object bound with a memory object.
-#[derive(Clone)]
-pub struct Buffer(Rc<br::Buffer>, Memory, u64);
-/// A refcounted image object bound with a memory object.
-#[derive(Clone)]
-pub struct Image(Rc<br::Image>, Memory, u64);
-impl Buffer
-{
-    pub fn bound(b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self>
-    {
-        b.bind(mem, offset as _).map(|_| Buffer(b.into(), mem.clone(), offset))
-    }
-    /// Reference to a memory object bound with this object.
-    pub fn memory(&self) -> &Memory { &self.1 }
-
-    pub fn map(&self, range: Range<u64>) -> br::Result<br::MappedMemoryRange>
-    {
-        self.1.map((self.2 + range.start) as _ .. (self.2 + range.end) as _)
-    }
-    pub unsafe fn unmap(&self) { self.1.unmap() }
-    pub fn guard_map<F: FnOnce(&br::MappedMemoryRange) -> R, R>(&self, range: Range<u64>, f: F) -> br::Result<R>
-    {
-        Ok(f(&AutocloseMappedMemoryRange(&self.1, ManuallyDrop::new(self.map(range)?))))
-    }
-}
-impl Image
-{
-    pub fn bound(r: br::Image, mem: &Memory, offset: u64) -> br::Result<Self>
-    {
-        r.bind(mem, offset as _).map(|_| Image(r.into(), mem.clone(), offset))
-    }
-    /// Reference to a memory object bound with this object.
-    pub fn memory(&self) -> &Memory { &self.1 }
-
-    pub fn format(&self) -> PixelFormat { unsafe { transmute(self.0.format()) } }
-}
-impl Deref for Buffer
-{
-    type Target = br::Buffer; fn deref(&self) -> &br::Buffer { &self.0 }
-}
-impl Deref for Image
-{
-    type Target = br::Image; fn deref(&self) -> &br::Image { &self.0 }
-}
-impl br::VkHandle for Buffer
-{
-    type Handle = <br::Buffer as br::VkHandle>::Handle;
-    fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
-}
-impl br::VkHandle for Image
-{
-    type Handle = <br::Image as br::VkHandle>::Handle;
-    fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
-}
-
-/// A view of the buffer.
-#[derive(Clone, Copy)]
-pub struct BufferView<'b> { pub buffer: &'b Buffer, pub offset: usize }
-impl Buffer {
-    pub fn with_offset(&self, offset: usize) -> BufferView {
-        BufferView { buffer: self, offset }
-    }
-}
-impl BufferView<'_> {
-    pub fn with_offset(self, offset: usize) -> Self {
-        BufferView { buffer: self.buffer, offset: self.offset + offset }
-    }
-    pub fn range(&self, bytes: usize) -> std::ops::Range<usize> {
-        self.offset .. self.offset + bytes
-    }
-}
-/// Conversion for Bedrock bind_vertex_buffers form
-impl<'b> From<BufferView<'b>> for (&'b Buffer, usize) {
-    fn from(v: BufferView<'b>) -> Self { (v.buffer, v.offset) }
-}
-
-/// a view of the buffer in GPU Address.
-#[derive(Clone, Copy)]
-pub struct DeviceBufferView<'b> { pub buffer: &'b Buffer, pub offset: br::vk::VkDeviceSize }
-impl Buffer {
-    pub fn with_dev_offset(&self, offset: br::vk::VkDeviceSize) -> DeviceBufferView {
-        DeviceBufferView { buffer: self, offset }
-    }
-}
-impl DeviceBufferView<'_> {
-    pub fn with_offset(&self, offset: br::vk::VkDeviceSize) -> Self {
-        DeviceBufferView { buffer: self.buffer, offset: self.offset + offset }
-    }
-    pub fn range(&self, bytes: br::vk::VkDeviceSize) -> std::ops::Range<br::vk::VkDeviceSize> {
-        self.offset .. self.offset + bytes
     }
 }
 
@@ -523,10 +315,8 @@ impl TextureInstantiatedGroup
     pub fn stage_data(&self, mr: &br::MappedMemoryRange)
     {
         trace!("Staging Texture Data...");
-        for &(ref pd, offs) in &self.0
-        {
-            let s = unsafe
-            {
+        for &(ref pd, offs) in &self.0 {
+            let s = unsafe {
                 mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format.bpp() >> 3) as usize)
             };
             s.copy_from_slice(pd.u8_pixels());

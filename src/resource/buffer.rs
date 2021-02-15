@@ -90,7 +90,7 @@ pub enum BufferContent {
     Storage(u64, u64), StorageTexel(u64, u64)
 }
 impl BufferContent {
-    fn usage(&self, src: br::BufferUsage) -> br::BufferUsage {
+    pub fn usage(&self, src: br::BufferUsage) -> br::BufferUsage {
         use self::BufferContent::*;
 
         match *self {
@@ -103,7 +103,7 @@ impl BufferContent {
             StorageTexel(_, _) => src.storage_texel_buffer()
         }
     }
-    fn alignment(&self, pd: &br::PhysicalDevice) -> u64 {
+    pub fn alignment(&self, pd: &br::PhysicalDevice) -> u64 {
         use self::BufferContent::*;
 
         match *self {
@@ -114,7 +114,7 @@ impl BufferContent {
                 u64::lcm(&pd.properties().limits.minStorageBufferOffsetAlignment as _, &a)
         }
     }
-    fn size(&self) -> u64 {
+    pub fn size(&self) -> u64 {
         use self::BufferContent::*;
 
         match *self {

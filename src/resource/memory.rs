@@ -1,4 +1,5 @@
 //! DeviceMemory Helper
+#![allow(deprecated)]
 
 use bedrock as br;
 use std::rc::Rc;
@@ -7,6 +8,7 @@ use std::rc::Rc;
 /// Convertable from `br::DeviceMemory` via `Into::into`
 pub type Memory = Rc<br::DeviceMemory>;
 
+#[deprecated = "use BulkedResourceStorageAllocator and ResourceStorage for more efficient memory allocation"]
 pub struct MemoryBadget<'g> {
     g: &'g crate::Graphics,
     entries: Vec<(MemoryBadgetEntry, u64)>,
