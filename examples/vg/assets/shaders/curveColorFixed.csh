@@ -42,7 +42,8 @@ FragmentShader {
     if(alpha < 0) discard;
     Target[0] = vec4(FillR, FillG, FillB, 1.0) * FillA * alpha;*/
 
+    float sdScale = length(dFdx(helper_coord) + dFdy(helper_coord));
     float sd = pow(helper_coord.x, 2) - helper_coord.y;
-    if(sd * lb_dir < 0) discard;
-    Target[0] = vec4(FillR, FillG, FillB, 1.0) * FillA;
+    // if(sd * lb_dir < 0) discard;
+    Target[0] = vec4(FillR, FillG, FillB, 1.0) * FillA * clamp(0.0, 1.0, (1.0 / sdScale) * sd * lb_dir + 0.5);
 }

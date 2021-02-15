@@ -8,10 +8,146 @@ mod buffer;
 pub use self::buffer::*;
 mod image;
 pub use self::image::*;
+use num::Integer;
 
 #[macro_export]
 macro_rules! align2 {
-    ($v: expr, $a: expr) => (($v + ($a - 1)) & !($a - 1))
+    ($v: expr, $a: expr) => (if $a == 0 { $v } else { ($v + ($a - 1)) & !($a - 1) })
+}
+
+pub struct BulkedResourceStorageAllocator {
+    buffers: Vec<(br::Buffer, u64)>,
+    images: Vec<(br::Image, u64)>,
+    buffers_top: u64,
+    images_top: u64,
+    images_align_requirement: u64,
+    memory_type_bitmask: u32
+}
+impl BulkedResourceStorageAllocator {
+    pub fn new() -> Self {
+        BulkedResourceStorageAllocator {
+            buffers: Vec::new(),
+            images: Vec::new(),
+            buffers_top: 0,
+            images_top: 0,
+            images_align_requirement: 0,
+            memory_type_bitmask: std::u32::MAX
+        }
+    }
+
+    pub fn add_buffer(&mut self, buffer: br::Buffer) -> usize {
+        let req = buffer.requirements();
+        let new_offset = align2!(self.buffers_top, req.alignment);
+        self.buffers.push((buffer, new_offset));
+        self.memory_type_bitmask &= req.memoryTypeBits;
+        self.buffers_top = new_offset + req.size;
+        
+        self.buffers.len() - 1
+    }
+    pub fn add_image(&mut self, image: br::Image) -> usize {
+        let req = image.requirements();
+        let new_offset = align2!(self.images_top, req.alignment);
+        self.images.push((image, new_offset));
+        self.memory_type_bitmask &= req.memoryTypeBits;
+        self.images_top = new_offset + req.size;
+        self.images_align_requirement = self.images_align_requirement.lcm(&req.alignment);
+
+        self.images.len() - 1
+    }
+    pub fn add_images(&mut self, images: impl IntoIterator<Item = br::Image>) -> usize {
+        let iter = images.into_iter();
+        let (min, _) = iter.size_hint();
+        if self.images.capacity() < self.images.len() + min { self.images.reserve(min); }
+        let first_id = self.images.len();
+        for x in iter { self.add_image(x); }
+
+        first_id
+    }
+
+    pub fn alloc(self, g: &Graphics) -> br::Result<ResourceStorage> {
+        let mt = g.memory_type_manager.device_local_index(self.memory_type_bitmask)
+            .expect("No device-local memory")
+            .index();
+        let images_base = align2!(self.buffers_top, self.images_align_requirement);
+        let total_size = images_base + self.images_top;
+        info!(
+            target: "peridot",
+            "Allocating Device Memory: {} bytes in {}(?0x{:x})",
+            total_size, mt, self.memory_type_bitmask
+        );
+        let mem = Rc::new(br::DeviceMemory::allocate(&g.device, total_size as _, mt)?);
+
+        Ok(ResourceStorage {
+            buffers: self.buffers.into_iter()
+                .map(|(b, o)| Buffer::bound(b, &mem, o))
+                .collect::<Result<_, _>>()?,
+            images: self.images.into_iter()
+                .map(|(i, o)| Image::bound(i, &mem, o + images_base))
+                .collect::<Result<_, _>>()?
+        })
+    }
+    pub fn alloc_upload(self, g: &Graphics) -> br::Result<ResourceStorage> {
+        let mt = g.memory_type_manager
+            .exact_host_visible_index(self.memory_type_bitmask, br::MemoryPropertyFlags::HOST_COHERENT)
+            .expect("No host-visible memory")
+            .index();
+        let images_base = align2!(self.buffers_top, self.images_align_requirement);
+        let total_size = images_base + self.images_top;
+        info!(
+            target: "peridot",
+            "Allocating Upload Memory: {} bytes in 0x{:x}(?0x{:x})",
+            total_size, mt, self.memory_type_bitmask
+        );
+        let mem = Rc::new(br::DeviceMemory::allocate(&g.device, total_size as _, mt)?);
+
+        Ok(ResourceStorage {
+            buffers: self.buffers.into_iter()
+                .map(|(b, o)| Buffer::bound(b, &mem, o))
+                .collect::<Result<_, _>>()?,
+            images: self.images.into_iter()
+                .map(|(i, o)| Image::bound(i, &mem, o + images_base))
+                .collect::<Result<_, _>>()?
+        })
+    }
+}
+pub struct ResourceStorage {
+    buffers: Vec<Buffer>,
+    images: Vec<Image>
+}
+impl ResourceStorage {
+    pub fn get_buffer(&self, index: usize) -> Option<&Buffer> { self.buffers.get(index) }
+    pub fn get_image(&self, index: usize) -> Option<&Image> { self.images.get(index) }
+}
+
+use std::mem::ManuallyDrop;
+pub struct AutocloseMappedMemoryRange<'m>(&'m br::DeviceMemory, ManuallyDrop<br::MappedMemoryRange<'m>>);
+impl<'m> Deref for AutocloseMappedMemoryRange<'m>
+{
+    type Target = br::MappedMemoryRange<'m>; fn deref(&self) -> &Self::Target { &self.1 }
+}
+impl<'m> Drop for AutocloseMappedMemoryRange<'m>
+{
+    fn drop(&mut self)
+    {
+        unsafe
+        {
+            // 1を確実に先に破棄したいのでManuallyDropで殺す
+            ManuallyDrop::drop(&mut self.1);
+            self.0.unmap();
+        }
+    }
+}
+
+/// A view of the buffer in GPU Address, holds object reference count
+#[derive(Clone)]
+pub struct DeviceBufferViewHold { pub buffer: Buffer, pub offset: br::vk::VkDeviceSize }
+impl Buffer {
+    pub fn hold_with_dev_offset(&self, offset: br::vk::VkDeviceSize) -> DeviceBufferViewHold {
+        DeviceBufferViewHold { buffer: self.clone(), offset }
+    }
+}
+impl DeviceBufferViewHold {
+    pub fn to_unhold_view(&self) -> DeviceBufferView { DeviceBufferView { buffer: &self.buffer, offset: self.offset } }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -140,10 +276,8 @@ impl TextureInstantiatedGroup
     pub fn stage_data(&self, mr: &br::MappedMemoryRange)
     {
         trace!("Staging Texture Data...");
-        for &(ref pd, offs) in &self.0
-        {
-            let s = unsafe
-            {
+        for &(ref pd, offs) in &self.0 {
+            let s = unsafe {
                 mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format.bpp() >> 3) as usize)
             };
             s.copy_from_slice(pd.u8_pixels());
@@ -272,16 +406,15 @@ impl DeviceWorkingTextureAllocator<'_>
         let images2 = self.planes.iter().map(|d| d.create(g));
         let images3 = self.volumes.iter().map(|d| d.create(g));
         let images: Vec<_> = images2.chain(images3).collect::<Result<_, _>>()?;
-        let mut mb = MemoryBadget::new(g);
-        for img in images { mb.add(img); }
-        let mut bound_images = mb.alloc()?;
+        let mut storage_alloc = BulkedResourceStorageAllocator::new();
+        storage_alloc.add_images(images);
+        let ResourceStorage { images: mut bound_images, .. } = storage_alloc.alloc(g)?;
         
         let v3s = bound_images.split_off(bound_images.len() - self.volumes.len());
         Ok(DeviceWorkingTextureStore
         {
             planes: self.planes.into_iter().zip(bound_images.into_iter()).map(|(d, res)|
             {
-                let res = res.unwrap_image();
                 let view = res.create_view(
                     None, None, &br::ComponentMapping::default(),
                     &br::ImageSubresourceRange::color(0..1, 0..1)
@@ -297,7 +430,6 @@ impl DeviceWorkingTextureAllocator<'_>
             }).collect::<Result<_, _>>()?,
             volumes: self.volumes.into_iter().zip(v3s.into_iter()).map(|(d, res)|
             {
-                let res = res.unwrap_image();
                 let view = res.create_view(
                     None, None, &br::ComponentMapping::default(),
                     &br::ImageSubresourceRange::color(0..1, 0..1)

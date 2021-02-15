@@ -43,7 +43,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let font_provider = pvg::FontProvider::new().expect("FontProvider initialization error");
         let font = font_provider.best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
             .expect("No Fonts");
-        let mut ctx = pvg::Context::new(1.0);
+        let mut ctx = pvg::Context::new(2.0);
         ctx.text(&font, "Hello, World!|Opaque").expect("Text Rendering failed");
         {
             let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
@@ -108,7 +108,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 
         let mut bp = BufferPrealloc::new(&e.graphics());
         let vg_offs = ctx.prealloc(&mut bp);
-        let vg_offs2 = ctx.prealloc(&mut bp);
+        let vg_offs2 = ctx2.prealloc(&mut bp);
 
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
