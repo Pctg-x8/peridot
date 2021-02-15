@@ -14,45 +14,6 @@ use num::Integer;
 macro_rules! align2 {
     ($v: expr, $a: expr) => (if $a == 0 { $v } else { ($v + ($a - 1)) & !($a - 1) })
 }
-#[derive(Clone)]
-pub struct BufferPrealloc<'g> {
-    g: &'g Graphics, usage: br::BufferUsage, offsets: Vec<u64>, total: u64, common_align: u64
-}
-impl<'g> BufferPrealloc<'g> {
-    pub fn new(g: &'g Graphics) -> Self {
-        BufferPrealloc { g, usage: br::BufferUsage(0), offsets: Vec::new(), total: 0, common_align: 1 }
-    }
-    pub fn build(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
-    }
-    pub fn build_transferred(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_dest()).create(&self.g.device)
-    }
-    pub fn build_upload(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(&self.g.device)
-    }
-
-    pub fn add(&mut self, content: BufferContent) -> u64 {
-        self.usage = content.usage(self.usage);
-        let content_align = content.alignment(&self.g.adapter);
-        self.common_align = self.common_align.lcm(&content_align);
-        let offs = align2!(self.total, content_align);
-        self.total = offs + content.size() as u64;
-        self.offsets.push(offs);
-        return offs;
-    }
-    pub fn total_size(&self) -> u64 { self.total }
-
-    /// Returns first offset of merged(other's) prealloc-ed block
-    pub fn merge(&mut self, other: &Self) -> u64 {
-        self.common_align = self.common_align.lcm(&other.common_align);
-        let offs = align2!(self.total, other.common_align);
-        self.usage |= other.usage;
-        self.total = offs + other.total;
-        self.offsets.extend(other.offsets.iter().map(|&o| o + offs));
-        return offs;
-    }
-}
 
 pub struct BulkedResourceStorageAllocator {
     buffers: Vec<(br::Buffer, u64)>,
