@@ -13,3 +13,4 @@ Varyings VertexShader -> FragmentShader {
 
 Uniform[VertexShader](0, 0) Camera { mat4 vp, obj; }
 Sampler2D[FragmentShader](0, 1) tex
+

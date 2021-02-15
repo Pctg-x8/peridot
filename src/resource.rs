@@ -1,100 +1,15 @@
-use bedrock as br; use self::br::traits::*;
+use bedrock as br;
 use super::*;
 use std::ops::{Deref, Range};
-use std::mem::{size_of, transmute, align_of};
-use num::Integer;
 
-/// (size, align)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferContent
-{
-    Vertex(u64, u64), Index(u64, u64), Uniform(u64, u64), Raw(u64, u64), UniformTexel(u64, u64),
-    Storage(u64, u64), StorageTexel(u64, u64)
-}
-impl BufferContent
-{
-    fn usage(&self, src: br::BufferUsage) -> br::BufferUsage
-    {
-        use self::BufferContent::*;
+mod memory;
+pub use self::memory::*;
+mod buffer;
+pub use self::buffer::*;
+mod image;
+pub use self::image::*;
 
-        match *self
-        {
-            Vertex(_, _) => src.vertex_buffer(),
-            Index(_, _) => src.index_buffer(),
-            Uniform(_, _) => src.uniform_buffer(),
-            Raw(_, _) => src,
-            UniformTexel(_, _) => src.uniform_texel_buffer(),
-            Storage(_, _) => src.storage_buffer(),
-            StorageTexel(_, _) => src.storage_texel_buffer()
-        }
-    }
-    fn alignment(&self, pd: &br::PhysicalDevice) -> u64
-    {
-        use self::BufferContent::*;
-
-        match *self
-        {
-            Vertex(_, a) | Index(_, a) | Raw(_, a) => a,
-            Uniform(_, a) | UniformTexel(_, a) =>
-                u64::lcm(&pd.properties().limits.minUniformBufferOffsetAlignment as _, &a),
-            Storage(_, a) | StorageTexel(_, a) =>
-                u64::lcm(&pd.properties().limits.minStorageBufferOffsetAlignment as _, &a)
-        }
-    }
-    fn size(&self) -> u64
-    {
-        use self::BufferContent::*;
-
-        match *self
-        {
-            Vertex(v, _) | Index(v, _) | Uniform(v, _) | Raw(v, _) | UniformTexel(v, _) |
-            Storage(v, _) | StorageTexel(v, _) => v
-        }
-    }
-
-    /// Generic Shorthands
-    pub fn vertex<T>() -> Self {
-        BufferContent::Vertex(size_of::<T>() as _, align_of::<T>() as _)
-    }
-    pub fn vertices<T>(count: usize) -> Self {
-        BufferContent::Vertex(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
-    }
-
-    pub fn index<T>()  -> Self {
-        BufferContent::Index(size_of::<T>() as _, align_of::<T>() as _)
-    }
-    pub fn indices<T>(count: usize) -> Self {
-        BufferContent::Index(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
-    }
-
-    pub fn uniform<T>() -> Self {
-        BufferContent::Uniform(size_of::<T>() as _, align_of::<T>() as _)
-    }
-    pub fn uniform_dynarray<T>(count: usize) -> Self {
-        BufferContent::Uniform(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
-    }
-
-    pub fn uniform_texel<T>() -> Self {
-        BufferContent::UniformTexel(size_of::<T>() as _, align_of::<T>() as _)
-    }
-    pub fn uniform_texel_dynarray<T>(count: usize) -> Self {
-        BufferContent::UniformTexel(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
-    }
-
-    pub fn storage<T>() -> Self {
-        BufferContent::Storage(size_of::<T>() as _, align_of::<T>() as _)
-    }
-    pub fn storage_dynarray<T>(count: usize) -> Self {
-        BufferContent::Storage(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
-    }
-
-    pub fn storage_texel<T>() -> Self {
-        BufferContent::StorageTexel(size_of::<T>() as _, align_of::<T>() as _)
-    }
-    pub fn storage_texel_dynarray<T>(count: usize) -> Self {
-        BufferContent::StorageTexel(size_of::<T>() as u64 * count as u64, align_of::<T>() as _)
-    }
-}
+#[macro_export]
 macro_rules! align2 {
     ($v: expr, $a: expr) => (if $a == 0 { $v } else { ($v + ($a - 1)) & !($a - 1) })
 }
@@ -482,7 +397,8 @@ impl DeviceBufferViewHold {
     pub fn to_unhold_view(&self) -> DeviceBufferView { DeviceBufferView { buffer: &self.buffer, offset: self.offset } }
 }
 
-#[derive(Clone, Copy)] #[repr(i32)]
+#[derive(Clone, Copy, Debug)]
+#[repr(i32)]
 pub enum PixelFormat
 {
     RGBA32 = br::vk::VK_FORMAT_R8G8B8A8_UNORM,
@@ -548,16 +464,17 @@ impl Deref for Texture2D
     fn deref(&self) -> &br::ImageView { &self.0 }
 }
 
+pub struct DecodedPixelData {
+    pub pixels: Vec<u8>, pub size: math::Vector2<u32>,
+    pub format: PixelFormat, pub stride: usize
+}
+impl DecodedPixelData {
+    pub fn u8_pixels(&self) -> &[u8] { &self.pixels }
+}
 /// Low Dynamic Range(8bit colors) image asset
-pub trait LDRImageAsset
-{
+pub trait LDRImageAsset {
     fn into_pixel_data_info(self) -> DecodedPixelData;
 }
-impl LDRImageAsset for BMP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for PNG { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for TGA { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for TIFF { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
-impl LDRImageAsset for WebP { fn into_pixel_data_info(self) -> DecodedPixelData { self.0 } }
 
 /// Stg1. Group what textures are being initialized
 pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<DecodedPixelData>);
@@ -580,7 +497,7 @@ impl<'g> TextureInitializationGroup<'g>
         let (mut images, mut stage_info) = (Vec::with_capacity(self.1.len()), Vec::with_capacity(self.1.len()));
         for pd in self.1
         {
-            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format(), prealloc)?;
+            let (o, offs) = Texture2D::init(self.0, &pd.size, pd.format, prealloc)?;
             images.push(o); stage_info.push((pd, offs));
         }
         return Ok(TexturePreallocatedGroup(stage_info, images));
@@ -610,7 +527,7 @@ impl TextureInstantiatedGroup
         {
             let s = unsafe
             {
-                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format().bpp() >> 3) as usize)
+                mr.slice_mut(offs as _, (pd.size.x() * pd.size.y()) as usize * (pd.format.bpp() >> 3) as usize)
             };
             s.copy_from_slice(pd.u8_pixels());
         }

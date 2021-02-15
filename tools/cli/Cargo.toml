@@ -1,0 +1,19 @@
+[package]
+name = "peridot-cli"
+version = "0.1.0"
+description = "Peridot Enigne BuildProcess CLI"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "peridot"
+path = "src/main.rs"
+
+[dependencies]
+structopt = "0.3"
+toml = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+console = "0.14"
+regex = "1.4"

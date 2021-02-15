@@ -128,58 +128,66 @@ impl FontProvider
     }
 }
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-impl Font
-{
+impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    pub(crate) fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
-    pub fn ascent(&self) -> f32 { self.0.ascent() as _ }
+    pub fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
+    pub fn ascent(&self) -> f32 { self.0.ascent() as f32 * self.scale_value() }
 
-    pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
-    {
+    pub fn glyph_id(&self, c: char) -> Option<u32> {
         let mut u16s = [0u16; 2];
         c.encode_utf16(&mut u16s);
         // remove surrogate paired codepoint
         self.0.glyphs_for_characters(&u16s[..1]).ok().map(|x| x[0] as _)
     }
-    pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
-    {
+    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
         Ok(self.0.advances_for_glyphs(appkit::CTFontOrientation::Horizontal, &[glyph as _], None) as _)
     }
-    pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
-    {
+    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
         let r = self.0.bounding_rects_for_glyphs(appkit::CTFontOrientation::Horizontal, &[glyph as _], None);
-        Ok(Rect::new(euclid::point2(r.origin.x as _, r.origin.y as _),
-            euclid::size2(r.size.width as _, r.size.height as _)))
+        Ok(Rect::new(euclid::point2(r.origin.x as f32 * self.scale_value(), r.origin.y as f32 * self.scale_value()),
+            euclid::size2(r.size.width as f32 * self.scale_value(), r.size.height as f32 * self.scale_value())))
     }
-    pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
-    {
+    pub fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError> {
         let path = self.0.create_path_for_glyph(glyph as _, None)
             .map_err(|_| GlyphLoadingError::SysAPICallError("CTFont::create_path_for_glyph"))?;
-        path.apply(|e| match e.type_
-        {
-            appkit::CGPathElementType::MoveToPoint => unsafe
-            {
-                builder.move_to(euclid::point2((*e.points).x as _, (*e.points).y as _));
+        path.apply(|e| match e.type_ {
+            appkit::CGPathElementType::MoveToPoint => unsafe {
+                builder.move_to(euclid::point2(
+                    (*e.points).x as f32 * self.scale_value(),
+                    (*e.points).y as f32 * self.scale_value() - self.ascent()
+                ));
             },
             appkit::CGPathElementType::CloseSubpath => builder.close(),
-            appkit::CGPathElementType::AddLineToPoint => unsafe
-            {
-                builder.line_to(euclid::point2((*e.points).x as _, (*e.points).y as _));
+            appkit::CGPathElementType::AddLineToPoint => unsafe {
+                builder.line_to(euclid::point2(
+                    (*e.points).x as f32 * self.scale_value(),
+                    (*e.points).y as f32 * self.scale_value() - self.ascent()
+                ));
             },
-            appkit::CGPathElementType::AddCurveToPoint => unsafe
-            {
+            appkit::CGPathElementType::AddCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 3);
                 builder.cubic_bezier_to(
-                    euclid::point2(points[0].x as _, points[0].y as _),
-                    euclid::point2(points[1].x as _, points[1].y as _),
-                    euclid::point2(points[2].x as _, points[2].y as _));
+                    euclid::point2(
+                        points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()
+                    ),
+                    euclid::point2(
+                        points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()
+                    ),
+                    euclid::point2(
+                        points[2].x as f32 * self.scale_value(), points[2].y as f32 * self.scale_value() - self.ascent()
+                    )
+                );
             },
-            appkit::CGPathElementType::AddQuadCurveToPoint => unsafe
-            {
+            appkit::CGPathElementType::AddQuadCurveToPoint => unsafe {
                 let points = std::slice::from_raw_parts(e.points, 2);
                 builder.quadratic_bezier_to(
-                    euclid::point2(points[0].x as _, points[0].y as _),
-                    euclid::point2(points[1].x as _, points[1].y as _));
+                    euclid::point2(
+                        points[0].x as f32 * self.scale_value(), points[0].y as f32 * self.scale_value() - self.ascent()
+                    ),
+                    euclid::point2(
+                        points[1].x as f32 * self.scale_value(), points[1].y as f32 * self.scale_value() - self.ascent()
+                    )
+                );
             }
         });
 
@@ -216,33 +224,38 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
-    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub fn scale_value(&self) -> f32 { (96.0 * self.1 / 72.0) / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 }
 
-    pub(crate) fn glyph_id(&self, c: char) -> Option<u32>
+    pub fn glyph_id(&self, c: char) -> Option<u32>
     {
         self.0.glyph_indices(&[c]).ok().map(|x| x[0] as _)
     }
-    pub(crate) fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError>
-    {
+    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
         self.0.design_glyph_metrics(&[glyph as _], false)
             .map(|m| m[0].advanceWidth as f32).map_err(From::from)
     }
-    pub(crate) fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError>
-    {
+    /// in dip
+    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
         let m = self.0.design_glyph_metrics(&[glyph as _], false)?[0];
         
-        Ok(Rect::new(euclid::point2(m.leftSideBearing as _, m.topSideBearing as _), euclid::size2(
-            (m.leftSideBearing + m.rightSideBearing + m.advanceWidth as i32) as f32,
-            (m.topSideBearing + m.bottomSideBearing + m.advanceHeight as i32) as f32,
-        )))
+        Ok(Rect::new(
+            euclid::point2(
+                m.leftSideBearing as f32 * self.scale_value(),
+                (m.verticalOriginY - m.topSideBearing) as f32 * self.scale_value()
+            ),
+            euclid::size2(
+                (m.leftSideBearing + m.rightSideBearing + m.advanceWidth as i32) as f32 * self.scale_value(),
+                (m.topSideBearing + m.bottomSideBearing + m.advanceHeight as i32) as f32 * self.scale_value(),
+            )
+        ))
     }
-    pub(crate) fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
+    pub fn outline<B: PathBuilder>(&self, glyph: u32, builder: &mut B) -> Result<(), GlyphLoadingError>
     {
         let sink = comdrive::ComPtr(PathEventReceiver::new());
         self.0.sink_glyph_run_outline(
-            self.units_per_em() as _, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 }
+            96.0 * self.1 as f32 / 72.0, &[glyph as _], None, None, false, false, unsafe { &mut *sink.0 }
         )?;
         for pe in unsafe { sink.0.as_mut().expect("null sink").drain_all_paths() }
         {
@@ -270,7 +283,7 @@ impl FontProvider
         pat.default_substitute();
         let fonts = self.fc.sort_fonts(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
 
-        let group_desc: Vec<(*const i8, i64)> = fonts.iter().map(|f|
+        let group_desc: Vec<(*const i8, freetype2::FT_Long)> = fonts.iter().map(|f|
         {
             let font_path = f.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
             let face_index = f.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
@@ -295,31 +308,31 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; self.0.set_size(size); }
-    pub(crate) fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
+    pub fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     pub fn ascent(&self) -> f32 { self.0.ascender() as _ }
 
-    pub(crate) fn glyph_id(&self, c: char) -> Option<(usize, u32)>
+    pub fn glyph_id(&self, c: char) -> Option<(usize, u32)>
     {
         self.0.char_index(c)
     }
-    pub(crate) fn advance_h(&self, glyph: (usize, u32)) -> Result<f32, GlyphLoadingError>
+    pub fn advance_h(&self, glyph: (usize, u32)) -> Result<f32, GlyphLoadingError>
     {
         self.0.get(glyph.0).load_glyph(glyph.1)?;
 
         Ok(self.0.get(glyph.0).glyph_advance().x as f32 / 64.0)
     }
-    pub(crate) fn bounds(&self, glyph: (usize, u32)) -> Result<Rect<f32>, GlyphLoadingError>
+    pub fn bounds(&self, glyph: (usize, u32)) -> Result<Rect<f32>, GlyphLoadingError>
     {
         let fnt = self.0.get(glyph.0);
         fnt.load_glyph(glyph.1)?;
         let m = fnt.glyph_metrics();
         
         Ok(Rect::new(
-            euclid::point2(m.horiBearingX as f32 * 64.0, m.horiBearingY as f32 * 64.0),
-            euclid::size2(m.width as f32 * 64.0, m.height as f32 * 64.0)
+            euclid::point2(m.horiBearingX as f32 / 64.0, m.horiBearingY as f32 / 64.0),
+            euclid::size2(m.width as f32 / 64.0, m.height as f32 / 64.0)
         ))
     }
-    pub(crate) fn outline<B: PathBuilder>(&self, glyph: (usize, u32), builder: &mut B) -> Result<(), GlyphLoadingError>
+    pub fn outline<B: PathBuilder>(&self, glyph: (usize, u32), builder: &mut B) -> Result<(), GlyphLoadingError>
     {
         self.0.get(glyph.0).load_glyph(glyph.1)?;
         self.0.get(glyph.0).decompose_outline(builder);

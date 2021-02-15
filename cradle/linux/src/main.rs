@@ -1,6 +1,5 @@
 
 #[macro_use] extern crate log;
-#[macro_use] extern crate peridot_derive;
 
 use std::fs::File;
 use std::path::PathBuf;
@@ -17,32 +16,51 @@ mod kernel_input;
 mod input;
 mod userlib;
 
-pub struct PlatformAssetLoader { basedir: PathBuf }
-impl PlatformAssetLoader
-{
-    fn new() -> Self
-    {
+pub struct PlatformAssetLoader {
+    basedir: PathBuf,
+    #[cfg(feature = "IterationBuild")]
+    builtin_asset_basedir: PathBuf
+}
+impl PlatformAssetLoader {
+    fn new() -> Self {
         #[cfg(feature = "UseExternalAssetPath")] let basedir = PathBuf::from(env!("PERIDOT_EXTERNAL_ASSET_PATH"));
-        #[cfg(not(feature = "UseExternalAssetPath"))] let basedir =
-        {
+        #[cfg(not(feature = "UseExternalAssetPath"))] let basedir = {
             let mut binloc = std::env::current_exe().expect("Getting exe directory");
             binloc.pop(); binloc.push("assets"); binloc
         };
 
         trace!("Using Assets in {}", basedir.display());
-        PlatformAssetLoader { basedir }
+        PlatformAssetLoader {
+            basedir,
+            #[cfg(feature = "IterationBuild")]
+            builtin_asset_basedir: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH"))
+        }
     }
 }
-impl peridot::PlatformAssetLoader for PlatformAssetLoader
-{
+impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = File;
     type StreamingAsset = File;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>
-    {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
+        #[allow(unused_mut)]
+        let mut path_segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if path_segments.peek().map_or(false, |&s| s == "builtin") {
+            // Switch base to external builtin path
+            path_segments.next();
+            let mut apath = self.builtin_asset_basedir.clone();
+            apath.extend(path_segments);
+            apath.set_extension(ext);
+            
+            return File::open(apath);
+        }
+
         let mut apath = self.basedir.clone();
-        apath.push(path.replace(".", "/")); apath.set_extension(ext);
-        return File::open(apath);
+        apath.extend(path_segments);
+        apath.set_extension(ext);
+
+        File::open(apath)
     }
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> { self.get(path, ext) }
 }

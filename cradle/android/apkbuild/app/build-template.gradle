@@ -23,7 +23,7 @@ android {
     sourceSets.main {
         java.srcDirs = ["src/main"]
         jniLibs.srcDir System.getenv("NDK_HOME") + '/sources/third_party/vulkan/src/build-android/jniLibs'
-        assets.srcDir '**ASSETDIR**'
+        assets.srcDir '../../assets'
     }
 }
 dependencies {

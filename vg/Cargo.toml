@@ -14,6 +14,7 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = ".." }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 lyon_path = "0.12"
+lyon_geom = "0.12"
 euclid = "0.19"
 log = "*"
 libc = "0.2"

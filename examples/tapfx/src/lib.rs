@@ -123,7 +123,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .expect("Failed to create GraphicsPipeline");
         let pipeline = peridot::LayoutedPipeline::combine(pipeline, &pl);
 
-        let main_image_data: peridot::PNG = e.load("images.peridot_default_tapfx_circle")
+        let main_image_data: peridot_image::PNG = e.load("images.peridot_default_tapfx_circle")
             .expect("Failed to load main_image_data");
         let mut tig = peridot::TextureInitializationGroup::new(e.graphics());
         tig.add(main_image_data);
