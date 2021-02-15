@@ -107,7 +107,7 @@ impl Default for PartialTransform {
         }
     }
 }
-trait UIElement {
+pub trait UIElement {
     #[allow(unused_variables)]
     fn layout(&mut self, placed_at: &Transform) {}
     fn layout_size(&self) -> peridot::math::Vector2<f32>;
