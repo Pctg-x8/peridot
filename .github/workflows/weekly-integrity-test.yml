@@ -54,6 +54,10 @@ jobs:
       run: "cargo build --release"
       "working-directory": tools/cli
     - if: 'true'
+      name: Build archiver
+      run: "cargo build --release"
+      "working-directory": tools/archiver
+    - if: 'true'
       name: install requirements
       run: brew install coreutils
     - env:
