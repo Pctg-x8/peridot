@@ -16,7 +16,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn init(e: &mut peridot::Engine<NL>) -> Self {
         let mut res_storage_alloc = peridot::BulkedResourceStorageAllocator::new();
         let mut ui = UIContext::new(e.graphics(), &mut res_storage_alloc, 2048);
-        let uifont = ui.load_font(&[peridot_vg::FamilyName::SansSerif], &peridot_vg::FontProperties::new())
+        let uifont = ui.load_font("sans-serif", &peridot_vg::FontProperties::default())
             .expect("Failed to load UI Font");
         let mut ui_main = UIPlane::new();
         ui_main.set_root(Box::new(StaticLabel::new(&mut ui, uifont, "test", 12.0)));
@@ -39,6 +39,7 @@ use std::collections::HashMap;
 pub struct FontId(usize);
 pub struct UIContext {
     charatlas: peridot::DynamicTextureAtlas<peridot::BookshelfBinning>,
+    font_provider: peridot_vg::FontProvider,
     fonts: Vec<peridot_vg::Font>,
     baked_characters: HashMap<(FontId, char), peridot::TextureSlice>
 }
@@ -53,15 +54,16 @@ impl UIContext {
                 g, peridot::math::Vector2(character_atlas_size, character_atlas_size), br::vk::VK_FORMAT_R8_UNORM,
                 res_storage_alloc
             ).expect("Failed to create Dynamic Texture Atlas for Characters"),
+            font_provider: peridot_vg::FontProvider::new().expect("Failed to initialize font provider"),
             fonts: Vec::new(),
             baked_characters: HashMap::new()
         }
     }
 
     pub fn load_font(
-        &mut self, families: &[peridot_vg::FamilyName], properties: &peridot_vg::FontProperties
+        &mut self, families: &str, properties: &peridot_vg::FontProperties
     ) -> Result<FontId, peridot_vg::FontConstructionError> {
-        peridot_vg::Font::best_match(families, properties, 12.0).map(|f| self.register_font(f))
+        self.font_provider.best_match(families, properties, 12.0).map(|f| self.register_font(f))
     }
     pub fn register_font(&mut self, font: peridot_vg::Font) -> FontId {
         self.fonts.push(font);
