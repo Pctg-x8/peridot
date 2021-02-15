@@ -176,6 +176,7 @@ impl peridot::PlatformAssetLoader for AssetProvider
 
     fn get(&self, path: &str, ext: &str) -> std::io::Result<Self::Asset>
     {
+        #[allow(unused_mut)]
         let mut segments = path.split('.').peekable();
 
         #[cfg(feature = "IterationBuild")]
@@ -185,6 +186,7 @@ impl peridot::PlatformAssetLoader for AssetProvider
             let mut p = self.builtin_assets_base.clone();
             p.extend(segments);
             p.set_extension(ext);
+            log::debug!("Loading Builtin Asset: {:?}", p);
 
             return std::fs::File::open(&p);
         }
@@ -192,11 +194,13 @@ impl peridot::PlatformAssetLoader for AssetProvider
         let mut p = self.base.clone();
         p.extend(segments);
         p.set_extension(ext);
+        log::debug!("Loading Asset: {:?}", p);
 
         std::fs::File::open(&p)
     }
     fn get_streaming(&self, path: &str, ext: &str) -> std::io::Result<Self::StreamingAsset>
     {
+        #[allow(unused_mut)]
         let mut segments = path.split('.').peekable();
 
         #[cfg(feature = "IterationBuild")]

@@ -3,6 +3,8 @@
 use log::*;
 
 mod font; pub use font::*;
+pub mod sdf_generator;
+pub use self::sdf_generator::SDFGenerator;
 
 use pathfinder_partitioner::{mesh::Mesh, partitioner::Partitioner, builder::Builder};
 // use lyon_path::PathEvent;
@@ -75,8 +77,10 @@ impl Context
             println!("Rendering Glyph: {:?}", g);
             let (adv, size) = (font.advance_h(g)?, font.bounds(g)?);
             let mut g0 = Partitioner::new();
-            let tf = self.current_transform.post_translate(Vector2D::new(left_offs, -font.ascent()))
-                .post_scale(font.scale_value() * self.screen_scaling, font.scale_value() * self.screen_scaling);
+            let tf = self.current_transform.post_translate(Vector2D::new(
+                left_offs * font.scale_value() * self.screen_scaling,
+                -font.ascent() * font.scale_value() * self.screen_scaling
+            ));
             if font.outline(g, g0.builder_mut()).is_ok()
             {
                 g0.partition(FillRule::Winding);

@@ -55,9 +55,15 @@ jobs:
       run: "cargo build --release"
       "working-directory": tools/cli
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Build archiver
+      run: "cargo build --release"
+      "working-directory": tools/archiver
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: install requirements
       run: brew install coreutils
     - env:
+        PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/target/release/peridot-archiver', github.workspace) }}"
+        PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VULKAN_SDK: /Users
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"

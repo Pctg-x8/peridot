@@ -212,6 +212,7 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
             , checkoutStep
             , cacheStep
             , GithubActions.Step::{ name = "Build CLI", run = Some "cargo build --release", working-directory = Some "tools/cli" }
+            , GithubActions.Step::{ name = "Build archiver", run = Some "cargo build --release", working-directory = Some "tools/archiver" }
             , GithubActions.Step::{
                 , name = "install requirements"
                 , run = Some "brew install coreutils"
@@ -220,7 +221,12 @@ let checkCradleMacos = \(notifyProvider : SlackNotifyProvider) -> \(precondition
                 , name = "cargo check"
                 , run = Some "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
                 , shell = Some GithubActions.Shell.bash
-                , env = Some (toMap { VULKAN_SDK = "/Users", PERIDOT_CLI_CRADLE_BASE = GithubActions.mkExpression "format('{0}/cradle', github.workspace)" })
+                , env = Some (toMap {
+                    , VULKAN_SDK = "/Users"
+                    , PERIDOT_CLI_CRADLE_BASE = GithubActions.mkExpression "format('{0}/cradle', github.workspace)"
+                    , PERIDOT_CLI_BUILTIN_ASSETS_PATH = GithubActions.mkExpression "format('{0}/builtin-assets', github.workspace)"
+                    , PERIDOT_CLI_ARCHIVER_PATH = GithubActions.mkExpression "format('{0}/target/release/peridot-archiver', github.workspace)"
+                    })
                 }
             ]
         , [runStepOnFailure (slackNotify notifyProvider (SlackNotification.Failure "check-cradle-macos"))]
