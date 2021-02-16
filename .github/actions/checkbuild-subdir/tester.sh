@@ -8,7 +8,10 @@ export CARGO_HOME=$GITHUB_WORKSPACE/.buildcache
 test_or_check() {
     if `/find-test-code.sh`; then echo "test"; else echo "check"; fi
 }
+run_test() {
+    if $(find . -name ci-test.sh | grep .); then ./ci-test.sh; else cargo `test_or_check` --verbose; fi
+}
 
 for c in */Cargo.toml; do
-    (cd $(dirname $c) && cargo `test_or_check` --verbose)
+    (cd $(dirname $c) && run_test) || exit $?
 done

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 50;
+	objectVersion = 52;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -22,10 +22,9 @@
 		4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */; };
 		4BC8ED2721B3F54900FB4AF9 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */; };
 		4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */; };
-		980100B623AF192B004DEEF8 /* vulkan.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 980100B523AF192B004DEEF8 /* vulkan.framework */; };
 		980100BC23AF202B004DEEF8 /* libMoltenVK.dylib in Copy Vulkan Frameworks */ = {isa = PBXBuildFile; fileRef = 980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		980100BE23AF2049004DEEF8 /* vulkan.framework in Copy Vulkan Frameworks */ = {isa = PBXBuildFile; fileRef = 980100BD23AF2049004DEEF8 /* vulkan.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		980100C323AF2605004DEEF8 /* MoltenVK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 980100C223AF2605004DEEF8 /* MoltenVK.framework */; };
+		985C79C525D5234C00CDBC0F /* MoltenVK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */; };
+		985C79C625D5234C00CDBC0F /* MoltenVK.xcframework in Copy Vulkan Frameworks */ = {isa = PBXBuildFile; fileRef = 985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -35,7 +34,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				980100BE23AF2049004DEEF8 /* vulkan.framework in Copy Vulkan Frameworks */,
+				985C79C625D5234C00CDBC0F /* MoltenVK.xcframework in Copy Vulkan Frameworks */,
 				980100BC23AF202B004DEEF8 /* libMoltenVK.dylib in Copy Vulkan Frameworks */,
 			);
 			name = "Copy Vulkan Frameworks";
@@ -121,6 +120,7 @@
 		980100BD23AF2049004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../../vulkansdk-macos-1.1.130.0/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
 		980100C023AF252E004DEEF8 /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = MoltenVK_icd.json; path = "../../../../../vulkansdk-macos-1.1.130.0/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"; sourceTree = "<group>"; };
 		980100C223AF2605004DEEF8 /* MoltenVK.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MoltenVK.framework; path = "../../../../../vulkansdk-macos-1.1.130.0/MoltenVK/macOS/framework/MoltenVK.framework"; sourceTree = "<group>"; };
+		985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MoltenVK.xcframework; path = ../../../../../vksdk/1.2.162.1/MoltenVK/MoltenVK.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,13 +129,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */,
-				980100C323AF2605004DEEF8 /* MoltenVK.framework in Frameworks */,
+				985C79C525D5234C00CDBC0F /* MoltenVK.xcframework in Frameworks */,
 				4BC8ED2721B3F54900FB4AF9 /* QuartzCore.framework in Frameworks */,
 				4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */,
 				4BC8ED2321B3F51600FB4AF9 /* IOSurface.framework in Frameworks */,
 				4BC8ED2121B3F50B00FB4AF9 /* IOKit.framework in Frameworks */,
 				4BC8ED1F21B3F4EC00FB4AF9 /* Metal.framework in Frameworks */,
-				980100B623AF192B004DEEF8 /* vulkan.framework in Frameworks */,
 				4BC8ED1D21B3F4C900FB4AF9 /* libc++.tbd in Frameworks */,
 				4BAF7A3721B3C85B0006BE24 /* libpegamelib.a in Frameworks */,
 			);
@@ -259,6 +258,7 @@
 				4B696EF1231BDB4900C2417C /* CoreAudio.framework */,
 				4B696EEF231BDB3200C2417C /* AudioToolbox.framework */,
 				4B696EED231BD4E000C2417C /* AudioUnit.framework */,
+				985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */,
 				980100C223AF2605004DEEF8 /* MoltenVK.framework */,
 				980100B523AF192B004DEEF8 /* vulkan.framework */,
 				4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */,
@@ -506,14 +506,15 @@
 		4BAF7A2221B2554E0006BE24 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = x86_64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "peridot-cradle/peridot_cradle.entitlements";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(HOME)/vulkansdk-macos-1.1.130.0/macOS/Frameworks",
-					"$(HOME)/vulkansdk-macos-1.1.130.0/MoltenVK/macOS/framework",
+					"$(VULKAN_SDK)/Frameworks",
+					"$(VULKAN_SDK)/../MoltenVK",
 				);
 				INFOPLIST_FILE = "peridot-cradle/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -521,7 +522,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/rlibs";
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.cterm2.peridot.cradle.peridot-cradle";
@@ -529,20 +530,22 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
 				SWIFT_VERSION = 4.2;
+				VULKAN_SDK = "$(HOME)/vksdk/1.2.162.1/macOS";
 			};
 			name = Debug;
 		};
 		4BAF7A2321B2554E0006BE24 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = x86_64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "peridot-cradle/peridot_cradle.entitlements";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(HOME)/vulkansdk-macos-1.1.130.0/macOS/Frameworks",
-					"$(HOME)/vulkansdk-macos-1.1.130.0/MoltenVK/macOS/framework",
+					"$(VULKAN_SDK)/Frameworks",
+					"$(VULKAN_SDK)/../MoltenVK",
 				);
 				INFOPLIST_FILE = "peridot-cradle/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -550,7 +553,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/rlibs";
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.cterm2.peridot.cradle.peridot-cradle";
@@ -558,6 +561,7 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
 				SWIFT_VERSION = 4.2;
+				VULKAN_SDK = "$(HOME)/vksdk/1.2.162.1/macOS";
 			};
 			name = Release;
 		};

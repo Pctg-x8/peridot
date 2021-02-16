@@ -2,7 +2,7 @@
 use std::marker::PhantomData;
 use bedrock as br; use bedrock::traits::*;
 use peridot::math::{
-    Vector3F32, Vector3, Vector2F32, Vector2, Camera, ProjectionMethod, Matrix4F32, Quaternion, Matrix4, Vector4, One
+    Vector3F32, Vector3, Vector2F32, Vector2, Camera, ProjectionMethod, Matrix4F32, Quaternion, Matrix4, One
 };
 use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
@@ -20,26 +20,21 @@ use std::time::Duration;
 use std::sync::{Arc, RwLock};
 use log::*;
 
-pub struct IPFixedBufferInitializer
-{
+pub struct IPFixedBufferInitializer {
     vertices_offset: u64
 }
-impl FixedBufferInitializer for IPFixedBufferInitializer
-{
-    fn stage_data(&mut self, m: &br::MappedMemoryRange)
-    {
-        unsafe
-        {
+impl FixedBufferInitializer for IPFixedBufferInitializer {
+    fn stage_data(&mut self, m: &br::MappedMemoryRange) {
+        unsafe {
             m.slice_mut(self.vertices_offset as _, 4).clone_from_slice(&[
-                UVVert { pos: Vector3(-1.0, -1.0, 0.0), uv: Vector2(0.0, 0.0) },
-                UVVert { pos: Vector3( 1.0, -1.0, 0.0), uv: Vector2(1.0, 0.0) },
-                UVVert { pos: Vector3(-1.0,  1.0, 0.0), uv: Vector2(0.0, 1.0) },
-                UVVert { pos: Vector3( 1.0,  1.0, 0.0), uv: Vector2(1.0, 1.0) }
+                UVVert { pos: Vector3(-1.0,  1.0, 0.0), uv: Vector2(0.0, 0.0) },
+                UVVert { pos: Vector3( 1.0,  1.0, 0.0), uv: Vector2(1.0, 0.0) },
+                UVVert { pos: Vector3(-1.0, -1.0, 0.0), uv: Vector2(0.0, 1.0) },
+                UVVert { pos: Vector3( 1.0, -1.0, 0.0), uv: Vector2(1.0, 1.0) }
             ]);
         }
     }
-    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buffer: &Buffer, buffer_range: Range<u64>)
-    {
+    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buffer: &Buffer, buffer_range: Range<u64>) {
         tfb.add_buffer_graphics_ready(br::PipelineStageFlags::VERTEX_INPUT.vertex_shader(), buffer,
             buffer_range.start as _ .. buffer_range.end as _,
             br::AccessFlags::UNIFORM_READ | br::AccessFlags::VERTEX_ATTRIBUTE_READ);
@@ -65,14 +60,14 @@ impl<PL: peridot::NativeLinker> Game<PL>
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
 {
-    fn init(e: &peridot::Engine<PL>) -> Self
+    fn init(e: &mut peridot::Engine<PL>) -> Self
     {
-        let screen_size: br::Extent3D = e.backbuffers()[0].size().clone().into();
-        let screen_aspect = screen_size.1 as f32 / screen_size.0 as f32;
+        let screen_size: br::Extent3D = e.backbuffer(0).expect("no backbuffers").size().clone().into();
+        let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-        let image_data: peridot::PNG = e.load("images.example").expect("No image found");
+        let image_data: peridot_image::PNG = e.load("images.example").expect("No image found");
         debug!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
-        debug!("ImageColor: {:?}", image_data.0.color);
+        debug!("ImageFormat: {:?}", image_data.0.format);
         debug!("ImageStride: {} bytes", image_data.0.stride);
 
         let bgm = Arc::new(RwLock::new(e.streaming::<StreamingPlayableWav>("bgm").expect("Loading BGM")));
@@ -98,20 +93,15 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         
         let mut cam = Camera
         {
-            projection: ProjectionMethod::Perspective { fov: 75.0f32.to_radians() },
+            projection: Some(ProjectionMethod::Perspective { fov: 75.0f32.to_radians() }),
             position: Vector3(-4.0, -1.0, -3.0), rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
             // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
             depth_range: 1.0 .. 10.0
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
-        buffers.mut_buffer.0.guard_map(0 .. buffers.mut_buffer.1, |m| unsafe
-        {
-            let (v, p) = cam.matrixes();
-            let aspect = Matrix4::scale(Vector4(screen_aspect, 1.0, 1.0, 1.0));
-            let vp = aspect * p * v;
-            *m.get_mut(mut_uniform_offset as _) = Uniform
-            {
-                camera: vp, object: Matrix4::ONE
+        buffers.mut_buffer.0.guard_map(0 .. buffers.mut_buffer.1, |m| unsafe {
+            *m.get_mut(mut_uniform_offset as _) = Uniform {
+                camera: cam.view_projection_matrix(screen_aspect), object: Matrix4::ONE
             };
         }).expect("Staging MutBuffer");
         let mut tfb_mut = TransferBatch::new();
@@ -149,15 +139,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             tfb_mut.sink_graphics_ready_commands(&mut rec);
         }
 
-        let attdesc = br::AttachmentDescription::new(e.backbuffer_format(),
-            br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)
+        let outer_layout = e.requesting_backbuffer_layout().0;
+        let attdesc = br::AttachmentDescription::new(e.backbuffer_format(), outer_layout, outer_layout)
             .load_op(br::LoadOp::Clear).store_op(br::StoreOp::Store);
         let renderpass = br::RenderPassBuilder::new().add_attachment(attdesc)
             .add_subpass(br::SubpassDescription::new().add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None))
             .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(None, 0, true))
             .create(&e.graphics())
             .expect("Create RenderPass");
-        let framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&renderpass, &[v], v.size(), 1))
+        let framebuffers = e.iter_backbuffers()
+            .map(|b| br::Framebuffer::new(&renderpass, &[&b], b.size(), 1))
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
         
@@ -180,7 +171,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         ]));
         dsub.submit(&e.graphics());
 
-        let shaderfile = e.load("shaders.prim").expect("Loading prim");
+        let shaderfile = e.load("builtin.shaders.unlit_image").expect("Loading shader");
         let shader = PvpShaderModules::new(&e.graphics(), shaderfile).expect("Create ShaderModules");
         let vp = [br::vk::VkViewport
         {
@@ -204,7 +195,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .expect("Create GraphicsPipeline");
         let gp = LayoutedPipeline::combine(gp, &pl);
 
-        let render_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, e.backbuffers().len())
+        let render_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, e.backbuffer_count())
             .expect("Alloc RenderCB");
         for (cb, fb) in render_cb.iter().zip(&framebuffers)
         {
@@ -258,17 +249,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
     }
     fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>)
     {
-        self.framebuffers = e.backbuffers().iter().map(|v| br::Framebuffer::new(&self.renderpass, &[v], v.size(), 1))
-            .collect::<Result<Vec<_>, _>>().expect("Bind Framebuffer");
+        self.framebuffers = e.iter_backbuffers()
+            .map(|b| br::Framebuffer::new(&self.renderpass, &[&b], b.size(), 1))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Bind Framebuffers");
         self.populate_render_commands();
     }
 }
-impl<PL: peridot::NativeLinker> Game<PL>
-{
-    fn populate_render_commands(&mut self)
-    {
-        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers)
-        {
+impl<PL: peridot::NativeLinker> Game<PL> {
+    fn populate_render_commands(&mut self) {
+        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
             let mut cr = cb.begin().expect("Begin CmdRecord");
             cr.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
                 &[br::ClearValue::Color([0.0; 4])], true);

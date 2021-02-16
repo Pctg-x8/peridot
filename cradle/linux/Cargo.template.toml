@@ -6,6 +6,7 @@ edition = "2018"
 
 [features]
 UseExternalAssetPath = []
+IterationBuild = []
 
 [dependencies]
 peridot = { path = "../.." }
@@ -14,8 +15,8 @@ log = "0.4"
 env_logger = "0.5"
 xcb = "0.8"
 pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
-
-#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
+libc = "0.2"
+regex = "1.4"
 
 [dependencies.async-std]
 version = "1.0"
