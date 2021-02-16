@@ -57,7 +57,7 @@ impl Mixer
     pub fn new() -> Self
     {
         let parallelize = (num_cpus::get() >> 1) as u32;
-        info!("Processing Audio with {} threads.", parallelize);
+        log::info!("Processing Audio with {} threads.", parallelize);
         let subprocess_pool = ThreadPoolBuilder::new().num_threads(parallelize as _).build()
             .expect("Building ThreadPool for SubAudioProcesses");
 
@@ -588,7 +588,7 @@ impl super::FromStreamingAsset for StreamingPlayableWav
         let mut loader = RIFFStreamingLoader::from(BoxedInputStream::new(asset));
         loader.file.skip(4 * 3)?;
         let fmt = loader.read_fmt()?;
-        debug!("fmt: {:?}", fmt);
+        log::debug!("fmt: {:?}", fmt);
         loader.seek_data()?;
         // initial buffering
         let mut buffered_samples = Vec::with_capacity(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);

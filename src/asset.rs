@@ -1,5 +1,5 @@
 
-use std::io::{Result as IOResult, BufReader, Error as IOError, ErrorKind, Cursor, SeekFrom};
+use std::io::{Result as IOResult, Error as IOError, ErrorKind, Cursor, SeekFrom};
 use std::io::prelude::{Read, Seek};
 
 pub trait InputStream: Read
