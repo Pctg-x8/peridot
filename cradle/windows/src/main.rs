@@ -73,7 +73,7 @@ impl GameDriver {
 
         GameDriver
         {
-            base, usercode, _snd, current_size: init_size, rt_handler
+            base, usercode, _snd, current_size: init_size, ri_handler
         }
     }
 

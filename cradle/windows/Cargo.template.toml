@@ -35,5 +35,10 @@ features = [
     "audioclient",
     "ksmedia",
     "shellscalingapi",
-    "xinput"
+    "xinput",
+    "mmreg",
+    "wtypes",
+    "propidl",
+    "strmif",
+    "audiosessiontypes"
 ]

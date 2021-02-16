@@ -228,7 +228,7 @@ impl NativeAudioEngine {
             let enumerator = MMDeviceEnumerator::new().expect("Enumerating MMDevices");
             let dev0 = enumerator.default_audio_endpoint(eRender, eConsole).expect("Getting Default AudioEP");
             
-            info!("Audio Output Device: {}",
+            log::info!("Audio Output Device: {}",
                 dev0.properties().expect("Getting DeviceProps")
                     .friendly_name().expect("Getting FriendlyName of the Device"));
 
@@ -255,13 +255,13 @@ impl NativeAudioEngine {
             aclient.initialize_shared(10 * 1000 * 10, unsafe { std::mem::transmute(&wfx) }).expect("initialize");
 
             let process_frames = aclient.buffer_size().expect("Getting BufferSize") as u32;
-            info!("Processing Buffer Size: {}", process_frames);
+            log::info!("Processing Buffer Size: {}", process_frames);
             let sleep_duration = Duration::from_micros(
                 (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _);
             let srv: AudioRenderClient = aclient.service().expect("No Render Service");
             mixer.write().expect("Setting SampleRate").set_sample_rate(samples_per_sec as _);
 
-            info!("Starting AudioRender...");
+            log::info!("Starting AudioRender...");
             aclient.start().expect("Starting AudioRender");
             mixer.write().expect("Starting Mixer").start();
             while !exit_state_th.load(Ordering::Acquire) {
