@@ -1,11 +1,20 @@
 
-use std::io::{Result as IOResult, Error as IOError, ErrorKind, Cursor};
+use std::io::{Result as IOResult, Error as IOError, ErrorKind, Cursor, SeekFrom};
 use std::io::prelude::{Read, Seek};
+
+pub trait InputStream: Read
+{
+    fn skip(&mut self, amount: u64) -> IOResult<u64>;
+}
+impl<T> InputStream for T where T: Seek + Read
+{
+    fn skip(&mut self, amount: u64) -> IOResult<u64> { self.seek(SeekFrom::Current(amount as _)) }
+}
 
 pub trait PlatformAssetLoader
 {
     type Asset: Read + Seek + 'static;
-    type StreamingAsset: Read + 'static;
+    type StreamingAsset: InputStream + 'static;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
@@ -31,7 +40,7 @@ pub trait FromAsset: LogicalAssetData
 pub trait FromStreamingAsset: LogicalAssetData
 {
     type Error: From<IOError>;
-    fn from_asset<Asset: Read + 'static>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: InputStream + 'static>(asset: Asset) -> Result<Self, Self::Error>;
 }
 
 // Shader Blob //

@@ -15,10 +15,30 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
 peridot = { path = "../.." }
 log = "0.4"
 env_logger = "0.5"
+rayon = "1.0"
+num_cpus = "1.0"
 comdrive = { git = "https://github.com/Pctg-x8/comdrive", optional = true }
 metrics = { git = "https://github.com/Pctg-x8/metrics", optional = true }
 widestring = { version = "0.4", optional = true }
 
 [dependencies.winapi]
 version = "0.3"
-features = ["winuser", "libloaderapi", "shellscalingapi", "xinput"]
+features = [
+    "winuser",
+    "libloaderapi",
+    "mmdeviceapi",
+    "combaseapi",
+    "propsys",
+    "coml2api",
+    "devpkey",
+    "objbase",
+    "audioclient",
+    "ksmedia",
+    "shellscalingapi",
+    "xinput",
+    "mmreg",
+    "wtypes",
+    "propidl",
+    "strmif",
+    "audiosessiontypes"
+]

@@ -14,5 +14,9 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
 log = "0.4"
 env_logger = "0.5"
 xcb = "0.8"
+pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 libc = "0.2"
 regex = "1.4"
+
+[dependencies.async-std]
+version = "1.0"

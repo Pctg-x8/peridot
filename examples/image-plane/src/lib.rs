@@ -8,7 +8,8 @@ use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
-    FixedMemory, FixedBufferInitializer
+    FixedMemory, FixedBufferInitializer,
+    audio::StreamingPlayableWav
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::borrow::Cow;
@@ -16,6 +17,7 @@ use std::rc::Rc;
 use std::mem::size_of;
 use std::ops::Range;
 use std::time::Duration;
+use std::sync::{Arc, RwLock};
 use log::*;
 
 pub struct IPFixedBufferInitializer {
@@ -67,6 +69,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         debug!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
         debug!("ImageFormat: {:?}", image_data.0.format);
         debug!("ImageStride: {} bytes", image_data.0.stride);
+
+        let bgm = Arc::new(RwLock::new(e.streaming::<StreamingPlayableWav>("bgm").expect("Loading BGM")));
+        e.audio_mixer().write().expect("Adding AudioProcess").add_process(bgm.clone());
+        e.audio_mixer().write().expect("Setting MasterVolume").set_master_volume(0.5);
 
         let mut bp = BufferPrealloc::new(e.graphics());
         let vertices_offset = bp.add(BufferContent::vertex::<[UVVert; 4]>());
@@ -201,6 +207,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
         }
+
+        bgm.write().expect("Starting BGM").play();
 
         Game
         {

@@ -10,6 +10,7 @@ use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::os::unix::io::{AsRawFd, RawFd};
 
+mod sound_backend; use sound_backend::NativeAudioEngine;
 mod udev;
 mod epoll;
 mod kernel_input;
@@ -206,7 +207,8 @@ impl X11 {
 
 pub struct GameDriver {
     engine: peridot::Engine<NativeLink>,
-    usercode: userlib::Game<NativeLink>
+    usercode: userlib::Game<NativeLink>,
+    _snd: NativeAudioEngine
 }
 impl GameDriver {
     fn new(wh: WindowHandler, x11: &Rc<RefCell<X11>>) -> Self {
@@ -221,8 +223,9 @@ impl GameDriver {
         let usercode = userlib::Game::init(&mut engine);
         engine.input_mut().set_nativelink(Box::new(input::InputNativeLink::new(x11)));
         engine.postinit();
+        let _snd = async_std::task::block_on(NativeAudioEngine::new(engine.audio_mixer()));
 
-        GameDriver { engine, usercode }
+        GameDriver { engine, usercode, _snd }
     }
 
     fn update(&mut self) { self.engine.do_update(&mut self.usercode); }

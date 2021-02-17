@@ -9,6 +9,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
 use std::cell::{Ref, RefMut, RefCell};
+use std::sync::{Arc, RwLock};
 use std::time::{Instant as InstantTimer, Duration};
 use std::ffi::CStr;
 
@@ -24,6 +25,7 @@ pub mod utils; pub use self::utils::*;
 mod asset; pub use self::asset::*;
 mod batch; pub use self::batch::*;
 mod input; pub use self::input::*;
+pub mod audio;
 mod model; pub use self::model::*;
 mod layout_cache; pub use self::layout_cache::*;
 mod presenter; pub use self::presenter::*;
@@ -92,7 +94,8 @@ pub struct Engine<NL: NativeLinker> {
     pub(self) g: Graphics,
     ip: InputProcess,
     gametimer: GameTimer,
-    last_rendering_completion: StateFence
+    last_rendering_completion: StateFence,
+    amixer: Arc<RwLock<audio::Mixer>>
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
@@ -113,7 +116,8 @@ impl<PL: NativeLinker> Engine<PL> {
         {
             ip: InputProcess::new().into(),
             gametimer: GameTimer::new(),
-            last_rendering_completion: StateFence::new(&g).expect("Failed to create State Fence"),
+            last_rendering_completion: StateFence::new(&g).expect("Failed to create State Fence for Rendering"),
+            amixer: Arc::new(RwLock::new(audio::Mixer::new())),
             nativelink,
             g,
             presenter
@@ -149,6 +153,9 @@ impl<NL: NativeLinker> Engine<NL> {
         self.g.submit_buffered_commands(batches, fence)
     }
 
+    pub fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> { &self.amixer }
+}
+impl<PL: NativeLinker> Engine<PL> {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
     }
@@ -200,6 +207,14 @@ impl<PL: NativeLinker> Engine<PL> {
                 .expect("Initializing Backbuffers");
         }
         userlib.on_resize(self, new_size);
+    }
+
+    pub fn sound_backend_callback(&self, output_buffer: &mut [f32])
+{
+        for (n, r) in output_buffer.iter_mut().enumerate()
+        {
+            *r = (440.0 * n as f32 / 44100.0).to_radians().sin() * 0.1;
+        }
     }
 }
 impl<NL: NativeLinker> Drop for Engine<NL> {

@@ -7,10 +7,14 @@ mod userlib;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::rc::Rc;
+use std::sync::{Arc, RwLock};
+use std::pin::Pin;
 
 struct Game {
     engine: peridot::Engine<NativeLink>,
     userlib: userlib::Game<NativeLink>,
+    snd: NativeAudioEngine,
+    stopping_render: bool,
     pos_cache: std::rc::Rc<std::cell::RefCell<TouchPositionCache>>
 }
 impl Game {
@@ -23,6 +27,7 @@ impl Game {
             userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
             nl, userlib::Game::<NativeLink>::requested_features()
         );
+        let snd = NativeAudioEngine::new(engine.audio_mixer());
         let pos_cache = std::rc::Rc::new(std::cell::RefCell::new(TouchPositionCache::new()));
         engine.input_mut().set_nativelink(Box::new(InputNativeLink { pos_cache: pos_cache.clone() }));
         engine.postinit();
@@ -30,6 +35,8 @@ impl Game {
         Game {
             userlib: userlib::Game::init(&mut engine),
             engine,
+            snd,
+            stopping_render: false,
             pos_cache
         }
     }
@@ -190,6 +197,75 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(e: JNIEnv, _: JC
     let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
     e.update();
+}
+
+mod audio_backend;
+
+struct Generator(Arc<RwLock<peridot::audio::Mixer>>);
+impl audio_backend::aaudio::DataCallback for Generator
+{
+    fn callback(&mut self, stream_ptr: *mut audio_backend::aaudio::native::AAudioStream,
+        buf: *mut libc::c_void, frames: usize)
+        -> audio_backend::aaudio::CallbackResult
+    {
+        let bufslice = unsafe { std::slice::from_raw_parts_mut(buf as *mut f32, frames << 1) };
+        for b in bufslice.iter_mut() { *b = 0.0; }
+        self.0.write().expect("Mixer Write Failed!").process(bufslice);
+
+        audio_backend::aaudio::CallbackResult::Continue
+    }
+}
+struct NativeAudioEngine
+{
+    stream: audio_backend::aaudio::Stream,
+    generator: Pin<Box<Generator>>
+}
+impl NativeAudioEngine
+{
+    pub fn new(mixer: &Arc<RwLock<peridot::audio::Mixer>>) -> Self
+    {
+        let mut generator = Box::pin(Generator(mixer.clone()));
+        let api = audio_backend::aaudio::Api::load().expect("AAudio unsupported?");
+        let mut stream = api.new_stream_builder().expect("Failed to create StreamBuilder")
+            .as_output()
+            // .set_low_latency_mode()
+            .use_shared()
+            .use_float_format()
+            .set_channel_count(2)
+            .set_sample_rate(44100)
+            .set_data_callback(generator.as_mut())
+            .open_stream()
+            .expect("Failed to open playback stream");
+        stream.request_start().expect("Failed to start playback stream");
+        generator.0.write().expect("AudioEngine Poisoned").start();
+        
+        NativeAudioEngine
+        {
+            stream,
+            generator
+        }
+    }
+
+    pub fn pause(&mut self)
+    {
+        self.generator.0.write().expect("AudioEngine Poisoning").stop();
+        self.stream.request_pause().expect("Failed to pause stream");
+        let mut st = self.stream.state();
+        while st != audio_backend::aaudio::native::AAUDIO_STREAM_STATE_PAUSED
+        {
+            self.stream.wait_for_state_change(st, &mut st, None).expect("Waiting StreamStateChange failed");
+        }
+        self.stream.request_flush().expect("Failed to pause stream");
+    }
+}
+impl Drop for NativeAudioEngine
+{
+    fn drop(&mut self)
+    {
+        self.generator.0.write().expect("AudioEngine Poisoning").stop();
+        self.stream.request_stop();
+        trace!("NativeAudioEngine end");
+    }
 }
 
 #[no_mangle]

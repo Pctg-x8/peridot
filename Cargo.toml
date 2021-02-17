@@ -9,6 +9,8 @@ edition = "2018"
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 log = "*"
 libc = "*"
+rayon = "1.0"
+num_cpus = "1.0"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements"] }
 num = "*"
 
