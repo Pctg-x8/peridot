@@ -33,7 +33,7 @@ mod test {
         assert_eq!(0.5f32.lerp(0.0, 1.0), 0.5);
         assert_eq!(0.5f64.lerp(0.0, 1.0), 0.5);
         assert_eq!(1.0f32.lerp(0.0, 50.0), 50.0);
-        assert_eq!(0.0f64.lerp(-9.375, -60.0), -60.0);
+        assert_eq!(0.0f64.lerp(-9.375, -60.0), -9.375);
         
         // out-of-range
         assert_eq!(2.0f32.lerp(-5.0, 5.0), 15.0);
