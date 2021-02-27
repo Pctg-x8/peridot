@@ -19,6 +19,7 @@ pub mod easing;
 mod test {
     use super::{Lerp, easing};
 
+    #[test]
     fn test_lerp() {
         assert_eq!(0.5f32.lerp(0.0, 1.0), 0.5);
         assert_eq!(0.5f64.lerp(0.0, 1.0), 0.5);
@@ -30,6 +31,7 @@ mod test {
         assert_eq!(-1.0f64.lerp(0.0, 1.25), -1.25);
     }
 
+    #[test]
     fn test_easing_simple() {
         assert_eq!(easing::linear(1.0), 1.0);
         assert_eq!(easing::quadratic(2.0), 2.0f32.powi(2));
@@ -37,6 +39,7 @@ mod test {
         assert_eq!(easing::quartic(1.25), 1.25f32.powi(4));
         assert_eq!(easing::quintic(5.75), 5.75f32.powi(5));
     }
+    #[test]
     fn test_easing_complex_bounds() {
         assert_eq!(easing::sin(0.0), 0.0);
         assert_eq!(easing::sin(1.0), 1.0);
