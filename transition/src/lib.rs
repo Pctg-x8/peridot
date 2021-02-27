@@ -19,6 +19,15 @@ pub mod easing;
 mod test {
     use super::{Lerp, easing};
 
+    macro_rules! assert_approx_eq {
+        ($left: expr, $right: expr) => {
+            let (l, r) = ($left, $right);
+            if (l - r).abs() as f32 > std::f32::EPSILON {
+                panic!("approxeq assertion failed!\n   left: {}\n  right: {}", l, r);
+            }
+        }
+    }
+
     #[test]
     fn test_lerp() {
         assert_eq!(0.5f32.lerp(0.0, 1.0), 0.5);
@@ -41,9 +50,9 @@ mod test {
     }
     #[test]
     fn test_easing_complex_bounds() {
-        assert_eq!(easing::sin(0.0), 0.0);
-        assert_eq!(easing::sin(1.0), 1.0);
-        assert_eq!(easing::exp(0.0), 0.0);
-        assert_eq!(easing::exp(1.0), 1.0);
+        assert_approx_eq!(easing::sin(0.0), 0.0);
+        assert_approx_eq!(easing::sin(1.0), 1.0);
+        assert_approx_eq!(easing::exp(0.0), 0.0);
+        assert_approx_eq!(easing::exp(1.0), 1.0);
     }
 }
