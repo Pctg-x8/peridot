@@ -52,7 +52,6 @@ mod test {
     fn test_easing_complex_bounds() {
         assert_approx_eq!(easing::sin(0.0), 0.0);
         assert_approx_eq!(easing::sin(1.0), 1.0);
-        assert_approx_eq!(easing::exp(0.0), 0.0);
         assert_approx_eq!(easing::exp(1.0), 1.0);
     }
 }
