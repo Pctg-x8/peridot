@@ -20,5 +20,5 @@ pub fn sin(x: f32) -> f32 {
     1.0 + ((x - 1.0) * std::f32::consts::FRAC_PI_2).sin()
 }
 pub fn exp(x: f32) -> f32 {
-    2.0f32.pow(10.0 * (x - 1.0))
+    2.0f32.powf(10.0 * (x - 1.0))
 }
