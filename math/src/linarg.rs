@@ -1,7 +1,7 @@
 //! PeridotExtendedMathematics: Vector/Matrix
 
 use crate::numtraits::{One, Zero};
-use std::ops::{Mul, Div, Add, Sub, Neg};
+use std::ops::*;
 use std::mem::transmute;
 
 /// 2-dimensional vector
@@ -497,8 +497,12 @@ impl<T: One + Zero + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy>
         let m31 = two * (x * z + w * y);
         let m32 = two * (y * z - w * x);
 
-        Matrix4([m11, m12, m13, T::ZERO], [m21, m22, m23, T::ZERO],
-            [m31, m32, m33, T::ZERO], [T::ZERO, T::ZERO, T::ZERO, T::ONE])
+        Matrix4(
+            [m11, m12, m13, T::ZERO],
+            [m21, m22, m23, T::ZERO],
+            [m31, m32, m33, T::ZERO],
+            [T::ZERO, T::ZERO, T::ZERO, T::ONE]
+        )
     }
 }
 
@@ -512,21 +516,37 @@ macro_rules! VariadicElementOps
             type Output = $e<<T as Add>::Output>;
             fn add(self, other: Self) -> Self::Output { $e($(self.$n + other.$n),*) }
         }
+        impl<T: AddAssign> AddAssign for $e<T>
+        {
+            fn add_assign(&mut self, other: Self) { $(self.$n += other.$n);* }
+        }
+
         impl<T: Sub> Sub for $e<T>
         {
             type Output = $e<<T as Sub>::Output>;
             fn sub(self, other: Self) -> Self::Output { $e($(self.$n - other.$n),*) }
         }
+        impl<T: SubAssign> SubAssign for $e<T>
+        {
+            fn sub_assign(&mut self, other: Self) { $(self.$n -= other.$n);* }
+        }
+
         impl<T: Mul + Copy> Mul<T> for $e<T>
         {
             type Output = $e<<T as Mul>::Output>;
             fn mul(self, other: T) -> Self::Output { $e($(self.$n * other),*) }
         }
+        impl<T: MulAssign + Copy> MulAssign<T> for $e<T>
+        {
+            fn mul_assign(&mut self, other: T) { $(self.$n *= other);* }
+        }
+
         impl<T: Neg> Neg for $e<T>
         {
             type Output = $e<<T as Neg>::Output>;
             fn neg(self) -> Self::Output { $e($(-self.$n),*) }
         }
+
         impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T>
         {
             /// Calculates an inner product between 2 vectors
@@ -543,6 +563,7 @@ macro_rules! VariadicElementOps
                 CTSummation!($(self.$n * self.$n),*)
             }
         }
+
         impl<T> $e<T> {
             /// Calculates minimum value of each element
             pub fn min(self, other: Self) -> Self where T: crate::numtraits::Min<Output = T> {
@@ -692,5 +713,16 @@ mod tests
         assert!(b.abs() <= std::f32::EPSILON);
         assert!(c.abs() <= std::f32::EPSILON);
         assert!((1.0 - d).abs() <= std::f32::EPSILON);
+    }
+    #[test]
+    fn vector_ops_assign()
+    {
+        let mut v1 = Vector3(0, 1, 2);
+        v1 += Vector3(1, -3, 2);
+        assert_eq!(v1, Vector3(0, 1, 2) + Vector3(1, -3, 2));
+        v1 -= Vector3(1, -3, 2);
+        assert_eq!(v1, Vector3(0, 1, 2) + Vector3(1, -3, 2) - Vector3(1, -3, 2));
+        v1 *= 4;
+        assert_eq!(v1, (Vector3(0, 1, 2) + Vector3(1, -3, 2) - Vector3(1, -3, 2)) * 4);
     }
 }
