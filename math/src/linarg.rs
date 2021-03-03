@@ -719,10 +719,10 @@ mod tests
     {
         let mut v1 = Vector3(0, 1, 2);
         v1 += Vector3(1, -3, 2);
-        assert_eq!(v1, Vector3(1, -2, 4));
+        assert_eq!(v1, Vector3(0, 1, 2) + Vector3(1, -3, 2));
         v1 -= Vector3(1, -3, 2);
-        assert_eq!(v1, Vector3(0, 1, 2));
+        assert_eq!(v1, Vector3(0, 1, 2) + Vector3(1, -3, 2) - Vector3(1, -3, 2));
         v1 *= 4;
-        assert_eq!(v1, Vector3(0, 4, 8));
+        assert_eq!(v1, (Vector3(0, 1, 2) + Vector3(1, -3, 2) - Vector3(1, -3, 2)) * 4);
     }
 }
