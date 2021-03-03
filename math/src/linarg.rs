@@ -714,4 +714,15 @@ mod tests
         assert!(c.abs() <= std::f32::EPSILON);
         assert!((1.0 - d).abs() <= std::f32::EPSILON);
     }
+    #[test]
+    fn vector_ops_assign()
+    {
+        let mut v1 = Vector3(0, 1, 2);
+        v1 += Vector3(1, -3, 2);
+        assert_eq!(v1, Vector3(1, -2, 4));
+        v1 -= Vector3(1, -3, 2);
+        assert_eq!(v1, Vector3(0, 1, 2));
+        v1 *= 4;
+        assert_eq!(v1, Vector3(0, 4, 8));
+    }
 }
