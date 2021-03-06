@@ -53,5 +53,7 @@ mod test {
         assert_approx_eq!(easing::sin(0.0), 0.0);
         assert_approx_eq!(easing::sin(1.0), 1.0);
         assert_approx_eq!(easing::exp(1.0), 1.0);
+        assert_approx_eq!(easing::back(0.0), 0.0);
+        assert_approx_eq!(easing::back(1.0), 1.0);
     }
 }
