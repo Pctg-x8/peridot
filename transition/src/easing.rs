@@ -1,5 +1,7 @@
 //! Easing Functions
 
+use once_cell::sync::Lazy;
+
 pub const fn linear(x: f32) -> f32 {
     x
 }
@@ -74,7 +76,7 @@ pub fn back(x: f32) -> f32 {
     // DdD 432 * 432 - 432 * 324 = 432 * (432 - 324), always DdD > 0 so has 2 real roots
     // flatpoints h = (-432 +- sqrt(432 * (432 - 324))) / -648 = (432 +- sqrt(432 * 108)) / 648
     // sqrt(432 * 108) = sqrt(4 * 108 * 108) = sqrt(2^2 * 2^2 * 3^3 * 2^2 * 3^3) = sqrt(2^6 * 3^6) = 2^3 * 3^3 = 8 * 27 = 216
-    // flatpoints h = (432 + 216) / 648, (432 - 216) / 648 = 1, 216 / 648 = 1 / 3, 1 and 1/3
+    // flatpoints h = (432 + 216) / 648 = 1, (432 - 216) / 648 = 216 / 648 = 1 / 3, 1 and 1/3
     // let h = 1 in -108h * (h - 1)^2 = 0
     // let h = 1/3 in -108h * (h - 1)^2 = -36 * (-2/3)^2 = -36 * 4/9 = -16
     // D(0) = 0, D(1/3) = -16(minpoint), D(1) = 0(maxpoint) so always D(h) <= 0, the cubic equation has always one real root, when h >= 0
@@ -98,8 +100,9 @@ pub fn back(x: f32) -> f32 {
     // f(x) = (x^3 - 3 * (1 - b) * x^2 + 3 * (1 - 2b) * x) / (1 - 3b)
 
     // peak is 10%
-    let h = 1.1f32;
-    let b = (h - 1.0).sqrt() * ((h - 1.0).recip().asinh() / 3.0).sinh();
+    const H: f32 = 1.1;
+    static B: Lazy<f32> = Lazy::new(|| (H - 1.0).sqrt() * ((H - 1.0).recip().asinh() / 3.0).sinh());
+    let b = *B;
 
     (x.powi(3) - 3.0 * (1.0 - b) * x.powi(2) + 3.0 * (1.0 - 2.0 * b) * x) / (1.0 - 3.0 * b)
 }
