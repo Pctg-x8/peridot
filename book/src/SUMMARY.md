@@ -19,7 +19,10 @@
   - [shaderbuild](tools/shaderbuild.md)
     - [Combined Shader Script(csh) Syntax Reference](tools/shaderbuild/script_reference.md)
   - [archiver](tools/archiver.md)
-- [Internals: File Formats](file_formats.md)
+
+# Internals
+
+- [File Formats](file_formats.md)
   - [Variadic Integer](file_formats/varint.md)
   - [Peridot Archive](file_formats/par.md)
   - [Peridot Vertex Processing pack](file_formats/pvp.md)
