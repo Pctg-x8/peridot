@@ -27,4 +27,4 @@ build.gradleのcompileSdkVersionに合わせてください。
 Android SDKのホームを指定してください。
 
 エラーメッセージ `Task 'assembleDebug' not found in root project 'apkbuild'.` が出た場合は、この変数が設定されていない可能性があるので改めて設定することで解決する場合があります。  
-[https://stackoverflow.com/questions/49187670/assembledebug-task-not-found-while-running-from-jenkins])(https://stackoverflow.com/questions/49187670/assembledebug-task-not-found-while-running-from-jenkins)
+[https://stackoverflow.com/questions/49187670/assembledebug-task-not-found-while-running-from-jenkins](https://stackoverflow.com/questions/49187670/assembledebug-task-not-found-while-running-from-jenkins)

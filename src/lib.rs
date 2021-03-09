@@ -83,6 +83,8 @@ pub trait FeatureRequests
             geometryShader: Self::ENABLE_GEOMETRY_SHADER as _,
             tessellationShader: Self::ENABLE_TESSELLATION_SHADER as _,
             vertexPipelineStoresAndAtomics: Self::USE_STORAGE_BUFFERS_IN_VERTEX_SHADER as _,
+            sparseBinding: true as _,
+            sparseResidencyBuffer: true as _,
             .. Default::default()
         }
     }
