@@ -26,11 +26,15 @@ glsl_represents_until(c) ::= /* get characters until c */
 glsl_code ::= /* read until block closes(nesting allowed) */
 ```
 
-## VertexInput
+## Toplevel Block
+
+Combined Shaderは次に示すToplevel Blockが一つ以上連なった形で定義されています。
+
+### VertexInput
 
 このシェーダが処理できる頂点フォーマットを定義します。
 
-## VertexShader / FragmentShader
+### VertexShader / FragmentShader
 
 頂点シェーダおよびフラグメントシェーダのmain関数内のコードを記述します。
 
@@ -39,25 +43,25 @@ glsl_code ::= /* read until block closes(nesting allowed) */
 * `RasterPosition`: VertexShaderでgl_Positionに置き換わる
 * `Target[n]`: FragmentShaderで `layout(location = n)` がついたout変数に置き換わる
 
-## Varyings
+### Varyings
 
 シェーダ間で渡される変数を定義します。
 ２つのシェーダステージを `->` で挟んで、前にあるステージではout変数として、後にあるステージではin変数として宣言されます。
 
-## SpecConstant
+### SpecConstant
 
-特殊化定数（Specialization Constant）を宣言します。[]内で示したシェーダステージの、()で示した番号で宣言されるようになります。
+特殊化定数（Specialization Constant）を宣言します。[]内で示したシェーダステージで、()で示した番号で宣言されるようになります。
 
-## Uniform / SamplerBuffer / Sampler
+### Uniform / SamplerBuffer / Sampler
 
 各種リソースを定義します。()の中の数値はlayoutで指定されるもので、1つめがset、2つめがbindingです。
 
-## PushConstant
+### PushConstant
 
 Push Constantを宣言します。[]内で示したシェーダステージに宣言されます。
 一つのシェーダステージに複数回定義することはできません。
 
-## Header
+### Header
 
 mainコード以外の任意のGLSLコードを記述することができます。
 PushConstantの次、mainの前に挿入されます。
