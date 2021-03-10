@@ -231,7 +231,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         for (r, f) in render_cb.iter().zip(&framebuffers)
         {
             let mut cbr = r.begin().expect("Start Recoding CB");
-            cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
+            cbr.begin_render_pass(&renderpass, f, f.size().clone().into(), &[br::ClearValue::color([1.0; 4])], true);
             vg_renderer_params2.default_render_commands(e, &mut cbr, &buffer, &vg_renderer_exinst2);
             vg_renderer_params.default_render_commands(e, &mut cbr, &buffer, &vg_renderer_exinst);
             cbr.end_render_pass();
@@ -280,7 +280,7 @@ impl<PL: peridot::NativeLinker> Game<PL>
 {
     fn render_commands(&self, e: &peridot::Engine<PL>, cmd: &mut br::CmdRecord, fb: &br::Framebuffer)
     {
-        cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([1.0; 4])], true);
+        cmd.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(), &[br::ClearValue::color([1.0; 4])], true);
         self.vg_renderer_params2.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst2);
         self.vg_renderer_params.default_render_commands(e, cmd, &self.buffer, &self.vg_renderer_exinst);
         cmd.end_render_pass();

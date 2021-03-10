@@ -70,11 +70,47 @@ impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
     fn init(_e: &mut Engine<PL>) -> Self { () }
 }
+/// Specifies which type of resource is supports sparse residency?
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct SparseResidencySupportBits(u16);
+impl SparseResidencySupportBits {
+    pub const EMPTY: Self = Self(0);
+    pub const BUFFER: Self = Self(0x0001);
+    pub const IMAGE_2D: Self = Self(0x0002);
+    pub const IMAGE_3D: Self = Self(0x0004);
+    pub const SAMPLE2: Self = Self(0x0008);
+    pub const SAMPLE4: Self = Self(0x0010);
+    pub const SAMPLE8: Self = Self(0x0020);
+    pub const SAMPLE16: Self = Self(0x0040);
+    pub const SAMPLE32: Self = Self(0x0080);
+    pub const ALIASED: Self = Self(0x0100);
+
+    pub const fn buffer(self) -> Self { Self(self.0 | Self::BUFFER.0) }
+    pub const fn image_2d(self) -> Self { Self(self.0 | Self::IMAGE_2D.0) }
+    pub const fn image_3d(self) -> Self { Self(self.0 | Self::IMAGE_3D.0) }
+    pub const fn sample2(self) -> Self { Self(self.0 | Self::SAMPLE2.0) }
+    pub const fn sample4(self) -> Self { Self(self.0 | Self::SAMPLE4.0) }
+    pub const fn sample8(self) -> Self { Self(self.0 | Self::SAMPLE8.0) }
+    pub const fn sample16(self) -> Self { Self(self.0 | Self::SAMPLE16.0) }
+    pub const fn aliased(self) -> Self { Self(self.0 | Self::ALIASED.0) }
+
+    const fn has_buffer(self) -> bool { (self.0 & Self::BUFFER.0) != 0 }
+    const fn has_image_2d(self) -> bool { (self.0 & Self::IMAGE_2D.0) != 0 }
+    const fn has_image_3d(self) -> bool { (self.0 & Self::IMAGE_3D.0) != 0 }
+    const fn has_sample2(self) -> bool { (self.0 & Self::SAMPLE2.0) != 0 }
+    const fn has_sample4(self) -> bool { (self.0 & Self::SAMPLE4.0) != 0 }
+    const fn has_sample8(self) -> bool { (self.0 & Self::SAMPLE8.0) != 0 }
+    const fn has_sample16(self) -> bool { (self.0 & Self::SAMPLE16.0) != 0 }
+    const fn has_aliased(self) -> bool { (self.0 & Self::ALIASED.0) != 0 }
+}
 pub trait FeatureRequests
 {
     const ENABLE_GEOMETRY_SHADER: bool = false;
     const ENABLE_TESSELLATION_SHADER: bool = false;
     const USE_STORAGE_BUFFERS_IN_VERTEX_SHADER: bool = false;
+    const SPARSE_BINDING: bool = false;
+    const SPARSE_RESIDENCY_SUPPORT_BITS: SparseResidencySupportBits = SparseResidencySupportBits::EMPTY;
     
     fn requested_features() -> br::vk::VkPhysicalDeviceFeatures
     {
@@ -83,8 +119,15 @@ pub trait FeatureRequests
             geometryShader: Self::ENABLE_GEOMETRY_SHADER as _,
             tessellationShader: Self::ENABLE_TESSELLATION_SHADER as _,
             vertexPipelineStoresAndAtomics: Self::USE_STORAGE_BUFFERS_IN_VERTEX_SHADER as _,
-            sparseBinding: true as _,
-            sparseResidencyBuffer: true as _,
+            sparseBinding: Self::SPARSE_BINDING as _,
+            sparseResidencyBuffer: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_buffer() as _,
+            sparseResidencyImage2D: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_image_2d() as _,
+            sparseResidencyImage3D: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_image_3d() as _,
+            sparseResidency2Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample2() as _,
+            sparseResidency4Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample4() as _,
+            sparseResidency8Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample8() as _,
+            sparseResidency16Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample16() as _,
+            sparseResidencyAliased: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_aliased() as _,
             .. Default::default()
         }
     }
