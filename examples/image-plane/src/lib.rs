@@ -200,7 +200,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         for (cb, fb) in render_cb.iter().zip(&framebuffers)
         {
             let mut cr = cb.begin().expect("Begin CmdRecord");
-            cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
+            cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::color([0.0; 4])], true);
             gp.bind(&mut cr);
             cr.bind_graphics_descriptor_sets(0, &descriptor_main, &[]);
             cr.bind_vertex_buffers(0, &[(&buffers.buffer.0, vertices_offset as _)]);
@@ -261,7 +261,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
         for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
             let mut cr = cb.begin().expect("Begin CmdRecord");
             cr.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
-                &[br::ClearValue::Color([0.0; 4])], true);
+                &[br::ClearValue::color([0.0; 4])], true);
             self.gp_main.bind(&mut cr);
             cr.bind_graphics_descriptor_sets(0, &self.descriptor.2, &[]);
             cr.bind_vertex_buffers(0, &[(&self.buffers.buffer.0, self.vertices_offset as _)]);
