@@ -350,7 +350,7 @@ impl TwoPassStencilSDFRenderer {
         }
     }
     pub const CLEAR_VALUES: &'static [br::ClearValue] = &[
-        br::ClearValue::color([0.0; 4]),    // ignored
+        br::ClearValue::color_f32([0.0; 4]),    // ignored
         br::ClearValue::depth_stencil(0.0, 0)
     ];
 }
