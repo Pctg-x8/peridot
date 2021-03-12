@@ -47,10 +47,9 @@ pub trait EngineEvents<PL: NativeLinker> : Sized
 {
     fn init(_e: &mut Engine<PL>) -> Self;
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(&mut self, _e: &Engine<PL>, _on_backbuffer_of: u32, _delta_time: Duration)
-        -> (Option<br::SubmissionBatch>, br::SubmissionBatch)
+    fn update(&mut self, _e: &Engine<PL>, _on_backbuffer_of: u32, _delta_time: Duration) -> QueueSubmissions
     {
-        (None, br::SubmissionBatch::default())
+        QueueSubmissions::new(br::SubmissionBatch::default())
     }
     /// Discards backbuffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
     fn discard_backbuffer_resources(&mut self) {}
@@ -130,6 +129,29 @@ pub trait FeatureRequests
             sparseResidencyAliased: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_aliased() as _,
             .. Default::default()
         }
+    }
+}
+
+pub struct QueueSubmissions<'d> {
+    pub updating: Option<br::SubmissionBatch<'d>>,
+    pub sparse_binding: Option<br::SparseBindingOpBatch<'d>>,
+    pub rendering: br::SubmissionBatch<'d>
+}
+impl<'d> QueueSubmissions<'d> {
+    pub fn new(rendering: br::SubmissionBatch<'d>) -> Self {
+        Self {
+            updating: None,
+            sparse_binding: None,
+            rendering,
+        }
+    }
+    pub fn with_updating(mut self, updating: br::SubmissionBatch<'d>) -> Self {
+        self.updating = Some(updating);
+        self
+    }
+    pub fn with_sparse_binding(mut self, sparse_binding: br::SparseBindingOpBatch<'d>) -> Self {
+        self.sparse_binding = Some(sparse_binding);
+        self
     }
 }
 
@@ -226,10 +248,13 @@ impl<PL: NativeLinker> Engine<PL> {
 
         self.ip.prepare_for_frame(dt);
 
-        let (copy_submission, fb_submission) = userlib.update(self, bb_index, dt);
+        let submissions = userlib.update(self, bb_index, dt);
         let pr = self.presenter.render_and_present(
-            &self.g, &self.last_rendering_completion.object(),
-            &self.g.graphics_queue.q, bb_index, fb_submission, copy_submission
+            &self.g,
+            &self.last_rendering_completion.object(),
+            &self.g.graphics_queue.q,
+            bb_index,
+            submissions
         );
         unsafe { self.last_rendering_completion.signal(); }
 
@@ -486,6 +511,7 @@ impl Graphics
 
     pub fn instance(&self) -> &br::Instance { &self.instance }
     pub fn adapter(&self) -> &br::PhysicalDevice { &self.adapter }
+    pub fn main_queue(&self) -> &Queue { &self.graphics_queue }
     pub fn graphics_queue_family_index(&self) -> u32 { self.graphics_queue.family }
 }
 impl Deref for Graphics

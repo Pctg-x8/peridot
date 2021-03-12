@@ -46,12 +46,9 @@ impl peridot::PlatformPresenter for Presenter {
         last_render_fence: &br::Fence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>
+        submissions: peridot::QueueSubmissions<'s>
     ) -> br::Result<()> {
-        self.sc.render_and_present(
-            g, last_render_fence, present_queue, backbuffer_index, render_submission, update_submission
-        )
+        self.sc.render_and_present(g, last_render_fence, present_queue, backbuffer_index, submissions)
     }
     /// Returns whether re-initializing is needed for backbuffer resources
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
@@ -285,28 +282,30 @@ impl peridot::PlatformPresenter for Presenter {
         last_render_fence: &br::Fence,
         _present_queue: &br::Queue,
         _backbuffer_index: u32,
-        mut render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>
+        mut submissions: peridot::QueueSubmissions<'s>
     ) -> br::Result<()> {
         use br::VkHandle;
 
         let signal_counters = [self.render_completion_counter + 1];
         let signal_info = br::vk::VkD3D12FenceSubmitInfoKHR::from(br::D3D12FenceSubmitInfo::new(&[], &signal_counters));
-        if let Some(mut cs) = update_submission {
+        if let Some(mut cs) = submissions.updating {
             // copy -> render
             cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
-            render_submission.wait_semaphores.to_mut().extend(vec![
+            submissions.rendering.wait_semaphores.to_mut().extend(vec![
                 (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
             ]);
-            render_submission.signal_semaphores.to_mut().push(&self.present_order);
+            submissions.rendering.signal_semaphores.to_mut().push(&self.present_order);
 
-            let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = render_submission.wait_semaphores
+            let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = submissions.rendering.wait_semaphores
                 .iter()
                 .map(|(s, st)| (s.native_ptr(), st.0))
                 .unzip();
-            let render_signal_semaphores = render_submission.signal_semaphores.iter().map(|s| s.native_ptr())
+            let render_signal_semaphores = submissions.rendering.signal_semaphores.iter().map(|s| s.native_ptr())
                 .collect::<Vec<_>>();
-            let render_buffers = render_submission.command_buffers.iter().map(|s| s.native_ptr()).collect::<Vec<_>>();
+            let render_buffers = submissions.rendering.command_buffers
+                .iter()
+                .map(|s| s.native_ptr())
+                .collect::<Vec<_>>();
             let (update_wait_semaphores, update_wait_stages): (Vec<_>, Vec<_>) = cs.wait_semaphores
                 .iter()
                 .map(|(s, st)| (s.native_ptr(), st.0))
@@ -339,15 +338,18 @@ impl peridot::PlatformPresenter for Presenter {
                 .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
-            render_submission.signal_semaphores.to_mut().push(&self.present_order);
+            submissions.rendering.signal_semaphores.to_mut().push(&self.present_order);
 
-            let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = render_submission.wait_semaphores
+            let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = submissions.rendering.wait_semaphores
                 .iter()
                 .map(|(s, st)| (s.native_ptr(), st.0))
                 .unzip();
-            let render_signal_semaphores = render_submission.signal_semaphores.iter().map(|s| s.native_ptr())
+            let render_signal_semaphores = submissions.rendering.signal_semaphores.iter().map(|s| s.native_ptr())
                 .collect::<Vec<_>>();
-            let render_buffers = render_submission.command_buffers.iter().map(|s| s.native_ptr()).collect::<Vec<_>>();
+            let render_buffers = submissions.rendering.command_buffers
+                .iter()
+                .map(|s| s.native_ptr())
+                .collect::<Vec<_>>();
             let render_submission = br::vk::VkSubmitInfo {
                 pNext: &signal_info as *const _ as _,
                 waitSemaphoreCount: render_wait_semaphores.len() as _,

@@ -1,6 +1,7 @@
 //! Platform Presenter(Swapchain Abstraction)
 
 use bedrock as br;
+use br::VkHandle;
 use std::rc::Rc;
 
 pub trait PlatformPresenter {
@@ -17,8 +18,7 @@ pub trait PlatformPresenter {
         last_render_fence: &br::Fence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>
+        submissions: crate::QueueSubmissions<'s>
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for backbuffer resources
     fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
@@ -74,6 +74,7 @@ pub struct IntegratedSwapchain {
     rendering_order: br::Semaphore,
     buffer_ready_order: br::Semaphore,
     present_order: br::Semaphore,
+    sparse_binding_order: br::Semaphore
 }
 impl IntegratedSwapchain {
     pub fn new(g: &crate::Graphics, surface: br::Surface, default_extent: peridot_math::Vector2<usize>) -> Self {
@@ -84,7 +85,9 @@ impl IntegratedSwapchain {
             surface_info,
             rendering_order: br::Semaphore::new(&g.device).expect("Failed to create Rendering Order Semaphore"),
             buffer_ready_order: br::Semaphore::new(&g.device).expect("Failed to create BufferReady Order Semaphore"),
-            present_order: br::Semaphore::new(&g.device).expect("Failed to create Present Order Semaphore")
+            present_order: br::Semaphore::new(&g.device).expect("Failed to create Present Order Semaphore"),
+            sparse_binding_order: br::Semaphore::new(&g.device)
+                .expect("Failed to create Sparse Binding Order Semaphore")
         }
     }
 
@@ -119,26 +122,41 @@ impl IntegratedSwapchain {
         last_render_fence: &br::Fence,
         q: &br::Queue,
         bb_index: u32,
-        mut render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>
+        mut submissions: crate::QueueSubmissions<'s>
     ) -> br::Result<()> {
-        if let Some(mut cs) = update_submission {
+        let wait_sparse_binding = if let Some(mut b) = submissions.sparse_binding {
+            b.signal_semaphores.to_mut().push(&self.sparse_binding_order);
+            q.bind_sparse(&[b], None).expect("Failed to submit sparse binding ops");
+            true
+        } else {
+            false
+        };
+
+        if let Some(mut cs) = submissions.updating {
             // copy -> render
             cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
-            render_submission.wait_semaphores.to_mut().extend(vec![
+            if wait_sparse_binding {
+                cs.wait_semaphores.to_mut().push((&self.sparse_binding_order, br::PipelineStageFlags::TRANSFER));
+            }
+            submissions.rendering.wait_semaphores.to_mut().extend(vec![
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                 (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
             ]);
-            render_submission.signal_semaphores.to_mut().push(&self.present_order);
-            g.submit_buffered_commands(&[cs, render_submission], last_render_fence)
+            submissions.rendering.signal_semaphores.to_mut().push(&self.present_order);
+            g.submit_buffered_commands(&[cs, submissions.rendering], last_render_fence)
                 .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
-            render_submission.signal_semaphores.to_mut().push(&self.present_order);
-            render_submission.wait_semaphores.to_mut().push(
+            submissions.rendering.signal_semaphores.to_mut().push(&self.present_order);
+            submissions.rendering.wait_semaphores.to_mut().push(
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
             );
-            g.submit_buffered_commands(&[render_submission], last_render_fence)
+            if wait_sparse_binding {
+                submissions.rendering.wait_semaphores.to_mut().push(
+                    (&self.sparse_binding_order, br::PipelineStageFlags::VERTEX_INPUT)
+                );
+            }
+            g.submit_buffered_commands(&[submissions.rendering], last_render_fence)
                 .expect("Failed to submit render commands");
         }
 
