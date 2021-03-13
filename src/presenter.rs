@@ -73,8 +73,7 @@ pub struct IntegratedSwapchain {
     swapchain: crate::Discardable<IntegratedSwapchainObject>,
     rendering_order: br::Semaphore,
     buffer_ready_order: br::Semaphore,
-    present_order: br::Semaphore,
-    sparse_binding_order: br::Semaphore
+    present_order: br::Semaphore
 }
 impl IntegratedSwapchain {
     pub fn new(g: &crate::Graphics, surface: br::Surface, default_extent: peridot_math::Vector2<usize>) -> Self {
@@ -85,9 +84,7 @@ impl IntegratedSwapchain {
             surface_info,
             rendering_order: br::Semaphore::new(&g.device).expect("Failed to create Rendering Order Semaphore"),
             buffer_ready_order: br::Semaphore::new(&g.device).expect("Failed to create BufferReady Order Semaphore"),
-            present_order: br::Semaphore::new(&g.device).expect("Failed to create Present Order Semaphore"),
-            sparse_binding_order: br::Semaphore::new(&g.device)
-                .expect("Failed to create Sparse Binding Order Semaphore")
+            present_order: br::Semaphore::new(&g.device).expect("Failed to create Present Order Semaphore")
         }
     }
 
@@ -124,20 +121,13 @@ impl IntegratedSwapchain {
         bb_index: u32,
         mut submissions: crate::QueueSubmissions<'s>
     ) -> br::Result<()> {
-        let wait_sparse_binding = if let Some(mut b) = submissions.sparse_binding {
-            b.signal_semaphores.to_mut().push(&self.sparse_binding_order);
+        if let Some(b) = submissions.sparse_binding {
             q.bind_sparse(&[b], None).expect("Failed to submit sparse binding ops");
-            true
-        } else {
-            false
-        };
+        }
 
         if let Some(mut cs) = submissions.updating {
             // copy -> render
             cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
-            if wait_sparse_binding {
-                cs.wait_semaphores.to_mut().push((&self.sparse_binding_order, br::PipelineStageFlags::TRANSFER));
-            }
             submissions.rendering.wait_semaphores.to_mut().extend(vec![
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
                 (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
@@ -151,11 +141,6 @@ impl IntegratedSwapchain {
             submissions.rendering.wait_semaphores.to_mut().push(
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
             );
-            if wait_sparse_binding {
-                submissions.rendering.wait_semaphores.to_mut().push(
-                    (&self.sparse_binding_order, br::PipelineStageFlags::VERTEX_INPUT)
-                );
-            }
             g.submit_buffered_commands(&[submissions.rendering], last_render_fence)
                 .expect("Failed to submit render commands");
         }
