@@ -155,7 +155,7 @@ final class PeridotRenderableViewController : NSViewController {
                 self.clientMousePoint = event.locationInWindow
                 self.enginePointer?.reportMouseMove(
                     x: Float(event.locationInWindow.x),
-                    y: Float(event.locationInWindow.y)
+                    y: -Float(event.locationInWindow.y)
                 )
             case .leftMouseDown:
                 self.enginePointer?.handleMouseButtonDown(index: 0)
