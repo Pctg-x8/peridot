@@ -505,7 +505,8 @@ pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
 #[no_mangle]
 pub extern "C" fn report_mouse_move_abs(g: *mut GameDriver, x: f32, y: f32) {
     unsafe {
-        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x, true);
-        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y, true);
+        let scale = nsscreen_backing_scale_factor();
+        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x * scale, true);
+        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
     }
 }
