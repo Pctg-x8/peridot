@@ -295,6 +295,16 @@ impl<'s> BindingBlock<'s>
                     let offs = align2(total, align_of::<f32>());
                     total = offs + size_of::<f32>();
                 },
+                "uint" =>
+                {
+                    let offs = align2(total, align_of::<u32>());
+                    total = offs + size_of::<u32>();
+                },
+                "int" =>
+                {
+                    let offs = align2(total, align_of::<u32>());
+                    total = offs + size_of::<u32>();
+                },
                 "ivec4" =>
                 {
                     let offset = align2(total, align_of::<[i32; 4]>());
