@@ -768,6 +768,26 @@ impl<'s> CombinedShader<'s>
                         });
                         offs_in_binding = align2(offs_in_binding + size_of::<f32>(), align_of::<f32>());
                     },
+                    "uint" =>
+                    {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription
+                        {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R32_UINT,
+                            offset: offs_in_binding as _
+                        });
+                        offs_in_binding = align2(offs_in_binding + size_of::<u32>(), align_of::<u32>());
+                    },
+                    "int" =>
+                    {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription
+                        {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R32_SINT,
+                            offset: offs_in_binding as _
+                        });
+                        offs_in_binding = align2(offs_in_binding + size_of::<i32>(), align_of::<i32>());
+                    },
                     "ivec4" =>
                     {
                         attrs.push(br::vk::VkVertexInputAttributeDescription
