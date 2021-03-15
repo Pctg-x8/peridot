@@ -10,9 +10,13 @@ use super::{Memory, AutocloseMappedMemoryRange};
 #[derive(Clone)]
 pub struct Buffer(Rc<br::Buffer>, Memory, u64);
 impl Buffer {
-    pub fn bound(b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self> {
-        b.bind(mem, offset as _).map(|_| Buffer(b.into(), mem.clone(), offset))
+    pub unsafe fn bounded(b: br::Buffer, mem: &Memory, offset: u64) -> Self {
+        Buffer(b.into(), mem.clone(), offset)
     }
+    pub fn bound(b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self> {
+        b.bind(mem, offset as _).map(|_| unsafe { Buffer::bounded(b, mem, offset) })
+    }
+
     /// Reference to a memory object bound with this object.
     pub fn memory(&self) -> &Memory {
         &self.1
