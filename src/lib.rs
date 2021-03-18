@@ -413,19 +413,21 @@ pub struct Graphics
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32), instance_extensions: Vec<&str>, device_extensions: Vec<&str>,
-        features: br::vk::VkPhysicalDeviceFeatures) -> br::Result<Self>
-    {
+    fn new(
+        appname: &str,
+        appversion: (u32, u32, u32),
+        instance_extensions: Vec<&str>,
+        device_extensions: Vec<&str>,
+        features: br::vk::VkPhysicalDeviceFeatures
+    ) -> br::Result<Self> {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
         #[cfg(debug_assertions)]
-        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties")
-        {
+        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
             let name_str = name.to_str().expect("unexpected invalid sequence in layer name");
             info!("* {} :: {}/{}", name_str, l.specVersion, l.implementationVersion);
-            if name_str == "VK_LAYER_KHRONOS_validation"
-            {
+            if name_str == "VK_LAYER_KHRONOS_validation" {
                 validation_layer_available = true;
             }
         }
@@ -435,8 +437,7 @@ impl Graphics
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
         if validation_layer_available {
             ib.add_layer("VK_LAYER_KHRONOS_validation");
-        }
-        else {
+        } else {
             warn!("Validation Layer is not found!");
         }
         #[cfg(feature = "debug")]
@@ -457,8 +458,7 @@ impl Graphics
         let gqf_index = adapter.queue_family_properties().find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("No graphics queue");
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
-        let device =
-        {
+        let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extensions(device_extensions).add_queue(qci);
             if validation_layer_available { db.add_layer("VK_LAYER_KHRONOS_validation"); }
@@ -466,8 +466,7 @@ impl Graphics
             db.create()?
         };
         
-        return Ok(Graphics
-        {
+        return Ok(Graphics {
             cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
             graphics_queue: Queue { q: device.queue(gqf_index, 0), family: gqf_index },
             instance, adapter, device,
