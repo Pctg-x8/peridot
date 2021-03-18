@@ -36,5 +36,5 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         );
         ext_features.push("IterationBuild");
     }
-    steps::cargo(&ctx, cargo_cmd, ext_features, env, Some("x86_64-pc-windows-msvc"));
+    steps::cargo(&ctx, cargo_cmd, ext_features, env, Some("x86_64-pc-windows-msvc"), options.release);
 }

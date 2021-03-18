@@ -73,7 +73,8 @@ pub fn update_deps(ctx: &BuildContext) {
     crate::shellutil::handle_process_result("`cargo update`", e);
 }
 pub fn cargo(
-    ctx: &BuildContext, subcmd: &str, ext_features: Vec<&str>, env: HashMap<&str, &str>, target_spec: Option<&str>
+    ctx: &BuildContext, subcmd: &str, ext_features: Vec<&str>, env: HashMap<&str, &str>, target_spec: Option<&str>,
+    release: bool
 ) {
     ctx.print_step("Compiling code...");
 
@@ -85,6 +86,9 @@ pub fn cargo(
     }
     if !ext_features.is_empty() {
         cmd.args(&["--features", &ext_features]);
+    }
+    if release {
+        cmd.args(&["--release"]);
     }
     let e = cmd
         .spawn()
