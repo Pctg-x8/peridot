@@ -11,6 +11,7 @@ name = "pegamelib"
 
 [features]
 UseExternalAssetPath = []
+debug = ["peridot/debug"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "VK_MVK_macos_surface"] }
