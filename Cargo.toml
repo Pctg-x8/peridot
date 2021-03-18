@@ -5,22 +5,24 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
+[features]
+debug = ["bedrock/VK_EXT_debug_utils"]
+
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 log = "*"
 libc = "*"
 rayon = "1.0"
 num_cpus = "1.0"
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements"] }
 num = "*"
 
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
 
-[target.'cfg(debug_assertions)'.dependencies.bedrock]
+[dependencies.bedrock]
 git = "https://github.com/Pctg-x8/bedrock"
 branch = "peridot"
-features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "VK_EXT_debug_report"]
+features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements"]
 
 [workspace]
 exclude = ["extras/", "cradle/", "examples/"]

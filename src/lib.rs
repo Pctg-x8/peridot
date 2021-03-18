@@ -18,8 +18,8 @@ use self::state_track::StateFence;
 mod window;
 pub use self::window::SurfaceInfo;
 mod resource; pub use self::resource::*;
-#[cfg(debug_assertions)] mod debug;
-#[cfg(debug_assertions)] use self::debug::DebugReport;
+#[cfg(feature = "debug")] mod debug;
+#[cfg(feature = "debug")] use self::debug::*;
 pub mod utils; pub use self::utils::*;
 
 mod asset; pub use self::asset::*;
@@ -255,7 +255,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 
     pub fn sound_backend_callback(&self, output_buffer: &mut [f32])
-{
+    {
         for (n, r) in output_buffer.iter_mut().enumerate()
         {
             *r = (440.0 * n as f32 / 44100.0).to_radians().sin() * 0.1;
@@ -408,7 +408,6 @@ pub struct Graphics
 {
     pub(self) instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
     graphics_queue: Queue,
-    #[cfg(debug_assertions)] _d: DebugReport,
     cp_onetime_submit: br::CommandPool,
     pub memory_type_manager: MemoryTypeManager
 }
@@ -434,12 +433,23 @@ impl Graphics
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
         ib.add_extensions(instance_extensions);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
-        if validation_layer_available { ib.add_layer("VK_LAYER_KHRONOS_validation"); }
-        else { warn!("Validation Layer is not found!"); }
+        if validation_layer_available {
+            ib.add_layer("VK_LAYER_KHRONOS_validation");
+        }
+        else {
+            warn!("Validation Layer is not found!");
+        }
+        #[cfg(feature = "debug")]
+        {
+            ib.add_extension("VK_EXT_debug_utils");
+            ib.add_ext_structure(
+                br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
+                    .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
+            );
+            debug!("Debug reporting activated");
+        }
         let instance = ib.create()?;
 
-        #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
-        #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
         let memory_type_manager = MemoryTypeManager::new(&adapter);
         MemoryTypeManager::diagnose_heaps(&adapter);
@@ -461,7 +471,6 @@ impl Graphics
             cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
             graphics_queue: Queue { q: device.queue(gqf_index, 0), family: gqf_index },
             instance, adapter, device,
-            #[cfg(debug_assertions)] _d,
             memory_type_manager
         });
     }
