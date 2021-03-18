@@ -22,7 +22,7 @@ pub extern "system" fn debug_utils_out(
     if (ty & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT) != 0 {
         tys.push("PERFORMANCE");
     }
-    let tystr = tys.join(" / ");
+    let tystr = tys.join("/");
 
     match severity {
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT => {
