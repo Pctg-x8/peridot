@@ -31,7 +31,8 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
             if cargo_cmd == "run" { "build" } else { cargo_cmd },
             ext_features,
             env,
-            None
+            None,
+            options.release
         );
     });
 

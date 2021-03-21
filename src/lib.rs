@@ -18,8 +18,8 @@ use self::state_track::StateFence;
 mod window;
 pub use self::window::SurfaceInfo;
 mod resource; pub use self::resource::*;
-#[cfg(debug_assertions)] mod debug;
-#[cfg(debug_assertions)] use self::debug::DebugReport;
+#[cfg(feature = "debug")] mod debug;
+#[cfg(feature = "debug")] use self::debug::*;
 pub mod utils; pub use self::utils::*;
 
 mod asset; pub use self::asset::*;
@@ -255,7 +255,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 
     pub fn sound_backend_callback(&self, output_buffer: &mut [f32])
-{
+    {
         for (n, r) in output_buffer.iter_mut().enumerate()
         {
             *r = (440.0 * n as f32 / 44100.0).to_radians().sin() * 0.1;
@@ -408,25 +408,26 @@ pub struct Graphics
 {
     pub(self) instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
     graphics_queue: Queue,
-    #[cfg(debug_assertions)] _d: DebugReport,
     cp_onetime_submit: br::CommandPool,
     pub memory_type_manager: MemoryTypeManager
 }
 impl Graphics
 {
-    fn new(appname: &str, appversion: (u32, u32, u32), instance_extensions: Vec<&str>, device_extensions: Vec<&str>,
-        features: br::vk::VkPhysicalDeviceFeatures) -> br::Result<Self>
-    {
+    fn new(
+        appname: &str,
+        appversion: (u32, u32, u32),
+        instance_extensions: Vec<&str>,
+        device_extensions: Vec<&str>,
+        features: br::vk::VkPhysicalDeviceFeatures
+    ) -> br::Result<Self> {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
         #[cfg(debug_assertions)]
-        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties")
-        {
+        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
             let name_str = name.to_str().expect("unexpected invalid sequence in layer name");
             info!("* {} :: {}/{}", name_str, l.specVersion, l.implementationVersion);
-            if name_str == "VK_LAYER_KHRONOS_validation"
-            {
+            if name_str == "VK_LAYER_KHRONOS_validation" {
                 validation_layer_available = true;
             }
         }
@@ -434,12 +435,22 @@ impl Graphics
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
         ib.add_extensions(instance_extensions);
         #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
-        if validation_layer_available { ib.add_layer("VK_LAYER_KHRONOS_validation"); }
-        else { warn!("Validation Layer is not found!"); }
+        if validation_layer_available {
+            ib.add_layer("VK_LAYER_KHRONOS_validation");
+        } else {
+            warn!("Validation Layer is not found!");
+        }
+        #[cfg(feature = "debug")]
+        {
+            ib.add_extension("VK_EXT_debug_utils");
+            ib.add_ext_structure(
+                br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
+                    .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
+            );
+            debug!("Debug reporting activated");
+        }
         let instance = ib.create()?;
 
-        #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
-        #[cfg(debug_assertions)] debug!("Debug reporting activated");
         let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
         let memory_type_manager = MemoryTypeManager::new(&adapter);
         MemoryTypeManager::diagnose_heaps(&adapter);
@@ -447,8 +458,7 @@ impl Graphics
         let gqf_index = adapter.queue_family_properties().find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("No graphics queue");
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
-        let device =
-        {
+        let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extensions(device_extensions).add_queue(qci);
             if validation_layer_available { db.add_layer("VK_LAYER_KHRONOS_validation"); }
@@ -456,12 +466,10 @@ impl Graphics
             db.create()?
         };
         
-        return Ok(Graphics
-        {
+        return Ok(Graphics {
             cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
             graphics_queue: Queue { q: device.queue(gqf_index, 0), family: gqf_index },
             instance, adapter, device,
-            #[cfg(debug_assertions)] _d,
             memory_type_manager
         });
     }
