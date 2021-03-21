@@ -36,6 +36,8 @@ impl std::ops::Deref for Buffer {
 }
 impl br::VkHandle for Buffer {
     type Handle = <br::Buffer as br::VkHandle>::Handle;
+    const TYPE: br::vk::VkObjectType = <br::Buffer as br::VkHandle>::TYPE;
+
     fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }
 
