@@ -31,19 +31,28 @@ pub struct Args {
     app_package_id: String,
     /// Use fast build(no copy of builtin-assets)
     #[structopt(long)]
-    fast_build: bool
+    fast_build: bool,
+    /// Release build
+    #[structopt(long)]
+    release: bool
 }
 impl Args {
     pub fn to_build_options(&self) -> crate::platform::BuildOptions {
+        let mut engine_features: Vec<_> = self.engine_feature.iter().map(|s| s as &str).collect();
+        if !self.release {
+            engine_features.push("debug");
+        }
+
         crate::platform::BuildOptions {
             userlib: &self.userlib_path,
             features: self.feature.iter().map(|s| s as &str).collect(),
-            engine_features: self.engine_feature.iter().map(|s| s as &str).collect(),
+            engine_features,
             update_deps: self.update_deps,
             ext_asset_path: self.asset_directory.as_deref(),
             entry_ty_name: &self.entry_ty_name,
             appid: &self.app_package_id,
-            fast_build: self.fast_build
+            fast_build: self.fast_build,
+            release: self.release
         }
     }
 }

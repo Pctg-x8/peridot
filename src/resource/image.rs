@@ -24,5 +24,7 @@ impl std::ops::Deref for Image {
 }
 impl br::VkHandle for Image {
     type Handle = <br::Image as br::VkHandle>::Handle;
+    const TYPE: br::vk::VkObjectType = <br::Image as br::VkHandle>::TYPE;
+
     fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }

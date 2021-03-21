@@ -501,3 +501,12 @@ pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
 pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
     unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false); }
 }
+
+#[no_mangle]
+pub extern "C" fn report_mouse_move_abs(g: *mut GameDriver, x: f32, y: f32) {
+    unsafe {
+        let scale = nsscreen_backing_scale_factor();
+        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x * scale, true);
+        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
+    }
+}

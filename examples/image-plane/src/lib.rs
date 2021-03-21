@@ -193,12 +193,21 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(&e.graphics(), None)
             .expect("Create GraphicsPipeline");
+        #[cfg(feature = "debug")]
+        gp.set_name(
+            Some(&std::ffi::CString::new("Main Pipeline").expect("invalid sequence?"))
+        ).expect("Failed to set pipeline name");
         let gp = LayoutedPipeline::combine(gp, &pl);
 
         let render_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, e.backbuffer_count())
             .expect("Alloc RenderCB");
-        for (cb, fb) in render_cb.iter().zip(&framebuffers)
+        for (n, (cb, fb)) in render_cb.iter().zip(&framebuffers).enumerate()
         {
+            #[cfg(feature = "debug")]
+            br::DebugUtilsObjectNameInfo::new(
+                cb,
+                Some(&std::ffi::CString::new(format!("Primary Render Commands #{}", n)).expect("invalid sequence?"))
+            ).apply(e.graphics()).expect("Failed to set render cb name");
             let mut cr = cb.begin().expect("Begin CmdRecord");
             cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::color([0.0; 4])], true);
             gp.bind(&mut cr);
