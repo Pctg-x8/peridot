@@ -61,21 +61,24 @@ impl IntegratedSwapchainObject {
         })).expect("Failed to set swapchain name");
         
         let isr_c0 = br::ImageSubresourceRange::color(0, 0);
-        let backbuffer_images = chain.get_images().expect("Failed to get backbuffer images").into_iter().enumerate()
-            .map(|(n, bb)| {
-                let view: Rc<_> = bb.create_view(None, None, &Default::default(), &isr_c0)
-                    .expect("Failed to create ImageView for Backbuffer")
-                    .into();
-                #[cfg(feature = "debug")]
-                view.set_name(
-                    Some(
-                        &std::ffi::CString::new(format!("Peridot-Default Presentor-Backbuffer View #{}", n))
-                            .expect("invalid sequence?")
-                    )
-                ).expect("Failed to set backbuffer view name");
-
-                view
-            }).collect();
+        let backbuffer_images: Vec<Rc<_>> = chain
+            .get_images()
+            .expect("Failed to get backbuffer images")
+            .into_iter()
+            .map(|bb| bb.create_view(None, None, &Default::default(), &isr_c0)
+                .expect("Failed to create ImageView for Backbuffer")
+                .into()
+            ).collect();
+        
+        #[cfg(feature = "debug")]
+        for (n, v) in backbuffer_images.iter().enumerate() {
+            v.set_name(
+                Some(
+                    &std::ffi::CString::new(format!("Peridot-Default Presentor-Backbuffer View #{}", n))
+                        .expect("invalid sequence?")
+                )
+            ).expect("Failed to set backbuffer view name");
+        }
         
         IntegratedSwapchainObject { swapchain: chain, backbuffer_images }
     }
