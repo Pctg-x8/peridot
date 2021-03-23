@@ -1,7 +1,7 @@
 
 use libc::c_void;
 use winapi::Interface;
-use winapi::shared::minwindef::{ULONG};
+use winapi::shared::minwindef::ULONG;
 use winapi::shared::winerror::{S_OK, E_NOINTERFACE, HRESULT};
 use winapi::shared::guiddef::REFIID;
 use winapi::um::unknwnbase::{IUnknown, IUnknownVtbl};
@@ -9,6 +9,10 @@ use winapi::um::d2d1::{
     ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySinkVtbl, D2D1_FIGURE_BEGIN, D2D1_FIGURE_END,
     D2D1_FILL_MODE, D2D1_PATH_SEGMENT,
     D2D1_FIGURE_END_CLOSED
+};
+use winapi::um::dwrite::{
+    IDWriteFontFileLoader, IDWriteFontFileLoaderVtbl,
+    IDWriteFontFileStream, IDWriteFontFileStreamVtbl
 };
 use std::ptr::null_mut;
 use lyon_path::PathEvent;
@@ -113,4 +117,114 @@ impl PathEventReceiver
 unsafe impl comdrive::AsRawHandle<ID2D1SimplifiedGeometrySink> for PathEventReceiver
 {
     fn as_raw_handle(&self) -> *mut ID2D1SimplifiedGeometrySink { self as *const _ as _ }
+}
+
+pub struct AssetToFontConverter<'a> {
+    base: ComBase<IDWriteFontFileLoaderVtbl>,
+    asset: &'a super::TTFBlob
+}
+impl<'a> AssetToFontConverter<'a> {
+    const VTABLE: &'static IDWriteFontFileLoaderVtbl = &IDWriteFontFileLoaderVtbl {
+        CreateStreamFromKey: Self::create_stream_from_key,
+        parent: IUnknownVtbl {
+            QueryInterface: Self::query_interface,
+            AddRef: ComBase::<IDWriteFontFileLoaderVtbl>::add_ref,
+            Release: ComBase::<IDWriteFontFileLoaderVtbl>::release
+        }
+    };
+    unsafe extern "system" fn query_interface(this: *mut IUnknown, iid: REFIID, objret: *mut *mut c_void) -> HRESULT
+    {
+        *objret = null_mut();
+        if iid == &IDWriteFontFileLoader::uuidof() || iid == &IUnknown::uuidof() {
+            *objret = this as *mut _;
+            return S_OK;
+        }
+        
+        E_NOINTERFACE
+    }
+
+    pub fn new(asset: &'a super::TTFBlob) -> Self {
+        Self {
+            base: ComBase::new(Self::VTABLE),
+            asset
+        }
+    }
+}
+/// IDWritFontFileLoader
+impl AssetToFontConverter<'_> {
+    unsafe extern "system" fn create_stream_from_key(
+        this: *mut IDWriteFontFileLoader,
+        _refkey: *const c_void,
+        _keysize: u32,
+        stream: *mut *mut IDWriteFontFileStream
+    ) -> HRESULT {
+        *stream = AssetStreamBridge::new((*(this as *mut Self)).asset) as *mut _;
+
+        S_OK
+    }
+}
+unsafe impl comdrive::AsRawHandle<IDWriteFontFileLoader> for AssetToFontConverter<'_> {
+    fn as_raw_handle(&self) -> *mut IDWriteFontFileLoader { self as *const Self as _ }
+}
+
+pub struct AssetStreamBridge<'a> {
+    base: ComBase<IDWriteFontFileStreamVtbl>,
+    asset: &'a super::TTFBlob
+}
+impl<'a> AssetStreamBridge<'a> {
+    const VTABLE: &'static IDWriteFontFileStreamVtbl = &IDWriteFontFileStreamVtbl {
+        GetFileSize: Self::get_size,
+        GetLastWriteTime: Self::get_last_write_time,
+        ReadFileFragment: Self::read_file_fragment,
+        ReleaseFileFragment: Self::release_file_fragment,
+        parent: IUnknownVtbl {
+            QueryInterface: Self::query_interface,
+            AddRef: ComBase::<IDWriteFontFileStreamVtbl>::add_ref,
+            Release: ComBase::<IDWriteFontFileStreamVtbl>::release
+        }
+    };
+    unsafe extern "system" fn query_interface(this: *mut IUnknown, iid: REFIID, objret: *mut *mut c_void) -> HRESULT {
+        *objret = null_mut();
+        if iid == &IDWriteFontFileStream::uuidof() || iid == &IUnknown::uuidof() {
+            *objret = this as *mut _;
+            return S_OK;
+        }
+
+        E_NOINTERFACE
+    }
+
+    fn new(asset: &'a super::TTFBlob) -> *mut Self {
+        Box::into_raw(Box::new(Self {
+            base: ComBase::new(Self::VTABLE),
+            asset
+        }))
+    }
+}
+/// IDWriteFontFileStream
+impl AssetStreamBridge<'_> {
+    unsafe extern "system" fn get_size(this: *mut IDWriteFontFileStream, size: *mut u64) -> HRESULT {
+        *size = (*(this as *mut Self)).asset.0.len() as _;
+        S_OK
+    }
+    unsafe extern "system" fn get_last_write_time(
+        _this: *mut IDWriteFontFileStream, last_write_time: *mut u64
+    ) -> HRESULT {
+        *last_write_time = 0;
+        S_OK
+    }
+    unsafe extern "system" fn read_file_fragment(
+        this: *mut IDWriteFontFileStream,
+        fragment_start: *mut *const c_void,
+        file_offset: u64,
+        _fragment_size: u64,
+        fragment_context: *mut *mut c_void
+    ) -> HRESULT {
+        *fragment_context = null_mut();
+        *fragment_start = (*(this as *mut Self)).asset.0.as_ptr().add(file_offset as _) as *const _;
+
+        S_OK
+    }
+    unsafe extern "system" fn release_file_fragment(
+        _this: *mut IDWriteFontFileStream, _fragment_context: *mut c_void
+    ) {}
 }

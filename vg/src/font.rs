@@ -1,4 +1,5 @@
 
+use comdrive::AsRawHandle;
 use euclid::Rect;
 use peridot::math::Vector2;
 use lyon_path::builder::PathBuilder;
@@ -41,7 +42,8 @@ impl FontProperties
 #[derive(Debug)]
 pub enum FontConstructionError
 {
-    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error)
+    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error),
+    UnsupportedFontFile
 }
 impl From<std::io::Error> for FontConstructionError
 {
@@ -198,11 +200,10 @@ impl Font {
 }
 
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-impl FontProvider
-{
-    pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
-        -> Result<Font, FontConstructionError>
-    {
+impl FontProvider {
+    pub fn best_match(
+        &self, family_name: &str, properties: &FontProperties, size: f32
+    ) -> Result<Font, FontConstructionError> {
         let collection = self.factory.system_font_collection(false)?;
         let family_index = collection.find_family_name(family_name)?.unwrap_or(0);
         let family = collection.font_family(family_index)?;
@@ -219,10 +220,24 @@ impl FontProvider
         
         font.new_font_face().map(|x| Font(x, size)).map_err(From::from)
     }
+
+    pub fn load<NL: peridot::NativeLinker>(
+        &self, e: &peridot::Engine<NL>, asset_path: &str, size: f32
+    ) -> Result<Font, FontConstructionError> {
+        let a: TTFBlob = e.load(asset_path)?;
+        let fntfile = self.factory.new_custom_font_file_reference(&(), &dwrite_driver::AssetToFontConverter::new(&a))?;
+        let (is_supported, _, face_type, _) = fntfile.analyze()?;
+        if !is_supported {
+            return Err(FontConstructionError::UnsupportedFontFile);
+        }
+        
+        self.factory.new_font_face(face_type, &[fntfile.as_raw_handle()], 0, comdrive::dwrite::FONT_SIMULATIONS_NONE)
+            .map(|x| Font(x, size))
+            .map_err(From::from)
+    }
 }
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-impl Font
-{
+impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
     pub fn scale_value(&self) -> f32 { (96.0 * self.1 / 72.0) / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
@@ -341,4 +356,18 @@ impl Font
     }
 
     pub fn units_per_em(&self) -> u32 { self.0.units_per_em() as _ }
+}
+
+/// An asset represents ttf blob
+pub struct TTFBlob(pub(crate) Vec<u8>);
+impl peridot::LogicalAssetData for TTFBlob {
+    const EXT: &'static str = "ttf";
+}
+impl peridot::FromAsset for TTFBlob {
+    type Error = std::io::Error;
+
+    fn from_asset<Asset: std::io::Read + std::io::Seek + 'static>(mut asset: Asset) -> Result<Self, Self::Error> {
+        let mut bin = Vec::new();
+        asset.read_to_end(&mut bin).map(move |_| TTFBlob(bin))
+    }
 }
