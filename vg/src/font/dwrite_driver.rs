@@ -121,7 +121,9 @@ unsafe impl comdrive::AsRawHandle<ID2D1SimplifiedGeometrySink> for PathEventRece
 
 pub struct ATFRegisterScope<'a>(&'a comdrive::dwrite::Factory, comdrive::ComPtr<AssetToFontConverter<'a>>);
 impl<'a> ATFRegisterScope<'a> {
-    pub fn register(factory: &'a comdrive::dwrite::Factory, atf: comdrive::ComPtr<AssetToFontConverter<'a>>) -> std::io::Result<Self> {
+    pub fn register(
+        factory: &'a comdrive::dwrite::Factory, atf: comdrive::ComPtr<AssetToFontConverter<'a>>
+    ) -> std::io::Result<Self> {
         factory.register_font_file_loader(unsafe { &*atf.0 }).map(|_| Self(factory, atf))
     }
 
@@ -138,16 +140,16 @@ pub struct AssetToFontConverter<'a> {
     base: ComBase<IDWriteFontFileLoaderVtbl>,
     asset: &'a super::TTFBlob
 }
-pub static ATF_VTABLE: IDWriteFontFileLoaderVtbl = IDWriteFontFileLoaderVtbl {
-    CreateStreamFromKey: AssetToFontConverter::create_stream_from_key,
-    parent: IUnknownVtbl {
-        QueryInterface: AssetToFontConverter::query_interface,
-        AddRef: ComBase::<IDWriteFontFileLoaderVtbl>::add_ref,
-        Release: ComBase::<IDWriteFontFileLoaderVtbl>::release
-    }
-};
 impl<'a> AssetToFontConverter<'a> {
-    pub unsafe extern "system" fn query_interface(this: *mut IUnknown, iid: REFIID, objret: *mut *mut c_void) -> HRESULT {
+    const VTABLE: &'static IDWriteFontFileLoaderVtbl = &IDWriteFontFileLoaderVtbl {
+        CreateStreamFromKey: AssetToFontConverter::create_stream_from_key,
+        parent: IUnknownVtbl {
+            QueryInterface: AssetToFontConverter::query_interface,
+            AddRef: ComBase::<IDWriteFontFileLoaderVtbl>::add_ref,
+            Release: ComBase::<IDWriteFontFileLoaderVtbl>::release
+        }
+    };
+    unsafe extern "system" fn query_interface(this: *mut IUnknown, iid: REFIID, objret: *mut *mut c_void) -> HRESULT {
         *objret = null_mut();
         if iid == &IDWriteFontFileLoader::uuidof() || iid == &IUnknown::uuidof() {
             *objret = this as *mut _;
@@ -158,9 +160,8 @@ impl<'a> AssetToFontConverter<'a> {
     }
 
     pub fn new(asset: &'a super::TTFBlob) -> *mut Self {
-        println!("vtbl: {:p}", &ATF_VTABLE);
         Box::into_raw(Box::new(Self {
-            base: ComBase::new(&ATF_VTABLE),
+            base: ComBase::new(Self::VTABLE),
             asset
         }))
     }
