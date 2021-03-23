@@ -1,5 +1,4 @@
 
-use comdrive::AsRawHandle;
 use euclid::Rect;
 use peridot::math::Vector2;
 use lyon_path::builder::PathBuilder;
@@ -7,6 +6,7 @@ use lyon_path::builder::PathBuilder;
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))] use appkit::ObjcObjectBase;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))] mod dwrite_driver;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))] use self::dwrite_driver::*;
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))] use comdrive::AsRawHandle;
 #[cfg(feature = "use-freetype")] mod ft_drivers;
 #[cfg(feature = "use-fontconfig")] mod fc_drivers;
 
