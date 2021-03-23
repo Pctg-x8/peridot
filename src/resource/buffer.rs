@@ -185,6 +185,9 @@ impl<'g> BufferPrealloc<'g> {
     pub fn build_upload(&self) -> br::Result<br::Buffer> {
         br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(&self.g.device)
     }
+    pub fn build_custom_usage(&self, usage: br::BufferUsage) -> br::Result<br::Buffer> {
+        br::BufferDesc::new(self.total as _, self.usage | usage).create(&self.g.device)
+    }
 
     pub fn add(&mut self, content: BufferContent) -> u64 {
         self.usage = content.usage(self.usage);
