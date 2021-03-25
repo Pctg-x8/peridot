@@ -119,15 +119,15 @@ unsafe impl comdrive::AsRawHandle<ID2D1SimplifiedGeometrySink> for PathEventRece
     fn as_raw_handle(&self) -> *mut ID2D1SimplifiedGeometrySink { self as *const _ as _ }
 }
 
-pub struct ATFRegisterScope<'a>(&'a comdrive::dwrite::Factory, comdrive::ComPtr<AssetToFontConverter<'a>>);
+pub struct ATFRegisterScope<'a>(&'a comdrive::dwrite::Factory, comdrive::ComPtr<AssetToFontConverter>);
 impl<'a> ATFRegisterScope<'a> {
     pub fn register(
-        factory: &'a comdrive::dwrite::Factory, atf: comdrive::ComPtr<AssetToFontConverter<'a>>
+        factory: &'a comdrive::dwrite::Factory, atf: comdrive::ComPtr<AssetToFontConverter>
     ) -> std::io::Result<Self> {
         factory.register_font_file_loader(unsafe { &*atf.0 }).map(|_| Self(factory, atf))
     }
 
-    pub fn object(&self) -> &AssetToFontConverter<'a> { unsafe { &*(self.1).0 } }
+    pub fn object(&self) -> &AssetToFontConverter { unsafe { &*(self.1).0 } }
 }
 impl Drop for ATFRegisterScope<'_> {
     fn drop(&mut self) {
@@ -136,11 +136,11 @@ impl Drop for ATFRegisterScope<'_> {
 }
 
 #[repr(C)]
-pub struct AssetToFontConverter<'a> {
+pub struct AssetToFontConverter {
     base: ComBase<IDWriteFontFileLoaderVtbl>,
-    asset: &'a super::TTFBlob
+    asset: Option<super::TTFBlob>
 }
-impl<'a> AssetToFontConverter<'a> {
+impl AssetToFontConverter {
     const VTABLE: &'static IDWriteFontFileLoaderVtbl = &IDWriteFontFileLoaderVtbl {
         CreateStreamFromKey: AssetToFontConverter::create_stream_from_key,
         parent: IUnknownVtbl {
@@ -159,36 +159,38 @@ impl<'a> AssetToFontConverter<'a> {
         E_NOINTERFACE
     }
 
-    pub fn new(asset: &'a super::TTFBlob) -> *mut Self {
+    pub fn new(asset: super::TTFBlob) -> *mut Self {
         Box::into_raw(Box::new(Self {
             base: ComBase::new(Self::VTABLE),
-            asset
+            asset: Some(asset)
         }))
     }
 }
 /// IDWritFontFileLoader
-impl AssetToFontConverter<'_> {
+impl AssetToFontConverter {
     unsafe extern "system" fn create_stream_from_key(
         this: *mut IDWriteFontFileLoader,
         _refkey: *const c_void,
         _keysize: u32,
         stream: *mut *mut IDWriteFontFileStream
     ) -> HRESULT {
-        *stream = AssetStreamBridge::new((*(this as *mut Self)).asset) as *mut _;
+        *stream = AssetStreamBridge::new(
+            (*(this as *mut Self)).asset.take().expect("ATF create stream called twice?")
+        ) as *mut _;
 
         S_OK
     }
 }
-unsafe impl comdrive::AsRawHandle<IDWriteFontFileLoader> for AssetToFontConverter<'_> {
+unsafe impl comdrive::AsRawHandle<IDWriteFontFileLoader> for AssetToFontConverter {
     fn as_raw_handle(&self) -> *mut IDWriteFontFileLoader { self as *const Self as _ }
 }
 
 #[repr(C)]
-pub struct AssetStreamBridge<'a> {
+pub struct AssetStreamBridge {
     base: ComBase<IDWriteFontFileStreamVtbl>,
-    asset: &'a super::TTFBlob
+    asset: super::TTFBlob
 }
-impl<'a> AssetStreamBridge<'a> {
+impl AssetStreamBridge {
     const VTABLE: &'static IDWriteFontFileStreamVtbl = &IDWriteFontFileStreamVtbl {
         GetFileSize: Self::get_size,
         GetLastWriteTime: Self::get_last_write_time,
@@ -210,7 +212,7 @@ impl<'a> AssetStreamBridge<'a> {
         E_NOINTERFACE
     }
 
-    fn new(asset: &'a super::TTFBlob) -> *mut Self {
+    fn new(asset: super::TTFBlob) -> *mut Self {
         Box::into_raw(Box::new(Self {
             base: ComBase::new(Self::VTABLE),
             asset
@@ -218,7 +220,7 @@ impl<'a> AssetStreamBridge<'a> {
     }
 }
 /// IDWriteFontFileStream
-impl AssetStreamBridge<'_> {
+impl AssetStreamBridge {
     unsafe extern "system" fn get_size(this: *mut IDWriteFontFileStream, size: *mut u64) -> HRESULT {
         *size = (*(this as *mut Self)).asset.0.len() as _;
         S_OK

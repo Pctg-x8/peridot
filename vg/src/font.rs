@@ -225,7 +225,7 @@ impl FontProvider {
         &self, e: &peridot::Engine<NL>, asset_path: &str, size: f32
     ) -> Result<Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
-        let conv = ATFRegisterScope::register(&self.factory, comdrive::ComPtr(AssetToFontConverter::new(&a)))?;
+        let conv = ATFRegisterScope::register(&self.factory, comdrive::ComPtr(AssetToFontConverter::new(a)))?;
         let fntfile = self.factory.new_custom_font_file_reference(&1u32, conv.object())?;
         let (is_supported, _, face_type, _) = fntfile.analyze()?;
         if !is_supported {
