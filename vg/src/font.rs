@@ -132,6 +132,7 @@ impl FontProvider
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    pub fn size(&self) -> f32 { self.1 }
     pub fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
     pub fn ascent(&self) -> f32 { self.0.ascent() as f32 * self.scale_value() }
 
@@ -240,6 +241,7 @@ impl FontProvider {
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    pub fn size(&self) -> f32 { self.1 }
     pub fn scale_value(&self) -> f32 { (96.0 * self.1 / 72.0) / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 }
@@ -324,6 +326,7 @@ impl FontProvider
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; self.0.set_size(size); }
+    pub fn size(&self) -> f32 { self.1 }
     pub fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     pub fn ascent(&self) -> f32 { self.0.ascender() as _ }
 
