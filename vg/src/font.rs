@@ -99,13 +99,12 @@ type UnderlyingHandle = comdrive::dwrite::FontFace;
 type UnderlyingHandle = self::ft_drivers::FaceGroup;
 pub struct Font(UnderlyingHandle, f32);
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-impl FontProvider
-{
+impl FontProvider {
     const CTFONT_DEFAULT_SIZE: f32 = 12.0;
 
-    pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
-        -> Result<Font, FontConstructionError>
-    {
+    pub fn best_match(
+        &self, family_name: &str, properties: &FontProperties, size: f32
+    ) -> Result<Font, FontConstructionError> {
         let traits = appkit::NSMutableDictionary::with_capacity(2)
             .map_err(|_| FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity"))?;
         let weight_num = appkit::NSNumber::from_float(properties.native_weight())
@@ -124,6 +123,19 @@ impl FontProvider
 
         let fd = appkit::CTFontDescriptor::with_attributes(AsRef::as_ref(&**attrs))
             .map_err(|_| FontConstructionError::SysAPICallError("CTFontDescriptor::with_attributes"))?;
+        appkit::CTFont::from_font_descriptor(&fd, Self::CTFONT_DEFAULT_SIZE as _, None)
+            .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
+            .map(|x| Font(x, size))
+    }
+
+    pub fn load<NL: peridot::NativeLinker>(
+        &self, e: &peridot::Engine<NL>, asset_path: &str, size: f32
+    ) -> Result<Font, FontConstructionError> {
+        let a: TTFBlob = e.load(asset_path)?;
+        let d = appkit::CFData::new(&a.0).ok_or(FontConstructionError::SysAPICallError("CFData::new"))?;
+        let fd = appkit::CTFontDescriptor::from_data(&d)
+            .ok_or(FontConstructionError::SysAPICallError("CTFontDescriptor::from_data"))?;
+        
         appkit::CTFont::from_font_descriptor(&fd, Self::CTFONT_DEFAULT_SIZE as _, None)
             .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
             .map(|x| Font(x, size))
