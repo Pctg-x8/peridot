@@ -43,7 +43,9 @@ impl FontProperties
 pub enum FontConstructionError
 {
     SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error),
-    UnsupportedFontFile
+    UnsupportedFontFile,
+    #[cfg(feature = "use-freetype")]
+    FT2(freetype2::FT_Error)
 }
 impl From<std::io::Error> for FontConstructionError
 {
@@ -313,15 +315,14 @@ impl FontProvider
         pat.default_substitute();
         let fonts = self.fc.sort_fonts(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
 
-        let group_desc: Vec<(*const i8, freetype2::FT_Long)> = fonts.iter().map(|f|
+        let group_desc = fonts.iter().map(|f|
         {
             let font_path = f.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
             let face_index = f.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
 
-            Ok((font_path.as_ptr(), face_index as _))
+            Ok(ft_drivers::FaceGroupEntry::unloaded(font_path, face_index as _))
         }).collect::<Result<_, FontConstructionError>>()?;
-        
-        let face = self.ftlib.new_face_group(&group_desc[..]);
+        let face = self.ftlib.new_face_group(group_desc);
         face.set_size(size);
 
         Ok(Font(face, size))
@@ -332,6 +333,17 @@ impl FontProvider
         // no matching algorithm is available!
 
         Err(FontConstructionError::MatcherUnavailable)
+    }
+
+    pub fn load<NL: peridot::NativeLinker>(
+        &self, e: &peridot::Engine<NL>, asset_path: &str, size: f32
+    ) -> Result<Font, FontConstructionError> {
+        let a: TTFBlob = e.load(asset_path)?;
+        let f = self.ftlib.new_face_from_mem(&a.0, 0).map_err(FontConstructionError::FT2)?;
+        let face = self.ftlib.new_face_group(vec![ft_drivers::FaceGroupEntry::LoadedMem(f, a.0.into())]);
+        face.set_size(size);
+
+        Ok(Font(face, size))
     }
 }
 #[cfg(feature = "use-freetype")]
