@@ -223,7 +223,7 @@ impl GameDriver {
         let usercode = userlib::Game::init(&mut engine);
         engine.input_mut().set_nativelink(Box::new(input::InputNativeLink::new(x11)));
         engine.postinit();
-        let _snd = async_std::task::block_on(NativeAudioEngine::new(engine.audio_mixer()));
+        let _snd = NativeAudioEngine::new(engine.audio_mixer());
 
         GameDriver { engine, usercode, _snd }
     }
