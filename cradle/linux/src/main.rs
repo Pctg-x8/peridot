@@ -248,6 +248,7 @@ fn main() {
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
     x11.borrow().show();
+    gd.engine.audio_mixer().write().expect("Failed to mutate audio mixer").start();
     let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2 + input.managed_devices_count()];
     'app: loop {
         if events.len() != 2 + input.managed_devices_count() {

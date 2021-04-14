@@ -1,7 +1,7 @@
 //! PulseAudio Sound Backend
 
 use pulseaudio_rs as pa;
-use std::sync::{Arc, RwLock};
+use std::{mem::ManuallyDrop, sync::{Arc, RwLock}};
 use std::pin::Pin;
 use std::cell::RefCell;
 
@@ -52,7 +52,7 @@ impl pa::stream::WriteRequestHandler for AudioDataWriter
 
 pub struct NativeAudioEngine {
 	mlp: Pin<Box<pa::mainloop::Threaded>>,
-	context: pa::Context,
+	context: ManuallyDrop<pa::Context>,
 	stream: pa::Stream,
 	_wh: Pin<Box<AudioDataWriter>>
 }
@@ -119,23 +119,21 @@ impl NativeAudioEngine {
 		}
 
 		trace!("Done!");
-		NativeAudioEngine
-		{
+		NativeAudioEngine {
 			mlp,
-			context,
+			context: ManuallyDrop::new(context),
 			stream,
 			_wh: writer
 		}
 	}
 }
-impl Drop for NativeAudioEngine
-{
-	fn drop(&mut self)
-	{
+impl Drop for NativeAudioEngine {
+	fn drop(&mut self) {
 		{
 			let _ = pa::mainloop::LockedLoop::new(Pin::into_inner(self.mlp.as_ref()));
 			self.stream.disconnect();
 		}
+		unsafe { ManuallyDrop::drop(&mut self.context); }
 		Pin::into_inner(self.mlp.as_mut()).stop();
 	}
 }
