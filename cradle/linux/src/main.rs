@@ -223,7 +223,7 @@ impl GameDriver {
         let usercode = userlib::Game::init(&mut engine);
         engine.input_mut().set_nativelink(Box::new(input::InputNativeLink::new(x11)));
         engine.postinit();
-        let _snd = async_std::task::block_on(NativeAudioEngine::new(engine.audio_mixer()));
+        let _snd = NativeAudioEngine::new(engine.audio_mixer());
 
         GameDriver { engine, usercode, _snd }
     }
@@ -248,6 +248,7 @@ fn main() {
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
     x11.borrow().show();
+    gd.engine.audio_mixer().write().expect("Failed to mutate audio mixer").start();
     let mut events = vec![unsafe { std::mem::MaybeUninit::zeroed().assume_init() }; 2 + input.managed_devices_count()];
     'app: loop {
         if events.len() != 2 + input.managed_devices_count() {
