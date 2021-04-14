@@ -5,7 +5,7 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
 [features]
-debug = ["bedrock/VK_EXT_debug_utils"]
+debug = ["bedrock/VK_EXT_debug_utils", "peridot/debug"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
