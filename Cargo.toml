@@ -7,6 +7,7 @@ edition = "2018"
 
 [features]
 debug = ["bedrock/VK_EXT_debug_utils"]
+derive = ["peridot-derive"]
 
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
@@ -18,6 +19,7 @@ num = "*"
 
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
+peridot-derive = { path = "derive", optional = true }
 
 [dependencies.bedrock]
 git = "https://github.com/Pctg-x8/bedrock"
