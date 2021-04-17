@@ -2,7 +2,7 @@ target/
 **/*.rs.bk
 *.lock
 .vscode/
-android-build
+android-build/
 **/*.pvp
 **/*.spv
 

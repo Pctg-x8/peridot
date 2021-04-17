@@ -8,7 +8,8 @@ use peridot::{
     CommandBundle, CBSubmissionType, TransferBatch, BufferPrealloc, BufferContent,
     SubpassDependencyTemplates, DescriptorSetUpdateBatch, LayoutedPipeline,
     TextureInitializationGroup, Buffer,
-    FixedMemory, FixedBufferInitializer
+    FixedMemory, FixedBufferInitializer,
+    audio::StreamingPlayableWav
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::borrow::Cow;
@@ -16,6 +17,7 @@ use std::rc::Rc;
 use std::mem::size_of;
 use std::ops::Range;
 use std::time::Duration;
+use std::sync::{Arc, RwLock};
 use log::*;
 
 pub struct IPFixedBufferInitializer {
@@ -63,10 +65,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         let screen_size: br::Extent3D = e.backbuffer(0).expect("no backbuffers").size().clone().into();
         let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-        let image_data: peridot::PNG = e.load("images.example").expect("No image found");
+        let image_data: peridot_image::PNG = e.load("images.example").expect("No image found");
         debug!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
-        debug!("ImageColor: {:?}", image_data.0.color);
+        debug!("ImageFormat: {:?}", image_data.0.format);
         debug!("ImageStride: {} bytes", image_data.0.stride);
+
+        let bgm = Arc::new(RwLock::new(e.streaming::<StreamingPlayableWav>("bgm").expect("Loading BGM")));
+        e.audio_mixer().write().expect("Adding AudioProcess").add_process(bgm.clone());
+        e.audio_mixer().write().expect("Setting MasterVolume").set_master_volume(0.5);
 
         let mut bp = BufferPrealloc::new(e.graphics());
         let vertices_offset = bp.add(BufferContent::vertex::<[UVVert; 4]>());
@@ -165,7 +171,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
         ]));
         dsub.submit(&e.graphics());
 
-        let shaderfile = e.load("shaders.prim").expect("Loading prim");
+        let shaderfile = e.load("builtin.shaders.unlit_image").expect("Loading shader");
         let shader = PvpShaderModules::new(&e.graphics(), shaderfile).expect("Create ShaderModules");
         let vp = [br::vk::VkViewport
         {
@@ -187,20 +193,31 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL>
             .add_attachment_blend(br::AttachmentColorBlendState::noblend())
             .create(&e.graphics(), None)
             .expect("Create GraphicsPipeline");
+        #[cfg(feature = "debug")]
+        gp.set_name(
+            Some(&std::ffi::CString::new("Main Pipeline").expect("invalid sequence?"))
+        ).expect("Failed to set pipeline name");
         let gp = LayoutedPipeline::combine(gp, &pl);
 
         let render_cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, e.backbuffer_count())
             .expect("Alloc RenderCB");
-        for (cb, fb) in render_cb.iter().zip(&framebuffers)
+        for (n, (cb, fb)) in render_cb.iter().zip(&framebuffers).enumerate()
         {
+            #[cfg(feature = "debug")]
+            br::DebugUtilsObjectNameInfo::new(
+                cb,
+                Some(&std::ffi::CString::new(format!("Primary Render Commands #{}", n)).expect("invalid sequence?"))
+            ).apply(e.graphics()).expect("Failed to set render cb name");
             let mut cr = cb.begin().expect("Begin CmdRecord");
-            cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::Color([0.0; 4])], true);
+            cr.begin_render_pass(&renderpass, fb, fb.size().clone().into(), &[br::ClearValue::color([0.0; 4])], true);
             gp.bind(&mut cr);
             cr.bind_graphics_descriptor_sets(0, &descriptor_main, &[]);
             cr.bind_vertex_buffers(0, &[(&buffers.buffer.0, vertices_offset as _)]);
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
         }
+
+        bgm.write().expect("Starting BGM").play();
 
         Game
         {
@@ -253,7 +270,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
         for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
             let mut cr = cb.begin().expect("Begin CmdRecord");
             cr.begin_render_pass(&self.renderpass, fb, fb.size().clone().into(),
-                &[br::ClearValue::Color([0.0; 4])], true);
+                &[br::ClearValue::color([0.0; 4])], true);
             self.gp_main.bind(&mut cr);
             cr.bind_graphics_descriptor_sets(0, &self.descriptor.2, &[]);
             cr.bind_vertex_buffers(0, &[(&self.buffers.buffer.0, self.vertices_offset as _)]);

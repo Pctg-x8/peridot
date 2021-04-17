@@ -1,7 +1,4 @@
-use super::*;
 use bedrock as br;
-
-use std::mem::{replace, forget};
 
 pub struct SurfaceInfo {
     pub(crate) obj: br::Surface,
@@ -28,28 +25,4 @@ impl SurfaceInfo {
         return Ok(SurfaceInfo { obj, fmt, pres_mode, available_composite_alpha });
     }
     pub fn format(&self) -> br::vk::VkFormat { self.fmt.format }
-}
-
-pub enum StateFence { Signaled(br::Fence), Unsignaled(br::Fence) }
-impl StateFence {
-    pub fn new(d: &br::Device) -> br::Result<Self> { br::Fence::new(d, false).map(StateFence::Unsignaled) }
-    /// must be coherent with background API
-    pub unsafe fn signal(&mut self) {
-        let obj = std::ptr::read(match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _ });
-        forget(replace(self, StateFence::Signaled(obj)));
-    }
-    /// must be coherent with background API
-    unsafe fn unsignal(&mut self) {
-        let obj = std::ptr::read(match self { StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _ });
-        forget(replace(self, StateFence::Unsignaled(obj)));
-    }
-
-    pub fn wait(&mut self) -> br::Result<()> {
-        if let StateFence::Signaled(ref f) = *self { f.wait()?; f.reset()?; }
-        unsafe { self.unsignal(); } return Ok(());
-    }
-
-    pub fn object(&self) -> &br::Fence {
-        match *self { StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f }
-    }
 }

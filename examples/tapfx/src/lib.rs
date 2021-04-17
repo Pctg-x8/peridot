@@ -123,7 +123,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .expect("Failed to create GraphicsPipeline");
         let pipeline = peridot::LayoutedPipeline::combine(pipeline, &pl);
 
-        let main_image_data: peridot::PNG = e.load("images.peridot_default_tapfx_circle")
+        let main_image_data: peridot_image::PNG = e.load("images.peridot_default_tapfx_circle")
             .expect("Failed to load main_image_data");
         let mut tig = peridot::TextureInitializationGroup::new(e.graphics());
         tig.add(main_image_data);
@@ -178,7 +178,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         ).expect("Failed to allocate render commands");
         for (b, fb) in main_commands.iter().zip(&framebuffers) {
             let mut rec = b.begin().expect("Failed to begin recording main commands");
-            rec.begin_render_pass(&renderpass, fb, scissors[0].clone(), &[br::ClearValue::Color([0.0; 4])], true);
+            rec.begin_render_pass(&renderpass, fb, scissors[0].clone(), &[br::ClearValue::color([0.0; 4])], true);
             pipeline.bind(&mut rec);
             rec.bind_graphics_descriptor_sets(0, &descriptors[..], &[]);
             rec.bind_vertex_buffers(0, &[(&buffers.buffer.0, vertex_start as _)]);

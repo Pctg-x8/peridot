@@ -31,6 +31,7 @@ void handle_keymod_up(GameRun* engineptr, uint8_t code);
 
 void handle_mouse_button_down(GameRun* engineptr, uint8_t index);
 void handle_mouse_button_up(GameRun* engineptr, uint8_t index);
+void report_mouse_move_abs(GameRun* engineptr, float x, float y);
 
 void* captionbar_text();
 

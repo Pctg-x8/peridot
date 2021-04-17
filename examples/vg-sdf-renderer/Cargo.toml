@@ -1,0 +1,19 @@
+[package]
+name = "vg-sdf-renderer"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = []
+use-freetype = ["peridot-vg/use-freetype"]
+use-fontconfig = ["peridot-vg/use-fontconfig"]
+
+[dependencies]
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+peridot = { path = "../.." }
+peridot-vg = { path = "../../vg" }
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-derive = { path = "../../derive" }

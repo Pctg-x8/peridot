@@ -91,7 +91,7 @@ impl Camera {
         let basedir = Vector3(0.0f32, 0.0, 1.0);
         
         let axis = basedir.cross(&eyedir).normalize();
-        let angle = basedir.dot(&eyedir).acos();
+        let angle = basedir.dot(eyedir).acos();
         self.rotation = Quaternion::new(-angle, axis);
     }
 }

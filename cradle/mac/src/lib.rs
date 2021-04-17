@@ -9,13 +9,14 @@ use peridot::{EngineEvents, FeatureRequests};
 use std::io::{Result as IOResult, Error as IOError, ErrorKind};
 use std::io::Cursor;
 use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 struct NSLogger;
 impl log::Log for NSLogger
 {
     fn log(&self, record: &log::Record)
     {
-        // if self.enabled(record.metadata())
+        if self.enabled(record.metadata())
         {
             unsafe
             {
@@ -234,7 +235,8 @@ type Engine = peridot::Engine<NativeLink>;
 pub struct GameDriver
 {
     engine: Engine,
-    usercode: Game
+    usercode: Game,
+    nae: NativeAudioEngine
 }
 impl GameDriver
 {
@@ -245,8 +247,11 @@ impl GameDriver
         let usercode = Game::init(&mut engine);
         let nih = Box::new(NativeInputHandler::new(rt_view));
         engine.input_mut().set_nativelink(nih);
+        let mut nae = NativeAudioEngine::init();
+        nae.start(engine.audio_mixer().clone());
+        engine.postinit();
 
-        GameDriver { engine, usercode }
+        GameDriver { engine, usercode, nae }
     }
 
     fn update(&mut self)
@@ -296,6 +301,124 @@ pub extern "C" fn captionbar_text() -> *mut c_void
 {
     NSString::from_str(&format!("{} v{}.{}.{}", Game::NAME, Game::VERSION.0, Game::VERSION.1, Game::VERSION.2))
         .expect("CaptionbarText NSString Allocation").into_id() as *mut _
+}
+
+pub struct OutputAU(appkit::AudioUnit);
+impl OutputAU
+{
+    fn new() -> Self
+    {
+        unsafe
+        {
+            let d = appkit::AudioComponentDescription
+            {
+                component_type: appkit::kAudioUnitType_Output,
+                component_subtype: appkit::kAudioUnitSubType_DefaultOutput,
+                component_manufacturer: appkit::kAudioUnitManufacturer_Apple,
+                component_flags: 0, component_flags_mask: 0
+            };
+
+            let c = appkit::AudioComponentFindNext(std::ptr::null_mut(), &d);
+            if c.is_null() { panic!("No output audio component found"); }
+            let mut au = std::mem::MaybeUninit::uninit();
+            if appkit::AudioComponentInstanceNew(c, au.as_mut_ptr()) != 0
+            {
+                panic!("AudioComponentInstanceNew failed");
+            }
+            let au = au.assume_init();
+            appkit::AudioUnitInitialize(au);
+
+            OutputAU(au)
+        }
+    }
+
+    fn set_stream_format(&self, format: &appkit::AudioStreamBasicDescription)
+    {
+        unsafe
+        {
+            let r = appkit::AudioUnitSetProperty(self.0,
+                appkit::kAudioUnitProperty_StreamFormat, appkit::kAudioUnitScope_Input,
+                0, format as *const _ as *const _, std::mem::size_of::<appkit::AudioStreamBasicDescription>() as _);
+            if r != 0 { panic!("Setting StreamFormat Failed: {}", r); }
+        }
+    }
+    fn set_render_callback(&self, callback: appkit::AURenderCallback, context: *mut c_void)
+    {
+        let cb = appkit::AURenderCallbackStruct { input_proc: callback, input_proc_ref_con: context };
+
+        unsafe
+        {
+            appkit::AudioUnitSetProperty(self.0, appkit::kAudioUnitProperty_SetRenderCallback,
+                appkit::kAudioUnitScope_Input, 0, &cb as *const _ as *const _,
+                std::mem::size_of::<appkit::AURenderCallbackStruct>() as _);
+        }
+    }
+    fn start(&self)
+    {
+        unsafe { appkit::AudioOutputUnitStart(self.0); }
+    }
+}
+impl Drop for OutputAU
+{
+    fn drop(&mut self)
+    {
+        unsafe { appkit::AudioComponentInstanceDispose(self.0); }
+    }
+}
+
+pub struct NativeAudioEngine
+{
+    output: OutputAU, amixer: Option<Box<Arc<RwLock<peridot::audio::Mixer>>>>
+}
+impl NativeAudioEngine
+{
+    fn init() -> Self
+    {
+        let output = OutputAU::new();
+
+        let af = appkit::AudioStreamBasicDescription
+        {
+            sample_rate: 44100.0,
+            format_id: appkit::kAudioFormatLinearPCM,
+            format_flags: appkit::kAudioFormatFlagIsFloat,
+            bits_per_channel: 32,
+            channels_per_frame: 2,
+            bytes_per_frame: 2 * 4,
+            frames_per_packet: 1,
+            bytes_per_packet: 2 * 4 * 1,
+            _reserved: 0
+        };
+        output.set_stream_format(&af);
+
+        NativeAudioEngine { output, amixer: None }
+    }
+    fn start(&mut self, mixer: Arc<RwLock<peridot::audio::Mixer>>)
+    {
+        let bptr = Box::into_raw(Box::new(mixer));
+        self.amixer = Some(unsafe { Box::from_raw(bptr) });
+        self.output.set_render_callback(Self::render as _, bptr as *mut _);
+        self.output.start();
+        self.amixer.as_ref().expect("no audio?").write().expect("Poisoning Audio").start();
+    }
+
+    extern "C" fn render(in_ref_con: *mut c_void,
+        _io_action_flags: *mut appkit::AudioUnitRenderActionFlags,
+        _in_time_stamp: *const appkit::AudioTimeStamp,
+        _in_bus_number: u32,
+        in_number_frames: u32,
+        io_data: *mut appkit::AudioBufferList) -> appkit::OSStatus
+    {
+        let ctx = unsafe { &mut *(in_ref_con as *mut Arc<RwLock<peridot::audio::Mixer>>) };
+        let bufptr = unsafe
+        {
+            std::slice::from_raw_parts_mut((*io_data).buffers[0].data as *mut f32,
+                (*io_data).buffers[0].number_channels as usize * in_number_frames as usize)
+        };
+        for v in bufptr.iter_mut() { *v = 0.0; }
+        ctx.write().expect("Processing WriteLock").process(bufptr);
+        // trace!("render callback! {:?} {}", unsafe { &(*io_data).buffers[0] }, in_number_frames);
+        0
+    }
 }
 
 #[no_mangle]
@@ -377,4 +500,13 @@ pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
 #[no_mangle]
 pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
     unsafe { (*g).engine.input().dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false); }
+}
+
+#[no_mangle]
+pub extern "C" fn report_mouse_move_abs(g: *mut GameDriver, x: f32, y: f32) {
+    unsafe {
+        let scale = nsscreen_backing_scale_factor();
+        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x * scale, true);
+        (*g).engine.input().dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
+    }
 }
