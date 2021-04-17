@@ -6,3 +6,4 @@ src/userlib
 src/userlib.rs
 Cargo.toml
 /.cargo/
+/assets

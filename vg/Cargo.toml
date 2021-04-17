@@ -2,15 +2,38 @@
 name = "peridot-vg"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+[features]
+default = []
+use-freetype = ["freetype2"]
+use-fontconfig = ["fontconfig"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = ".." }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
-# 0.3.1のコミットに合わせる
-font-kit = { git = "https://github.com/pcwalton/font-kit", rev = "e54e9d9546f59dab0ae7d91db052908773488edd" }
 lyon_path = "0.12"
+lyon_geom = "0.12"
 euclid = "0.19"
+log = "*"
+libc = "0.2"
 
 [target.'cfg(target_os="macos")'.dependencies]
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
+
+[target.'cfg(target_os="android")'.dependencies]
+android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
+
+[target.'cfg(target_os="windows")'.dependencies]
+comdrive = { git = "https://github.com/Pctg-x8/comdrive" }
+winapi = { version = "0.3", features = ["unknwnbase", "d2d1"] }
+libc = "0.2"
+
+[dependencies.freetype2]
+git = "https://github.com/Pctg-x8/ft2-rs"
+optional = true
+
+[dependencies.fontconfig]
+git = "https://github.com/Pctg-x8/fc-rs"
+optional = true

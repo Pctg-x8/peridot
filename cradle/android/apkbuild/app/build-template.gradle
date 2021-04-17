@@ -1,6 +1,6 @@
 apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android-extensions'
 apply plugin: "kotlin-android"
+apply plugin: 'kotlin-android-extensions'
 
 android {
     compileSdkVersion = 28
@@ -8,7 +8,7 @@ android {
     defaultConfig {
         applicationId = **APKAPPID**
         minSdkVersion 16
-        targetSdkVersion 28
+        targetSdkVersion System.getenv("NDK_PLATFORM_TARGET")
         buildToolsVersion "28.0.3"
         externalNativeBuild.cmake {
             arguments '-DANDROID_STL=c++_shared'
@@ -23,7 +23,7 @@ android {
     sourceSets.main {
         java.srcDirs = ["src/main"]
         jniLibs.srcDir System.getenv("NDK_HOME") + '/sources/third_party/vulkan/src/build-android/jniLibs'
-        assets.srcDir '**ASSETDIR**'
+        assets.srcDir '../../assets'
     }
 }
 dependencies {

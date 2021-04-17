@@ -9,7 +9,7 @@
       android:fullBackupContent="false"
       android:label="@string/app_name">
     <activity
-        android:name="com.cterm2.peridot.NativeActivity"
+        android:name="jp.ct2.peridot.NativeActivity"
         android:theme="@style/st">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />

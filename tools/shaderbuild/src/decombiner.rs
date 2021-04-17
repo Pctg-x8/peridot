@@ -295,6 +295,16 @@ impl<'s> BindingBlock<'s>
                     let offs = align2(total, align_of::<f32>());
                     total = offs + size_of::<f32>();
                 },
+                "uint" =>
+                {
+                    let offs = align2(total, align_of::<u32>());
+                    total = offs + size_of::<u32>();
+                },
+                "int" =>
+                {
+                    let offs = align2(total, align_of::<u32>());
+                    total = offs + size_of::<u32>();
+                },
                 "ivec4" =>
                 {
                     let offset = align2(total, align_of::<[i32; 4]>());
@@ -767,6 +777,26 @@ impl<'s> CombinedShader<'s>
                             offset: offs_in_binding as _
                         });
                         offs_in_binding = align2(offs_in_binding + size_of::<f32>(), align_of::<f32>());
+                    },
+                    "uint" =>
+                    {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription
+                        {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R32_UINT,
+                            offset: offs_in_binding as _
+                        });
+                        offs_in_binding = align2(offs_in_binding + size_of::<u32>(), align_of::<u32>());
+                    },
+                    "int" =>
+                    {
+                        attrs.push(br::vk::VkVertexInputAttributeDescription
+                        {
+                            location: (location_offs + loc_offs) as _,
+                            binding: binding as _, format: br::vk::VK_FORMAT_R32_SINT,
+                            offset: offs_in_binding as _
+                        });
+                        offs_in_binding = align2(offs_in_binding + size_of::<i32>(), align_of::<i32>());
                     },
                     "ivec4" =>
                     {

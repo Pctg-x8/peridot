@@ -85,13 +85,18 @@ impl<'d> PvpShaderModules<'d>
             vertex_spec_constants: None, fragment_spec_constants: None
         })
     }
-    pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d>
-    {
+    pub fn generate_vps(&'d self, primitive_topo: br::vk::VkPrimitiveTopology) -> br::VertexProcessingStages<'d> {
+        let bindings = unsafe {
+            // Transparentなのでok
+            std::slice::from_raw_parts(
+                self.bindings.as_ptr() as *const br::VertexInputBindingDescription, self.bindings.len()
+            )
+        };
         let mut r = br::VertexProcessingStages::new(br::PipelineShader
         {
             module: &self.vertex, entry_name: CString::new("main").expect("unreachable"),
             specinfo: self.vertex_spec_constants.as_ref().map(|(e, d)| (Cow::Borrowed(&e[..]), d.clone()))
-        }, &self.bindings, &self.attributes, primitive_topo);
+        }, bindings, &self.attributes, primitive_topo);
         if let Some(ref f) = self.fragment
         {
             r.fragment_shader(br::PipelineShader

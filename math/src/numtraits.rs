@@ -25,3 +25,13 @@ impl One for u64 { const ONE: Self = 1; }
 impl One for i64 { const ONE: Self = 1; }
 impl One for f32 { const ONE: Self = 1.0; }
 impl One for f64 { const ONE: Self = 1.0; }
+
+/// Provides minimum value selector
+pub trait Min<Other = Self> { type Output; fn min(self, other: Other) -> Self::Output; }
+/// Provides maximum value selector
+pub trait Max<Other = Self> { type Output; fn max(self, other: Other) -> Self::Output; }
+
+impl Min for f32 { type Output = f32; fn min(self, other: f32) -> f32 { self.min(other) } }
+impl Min for f64 { type Output = f64; fn min(self, other: f64) -> f64 { self.min(other) } }
+impl Max for f32 { type Output = f32; fn max(self, other: f32) -> f32 { self.max(other) } }
+impl Max for f64 { type Output = f64; fn max(self, other: f64) -> f64 { self.max(other) } }

@@ -1,58 +1,247 @@
 
-use std::rc::Rc;
-use std::mem::replace;
 use std::cell::RefCell;
+use std::collections::HashMap;
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+/// Digital(Buttons) Input
+pub enum NativeButtonInput {
+    /// Keyboard Character(Case insensitive, cradles must pass with uppercase characters)
+    Character(char),
+    UpArrow, DownArrow, LeftArrow, RightArrow,
+    Esc, Enter, Backspace, Space, LeftShift, RightShift, LeftControl, RightControl, LeftMeta, RightMeta,
+    LeftAlt, RightAlt, CapsLock, Kana, Alphabet, ZenkakuHankaku, FunctionKey(u8),
+    /// DUALSHOCK equivalent is ○
+    ButtonA,
+    /// DUALSHOCK equivalent is ×
+    ButtonB,
+    ButtonC,
+    ButtonD,
+    /// DUALSHOCK equivalent is △
+    ButtonX,
+    /// DUALSHOCK equivalent is □
+    ButtonY,
+    ButtonStart,
+    ButtonSelect,
+    ButtonMeta,
+    /// DUALSHOCK equivalent is L1(L2 will be simulated as NativeAnalogInput::LeftTrigger(1.0))
+    ButtonL,
+    /// DUALSHOCK equivalent is R1(R2 will be simulated as NativeAnalogInput::RightTrigger(1.0))
+    ButtonR,
+    /// Stick Index
+    Stick(u32),
+    /// Mouse Button(0 = Left, 1 = Right, 2 = Center, 3.. = Other)
+    Mouse(u32),
+    /// Touch with ID
+    Touch(u32),
+    POVLeft, POVRight, POVUp, POVDown
+}
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+/// Analog(Motions) Input
+pub enum NativeAnalogInput {
+    MouseX,
+    MouseY,
+    ScrollWheel,
+    /// MacBook specific: Magnification gesture
+    Magnify,
+    /// Stick Index(0 = Left, 1 = Right, 2.. = Other)
+    StickX(u32),
+    /// Stick Index(0 = Left, 1 = Right, 2.. = Other)
+    StickY(u32),
+    /// Stick Index(0 = Left, 1 = Right, 2.. = Other)
+    StickZ(u32),
+    /// Xbox controller specific
+    LeftTrigger,
+    /// Xbox controller specific
+    RightTrigger,
+    /// Touch x position Move with ID
+    TouchMoveX(u32),
+    /// Touch y position Move with ID
+    TouchMoveY(u32)
+}
+
+pub trait MappableNativeInputType {
+    type ID;
+
+    fn map_to(&self, p: &mut InputProcess, id: Self::ID);
+}
+impl MappableNativeInputType for NativeButtonInput {
+    type ID = u16;
+
+    fn map_to(&self, p: &mut InputProcess, id: u16) {
+        p.buttonmap.insert(*self, id);
+        p.max_button_id = p.max_button_id.max(id);
+        if p.collected.borrow().button_pressing.len() != p.max_button_id as usize + 1 {
+            p.collected.borrow_mut().button_pressing.resize(p.max_button_id as usize + 1, false);
+        }
+    }
+}
+impl MappableNativeInputType for NativeAnalogInput {
+    type ID = u8;
+
+    fn map_to(&self, p: &mut InputProcess, id: u8) {
+        p.analogmap.insert(*self, id);
+        p.max_analog_id = p.max_analog_id.max(id);
+        if p.collected.borrow().analog_values.len() != p.max_analog_id as usize + 1 {
+            p.collected.borrow_mut().analog_values.resize(p.max_analog_id as usize + 1, 0.0);
+        }
+    }
+}
+
+/// Represents key input pair as emulated as axis input
+pub struct AxisKey {
+    pub positive_key: NativeButtonInput,
+    pub negative_key: NativeButtonInput
+}
+impl MappableNativeInputType for AxisKey {
+    type ID = <NativeAnalogInput as MappableNativeInputType>::ID;
+
+    fn map_to(&self, p: &mut InputProcess, id: Self::ID) {
+        p.ax_pos_buttonmap.insert(self.positive_key, id);
+        p.ax_neg_buttonmap.insert(self.negative_key, id);
+        p.max_analog_id = p.max_analog_id.max(id);
+        if p.collected.borrow().analog_values.len() != p.max_analog_id as usize + 1 {
+            p.collected.borrow_mut().ax_button_pressing.resize(p.max_analog_id as usize + 1, (false, false));
+            p.collected.borrow_mut().analog_values.resize(p.max_analog_id as usize + 1, 0.0);
+        }
+    }
+}
+
+type InputMap<T> = HashMap<T, <T as MappableNativeInputType>::ID>;
+
+pub trait NativeInput {
+    fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)>;
+
+    #[allow(unused_variables)]
+    fn pull(&self, p: &InputProcess) {}
+}
 
 const MAX_MOUSE_BUTTONS: usize = 5;
-struct AsyncCollectedData
-{
-    mouse_motion_x: isize, mouse_motion_y: isize, mouse_wheel_motion: isize, mouse_button: [bool; MAX_MOUSE_BUTTONS]
+struct AsyncCollectedData {
+    button_pressing: Vec<bool>,
+    ax_button_pressing: Vec<(bool, bool)>,
+    analog_values: Vec<f32>
 }
 #[derive(Debug)]
-struct FrameData
-{
-    mouse_motion_x: isize, mouse_motion_y: isize, mouse_wheel_motion: isize, mouse_pressing: [bool; MAX_MOUSE_BUTTONS],
-    mouse_down_inframe: [bool; MAX_MOUSE_BUTTONS], mouse_up_inframe: [bool; MAX_MOUSE_BUTTONS]
+struct FrameData {
+    mouse_motion_x: f32, mouse_motion_y: f32, mouse_wheel_motion: f32, mouse_pressing: [bool; MAX_MOUSE_BUTTONS],
+    mouse_down_inframe: [bool; MAX_MOUSE_BUTTONS], mouse_up_inframe: [bool; MAX_MOUSE_BUTTONS],
+    button_press_time: Vec<std::time::Duration>,
+    analog_values_abs: Vec<f32>
 }
-pub struct InputProcess
-{
-    collected: RefCell<AsyncCollectedData>, frame: RefCell<FrameData>
+pub struct InputProcess {
+    nativelink: Option<Box<dyn NativeInput>>,
+    collected: RefCell<AsyncCollectedData>, frame: RefCell<FrameData>,
+    buttonmap: InputMap<NativeButtonInput>,
+    analogmap: InputMap<NativeAnalogInput>,
+    ax_pos_buttonmap: HashMap<NativeButtonInput, <NativeAnalogInput as MappableNativeInputType>::ID>,
+    ax_neg_buttonmap: HashMap<NativeButtonInput, <NativeAnalogInput as MappableNativeInputType>::ID>,
+    max_button_id: <NativeButtonInput as MappableNativeInputType>::ID,
+    max_analog_id: <NativeAnalogInput as MappableNativeInputType>::ID
 }
-pub trait InputProcessPlugin
-{
-    fn on_start_handle(&mut self, processor: &Rc<InputProcess>);
-}
-impl InputProcess
-{
-    pub fn new() -> Self
-    {
-        let cd = AsyncCollectedData
-        {
-            mouse_motion_x: 0, mouse_motion_y: 0, mouse_wheel_motion: 0, mouse_button: [false; MAX_MOUSE_BUTTONS]
+impl InputProcess {
+    pub fn new() -> Self {
+        let cd = AsyncCollectedData {
+            button_pressing: Vec::new(),
+            ax_button_pressing: Vec::new(),
+            analog_values: Vec::new()
         };
-        let fd = FrameData
-        {
-            mouse_motion_x: 0, mouse_motion_y: 0, mouse_wheel_motion: 0, mouse_pressing: [false; MAX_MOUSE_BUTTONS],
-            mouse_down_inframe: [false; MAX_MOUSE_BUTTONS], mouse_up_inframe: [false; MAX_MOUSE_BUTTONS]
+        let fd = FrameData {
+            mouse_motion_x: 0.0, mouse_motion_y: 0.0, mouse_wheel_motion: 0.0,
+            mouse_pressing: [false; MAX_MOUSE_BUTTONS],
+            mouse_down_inframe: [false; MAX_MOUSE_BUTTONS], mouse_up_inframe: [false; MAX_MOUSE_BUTTONS],
+            button_press_time: Vec::new(),
+            analog_values_abs: Vec::new()
         };
 
-        return InputProcess { collected: cd.into(), frame: fd.into() };
+        return InputProcess {
+            nativelink: None,
+            collected: cd.into(), frame: fd.into(),
+            buttonmap: HashMap::new(),
+            analogmap: HashMap::new(),
+            ax_pos_buttonmap: HashMap::new(),
+            ax_neg_buttonmap: HashMap::new(),
+            max_button_id: 0,
+            max_analog_id: 0
+        };
     }
-    pub fn dispatch_message<M: InputMessage>(&self, msg: M) { msg.process(self); }
-    pub fn prepare_for_frame(&self)
-    {
+    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput>) {
+        self.nativelink = Some(n);
+    }
+
+    /// Cradle to Engine: Native Event Handler
+    pub fn dispatch_button_event(&self, msg: NativeButtonInput, is_press: bool) {
+        if let Some(&target_button_id) = self.buttonmap.get(&msg) {
+            self.collected.borrow_mut().button_pressing[target_button_id as usize] = is_press;
+        }
+        if let Some(&target_ax_button_id) = self.ax_pos_buttonmap.get(&msg) {
+            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].0 = is_press;
+        }
+        if let Some(&target_ax_button_id) = self.ax_neg_buttonmap.get(&msg) {
+            self.collected.borrow_mut().ax_button_pressing[target_ax_button_id as usize].1 = is_press;
+        }
+    }
+    /// Cradle to Engine: Native Event Handler
+    pub fn dispatch_analog_event(&self, ty: NativeAnalogInput, value: f32, is_absolute: bool) {
+        if let Some(&target_analog_id) = self.analogmap.get(&ty) {
+            if is_absolute {
+                self.collected.borrow_mut().analog_values[target_analog_id as usize] = value;
+            } else {
+                self.collected.borrow_mut().analog_values[target_analog_id as usize] += value;
+            }
+        }
+    }
+    
+    pub fn prepare_for_frame(&self, delta_time: std::time::Duration) {
+        if let Some(ref p) = self.nativelink { p.pull(self); }
+        
         let mut cd = self.collected.borrow_mut();
         let mut fd = self.frame.borrow_mut();
 
-        fd.mouse_motion_x = replace(&mut cd.mouse_motion_x, 0);
-        fd.mouse_motion_y = replace(&mut cd.mouse_motion_y, 0);
-        fd.mouse_wheel_motion = replace(&mut cd.mouse_wheel_motion, 0);
-        for n in 0 .. 5
-        {
-            fd.mouse_up_inframe[n] = fd.mouse_pressing[n] && !cd.mouse_button[n];
-            fd.mouse_down_inframe[n] = !fd.mouse_pressing[n] && cd.mouse_button[n];
-            fd.mouse_pressing[n] = cd.mouse_button[n];
+        // Adjust slot size
+        if cd.button_pressing.len() != fd.button_press_time.len() {
+            fd.button_press_time.resize(cd.button_pressing.len(), std::time::Duration::default());
         }
+        if cd.analog_values.len() != fd.analog_values_abs.len() {
+            fd.analog_values_abs.resize(cd.analog_values.len(), 0.0);
+        }
+
+        for (n, f) in cd.button_pressing.iter_mut().enumerate() {
+            if *f {
+                fd.button_press_time[n] += delta_time;
+            } else {
+                fd.button_press_time[n] = std::time::Duration::default();
+            }
+        }
+        let &mut AsyncCollectedData { ref analog_values, ref mut ax_button_pressing, .. } = &mut *cd;
+        for (n, (&a, f)) in analog_values.iter().zip(ax_button_pressing.iter_mut()).enumerate() {
+            let (pos, neg) = *f;
+            fd.analog_values_abs[n] = a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
+        }
+        // ax_button_pressingがない分
+        if analog_values.len() > ax_button_pressing.len() {
+            for (n, &a) in analog_values.iter().enumerate().skip(ax_button_pressing.len()) {
+                fd.analog_values_abs[n] = a;
+            }
+        }
+        // analog_valuesがない分
+        if ax_button_pressing.len() > analog_values.len() {
+            for (n, &(pos, neg)) in ax_button_pressing.iter().enumerate().skip(analog_values.len()) {
+                fd.analog_values_abs[n] = (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
+            }
+        }
+    }
+
+    /// Map native input event with id
+    pub fn map<T: MappableNativeInputType>(&mut self, from: T, id: T::ID) {
+        from.map_to(self, id)
+    }
+    /// Get button pressing time by id
+    pub fn button_pressing_time(&self, id: u16) -> std::time::Duration {
+        self.frame.borrow().button_press_time.get(id as usize).copied().unwrap_or_default()
+    }
+    /// Get Analog input absolute value by id
+    pub fn analog_value_abs(&self, id: u8) -> f32 {
+        self.frame.borrow().analog_values_abs.get(id as usize).copied().unwrap_or(0.0)
     }
 
     // Mouse/Touch integrated apis
@@ -64,7 +253,7 @@ impl InputProcess
     {
         self.frame.borrow().mouse_pressing[0]
     }
-    pub fn plane_delta_move(&self) -> (isize, isize)
+    pub fn plane_delta_move(&self) -> (f32, f32)
     {
         (self.frame.borrow().mouse_motion_x, self.frame.borrow().mouse_motion_y)
     }
@@ -81,46 +270,13 @@ impl InputProcess
     {
         if knum >= MAX_MOUSE_BUTTONS { false } else { self.frame.borrow().mouse_pressing[knum] }
     }
-    pub fn mouse_delta_move(&self) -> (isize, isize)
+    pub fn mouse_delta_move(&self) -> (f32, f32)
     {
         (self.frame.borrow().mouse_motion_x, self.frame.borrow().mouse_motion_y)
     }
-}
 
-pub trait InputMessage: Sized
-{
-    fn process(self, processor: &InputProcess);
-}
-
-pub enum MouseInputMessage
-{
-    ButtonDown(usize), ButtonUp(usize), MoveRel(isize, isize), Wheel(isize)
-}
-impl InputMessage for MouseInputMessage
-{
-    fn process(self, processor: &InputProcess)
-    {
-        match self
-        {
-            MouseInputMessage::ButtonDown(x @ 0 ..= 4) =>
-            {
-                processor.collected.borrow_mut().mouse_button[x] = true;
-            },
-            MouseInputMessage::ButtonDown(x) => trace!("MouseButton #{} Pressing", x),
-            MouseInputMessage::ButtonUp(x @ 0 ..= 4) =>
-            {
-                processor.collected.borrow_mut().mouse_button[x] = false;
-            },
-            MouseInputMessage::ButtonUp(x) => trace!("MouseButton #{} Released", x),
-            MouseInputMessage::MoveRel(x, y) =>
-            {
-                processor.collected.borrow_mut().mouse_motion_x += x;
-                processor.collected.borrow_mut().mouse_motion_y += y;
-            },
-            MouseInputMessage::Wheel(a) =>
-            {
-                processor.collected.borrow_mut().mouse_wheel_motion += a;
-            }
-        }
+    /// Gets plane interacting position. pointer_id=0 means Generic Mouse Input
+    pub fn get_plane_position(&self, pointer_id: u32) -> Option<(f32, f32)> {
+        self.nativelink.as_ref()?.get_pointer_position(pointer_id)
     }
 }
