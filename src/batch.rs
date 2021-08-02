@@ -76,6 +76,16 @@ impl TransferBatch {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.barrier_range_src.clear();
+        self.barrier_range_dst.clear();
+        self.org_layout_src.clear();
+        self.org_layout_dst.clear();
+        self.copy_buffers.clear();
+        self.init_images.clear();
+        self.ready_barriers.clear();
+    }
+
     /// Add copying operation between buffers.
     pub fn add_copying_buffer(
         &mut self, src: crate::DeviceBufferView, dst: crate::DeviceBufferView, bytes: br::vk::VkDeviceSize
