@@ -9,7 +9,7 @@ test_or_check() {
     if `/find-test-code.sh`; then echo "test"; else echo "check"; fi
 }
 run_test() {
-    if $(find . -name ci-test.sh | grep .); then ./ci-test.sh; else cargo `test_or_check` --verbose; fi
+    if $(find . -name ci-test.sh | grep .); then ./ci-test.sh; else cargo `test_or_check` --verbose --message-format=json | /cargo-json-gha-translator; fi
 }
 
 for c in */Cargo.toml; do
