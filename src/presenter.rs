@@ -172,7 +172,7 @@ impl IntegratedSwapchain {
             cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
             render_submission.wait_semaphores.to_mut().extend(vec![
                 (&self.rendering_order, br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT),
-                (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT)
+                (&self.buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT),
             ]);
             render_submission.signal_semaphores.to_mut().push(&self.present_order);
             g.submit_buffered_commands(&[cs, render_submission], last_render_fence)
