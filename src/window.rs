@@ -9,7 +9,7 @@ pub struct SurfaceInfo {
 impl SurfaceInfo {
     pub fn gather_info(pd: &br::PhysicalDevice, obj: br::Surface) -> br::Result<Self> {
         let mut fmq = br::FormatQueryPred::default();
-        fmq.bit(32).components(br::FormatComponents::RGBA).elements(br::ElementType::SRGB);
+        fmq.bit(32).components(br::FormatComponents::RGBA).elements(br::ElementType::UNORM);
         let fmt = pd.surface_formats(&obj)?.into_iter().find(|sf| fmq.satisfy(sf.format))
             .expect("No suitable format found");
         let pres_modes = pd.surface_present_modes(&obj)?;

@@ -26,7 +26,7 @@ Header[FragmentShader] {
     // From precompute_common.comp
     const float H_ATM = 80000;
     const float R_EARTH = 6371000;
-    const vec3 RayleighCoeffs = vec3(6.55e-6, 1.73e-5, 2.30e-5);
+    const vec3 RayleighCoeffs = vec3(6.55e-6, 1.23e-5, 2.30e-5);
     const vec3 MieCoeffs = vec3(2e-6, 2e-6, 2e-6);
     const vec3 TransmittanceMieCoeffs = MieCoeffs / 0.9;
 
@@ -93,7 +93,7 @@ FragmentShader {
     const vec3 viewvec = normalize((main_view * vec4((2.0 * uv.x - 1.0) * aspect_wh, -(2.0 * uv.y - 1.0), zd, 0.0)).xyz);
     const float cv = dot(viewvec, vec3(0.0, 1.0, 0.0));
     const float camHeight = (main_view * vec4(0.0, 0.0, 0.0, 1.0)).y;
-    const vec3 incidentLightDir = normalize(vec3(0.0, -0.1, -0.8));
+    const vec3 incidentLightDir = normalize(vec3(0.0, -0.6, -0.8));
     const float cs = dot(-incidentLightDir, vec3(0.0, 1.0, 0.0));
     const float vs_cos = dot(incidentLightDir, -viewvec);
 

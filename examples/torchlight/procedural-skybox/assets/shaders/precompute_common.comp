@@ -1,7 +1,7 @@
 
 const float H_ATM = 80000;
 const float R_EARTH = 6371000;
-const vec3 RayleighCoeffs = vec3(6.55e-6, 1.73e-5, 2.30e-5);
+const vec3 RayleighCoeffs = vec3(6.55e-6, 1.23e-5, 2.30e-5);
 const vec3 MieCoeffs = vec3(2.0e-6, 2.0e-6, 2.0e-6);
 const vec3 TransmittanceMieCoeffs = MieCoeffs / 0.9;
 
