@@ -6,4 +6,4 @@ RUN curl -o /cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-
 ADD entrypoint.sh /
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["bash", "-o", "pipefail", "-c", "/entrypoint.sh 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"]
+ENTRYPOINT ["/entrypoint.sh"]
