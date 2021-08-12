@@ -1,6 +1,7 @@
 //! Platform Presenter(Swapchain Abstraction)
 
 use bedrock as br;
+use br::VkHandle;
 use std::rc::Rc;
 
 pub trait PlatformPresenter {
@@ -21,8 +22,8 @@ pub trait PlatformPresenter {
         update_submission: Option<br::SubmissionBatch<'s>>
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for backbuffer resources
-    fn resize(&mut self, g: &crate::Graphics, new_size: math::Vector2<usize>) -> bool;
-    fn current_geometry_extent(&self) -> math::Vector2<usize>;
+    fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
+    fn current_geometry_extent(&self) -> peridot_math::Vector2<usize>;
 }
 
 struct IntegratedSwapchainObject {
@@ -30,10 +31,14 @@ struct IntegratedSwapchainObject {
     backbuffer_images: Vec<Rc<br::ImageView>>
 }
 impl IntegratedSwapchainObject {
-    pub fn new(g: &crate::Graphics, surface_info: &crate::SurfaceInfo, default_extent: math::Vector2<usize>) -> Self {
+    pub fn new(
+        g: &crate::Graphics, surface_info: &crate::SurfaceInfo, default_extent: peridot_math::Vector2<usize>
+    ) -> Self {
         let si = g.adapter.surface_capabilities(&surface_info.obj).expect("Failed to query Surface Capabilities");
         let ew = if si.currentExtent.width == 0xffff_ffff { default_extent.0 as _ } else { si.currentExtent.width };
         let eh = if si.currentExtent.height == 0xffff_ffff { default_extent.1 as _ } else { si.currentExtent.height };
+        let ew = ew.max(si.minImageExtent.width).min(si.maxImageExtent.width);
+        let eh = eh.max(si.minImageExtent.height).min(si.maxImageExtent.height);
         let ext = br::Extent2D(ew, eh);
         let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
         let pre_transform =
@@ -50,14 +55,30 @@ impl IntegratedSwapchainObject {
         .pre_transform(pre_transform)
         .create(&g.device)
         .expect("Failed to create Swapchain");
+        #[cfg(feature = "debug")]
+        chain.set_name(Some(unsafe {
+            std::ffi::CStr::from_bytes_with_nul_unchecked(b"Peridot-Default Presentor-Swapchain\0")
+        })).expect("Failed to set swapchain name");
         
         let isr_c0 = br::ImageSubresourceRange::color(0, 0);
-        let backbuffer_images = chain.get_images().expect("Failed to get backbuffer images").into_iter()
-            .map(|bb|
-                bb.create_view(None, None, &Default::default(), &isr_c0)
-                    .expect("Failed to create ImageView for Backbuffer")
-                    .into()
+        let backbuffer_images: Vec<Rc<_>> = chain
+            .get_images()
+            .expect("Failed to get backbuffer images")
+            .into_iter()
+            .map(|bb| bb.create_view(None, None, &Default::default(), &isr_c0)
+                .expect("Failed to create ImageView for Backbuffer")
+                .into()
             ).collect();
+        
+        #[cfg(feature = "debug")]
+        for (n, v) in backbuffer_images.iter().enumerate() {
+            v.set_name(
+                Some(
+                    &std::ffi::CString::new(format!("Peridot-Default Presentor-Backbuffer View #{}", n))
+                        .expect("invalid sequence?")
+                )
+            ).expect("Failed to set backbuffer view name");
+        }
         
         IntegratedSwapchainObject { swapchain: chain, backbuffer_images }
     }
@@ -72,15 +93,43 @@ pub struct IntegratedSwapchain {
     present_order: br::Semaphore,
 }
 impl IntegratedSwapchain {
-    pub fn new(g: &crate::Graphics, surface: br::Surface, default_extent: math::Vector2<usize>) -> Self {
+    pub fn new(g: &crate::Graphics, surface: br::Surface, default_extent: peridot_math::Vector2<usize>) -> Self {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, surface).expect("Failed to gather surface info");
+        
+        let rendering_order = br::Semaphore::new(&g.device).expect("Failed to create Rendering Order Semaphore");
+        let buffer_ready_order = br::Semaphore::new(&g.device).expect("Failed to create BufferReady Order Semaphore");
+        let present_order = br::Semaphore::new(&g.device).expect("Failed to create Present Order Semaphore");
+        #[cfg(feature = "debug")]
+        {
+            rendering_order.set_name(
+                Some(unsafe {
+                    std::ffi::CStr::from_bytes_with_nul_unchecked(
+                        b"Peridot-Default Presentor-Rendering Order Semaphore\0"
+                    )
+                })
+            ).expect("Failed to set Rendering Order Semaphore name");
+            buffer_ready_order.set_name(
+                Some(unsafe {
+                    std::ffi::CStr::from_bytes_with_nul_unchecked(
+                        b"Peridot-Default Presentor-BufferReady Order Semaphore\0"
+                    )
+                })
+            ).expect("Failed to set BufferReady Order Semaphore name");
+            present_order.set_name(
+                Some(unsafe {
+                    std::ffi::CStr::from_bytes_with_nul_unchecked(
+                        b"Peridot-Default Presentor-Present Order Semaphore\0"
+                    )
+                })
+            ).expect("Failed to set Present Order Semaphore name");
+        }
         
         IntegratedSwapchain {
             swapchain: crate::Discardable::from(IntegratedSwapchainObject::new(g, &surface_info, default_extent)),
             surface_info,
-            rendering_order: br::Semaphore::new(&g.device).expect("Failed to create Rendering Order Semaphore"),
-            buffer_ready_order: br::Semaphore::new(&g.device).expect("Failed to create BufferReady Order Semaphore"),
-            present_order: br::Semaphore::new(&g.device).expect("Failed to create Present Order Semaphore")
+            rendering_order,
+            buffer_ready_order,
+            present_order
         }
     }
 
@@ -141,7 +190,7 @@ impl IntegratedSwapchain {
         self.swapchain.get().swapchain.queue_present(q, bb_index, &[&self.present_order])
     }
 
-    pub fn resize(&mut self, g: &crate::Graphics, new_size: math::Vector2<usize>) {
+    pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {
         self.swapchain.discard_lw();
         self.swapchain.set_lw(IntegratedSwapchainObject::new(g, &self.surface_info, new_size));
     }

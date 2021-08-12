@@ -9,10 +9,15 @@ use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWA
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::shared::windef::{RECT, HWND};
-use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
+use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD, DWORD};
+use winapi::shared::winerror::{HRESULT, SUCCEEDED};
+use winapi::um::combaseapi::{CoInitializeEx, CoUninitialize};
+use winapi::um::objbase::COINIT_MULTITHREADED;
+use std::io::{Result as IOResult, Error as IOError};
 
 use std::mem::MaybeUninit;
-#[macro_use] extern crate log;
+mod audio; use audio::NativeAudioEngine;
+use log::*;
 mod input;
 mod userlib;
 use peridot::{EngineEvents, FeatureRequests};
@@ -22,10 +27,24 @@ mod presenter; use self::presenter::Presenter;
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
 fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
+pub(crate) fn hr_into_result(hr: HRESULT) -> IOResult<()>
+{
+    if SUCCEEDED(hr) { Ok(()) } else { Err(IOError::from_raw_os_error(hr)) }
+}
+struct CoScopeGuard;
+impl CoScopeGuard
+{
+    fn init(apartment: DWORD) -> IOResult<Self>
+    {
+        unsafe { hr_into_result(CoInitializeEx(std::ptr::null_mut(), apartment)).map(|_| CoScopeGuard) }
+    }
+}
+impl Drop for CoScopeGuard { fn drop(&mut self) { unsafe { CoUninitialize() } } }
 
 pub struct GameDriver {
     base: peridot::Engine<NativeLink>,
     usercode: userlib::Game<NativeLink>,
+    _snd: NativeAudioEngine,
     current_size: peridot::math::Vector2<usize>,
     ri_handler: self::input::RawInputHandler
 }
@@ -43,9 +62,18 @@ impl GameDriver {
         let ri_handler = self::input::RawInputHandler::init();
         base.input_mut().set_nativelink(Box::new(self::input::NativeInputHandler::new(window)));
         base.postinit();
+        let _snd = NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
+    
+        /*let mut ap = PSGSine::new();
+        ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
+        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap)));
+        let mut ap2 = PSGSine::new();
+        ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
+        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap2)));*/
 
-        GameDriver {
-            base, usercode, current_size: init_size, ri_handler
+        GameDriver
+        {
+            base, usercode, _snd, current_size: init_size, ri_handler
         }
     }
 
@@ -59,6 +87,7 @@ impl GameDriver {
 
 fn main() {
     env_logger::init();
+    let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
 
     unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
 
@@ -144,10 +173,13 @@ fn process_message_all() -> bool
     true
 }
 
-use std::rc::Rc;
 use std::path::PathBuf;
 
-struct AssetProvider { base: PathBuf }
+struct AssetProvider {
+    base: PathBuf,
+    #[cfg(feature = "IterationBuild")]
+    builtin_assets_base: PathBuf
+}
 impl AssetProvider
 {
     fn new() -> Self
@@ -159,7 +191,11 @@ impl AssetProvider
             exe.pop(); exe.push("/assets"); exe
         };
         trace!("Asset BaseDirectory={}", base.display());
-        AssetProvider { base }
+        AssetProvider {
+            base,
+            #[cfg(feature = "IterationBuild")]
+            builtin_assets_base: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH"))
+        }
     }
 }
 impl peridot::PlatformAssetLoader for AssetProvider
@@ -169,17 +205,49 @@ impl peridot::PlatformAssetLoader for AssetProvider
 
     fn get(&self, path: &str, ext: &str) -> std::io::Result<Self::Asset>
     {
+        #[allow(unused_mut)]
+        let mut segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if segments.peek().map_or(false, |&s| s == "builtin") {
+            let _ = segments.next();
+
+            let mut p = self.builtin_assets_base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+            log::debug!("Loading Builtin Asset: {:?}", p);
+
+            return std::fs::File::open(&p);
+        }
+
         let mut p = self.base.clone();
-        p.push(path.replace('.', "/"));
+        p.extend(segments);
         p.set_extension(ext);
-        return std::fs::File::open(&p);
+        log::debug!("Loading Asset: {:?}", p);
+
+        std::fs::File::open(&p)
     }
     fn get_streaming(&self, path: &str, ext: &str) -> std::io::Result<Self::StreamingAsset>
     {
+        #[allow(unused_mut)]
+        let mut segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if segments.peek().map_or(false, |&s| s == "builtin") {
+            let _ = segments.next();
+
+            let mut p = self.builtin_assets_base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+
+            return std::fs::File::open(&p);
+        }
+        
         let mut p = self.base.clone();
-        p.push(path.replace('.', "/"));
+        p.extend(segments);
         p.set_extension(ext);
-        return std::fs::File::open(&p);
+
+        std::fs::File::open(&p)
     }
 }
 

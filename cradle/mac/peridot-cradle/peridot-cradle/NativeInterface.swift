@@ -41,6 +41,7 @@ final class NativeGameEngine {
     
     func handleMouseButtonDown(index: UInt8) { handle_mouse_button_down(self.p, index) }
     func handleMouseButtonUp(index: UInt8) { handle_mouse_button_up(self.p, index) }
+    func reportMouseMove(x: Float, y: Float) { report_mouse_move_abs(self.p, x, y) }
     
     static func captionbarText() -> NSString? {
         let p = captionbar_text()

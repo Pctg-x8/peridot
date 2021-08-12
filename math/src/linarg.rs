@@ -1,23 +1,23 @@
 //! PeridotExtendedMathematics: Vector/Matrix
 
 use crate::numtraits::{One, Zero};
-use std::ops::{Mul, Div, Add, Sub, Neg};
+use std::ops::*;
 use std::mem::transmute;
 
 /// 2-dimensional vector
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Vector2<T>(pub T, pub T);
 /// 3-dimensional vector
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Vector3<T>(pub T, pub T, pub T);
 /// 4-dimensional vector
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Vector4<T>(pub T, pub T, pub T, pub T);
 /// Arbitrary rotating
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Quaternion<T>(pub T, pub T, pub T, pub T);
 
@@ -129,14 +129,6 @@ impl<T: Div<T> + Copy> From<Vector4<T>> for Vector3<<T as Div>::Output>
 {
     fn from(Vector4(x, y, z, w): Vector4<T>) -> Self { Vector3(x / w, y / w, z / w) }
 }
-
-// Vector as Fixed Arrays //
-#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
-impl<T> Into<[T; 2]> for Vector2<T> { fn into(self) -> [T; 2] { [self.0, self.1] } }
-#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
-impl<T> Into<[T; 3]> for Vector3<T> { fn into(self) -> [T; 3] { [self.0, self.1, self.2] } }
-#[deprecated(note = "To perform this conversion, please use AsRef with clone()")]
-impl<T> Into<[T; 4]> for Vector4<T> { fn into(self) -> [T; 4] { [self.0, self.1, self.2, self.3] } }
 
 // Safe Transmuting as Slice //
 impl<T> AsRef<[T; 2]> for Vector2<T> { fn as_ref(&self) -> &[T; 2] { unsafe { transmute(self) } } }
@@ -303,50 +295,39 @@ fn dotproduct4<T: Mul + Copy>(a: &[T; 4], b: &[T; 4]) -> <T as Mul>::Output
 }
 
 // Point Translation by Multiplication //
-impl<T: Mul + Copy> Mul<Vector2<T>> for Matrix2<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + Copy> Mul<Vector2<T>> for Matrix2<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector2<<T as Mul>::Output>;
-    fn mul(self, v: Vector2<T>) -> Self::Output
-    {
-        let va = v.into();
-        Vector2(dotproduct2(&va, &self.0), dotproduct2(&va, &self.1))
+    fn mul(self, v: Vector2<T>) -> Self::Output {
+        Vector2(dotproduct2(v.as_ref(), &self.0), dotproduct2(v.as_ref(), &self.1))
     }
 }
-impl<T: Mul + Copy> Mul<Vector3<T>> for Matrix3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + Copy> Mul<Vector3<T>> for Matrix3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector3<<T as Mul>::Output>;
-    fn mul(self, v: Vector3<T>) -> Self::Output
-    {
-        let va = v.into();
-        Vector3(dotproduct3(&va, &self.0), dotproduct3(&va, &self.1), dotproduct3(&va, &self.2))
+    fn mul(self, v: Vector3<T>) -> Self::Output {
+        Vector3(dotproduct3(v.as_ref(), &self.0), dotproduct3(v.as_ref(), &self.1), dotproduct3(v.as_ref(), &self.2))
     }
 }
-impl<T: Mul + Copy> Mul<Vector4<T>> for Matrix4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + Copy> Mul<Vector4<T>> for Matrix4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector4<<T as Mul>::Output>;
-    fn mul(self, v: Vector4<T>) -> Self::Output
-    {
-        let va = v.into();
-        Vector4(dotproduct4(&va, &self.0), dotproduct4(&va, &self.1),
-            dotproduct4(&va, &self.2), dotproduct4(&va, &self.3))
+    fn mul(self, v: Vector4<T>) -> Self::Output {
+        Vector4(
+            dotproduct4(v.as_ref(), &self.0), dotproduct4(v.as_ref(), &self.1),
+            dotproduct4(v.as_ref(), &self.2), dotproduct4(v.as_ref(), &self.3)
+        )
     }
 }
-impl<T: Mul + One + Copy> Mul<Vector2<T>> for Matrix2x3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + One + Copy> Mul<Vector2<T>> for Matrix2x3<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector2<<T as Mul>::Output>;
-    fn mul(self, v: Vector2<T>) -> Self::Output
-    {
-        let va = Vector3::from(v).into();
-        Vector2(dotproduct3(&va, &self.0), dotproduct3(&va, &self.1))
+    fn mul(self, v: Vector2<T>) -> Self::Output {
+        let v3 = Vector3::from(v);
+        Vector2(dotproduct3(v3.as_ref(), &self.0), dotproduct3(v3.as_ref(), &self.1))
     }
 }
-impl<T: Mul + One + Copy> Mul<Vector3<T>> for Matrix3x4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output>
-{
+impl<T: Mul + One + Copy> Mul<Vector3<T>> for Matrix3x4<T> where <T as Mul>::Output: Add<Output = <T as Mul>::Output> {
     type Output = Vector3<<T as Mul>::Output>;
-    fn mul(self, v: Vector3<T>) -> Self::Output
-    {
-        let va = Vector4::from(v).into();
-        Vector3(dotproduct4(&va, &self.0), dotproduct4(&va, &self.1), dotproduct4(&va, &self.2))
+    fn mul(self, v: Vector3<T>) -> Self::Output {
+        let v4 = Vector4::from(v);
+        Vector3(dotproduct4(v4.as_ref(), &self.0), dotproduct4(v4.as_ref(), &self.1), dotproduct4(v4.as_ref(), &self.2))
     }
 }
 // shortcuts //
@@ -516,8 +497,12 @@ impl<T: One + Zero + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy>
         let m31 = two * (x * z + w * y);
         let m32 = two * (y * z - w * x);
 
-        Matrix4([m11, m12, m13, T::ZERO], [m21, m22, m23, T::ZERO],
-            [m31, m32, m33, T::ZERO], [T::ZERO, T::ZERO, T::ZERO, T::ONE])
+        Matrix4(
+            [m11, m12, m13, T::ZERO],
+            [m21, m22, m23, T::ZERO],
+            [m31, m32, m33, T::ZERO],
+            [T::ZERO, T::ZERO, T::ZERO, T::ONE]
+        )
     }
 }
 
@@ -531,45 +516,41 @@ macro_rules! VariadicElementOps
             type Output = $e<<T as Add>::Output>;
             fn add(self, other: Self) -> Self::Output { $e($(self.$n + other.$n),*) }
         }
-        impl<'v, T> Add for &'v $e<T> where &'v T: Add
+        impl<T: AddAssign> AddAssign for $e<T>
         {
-            type Output = $e<<&'v T as Add>::Output>;
-            fn add(self, other: Self) -> Self::Output { $e($(&self.$n + &other.$n),*) }
+            fn add_assign(&mut self, other: Self) { $(self.$n += other.$n);* }
         }
+
         impl<T: Sub> Sub for $e<T>
         {
             type Output = $e<<T as Sub>::Output>;
             fn sub(self, other: Self) -> Self::Output { $e($(self.$n - other.$n),*) }
         }
-        impl<'v, T> Sub for &'v $e<T> where &'v T: Sub
+        impl<T: SubAssign> SubAssign for $e<T>
         {
-            type Output = $e<<&'v T as Sub>::Output>;
-            fn sub(self, other: Self) -> Self::Output { $e($(&self.$n - &other.$n),*) }
+            fn sub_assign(&mut self, other: Self) { $(self.$n -= other.$n);* }
         }
+
         impl<T: Mul + Copy> Mul<T> for $e<T>
         {
             type Output = $e<<T as Mul>::Output>;
             fn mul(self, other: T) -> Self::Output { $e($(self.$n * other),*) }
         }
-        impl<'v, T> Mul for &'v $e<T> where &'v T: Mul
+        impl<T: MulAssign + Copy> MulAssign<T> for $e<T>
         {
-            type Output = $e<<&'v T as Mul>::Output>;
-            fn mul(self, other: Self) -> Self::Output { $e($(&self.$n * &other.$n),*) }
+            fn mul_assign(&mut self, other: T) { $(self.$n *= other);* }
         }
+
         impl<T: Neg> Neg for $e<T>
         {
             type Output = $e<<T as Neg>::Output>;
             fn neg(self) -> Self::Output { $e($(-self.$n),*) }
         }
-        impl<'v, T> Neg for &'v $e<T> where &'v T: Neg
-        {
-            type Output = $e<<&'v T as Neg>::Output>;
-            fn neg(self) -> Self::Output { $e($(-&self.$n),*) }
-        }
+
         impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T>
         {
             /// Calculates an inner product between 2 vectors
-            pub fn dot(&self, other: &Self) -> T
+            pub fn dot(self, other: Self) -> T
             {
                 CTSummation!($(self.$n * other.$n),*)
             }
@@ -577,9 +558,20 @@ macro_rules! VariadicElementOps
         impl<T: Mul<Output = T> + Add<Output = T> + Copy> $e<T>
         {
             /// Calculates a squared length of a vector
-            pub fn len2(&self) -> T
+            pub fn len2(self) -> T
             {
                 CTSummation!($(self.$n * self.$n),*)
+            }
+        }
+
+        impl<T> $e<T> {
+            /// Calculates minimum value of each element
+            pub fn min(self, other: Self) -> Self where T: crate::numtraits::Min<Output = T> {
+                $e($(self.$n.min(other.$n)),*)
+            }
+            /// Calculates maximum value of each element
+            pub fn max(self, other: Self) -> Self where T: crate::numtraits::Max<Output = T> {
+                $e($(self.$n.max(other.$n)),*)
             }
         }
     }
@@ -704,8 +696,8 @@ mod tests
         assert_eq!(Vector3(6, 7, 8) - Vector3(3, 4, 5), Vector3(3, 3, 3));
         assert_eq!(Vector3(0, 2, 4) * 3, Vector3(0, 6, 12));
         assert_eq!(-Vector3(1, 2, -1), Vector3(-1, -2, 1));
-        assert_eq!(Vector3(2, 3, 4).dot(&Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
-        assert_eq!(Vector2(0, 1).dot(&Vector2(1, 0)), 0);
+        assert_eq!(Vector3(2, 3, 4).dot(Vector3(5, 6, 7)), 2 * 5 + 3 * 6 + 4 * 7);
+        assert_eq!(Vector2(0, 1).dot(Vector2(1, 0)), 0);
         assert_eq!(Vector3(1, 2, 3).len2(), 1 * 1 + 2 * 2 + 3 * 3);
         assert_eq!(Vector2(10, 3).cross(&Vector2(4, 30)), 10 * 30 - 3 * 4);
         assert_eq!(Vector3(2, 3, 4).cross(&Vector3(6, 7, 8)),
@@ -721,5 +713,16 @@ mod tests
         assert!(b.abs() <= std::f32::EPSILON);
         assert!(c.abs() <= std::f32::EPSILON);
         assert!((1.0 - d).abs() <= std::f32::EPSILON);
+    }
+    #[test]
+    fn vector_ops_assign()
+    {
+        let mut v1 = Vector3(0, 1, 2);
+        v1 += Vector3(1, -3, 2);
+        assert_eq!(v1, Vector3(0, 1, 2) + Vector3(1, -3, 2));
+        v1 -= Vector3(1, -3, 2);
+        assert_eq!(v1, Vector3(0, 1, 2) + Vector3(1, -3, 2) - Vector3(1, -3, 2));
+        v1 *= 4;
+        assert_eq!(v1, (Vector3(0, 1, 2) + Vector3(1, -3, 2) - Vector3(1, -3, 2)) * 4);
     }
 }

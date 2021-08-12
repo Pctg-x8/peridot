@@ -1,33 +1,37 @@
 
-// extern crate font_kit;
-#[macro_use] extern crate log;
-extern crate libc;
+use log::*;
+pub use peridot_math as math;
+pub use peridot_archive as archive;
 
-extern crate pathfinder_partitioner;
-extern crate bedrock;
-pub extern crate peridot_math as math;
-pub extern crate peridot_archive as archive;
-
-use bedrock as br; use bedrock::traits::*;
+use bedrock as br;
+use br::traits::*;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::cell::{Ref, RefMut, RefCell};
+use std::sync::{Arc, RwLock};
 use std::time::{Instant as InstantTimer, Duration};
 use std::ffi::CStr;
 
-mod window; use self::window::StateFence;
+mod state_track;
+use self::state_track::StateFence;
+mod window;
 pub use self::window::SurfaceInfo;
 mod resource; pub use self::resource::*;
-#[cfg(debug_assertions)] mod debug; #[cfg(debug_assertions)] use self::debug::DebugReport;
+#[cfg(feature = "debug")] mod debug;
+#[cfg(feature = "debug")] use self::debug::*;
 pub mod utils; pub use self::utils::*;
 
 mod asset; pub use self::asset::*;
+mod batch; pub use self::batch::*;
 mod input; pub use self::input::*;
+pub mod audio;
 mod model; pub use self::model::*;
 mod layout_cache; pub use self::layout_cache::*;
 mod presenter; pub use self::presenter::*;
+
+#[cfg(feature = "derive")]
+pub use peridot_derive::*;
 
 pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
@@ -69,11 +73,47 @@ impl<PL: NativeLinker> EngineEvents<PL> for ()
 {
     fn init(_e: &mut Engine<PL>) -> Self { () }
 }
+/// Specifies which type of resource is supports sparse residency?
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct SparseResidencySupportBits(u16);
+impl SparseResidencySupportBits {
+    pub const EMPTY: Self = Self(0);
+    pub const BUFFER: Self = Self(0x0001);
+    pub const IMAGE_2D: Self = Self(0x0002);
+    pub const IMAGE_3D: Self = Self(0x0004);
+    pub const SAMPLE2: Self = Self(0x0008);
+    pub const SAMPLE4: Self = Self(0x0010);
+    pub const SAMPLE8: Self = Self(0x0020);
+    pub const SAMPLE16: Self = Self(0x0040);
+    pub const SAMPLE32: Self = Self(0x0080);
+    pub const ALIASED: Self = Self(0x0100);
+
+    pub const fn buffer(self) -> Self { Self(self.0 | Self::BUFFER.0) }
+    pub const fn image_2d(self) -> Self { Self(self.0 | Self::IMAGE_2D.0) }
+    pub const fn image_3d(self) -> Self { Self(self.0 | Self::IMAGE_3D.0) }
+    pub const fn sample2(self) -> Self { Self(self.0 | Self::SAMPLE2.0) }
+    pub const fn sample4(self) -> Self { Self(self.0 | Self::SAMPLE4.0) }
+    pub const fn sample8(self) -> Self { Self(self.0 | Self::SAMPLE8.0) }
+    pub const fn sample16(self) -> Self { Self(self.0 | Self::SAMPLE16.0) }
+    pub const fn aliased(self) -> Self { Self(self.0 | Self::ALIASED.0) }
+
+    const fn has_buffer(self) -> bool { (self.0 & Self::BUFFER.0) != 0 }
+    const fn has_image_2d(self) -> bool { (self.0 & Self::IMAGE_2D.0) != 0 }
+    const fn has_image_3d(self) -> bool { (self.0 & Self::IMAGE_3D.0) != 0 }
+    const fn has_sample2(self) -> bool { (self.0 & Self::SAMPLE2.0) != 0 }
+    const fn has_sample4(self) -> bool { (self.0 & Self::SAMPLE4.0) != 0 }
+    const fn has_sample8(self) -> bool { (self.0 & Self::SAMPLE8.0) != 0 }
+    const fn has_sample16(self) -> bool { (self.0 & Self::SAMPLE16.0) != 0 }
+    const fn has_aliased(self) -> bool { (self.0 & Self::ALIASED.0) != 0 }
+}
 pub trait FeatureRequests
 {
     const ENABLE_GEOMETRY_SHADER: bool = false;
     const ENABLE_TESSELLATION_SHADER: bool = false;
     const USE_STORAGE_BUFFERS_IN_VERTEX_SHADER: bool = false;
+    const SPARSE_BINDING: bool = false;
+    const SPARSE_RESIDENCY_SUPPORT_BITS: SparseResidencySupportBits = SparseResidencySupportBits::EMPTY;
     
     fn requested_features() -> br::vk::VkPhysicalDeviceFeatures
     {
@@ -82,6 +122,15 @@ pub trait FeatureRequests
             geometryShader: Self::ENABLE_GEOMETRY_SHADER as _,
             tessellationShader: Self::ENABLE_TESSELLATION_SHADER as _,
             vertexPipelineStoresAndAtomics: Self::USE_STORAGE_BUFFERS_IN_VERTEX_SHADER as _,
+            sparseBinding: Self::SPARSE_BINDING as _,
+            sparseResidencyBuffer: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_buffer() as _,
+            sparseResidencyImage2D: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_image_2d() as _,
+            sparseResidencyImage3D: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_image_3d() as _,
+            sparseResidency2Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample2() as _,
+            sparseResidency4Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample4() as _,
+            sparseResidency8Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample8() as _,
+            sparseResidency16Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample16() as _,
+            sparseResidencyAliased: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_aliased() as _,
             .. Default::default()
         }
     }
@@ -93,7 +142,8 @@ pub struct Engine<NL: NativeLinker> {
     pub(self) g: Graphics,
     ip: InputProcess,
     gametimer: GameTimer,
-    last_rendering_completion: StateFence
+    last_rendering_completion: StateFence,
+    amixer: Arc<RwLock<audio::Mixer>>
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
@@ -114,7 +164,8 @@ impl<PL: NativeLinker> Engine<PL> {
         {
             ip: InputProcess::new().into(),
             gametimer: GameTimer::new(),
-            last_rendering_completion: StateFence::new(&g).expect("Failed to create State Fence"),
+            last_rendering_completion: StateFence::new(&g).expect("Failed to create State Fence for Rendering"),
+            amixer: Arc::new(RwLock::new(audio::Mixer::new())),
             nativelink,
             g,
             presenter
@@ -150,6 +201,9 @@ impl<NL: NativeLinker> Engine<NL> {
         self.g.submit_buffered_commands(batches, fence)
     }
 
+    pub fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> { &self.amixer }
+}
+impl<PL: NativeLinker> Engine<PL> {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
     }
@@ -202,6 +256,14 @@ impl<PL: NativeLinker> Engine<PL> {
         }
         userlib.on_resize(self, new_size);
     }
+
+    pub fn sound_backend_callback(&self, output_buffer: &mut [f32])
+    {
+        for (n, r) in output_buffer.iter_mut().enumerate()
+        {
+            *r = (440.0 * n as f32 / 44100.0).to_radians().sin() * 0.1;
+        }
+    }
 }
 impl<NL: NativeLinker> Drop for Engine<NL> {
     fn drop(&mut self) {
@@ -234,73 +296,93 @@ impl<T> From<T> for Discardable<T>
     fn from(v: T) -> Self { Discardable(RefCell::new(Some(v))) }
 }
 
-/// Queue object with family index
-pub struct Queue { q: br::Queue, family: u32 }
-/// Graphics manager
-pub struct Graphics
+use br::vk::{
+    VkMemoryType,
+    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+    VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+    VK_MEMORY_PROPERTY_PROTECTED_BIT
+};
+
+pub struct MemoryType(u32, VkMemoryType);
+impl MemoryType
 {
-    pub(self) instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
-    graphics_queue: Queue,
-    #[cfg(debug_assertions)] _d: DebugReport,
-    cp_onetime_submit: br::CommandPool,
-    memory_type_index_cache: RefCell<BTreeMap<(u32, u32), u32>>
-}
-impl Graphics
-{
-    fn new(appname: &str, appversion: (u32, u32, u32), instance_extensions: Vec<&str>, device_extensions: Vec<&str>,
-        features: br::vk::VkPhysicalDeviceFeatures) -> br::Result<Self>
+    pub fn index(&self) -> u32 { self.0 }
+    pub fn corresponding_mask(&self) -> u32 { 0x01 << self.0 }
+    pub fn has_property_flags(&self, other: br::MemoryPropertyFlags) -> bool
     {
-        info!("Supported Layers: ");
-        let mut validation_layer_available = false;
-        #[cfg(debug_assertions)]
-        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties")
+        (self.1.propertyFlags & other.bits()) != 0
+    }
+    pub fn is_host_coherent(&self) -> bool { self.has_property_flags(br::MemoryPropertyFlags::HOST_COHERENT) }
+    pub fn is_host_cached(&self) -> bool { self.has_property_flags(br::MemoryPropertyFlags::HOST_CACHED) }
+}
+impl std::fmt::Debug for MemoryType
+{
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
+    {
+        let mut flags = Vec::with_capacity(7);
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 { flags.push("DEVICE LOCAL"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 { flags.push("HOST VISIBLE"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 { flags.push("CACHED"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 { flags.push("COHERENT"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0
         {
-            let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
-            let name_str = name.to_str().expect("unexpected invalid sequence in layer name");
-            info!("* {} :: {}/{}", name_str, l.specVersion, l.implementationVersion);
-            if name_str == "VK_LAYER_KHRONOS_validation"
-            {
-                validation_layer_available = true;
-            }
+            flags.push("LAZILY ALLOCATED");
         }
+        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
 
-        let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(instance_extensions);
-        #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
-        if validation_layer_available { ib.add_layer("VK_LAYER_KHRONOS_validation"); }
-        else { warn!("Validation Layer is not found!"); }
-        let instance = ib.create()?;
+        write!(fmt, "{}: [{}] in heap #{}", self.index(), flags.join("/"), self.1.heapIndex)
+    }
+}
+pub struct MemoryTypeManager
+{
+    device_memory_types: Vec<MemoryType>,
+    host_memory_types: Vec<MemoryType>
+}
+impl MemoryTypeManager
+{
+    pub fn new(pd: &br::PhysicalDevice) -> Self
+    {
+        let mem = pd.memory_properties();
+        let (device_memory_types, host_memory_types): (Vec<_>, Vec<_>) = mem.types().enumerate().map(|(n, mt)| {
+            let is_device_local = (mt.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+            let is_host_visible = (mt.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
 
-        #[cfg(debug_assertions)] let _d = DebugReport::new(&instance)?;
-        #[cfg(debug_assertions)] debug!("Debug reporting activated");
-        let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
-        Self::diag_memory_properties(&adapter.memory_properties());
-        let gqf_index = adapter.queue_family_properties().find_matching_index(br::QueueFlags::GRAPHICS)
-            .expect("No graphics queue");
-        let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
-        let device =
+            (
+                if is_device_local { MemoryType(n as _, mt.clone()).into() } else { None },
+                if is_host_visible { MemoryType(n as _, mt.clone()).into() } else { None }
+            )
+        }).unzip();
+
+        MemoryTypeManager
         {
-            let mut db = br::DeviceBuilder::new(&adapter);
-            db.add_extensions(device_extensions).add_queue(qci);
-            if validation_layer_available { db.add_layer("VK_LAYER_KHRONOS_validation"); }
-            *db.mod_features() = features;
-            db.create()?
-        };
-        
-        return Ok(Graphics
-        {
-            cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
-            graphics_queue: Queue { q: device.queue(gqf_index, 0), family: gqf_index },
-            instance, adapter, device,
-            #[cfg(debug_assertions)] _d,
-            memory_type_index_cache: RefCell::new(BTreeMap::new())
-        });
+            device_memory_types: device_memory_types.into_iter().filter_map(|x| x).collect(),
+            host_memory_types: host_memory_types.into_iter().filter_map(|x| x).collect()
+        }
     }
 
-    fn diag_memory_properties(mp: &br::MemoryProperties)
+    pub fn exact_host_visible_index(&self, mask: u32, required: br::MemoryPropertyFlags) -> Option<&MemoryType>
+    {
+        self.host_memory_types.iter()
+            .find(|mt| (mask & mt.corresponding_mask()) != 0 && mt.has_property_flags(required))
+    }
+    pub fn host_visible_index(&self, mask: u32, preference: br::MemoryPropertyFlags) -> Option<&MemoryType>
+    {
+        self.exact_host_visible_index(mask, preference)
+            .or_else(|| self.host_memory_types.iter().find(|mt| (mask & mt.corresponding_mask()) != 0))
+    }
+    pub fn device_local_index(&self, mask: u32) -> Option<&MemoryType>
+    {
+        self.device_memory_types.iter().find(|mt| (mask & mt.corresponding_mask()) != 0)
+    }
+
+    fn diagnose_heaps(p: &br::PhysicalDevice)
     {
         info!("Memory Heaps: ");
-        for (n, &br::vk::VkMemoryHeap { size, flags }) in mp.heaps().enumerate()
+        for (n, &br::vk::VkMemoryHeap { size, flags }) in p.memory_properties().heaps().enumerate()
         {
             let (mut nb, mut unit) = (size as f32, "bytes");
             if nb >= 10000.0 { nb /= 1024.0; unit = "KB"; }
@@ -312,36 +394,87 @@ impl Graphics
             }
             else { info!("  #{}: {} {}", n, nb, unit); }
         }
-        info!("Memory Types: ");
-        for (n, ty) in mp.types().enumerate()
-        {
-            let mut flags = Vec::with_capacity(6);
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 { flags.push("DEVICE LOCAL"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 { flags.push("HOST VISIBLE"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 { flags.push("CACHED"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 { flags.push("COHERENT"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 { flags.push("PROTECTED"); }
-            if (ty.propertyFlags & br::vk::VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0
-            {
-                flags.push("LAZILY ALLOCATED");
-            }
-            info!("  {}: [{}] in heap #{}", n, flags.join("/"), ty.heapIndex);
-        }
     }
-
-    pub fn memory_type_index_for(&self, mask: br::MemoryPropertyFlags, index_mask: u32) -> Option<u32>
+    fn diagnose_types(&self)
     {
-        if let Some(&mi) = self.memory_type_index_cache.borrow().get(&(mask.bits(), index_mask)) { return Some(mi); }
-        for (n, m) in self.adapter.memory_properties().types().enumerate()
-        {
-            let lazily_allocated = (m.propertyFlags & br::MemoryPropertyFlags::LAZILY_ALLOCATED.bits()) != 0;
-            if ((1 << n) & index_mask) != 0 && (m.propertyFlags & mask.bits()) == mask.bits() && !lazily_allocated
-            {
-                self.memory_type_index_cache.borrow_mut().insert((mask.bits(), index_mask), n as _);
-                return Some(n as _);
+        info!("Device Memory Types: ");
+        for mt in &self.device_memory_types { info!("  {:?}", mt); }
+        info!("Host Visible Memory Types: ");
+        for mt in &self.host_memory_types { info!("  {:?}", mt); }
+    }
+}
+
+/// Queue object with family index
+pub struct Queue { q: br::Queue, family: u32 }
+/// Graphics manager
+pub struct Graphics
+{
+    pub(self) instance: br::Instance, pub(self) adapter: br::PhysicalDevice, device: br::Device,
+    graphics_queue: Queue,
+    cp_onetime_submit: br::CommandPool,
+    pub memory_type_manager: MemoryTypeManager
+}
+impl Graphics
+{
+    fn new(
+        appname: &str,
+        appversion: (u32, u32, u32),
+        instance_extensions: Vec<&str>,
+        device_extensions: Vec<&str>,
+        features: br::vk::VkPhysicalDeviceFeatures
+    ) -> br::Result<Self> {
+        info!("Supported Layers: ");
+        let mut validation_layer_available = false;
+        #[cfg(debug_assertions)]
+        for l in br::Instance::enumerate_layer_properties().expect("failed to enumerate layer properties") {
+            let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
+            let name_str = name.to_str().expect("unexpected invalid sequence in layer name");
+            info!("* {} :: {}/{}", name_str, l.specVersion, l.implementationVersion);
+            if name_str == "VK_LAYER_KHRONOS_validation" {
+                validation_layer_available = true;
             }
         }
-        return None;
+
+        let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
+        ib.add_extensions(instance_extensions);
+        #[cfg(debug_assertions)] ib.add_extension("VK_EXT_debug_report");
+        if validation_layer_available {
+            ib.add_layer("VK_LAYER_KHRONOS_validation");
+        } else {
+            warn!("Validation Layer is not found!");
+        }
+        #[cfg(feature = "debug")]
+        {
+            ib.add_extension("VK_EXT_debug_utils");
+            ib.add_ext_structure(
+                br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
+                    .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
+            );
+            debug!("Debug reporting activated");
+        }
+        let instance = ib.create()?;
+
+        let adapter = instance.iter_physical_devices()?.next().expect("no physical devices");
+        let memory_type_manager = MemoryTypeManager::new(&adapter);
+        MemoryTypeManager::diagnose_heaps(&adapter);
+        memory_type_manager.diagnose_types();
+        let gqf_index = adapter.queue_family_properties().find_matching_index(br::QueueFlags::GRAPHICS)
+            .expect("No graphics queue");
+        let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
+        let device = {
+            let mut db = br::DeviceBuilder::new(&adapter);
+            db.add_extensions(device_extensions).add_queue(qci);
+            if validation_layer_available { db.add_layer("VK_LAYER_KHRONOS_validation"); }
+            *db.mod_features() = features;
+            db.create()?
+        };
+        
+        return Ok(Graphics {
+            cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
+            graphics_queue: Queue { q: device.queue(gqf_index, 0), family: gqf_index },
+            instance, adapter, device,
+            memory_type_manager
+        });
     }
     
     /// Submits any commands as transient commands.
@@ -512,212 +645,4 @@ impl LayoutedPipeline
     pub fn pipeline(&self) -> &br::Pipeline { &self.0 }
     pub fn layout(&self) -> &Rc<br::PipelineLayout> { &self.1 }
     pub fn bind(&self, rec: &mut br::CmdRecord) { rec.bind_graphics_pipeline_pair(&self.0, &self.1); }
-}
-
-use self::br::vk::VkBufferCopy;
-use std::cmp::{PartialEq, Eq, PartialOrd, Ord, Ordering};
-use std::hash::{Hash, Hasher};
-use std::collections::HashMap;
-use std::ops::Range;
-#[derive(Clone)] pub struct ResourceKey<T: br::VkHandle>(T);
-impl PartialEq for ResourceKey<Buffer>
-{
-    fn eq(&self, other: &Self) -> bool { (self.0.native_ptr() as u64).eq(&(other.0.native_ptr() as u64)) }
-}
-impl PartialEq for ResourceKey<Image>
-{
-    fn eq(&self, other: &Self) -> bool { (self.0.native_ptr() as u64).eq(&(other.0.native_ptr() as u64)) }
-}
-impl PartialOrd for ResourceKey<Buffer>
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering>
-    {
-        (self.0.native_ptr() as u64).partial_cmp(&(other.0.native_ptr() as u64))
-    }
-}
-impl PartialOrd for ResourceKey<Image> 
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering>
-    {
-        (self.0.native_ptr() as u64).partial_cmp(&(other.0.native_ptr() as u64))
-    }
-}
-impl Eq for ResourceKey<Buffer> {}
-impl Ord for ResourceKey<Buffer>
-{
-    fn cmp(&self, other: &Self) -> Ordering
-    {
-        self.partial_cmp(other).expect("ord: unreachable")
-    }
-}
-impl Eq for ResourceKey<Image> {}
-impl Ord for ResourceKey<Image>
-{
-    fn cmp(&self, other: &Self) -> Ordering
-    {
-        self.partial_cmp(other).expect("ord: unreachable")
-    }
-}
-impl Hash for ResourceKey<Buffer> { fn hash<H: Hasher>(&self, hasher: &mut H) { self.0.native_ptr().hash(hasher) } }
-impl Hash for ResourceKey<Image> { fn hash<H: Hasher>(&self, hasher: &mut H) { self.0.native_ptr().hash(hasher) } }
-pub struct ReadyResourceBarriers
-{
-    buffer: Vec<(Buffer, Range<u64>, br::vk::VkAccessFlags)>,
-    image: Vec<(Image, br::ImageSubresourceRange, br::ImageLayout)>
-}
-impl ReadyResourceBarriers
-{
-    fn new() -> Self { ReadyResourceBarriers { buffer: Vec::new(), image: Vec::new() } }
-}
-/// Batching Manager for Transferring Operations.
-pub struct TransferBatch
-{
-    barrier_range_src: BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
-    barrier_range_dst: BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
-    org_layout_src: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
-    org_layout_dst: BTreeMap<ResourceKey<Image>, br::ImageLayout>,
-    copy_buffers: HashMap<(ResourceKey<Buffer>, ResourceKey<Buffer>), Vec<VkBufferCopy>>,
-    init_images: BTreeMap<ResourceKey<Image>, (Buffer, br::vk::VkDeviceSize)>,
-    ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>
-}
-impl TransferBatch
-{
-    pub fn new() -> Self
-    {
-        TransferBatch
-        {
-            barrier_range_src: BTreeMap::new(), barrier_range_dst: BTreeMap::new(),
-            org_layout_src: BTreeMap::new(), org_layout_dst: BTreeMap::new(),
-            copy_buffers: HashMap::new(), init_images: BTreeMap::new(),
-            ready_barriers: BTreeMap::new()
-        }
-    }
-
-    /// Add copying operation between buffers.
-    pub fn add_copying_buffer(&mut self, src: DeviceBufferView, dst: DeviceBufferView, bytes: br::vk::VkDeviceSize) {
-        trace!("Registering COPYING-BUFFER: ({}, {}) -> {} bytes", src.offset, dst.offset, bytes);
-        let (sk, dk) = (ResourceKey(src.buffer.clone()), ResourceKey(dst.buffer.clone()));
-        Self::update_barrier_range_for(&mut self.barrier_range_src, sk.clone(), src.range(bytes));
-        Self::update_barrier_range_for(&mut self.barrier_range_dst, dk.clone(), dst.range(bytes));
-        self.copy_buffers.entry((sk, dk)).or_insert_with(Vec::new).push(VkBufferCopy {
-            srcOffset: src.offset, dstOffset: dst.offset, size: bytes
-        });
-    }
-    /// Add copying operation between buffers.
-    /// Shorthand for copying operation that both BufferViews have same offset.
-    pub fn add_mirroring_buffer(
-        &mut self,
-        src: &Buffer,
-        dst: &Buffer,
-        offset: br::vk::VkDeviceSize,
-        bytes: br::vk::VkDeviceSize
-    ) {
-        self.add_copying_buffer(src.with_dev_offset(offset), dst.with_dev_offset(offset), bytes);
-    }
-    /// Add image content initializing operation, from the buffer.
-    pub fn init_image_from(&mut self, dest: &Image, src: DeviceBufferView)
-    {
-        self.init_images.insert(ResourceKey(dest.clone()), (src.buffer.clone(), src.offset));
-        let size = (dest.size().0 * dest.size().1) as u64 * (dest.format().bpp() >> 3) as u64;
-        Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.buffer.clone()), src.range(size));
-        self.org_layout_dst.insert(ResourceKey(dest.clone()), br::ImageLayout::Preinitialized);
-    }
-
-    /// Add ready barrier for buffers.
-    pub fn add_buffer_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
-        res: &Buffer, byterange: Range<br::vk::VkDeviceSize>, access_grants: br::vk::VkAccessFlags)
-    {
-        self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
-            .buffer.push((res.clone(), byterange, access_grants));
-    }
-    /// Add ready barrier for images.
-    pub fn add_image_graphics_ready(&mut self, dest_stage: br::PipelineStageFlags,
-        res: &Image, layout: br::ImageLayout)
-    {
-        self.ready_barriers.entry(dest_stage).or_insert_with(ReadyResourceBarriers::new)
-            .image.push((res.clone(), br::ImageSubresourceRange::color(0, 0), layout));
-    }
-    /// Have add_copying_buffer, add_mirroring_buffer or init_image_from been called?
-    pub fn has_copy_ops(&self) -> bool { !self.copy_buffers.is_empty() || !self.init_images.is_empty() }
-    /// Have add_buffer_graphics_ready or add_image_graphics_ready been called?
-    pub fn has_ready_barrier_ops(&self) -> bool { !self.ready_barriers.is_empty() }
-    
-    fn update_barrier_range_for(map: &mut BTreeMap<ResourceKey<Buffer>, Range<br::vk::VkDeviceSize>>,
-        k: ResourceKey<Buffer>, new_range: Range<br::vk::VkDeviceSize>)
-    {
-        let r = map.entry(k).or_insert_with(|| new_range.clone());
-        r.start = r.start.min(new_range.start);
-        r.end = r.end.max(new_range.end);
-    }
-}
-/// Sinking Commands into CommandBuffers
-impl TransferBatch
-{
-    pub fn sink_transfer_commands(&self, r: &mut br::CmdRecord)
-    {
-        let src_barriers = self.barrier_range_src.iter()
-            .map(|(b, r)| br::BufferMemoryBarrier::new(
-                &b.0, r.clone(), br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read
-            ));
-        let dst_barriers = self.barrier_range_dst.iter()
-            .map(|(b, r)| br::BufferMemoryBarrier::new(
-                &b.0, r.clone(), 0, br::AccessFlags::TRANSFER.write
-            ));
-        let barriers: Vec<_> = src_barriers.chain(dst_barriers).collect();
-        let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| br::ImageMemoryBarrier::new(
-            &br::ImageSubref::color(&b.0, 0, 0), l0, br::ImageLayout::TransferSrcOpt
-        ));
-        let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| br::ImageMemoryBarrier::new(
-            &br::ImageSubref::color(&b.0, 0, 0), l0, br::ImageLayout::TransferDestOpt
-        ));
-        let barriers_i: Vec<_> = src_barriers_i.chain(dst_barriers_i).collect();
-        
-        r.pipeline_barrier(br::PipelineStageFlags::HOST, br::PipelineStageFlags::TRANSFER, false,
-            &[], &barriers, &barriers_i);
-        for (&(ref s, ref d), ref rs) in &self.copy_buffers { r.copy_buffer(&s.0, &d.0, &rs); }
-        for (d, s) in &self.init_images {
-            trace!("Copying Image: extent={:?}", br::vk::VkExtent3D::from(d.0.size().clone()));
-            r.copy_buffer_to_image(&s.0, &d.0, br::ImageLayout::TransferDestOpt, &[br::vk::VkBufferImageCopy {
-                bufferOffset: s.1, bufferRowLength: 0, bufferImageHeight: 0,
-                imageSubresource: br::vk::VkImageSubresourceLayers::default(),
-                imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-                imageExtent: d.0.size().clone().into()
-            }]);
-        }
-    }
-    pub fn sink_graphics_ready_commands(&self, r: &mut br::CmdRecord)
-    {
-        for (&stg, &ReadyResourceBarriers { ref buffer, ref image, .. }) in &self.ready_barriers
-        {
-            let buf_barriers: Vec<_> = buffer.iter()
-                .map(|&(ref r, ref br, a)| br::BufferMemoryBarrier::new(&r, br.start as _ .. br.end as _,
-                    br::AccessFlags::TRANSFER.read, a)).collect();
-            let img_barriers: Vec<_> = image.iter()
-                .map(|(r, range, l)| br::ImageMemoryBarrier::new_raw(&r, range, br::ImageLayout::TransferDestOpt, *l))
-                .collect();
-            r.pipeline_barrier(br::PipelineStageFlags::TRANSFER, stg, false, &[], &buf_barriers, &img_barriers);
-        }
-    }
-}
-
-/// Batching mechanism for Updating Descriptor Sets
-pub struct DescriptorSetUpdateBatch(Vec<br::DescriptorSetWriteInfo>, Vec<br::DescriptorSetCopyInfo>);
-impl DescriptorSetUpdateBatch
-{
-    /// Create an Empty batch
-    pub fn new() -> Self { DescriptorSetUpdateBatch(Vec::new(), Vec::new()) }
-    /// Write an information to bound index and array index in destination.
-    pub fn write_index(&mut self, dest: br::vk::VkDescriptorSet, bound: u32, array: u32, info: br::DescriptorUpdateInfo)
-        -> &mut Self
-    {
-        self.0.push(br::DescriptorSetWriteInfo(dest, bound, array, info));
-        return self;
-    }
-    /// Write an information to bound index in destination.
-    pub fn write(&mut self, dest: br::vk::VkDescriptorSet, bound: u32, info: br::DescriptorUpdateInfo) -> &mut Self
-    {
-        self.write_index(dest, bound, 0, info)
-    }
-    /// Submit entire batches
-    pub fn submit(&self, d: &br::Device) { d.update_descriptor_sets(&self.0, &self.1); }
 }
