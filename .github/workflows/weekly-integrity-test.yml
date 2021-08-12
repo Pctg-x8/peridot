@@ -25,6 +25,19 @@ jobs:
     - if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
+    - env:
+        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+        AWS_DEFAULT_REGION: "ap-northeast-1"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+      if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-baselayer"
+        mode: branch
+        report_name: Weekly Check
+        status: failure
   "check-cradle-macos":
     name: "Cradle(macOS)"
     needs:
@@ -163,11 +176,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: 'true'
+    - env:
+        TARGET_PATH: examples
+      if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: examples
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -195,21 +208,21 @@ jobs:
     - if: 'true'
       name: Checking out
       uses: "actions/checkout@v2"
-    - if: 'true'
+    - env:
+        RUN_SCRIPT: codeform_check
+      if: 'true'
       name: "Running Check: Line Width"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: codeform_check
-    - if: 'true'
+    - env:
+        RUN_SCRIPT: vulnerabilities_elliminator
+      if: 'true'
       name: "Running Check: Debugging Weaks"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: vulnerabilities_elliminator
-    - if: 'true'
+    - env:
+        RUN_SCRIPT: trailing_newline_checker
+      if: 'true'
       name: "Running Check: Trailing Newline for Source Code Files"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: trailing_newline_checker
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -247,11 +260,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: 'true'
+    - env:
+        TARGET_PATH: '.'
+      if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: '.'
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -289,11 +302,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: 'true'
+    - env:
+        TARGET_PATH: tools
+      if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: tools
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"

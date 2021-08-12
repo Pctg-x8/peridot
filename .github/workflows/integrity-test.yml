@@ -25,6 +25,23 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
+    - env:
+        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+        AWS_DEFAULT_REGION: "ap-northeast-1"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+      if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        base_sha: "${{ github.event.pull_request.base.sha }}"
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-baselayer"
+        head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
+        pr_number: "${{ github.event.number }}"
+        pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
+        status: failure
   "check-cradle-macos":
     name: "Cradle(macOS)"
     needs:
@@ -173,11 +190,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        TARGET_PATH: examples
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: examples
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -209,21 +226,21 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
       uses: "actions/checkout@v2"
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        RUN_SCRIPT: codeform_check
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Running Check: Line Width"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: codeform_check
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        RUN_SCRIPT: vulnerabilities_elliminator
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Running Check: Debugging Weaks"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: vulnerabilities_elliminator
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        RUN_SCRIPT: trailing_newline_checker
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Running Check: Trailing Newline for Source Code Files"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: trailing_newline_checker
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -265,11 +282,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        TARGET_PATH: '.'
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: '.'
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
@@ -370,11 +387,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        TARGET_PATH: tools
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: tools
     - env:
         AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
