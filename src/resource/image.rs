@@ -28,5 +28,3 @@ impl br::VkHandle for Image {
 
     fn native_ptr(&self) -> Self::Handle { self.0.native_ptr() }
 }
-
-aaa
