@@ -1,5 +1,7 @@
 #!/bin/bash -xe
 
+set -o pipefail
+
 cd $TARGET_PATH
 
 export CARGO_TARGET_DIR=$GITHUB_WORKSPACE/.buildcache/target
