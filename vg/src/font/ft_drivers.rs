@@ -35,10 +35,14 @@ impl System
 	pub fn new() -> Self { System(UniqueSystem::new().into()) }
 }
 
-pub enum FaceGroupEntry { Unloaded(CString, FT_Long), Loaded(Face) }
-impl FaceGroupEntry
-{
-	pub fn is_loaded(&self) -> bool { match self { Self::Loaded(_) => true, _ => false } }
+pub enum FaceGroupEntry {
+	Unloaded(CString, FT_Long), Loaded(Face), LoadedMem(Face, Rc<Vec<u8>>)
+}
+impl FaceGroupEntry {
+	pub fn unloaded(path: &CStr, index: FT_Long) -> Self {
+		Self::Unloaded(path.to_owned(), index)
+	}
+	pub fn is_loaded(&self) -> bool { match self { Self::Loaded(_) | Self::LoadedMem(_, _) => true, _ => false } }
 }
 pub struct FaceGroup
 {
@@ -48,12 +52,9 @@ pub struct FaceGroup
 }
 impl System
 {
-	pub fn new_face_group(&self, entries: &[(*const i8, FT_Long)]) -> FaceGroup
+	pub fn new_face_group(&self, entries: Vec<FaceGroupEntry>) -> FaceGroup
 	{
-		let faces = entries.iter()
-			.map(|&(p, x)| FaceGroupEntry::Unloaded(unsafe { CStr::from_ptr(p as _).to_owned() }, x).into())
-			.collect();
-		
+		let faces = entries.into_iter().map(Into::into).collect();
 		FaceGroup { parent: self.clone(), faces, current_size: Cell::new(0.0) }
 	}
 }
@@ -63,17 +64,19 @@ impl FaceGroup
 	{
 		if !self.faces[index].borrow().is_loaded()
 		{
-			let new_face = if let FaceGroupEntry::Unloaded(p, x) = &*self.faces[index].borrow()
-			{
-				self.parent.new_face(p.as_ptr() as _, *x)
-			}
-			else { unreachable!() };
+			let new_face = match &*self.faces[index].borrow() {
+				FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
+				_ => unreachable!()
+			};
 			new_face.set_size(self.current_size.get());
 			let bm = &self.faces[index];
 			*bm.borrow_mut() = FaceGroupEntry::Loaded(new_face);
 		}
 
-		Ref::map(self.faces[index].borrow(), |f| if let FaceGroupEntry::Loaded(f) = f { f } else { unreachable!() })
+		Ref::map(
+			self.faces[index].borrow(),
+			|f| if let FaceGroupEntry::Loaded(f) | FaceGroupEntry::LoadedMem(f, _) = f { f } else { unreachable!() }
+		)
 	}
 
 	pub fn set_size(&self, size: f32)
@@ -82,7 +85,9 @@ impl FaceGroup
 		for e in &self.faces
 		{
 			let eb = e.borrow();
-			if let &FaceGroupEntry::Loaded(ref f) = &*eb { f.set_size(size); }
+			if let &FaceGroupEntry::Loaded(ref f) | &FaceGroupEntry::LoadedMem(ref f, _) = &*eb {
+				f.set_size(size);
+			}
 		}
 	}
 
@@ -111,6 +116,17 @@ impl System
 		{
 			FT_New_Face(self.0.ptr, path as _, face_index, ptr.as_mut_ptr());
 			Face { _parent: self.clone(), ptr: ptr.assume_init() }
+		}
+	}
+	pub fn new_face_from_mem(&self, mem: &[u8], face_index: FT_Long) -> Result<Face, FT_Error> {
+		let mut ptr = MaybeUninit::uninit();
+		unsafe {
+			let r = FT_New_Memory_Face(self.0.ptr, mem.as_ptr(), mem.len() as _, face_index, ptr.as_mut_ptr());
+			if r != 0 {
+				Err(r)
+			} else {
+				Ok(Face { _parent: self.clone(), ptr: ptr.assume_init() })
+			}
 		}
 	}
 }
