@@ -26,10 +26,20 @@ jobs:
       name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -83,10 +93,20 @@ jobs:
       run: "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
       shell: bash
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -140,10 +160,20 @@ jobs:
             $ErrorActionPreference = "Continue"
             pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -182,10 +212,20 @@ jobs:
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -224,10 +264,20 @@ jobs:
       name: "Running Check: Trailing Newline for Source Code Files"
       uses: "./.github/actions/codeform-checker"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -266,10 +316,20 @@ jobs:
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -308,10 +368,20 @@ jobs:
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -346,10 +416,19 @@ jobs:
     - name: Checking out
       uses: "actions/checkout@v2"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      name: Notify as Success
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - name: Notify as Success
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"
