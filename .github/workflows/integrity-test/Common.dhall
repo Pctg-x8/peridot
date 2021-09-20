@@ -57,11 +57,26 @@ let withConditionStep =
 
 let runStepOnFailure = withConditionStep "failure()"
 
-let awsAccessEnvParams
-    : SlackNotifierAction.ExecEnv
-    = { AWS_ACCESS_KEY_ID = eSecretAWSAccessKey
-      , AWS_SECRET_ACCESS_KEY = eSecretAWSAccessSecret
-      , AWS_DEFAULT_REGION = "ap-northeast-1"
+let configureSlackNotification =
+      GithubActions.Step::{
+      , name = "Configure for Slack Notification"
+      , id = Some "cfgNotification"
+      , run = Some
+          ''
+          # re-export configs for further step
+          echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+          echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+          echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+          curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+          ''
+      , env = Some
+          ( toMap
+              { AWS_ROLE_ARN = "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+              , AWS_WEB_IDENTITY_TOKEN_FILE = "/tmp/awstoken"
+              , AWS_DEFAULT_REGION = "ap-northeast-1"
+              }
+          )
       }
 
 let preconditionRecordBeginTimeStep =
@@ -119,7 +134,6 @@ let slackNotifyIfFailureStep =
                 , pr_title = ePullRequestTitle
                 }
           }
-          awsAccessEnvParams
 
 let slackNotifySuccessStep =
       SlackNotifierAction.step
@@ -135,7 +149,6 @@ let slackNotifySuccessStep =
               , pr_title = ePullRequestTitle
               }
         }
-        awsAccessEnvParams
 
 let weeklySlackNotifyAsFailureStep =
       λ(stepName : Text) →
@@ -146,7 +159,6 @@ let weeklySlackNotifyAsFailureStep =
           , report_name = "Weekly Check"
           , mode = SlackNotifierAction.Mode.Branch
           }
-          awsAccessEnvParams
 
 let weeklySlackNotifyAsSuccessStep =
       SlackNotifierAction.step
@@ -156,7 +168,6 @@ let weeklySlackNotifyAsSuccessStep =
         , report_name = "Weekly Check"
         , mode = SlackNotifierAction.Mode.Branch
         }
-        awsAccessEnvParams
 
 let SlackNotification = < Success | Failure : Text >
 
@@ -184,7 +195,7 @@ let weeklySlackNotifyProvider =
 let slackNotify =
       λ(provider : SlackNotifyProvider) →
       λ(state : SlackNotification) →
-        merge provider state
+        [ configureSlackNotification, merge provider state ]
 
 let checkFormats =
       λ(notifyProvider : SlackNotifyProvider) →
@@ -192,6 +203,7 @@ let checkFormats =
         GithubActions.Job::{
         , name = Some "Code Formats"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -217,12 +229,14 @@ let checkFormats =
                           "Running Check: Trailing Newline for Source Code Files"
                       }
                   ]
-              , [ runStepOnFailure
-                    ( slackNotify
-                        notifyProvider
-                        (SlackNotification.Failure "check-formats")
-                    )
-                ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-formats")
+                  )
               ]
         }
 
@@ -232,6 +246,7 @@ let checkBaseLayer =
         GithubActions.Job::{
         , name = Some "Base Layer"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -246,12 +261,14 @@ let checkBaseLayer =
                     , uses = Some "./.github/actions/checkbuild-baselayer"
                     }
                   ]
-              , [ runStepOnFailure
-                    ( slackNotify
-                        notifyProvider
-                        (SlackNotification.Failure "check-baselayer")
-                    )
-                ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-baselayer")
+                  )
               ]
         }
 
@@ -261,6 +278,7 @@ let checkTools =
         GithubActions.Job::{
         , name = Some "Tools"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -273,12 +291,14 @@ let checkTools =
                   , cacheStep
                   , CheckBuildSubdirAction.step { path = "tools" }
                   ]
-              , [ runStepOnFailure
-                    ( slackNotify
-                        notifyProvider
-                        (SlackNotification.Failure "check-tools")
-                    )
-                ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-tools")
+                  )
               ]
         }
 
@@ -288,6 +308,7 @@ let checkModules =
         GithubActions.Job::{
         , name = Some "Modules"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -300,12 +321,14 @@ let checkModules =
                   , cacheStep
                   , CheckBuildSubdirAction.step { path = "." }
                   ]
-              , [ runStepOnFailure
-                    ( slackNotify
-                        notifyProvider
-                        (SlackNotification.Failure "check-modules")
-                    )
-                ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-modules")
+                  )
               ]
         }
 
@@ -315,6 +338,7 @@ let checkExamples =
         GithubActions.Job::{
         , name = Some "Examples"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -327,12 +351,14 @@ let checkExamples =
                   , cacheStep
                   , CheckBuildSubdirAction.step { path = "examples" }
                   ]
-              , [ runStepOnFailure
-                    ( slackNotify
-                        notifyProvider
-                        (SlackNotification.Failure "check-examples")
-                    )
-                ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-examples")
+                  )
               ]
         }
 
@@ -342,6 +368,7 @@ let checkCradleWindows =
         GithubActions.Job::{
         , name = Some "Cradle(Windows)"
         , runs-on = GithubActions.RunnerPlatform.windows-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -389,12 +416,14 @@ let checkCradleWindows =
                         )
                     }
                   ]
-              , [ runStepOnFailure
-                    ( slackNotify
-                        notifyProvider
-                        (SlackNotification.Failure "check-cradle-windows")
-                    )
-                ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-windows")
+                  )
               ]
         }
 
@@ -404,6 +433,7 @@ let checkCradleMacos =
         GithubActions.Job::{
         , name = Some "Cradle(macOS)"
         , runs-on = GithubActions.RunnerPlatform.macos-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -448,12 +478,14 @@ let checkCradleMacos =
                         )
                     }
                   ]
-              , [ runStepOnFailure
-                    ( slackNotify
-                        notifyProvider
-                        (SlackNotification.Failure "check-cradle-macos")
-                    )
-                ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-macos")
+                  )
               ]
         }
 
@@ -462,11 +494,13 @@ let reportSuccessJob =
         GithubActions.Job::{
         , name = Some "Report as Success"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
-          [ checkoutHeadStep
-          , checkoutStep
-          , slackNotify notifyProvider SlackNotification.Success
-          ]
+            List/concat
+              GithubActions.Step.Type
+              [ [ checkoutHeadStep, checkoutStep ]
+              , slackNotify notifyProvider SlackNotification.Success
+              ]
         }
 
 in  { depends
@@ -479,6 +513,7 @@ in  { depends
     , eRepositoryName
     , ePullRequestNumber
     , eSecretGithubToken
+    , configureSlackNotification
     , slackNotifyIfFailureStep
     , slackNotifySuccessStep
     , prSlackNotifyProvider
