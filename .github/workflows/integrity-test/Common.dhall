@@ -203,6 +203,7 @@ let checkFormats =
         GithubActions.Job::{
         , name = Some "Code Formats"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -245,6 +246,7 @@ let checkBaseLayer =
         GithubActions.Job::{
         , name = Some "Base Layer"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -276,6 +278,7 @@ let checkTools =
         GithubActions.Job::{
         , name = Some "Tools"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -305,6 +308,7 @@ let checkModules =
         GithubActions.Job::{
         , name = Some "Modules"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -334,6 +338,7 @@ let checkExamples =
         GithubActions.Job::{
         , name = Some "Examples"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -363,6 +368,7 @@ let checkCradleWindows =
         GithubActions.Job::{
         , name = Some "Cradle(Windows)"
         , runs-on = GithubActions.RunnerPlatform.windows-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -427,6 +433,7 @@ let checkCradleMacos =
         GithubActions.Job::{
         , name = Some "Cradle(macOS)"
         , runs-on = GithubActions.RunnerPlatform.macos-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type
@@ -487,6 +494,7 @@ let reportSuccessJob =
         GithubActions.Job::{
         , name = Some "Report as Success"
         , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
               GithubActions.Step.Type

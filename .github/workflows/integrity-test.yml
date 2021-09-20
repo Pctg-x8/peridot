@@ -3,6 +3,8 @@ jobs:
     name: Base Layer
     needs:
     - preconditions
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -58,6 +60,8 @@ jobs:
     - preconditions
     - "check-tools"
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "macos-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -130,6 +134,8 @@ jobs:
     - preconditions
     - "check-tools"
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "windows-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -201,6 +207,8 @@ jobs:
     needs:
     - preconditions
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -256,6 +264,8 @@ jobs:
     name: Code Formats
     needs:
     - preconditions
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -313,6 +323,8 @@ jobs:
     needs:
     - preconditions
     - "check-baselayer"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -424,6 +436,8 @@ jobs:
     needs:
     - preconditions
     - "check-baselayer"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -525,6 +539,8 @@ jobs:
     - "check-sync-workflow"
     - "check-cradle-windows"
     - "check-cradle-macos"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
