@@ -157,7 +157,6 @@ struct AsyncCollectedData {
 struct FrameData {
     mouse_motion_x: f32,
     mouse_motion_y: f32,
-    mouse_wheel_motion: f32,
     mouse_pressing: [bool; MAX_MOUSE_BUTTONS],
     mouse_down_inframe: [bool; MAX_MOUSE_BUTTONS],
     mouse_up_inframe: [bool; MAX_MOUSE_BUTTONS],
@@ -187,7 +186,6 @@ impl InputProcess {
         let fd = FrameData {
             mouse_motion_x: 0.0,
             mouse_motion_y: 0.0,
-            mouse_wheel_motion: 0.0,
             mouse_pressing: [false; MAX_MOUSE_BUTTONS],
             mouse_down_inframe: [false; MAX_MOUSE_BUTTONS],
             mouse_up_inframe: [false; MAX_MOUSE_BUTTONS],

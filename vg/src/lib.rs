@@ -1,7 +1,5 @@
 //! Peridot Vector Graphics Dept. powered by Pathfinder 2(lyon)
 
-use log::*;
-
 mod font;
 pub use font::*;
 pub mod sdf_generator;
