@@ -9,3 +9,7 @@ android-build/
 ## other artifacts
 peridot-sdk/
 peridot-sdk.zip
+built/
+
+## hidden locals
+local/
