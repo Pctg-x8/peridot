@@ -12,6 +12,12 @@ all: $(addsuffix .yml,$(TARGET_WORKFLOWS))
 
 test-sync: $(addsuffix .ymls,$(TARGET_WORKFLOWS))
 
+integrity-test.yml: integrity-test.dhall integrity-test/Common.dhall
+	$(CONVERTER) --file integrity-test.dhall > integrity-test.yml
+
+weekly-integrity-test.yml: weekly-integrity-test.dhall integrity-test/Common.dhall
+	$(CONVERTER) --file weekly-integrity-test.dhall > weekly-integrity-test.yml
+
 .dhall.yml:
 	$(CONVERTER) --file $^ > $@
 
