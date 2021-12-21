@@ -93,7 +93,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let framebuffers: Vec<_> = (0..e.backbuffer_count())
             .map(|bb_index| {
                 let b = e.backbuffer(bb_index).expect("no backbuffer?");
-                br::Framebuffer::new(&renderpass, &[&b], b.size(), 1)
+                br::Framebuffer::new(&renderpass, &[&b], b.size().as_ref(), 1)
                     .expect("Failed to create Framebuffer")
             })
             .collect();
@@ -143,11 +143,15 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 .expect("Failed to create PipelineLayout"),
         );
 
-        let scissors = [br::vk::VkRect2D::from(br::Extent2D::clone(
-            e.backbuffer(0).expect("empty backbuffers").size().as_ref(),
-        ))];
-        let viewports =
-            [br::Viewport::from_rect_with_depth_range(&scissors[0], 0.0..1.0).into_inner()];
+        let scissors = [AsRef::<br::vk::VkExtent2D>::as_ref(
+            e.backbuffer(0).expect("empty backbuffers").size(),
+        )
+        .clone()
+        .into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
+        let viewports = [br::vk::VkViewport::from_rect_with_depth_range(
+            &scissors[0],
+            0.0..1.0,
+        )];
         let pipeline = br::GraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps)
             .viewport_scissors(
                 br::DynamicArrayState::Static(&viewports),
