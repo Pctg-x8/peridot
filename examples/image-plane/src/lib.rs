@@ -200,7 +200,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Create RenderPass");
         let framebuffers = e
             .iter_backbuffers()
-            .map(|b| br::Framebuffer::new(&renderpass, &[&b], b.size(), 1))
+            .map(|b| br::Framebuffer::new(&renderpass, &[&b], b.size().as_ref(), 1))
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
 
@@ -258,8 +258,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let shader =
             PvpShaderModules::new(&e.graphics(), shaderfile).expect("Create ShaderModules");
         let vp = [br::vk::VkViewport {
-            width: screen_size.0 as _,
-            height: screen_size.1 as _,
+            width: screen_size.width as _,
+            height: screen_size.height as _,
             x: 0.0,
             y: 0.0,
             minDepth: 0.0,
@@ -268,8 +268,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let sc = [br::vk::VkRect2D {
             offset: br::vk::VkOffset2D::default(),
             extent: br::vk::VkExtent2D {
-                width: screen_size.0,
-                height: screen_size.1,
+                width: screen_size.width,
+                height: screen_size.height,
             },
         }];
         let pl: Rc<_> = br::PipelineLayout::new(&e.graphics(), &[&descriptor_layout], &[])
@@ -313,7 +313,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             cr.begin_render_pass(
                 &renderpass,
                 fb,
-                fb.size().clone().into(),
+                fb.size().into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
                 &[br::ClearValue::color([0.0; 4])],
                 true,
             );
@@ -383,7 +383,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>) {
         self.framebuffers = e
             .iter_backbuffers()
-            .map(|b| br::Framebuffer::new(&self.renderpass, &[&b], b.size(), 1))
+            .map(|b| br::Framebuffer::new(&self.renderpass, &[&b], b.size().as_ref(), 1))
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffers");
         self.populate_render_commands();
@@ -396,7 +396,7 @@ impl<PL: peridot::NativeLinker> Game<PL> {
             cr.begin_render_pass(
                 &self.renderpass,
                 fb,
-                fb.size().clone().into(),
+                fb.size().into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
                 &[br::ClearValue::color([0.0; 4])],
                 true,
             );
