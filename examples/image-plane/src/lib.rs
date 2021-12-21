@@ -313,7 +313,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             cr.begin_render_pass(
                 &renderpass,
                 fb,
-                fb.size().into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
+                fb.size()
+                    .clone()
+                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
                 &[br::ClearValue::color([0.0; 4])],
                 true,
             );
@@ -396,7 +398,9 @@ impl<PL: peridot::NativeLinker> Game<PL> {
             cr.begin_render_pass(
                 &self.renderpass,
                 fb,
-                fb.size().into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
+                fb.size()
+                    .clone()
+                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
                 &[br::ClearValue::color([0.0; 4])],
                 true,
             );
