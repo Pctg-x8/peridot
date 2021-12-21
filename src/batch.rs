@@ -137,7 +137,8 @@ impl TransferBatch {
     pub fn init_image_from(&mut self, dest: &crate::Image, src: crate::DeviceBufferView) {
         self.init_images
             .insert(ResourceKey(dest.clone()), (src.buffer.clone(), src.offset));
-        let size = (dest.size().0 * dest.size().1) as u64 * (dest.format().bpp() >> 3) as u64;
+        let size =
+            (dest.size().width * dest.size().height) as u64 * (dest.format().bpp() >> 3) as u64;
         Self::update_barrier_range_for(
             &mut self.barrier_range_src,
             ResourceKey(src.buffer.clone()),
