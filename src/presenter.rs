@@ -1,6 +1,8 @@
 //! Platform Presenter(Swapchain Abstraction)
 
 use bedrock as br;
+#[cfg(feature = "debug")]
+use br::VkHandle;
 use std::rc::Rc;
 
 pub trait PlatformPresenter {
