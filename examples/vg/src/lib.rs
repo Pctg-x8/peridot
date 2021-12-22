@@ -242,7 +242,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .expect("Loading CurveShader"),
         )
         .expect("Creating CurveShader");
-        let sc = [br::vk::VkExtent2D::from(screen_size.clone())
+        let sc = [AsRef::<br::vk::VkExtent2D>::as_ref(&screen_size)
+            .clone()
             .into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
         let vp = [br::vk::VkViewport::from_rect_with_depth_range(
             &sc[0],
