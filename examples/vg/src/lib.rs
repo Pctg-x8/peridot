@@ -192,7 +192,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let framebuffers = (0..e.backbuffer_count())
             .map(|bb_index| {
                 let bb = e.backbuffer(bb_index).expect("no backbuffer");
-                br::Framebuffer::new(&renderpass, &[&bb], &screen_size, 1)
+                br::Framebuffer::new(&renderpass, &[&bb], screen_size.as_ref(), 1)
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Framebuffer Creation");
@@ -242,21 +242,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .expect("Loading CurveShader"),
         )
         .expect("Creating CurveShader");
-        let vp = [br::vk::VkViewport {
-            width: screen_size.0 as _,
-            height: screen_size.1 as _,
-            x: 0.0,
-            y: 0.0,
-            minDepth: 0.0,
-            maxDepth: 1.0,
-        }];
-        let sc = [br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D::default(),
-            extent: br::vk::VkExtent2D {
-                width: screen_size.0,
-                height: screen_size.1,
-            },
-        }];
+        let sc =
+            [br::vk::VkExtent2D::from(&screen_size).into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
+        let vp = [br::vk::VkViewport::from_rect_with_depth_range(
+            &sc[0],
+            0.0..1.0,
+        )];
         debug!("ScreenSize: {:?}", screen_size);
         let pl: Rc<_> = br::PipelineLayout::new(
             &e.graphics(),
@@ -380,20 +371,22 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 interior_pipeline: &gp,
                 curve_pipeline: &gp_curve,
                 transform_buffer_descriptor_set: descs[0],
-                target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _),
+                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
             };
             let vg_renderer_exinst2 = pvg::RendererExternalInstances {
                 interior_pipeline: &gp2,
                 curve_pipeline: &gp2_curve,
                 transform_buffer_descriptor_set: descs[1],
-                target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _),
+                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
             };
 
             let mut cbr = r.begin().expect("Start Recoding CB");
             cbr.begin_render_pass(
                 &renderpass,
                 f,
-                f.size().clone().into(),
+                f.size()
+                    .clone()
+                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
                 &[br::ClearValue::color([1.0; 4])],
                 true,
             );
@@ -417,7 +410,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             gp2,
             gp1_curve: gp_curve,
             gp2_curve,
-            target_size: peridot::math::Vector2(screen_size.0 as _, screen_size.1 as _),
+            target_size: peridot::math::Vector2(screen_size.width as _, screen_size.height as _),
         }
     }
 
@@ -446,7 +439,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.framebuffers = (0..e.backbuffer_count())
             .map(|bb_index| {
                 let bb = e.backbuffer(bb_index).expect("no backbuffer");
-                br::Framebuffer::new(&self.renderpass, &[&bb], bb.size(), 1)
+                br::Framebuffer::new(&self.renderpass, &[&bb], bb.size().as_ref(), 1)
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
@@ -480,7 +473,9 @@ impl<PL: peridot::NativeLinker> Game<PL> {
         cmd.begin_render_pass(
             &self.renderpass,
             fb,
-            fb.size().clone().into(),
+            fb.size()
+                .clone()
+                .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
             &[br::ClearValue::color([1.0; 4])],
             true,
         );
