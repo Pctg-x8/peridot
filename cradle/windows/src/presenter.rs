@@ -120,7 +120,7 @@ impl InteropBackbufferResource {
         device: &comdrive::d3d12::Device,
         resource: &comdrive::d3d12::Resource,
         name_suffix: u32,
-        size: &br::Extent2D,
+        size: &br::vk::VkExtent2D,
         format: br::vk::VkFormat,
     ) -> Self {
         use br::{Chainable, MemoryBound};
@@ -272,7 +272,10 @@ impl Presenter {
             )
             .expect("Failed to create SwapChain");
         let comp = Composition::new(window, &sc);
-        let bb_size = br::Extent2D((rc.right - rc.left) as _, (rc.bottom - rc.top) as _);
+        let bb_size = br::vk::VkExtent2D {
+            width: (rc.right - rc.left) as _,
+            height: (rc.bottom - rc.top) as _,
+        };
         let backbuffers = (0..2)
             .map(|bb_index| {
                 let backbuffer = sc
@@ -579,7 +582,10 @@ impl peridot::PlatformPresenter for Presenter {
                 &self.device12,
                 &backbuffer,
                 bb_index as _,
-                &br::Extent2D(new_size.0 as _, new_size.1 as _),
+                &br::vk::VkExtent2D {
+                    width: new_size.0 as _,
+                    height: new_size.1 as _,
+                },
                 br::vk::VK_FORMAT_R8G8B8A8_UNORM,
             ));
         }
