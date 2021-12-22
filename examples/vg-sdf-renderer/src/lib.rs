@@ -133,14 +133,13 @@ impl TwoPassStencilSDFRenderer {
             enable_color_output: true,
         };
 
-        let scissors = [br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D { x: 0, y: 0 },
-            extent: br::vk::VkExtent2D {
-                width: init_target_size.0,
-                height: init_target_size.1,
-            },
-        }];
-        let viewports = [br::Viewport::from_rect_with_depth_range(&scissors[0], 0.0..1.0).into()];
+        let scissors =
+            [br::vk::VkExtent2D::from(init_target_size)
+                .into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
+        let viewports = [br::vk::VkViewport::from_rect_with_depth_range(
+            &scissors[0],
+            0.0..1.0,
+        )];
         let fill_shader = PvpShaderModules::new(
             e.graphics(),
             e.load("builtin.vg.sdf.shaders.triangle_fans")
@@ -304,7 +303,10 @@ impl TwoPassStencilSDFRenderer {
                 height: new_size.1,
             },
         }];
-        let viewports = [br::Viewport::from_rect_with_depth_range(&scissors[0], 0.0..1.0).into()];
+        let viewports = [br::vk::VkViewport::from_rect_with_depth_range(
+            &scissors[0],
+            0.0..1.0,
+        )];
 
         let mut stencil_triangle_shader = self
             .fill_shader
@@ -502,7 +504,8 @@ impl<NL> FeatureRequests for Game<NL> {}
 impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
     fn init(e: &mut Engine<NL>) -> Self {
         let backbuffer_size =
-            AsRef::<br::Extent2D>::as_ref(e.backbuffer(0).expect("no backbuffer?").size()).clone();
+            AsRef::<br::vk::VkExtent2D>::as_ref(e.backbuffer(0).expect("no backbuffer?").size())
+                .clone();
 
         let font = peridot_vg::FontProvider::new()
             .expect("Failed to create font provider")
@@ -668,7 +671,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             e.backbuffer_format(),
             e.requesting_backbuffer_layout().0,
             e.requesting_backbuffer_layout().1,
-            peridot::math::Vector2(backbuffer_size.0, backbuffer_size.1),
+            peridot::math::Vector2(backbuffer_size.width, backbuffer_size.height),
             Self::SDF_SIZE,
         );
 
@@ -821,7 +824,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             .unwrap_buffer();
 
         let stencil_buffer = br::ImageDesc::new(
-            &br::Extent2D(new_size.0 as _, new_size.1 as _),
+            &br::vk::VkExtent2D {
+                width: new_size.0 as _,
+                height: new_size.1 as _,
+            },
             br::vk::VK_FORMAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
@@ -851,7 +857,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
                 br::Framebuffer::new(
                     &self.sdf_renderer.render_pass,
                     &[&bb, &self.stencil_buffer_view],
-                    bb.size(),
+                    bb.size().as_ref(),
                     1,
                 )
             })
