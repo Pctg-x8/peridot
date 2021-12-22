@@ -1,6 +1,7 @@
 //! Platform Presenter(Swapchain Abstraction)
 
 use bedrock as br;
+#[cfg(feature = "debug")]
 use br::VkHandle;
 use std::rc::Rc;
 
@@ -54,7 +55,10 @@ impl IntegratedSwapchainObject {
         let eh = eh
             .max(si.minImageExtent.height)
             .min(si.maxImageExtent.height);
-        let ext = br::Extent2D(ew, eh);
+        let ext = br::vk::VkExtent2D {
+            width: ew,
+            height: eh,
+        };
         let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
         let pre_transform = if br::SurfaceTransform::Identity.contains(si.supportedTransforms) {
             br::SurfaceTransform::Identity
