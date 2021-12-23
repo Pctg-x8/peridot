@@ -1,9 +1,9 @@
 use comdrive::d2;
 use euclid::point2;
-use libc::c_void;
 use log::*;
 use lyon_path::PathEvent;
 use std::ptr::null_mut;
+use winapi::ctypes::c_void;
 use winapi::shared::guiddef::REFIID;
 use winapi::shared::minwindef::ULONG;
 use winapi::shared::winerror::{E_NOINTERFACE, HRESULT, S_OK};
