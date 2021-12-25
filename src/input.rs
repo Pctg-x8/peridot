@@ -142,8 +142,6 @@ pub trait NativeInput {
     fn pull(&mut self, p: NativeEventReceiver) {}
 }
 
-const MAX_MOUSE_BUTTONS: usize = 5;
-
 struct InputMaps {
     buttonmap: InputMap<NativeButtonInput>,
     analogmap: InputMap<NativeAnalogInput>,
@@ -192,11 +190,6 @@ impl NativeEventReceiver<'_> {
 
 #[derive(Debug)]
 struct FrameData {
-    mouse_motion_x: f32,
-    mouse_motion_y: f32,
-    mouse_pressing: [bool; MAX_MOUSE_BUTTONS],
-    mouse_down_inframe: [bool; MAX_MOUSE_BUTTONS],
-    mouse_up_inframe: [bool; MAX_MOUSE_BUTTONS],
     button_press_time: Vec<std::time::Duration>,
     analog_values_abs: Vec<f32>,
 }
@@ -214,11 +207,6 @@ impl InputProcess {
             analog_values: Vec::new(),
         };
         let fd = FrameData {
-            mouse_motion_x: 0.0,
-            mouse_motion_y: 0.0,
-            mouse_pressing: [false; MAX_MOUSE_BUTTONS],
-            mouse_down_inframe: [false; MAX_MOUSE_BUTTONS],
-            mouse_up_inframe: [false; MAX_MOUSE_BUTTONS],
             button_press_time: Vec::new(),
             analog_values_abs: Vec::new(),
         };
@@ -343,42 +331,6 @@ impl InputProcess {
             .get(id as usize)
             .copied()
             .unwrap_or(0.0)
-    }
-
-    // Mouse/Touch integrated apis
-    pub fn plane_touch(&self) -> bool {
-        self.frame.mouse_down_inframe[0]
-    }
-    pub fn plane_touching(&self) -> bool {
-        self.frame.mouse_pressing[0]
-    }
-    pub fn plane_delta_move(&self) -> (f32, f32) {
-        (self.frame.mouse_motion_x, self.frame.mouse_motion_y)
-    }
-
-    pub fn mouse_down(&self, knum: usize) -> bool {
-        if knum >= MAX_MOUSE_BUTTONS {
-            false
-        } else {
-            self.frame.mouse_down_inframe[knum]
-        }
-    }
-    pub fn mouse_up(&self, knum: usize) -> bool {
-        if knum >= MAX_MOUSE_BUTTONS {
-            false
-        } else {
-            self.frame.mouse_up_inframe[knum]
-        }
-    }
-    pub fn mouse_button(&self, knum: usize) -> bool {
-        if knum >= MAX_MOUSE_BUTTONS {
-            false
-        } else {
-            self.frame.mouse_pressing[knum]
-        }
-    }
-    pub fn mouse_delta_move(&self) -> (f32, f32) {
-        (self.frame.mouse_motion_x, self.frame.mouse_motion_y)
     }
 
     /// Gets plane interacting position. pointer_id=0 means Generic Mouse Input
