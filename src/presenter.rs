@@ -3,7 +3,32 @@
 use bedrock as br;
 #[cfg(feature = "debug")]
 use br::VkHandle;
-use std::rc::Rc;
+use std::{borrow::Cow, rc::Rc};
+
+pub struct Submission<'d> {
+    pub command_buffers: Vec<br::CommandBuffer>,
+    pub wait_semaphores: Vec<(&'d mut br::Semaphore, br::PipelineStageFlags)>,
+    pub signal_semaphores: Vec<&'d mut br::Semaphore>,
+}
+impl Default for Submission<'_> {
+    fn default() -> Self {
+        Self {
+            command_buffers: Vec::new(),
+            wait_semaphores: Vec::new(),
+            signal_semaphores: Vec::new(),
+        }
+    }
+}
+impl<'d> Submission<'d> {
+    fn make_native_submission(&'d self) -> br::SubmissionBatch<'d> {
+        br::SubmissionBatch {
+            command_buffers: Cow::Borrowed(&self.command_buffers[..]),
+            wait_semaphores: &self.wait_semaphores[..],
+            signal_semaphores: &self.signal_semaphores[..],
+            ..Default::default()
+        }
+    }
+}
 
 pub trait PlatformPresenter {
     fn format(&self) -> br::vk::VkFormat;
@@ -19,8 +44,8 @@ pub trait PlatformPresenter {
         last_render_fence: &br::Fence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        render_submission: Submission<'s>,
+        update_submission: Option<Submission<'s>>,
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for backbuffer resources
     fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
@@ -230,40 +255,47 @@ impl IntegratedSwapchain {
         last_render_fence: &br::Fence,
         q: &br::Queue,
         bb_index: u32,
-        mut render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        mut render_submission: Submission<'s>,
+        update_submission: Option<Submission<'s>>,
     ) -> br::Result<()> {
         if let Some(mut cs) = update_submission {
             // copy -> render
-            cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
-            render_submission.wait_semaphores.to_mut().extend(vec![
+            cs.signal_semaphores.push(&mut self.buffer_ready_order);
+            render_submission.wait_semaphores.extend(vec![
                 (
-                    &self.rendering_order,
+                    &mut self.rendering_order,
                     br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 ),
                 (
-                    &self.buffer_ready_order,
+                    &mut self.buffer_ready_order,
                     br::PipelineStageFlags::VERTEX_INPUT,
                 ),
             ]);
             render_submission
                 .signal_semaphores
-                .to_mut()
-                .push(&self.present_order);
-            g.submit_buffered_commands(&[cs, render_submission], last_render_fence)
-                .expect("Failed to submit render and update commands");
+                .push(&mut self.present_order);
+            g.submit_buffered_commands(
+                &[
+                    cs.make_native_submission(),
+                    render_submission.make_native_submission(),
+                ],
+                last_render_fence,
+            )
+            .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
             render_submission
                 .signal_semaphores
-                .to_mut()
-                .push(&self.present_order);
-            render_submission.wait_semaphores.to_mut().push((
-                &self.rendering_order,
+                .push(&mut self.present_order);
+            render_submission.wait_semaphores.push((
+                &mut self.rendering_order,
                 br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             ));
-            g.submit_buffered_commands(&[render_submission], last_render_fence)
-                .expect("Failed to submit render commands");
+            g.submit_buffered_commands(
+                &[render_submission.make_native_submission()],
+                last_render_fence,
+            )
+            .expect("Failed to submit render commands");
         }
 
         self.swapchain
