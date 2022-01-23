@@ -17,7 +17,6 @@ pub trait PlatformPresenter {
         &'s mut self,
         g: &mut crate::Graphics,
         last_render_fence: &mut br::Fence,
-        present_queue: &br::Queue,
         backbuffer_index: u32,
         render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
@@ -228,7 +227,6 @@ impl IntegratedSwapchain {
         &'s mut self,
         g: &mut crate::Graphics,
         last_render_fence: &mut br::Fence,
-        q: &br::Queue,
         bb_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
@@ -266,10 +264,11 @@ impl IntegratedSwapchain {
                 .expect("Failed to submit render commands");
         }
 
-        self.swapchain
-            .get()
-            .swapchain
-            .queue_present(q, bb_index, &[&self.present_order])
+        self.swapchain.get().swapchain.queue_present(
+            &g.graphics_queue.q,
+            bb_index,
+            &[&self.present_order],
+        )
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {

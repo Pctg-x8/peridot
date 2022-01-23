@@ -313,9 +313,8 @@ impl<PL: NativeLinker> Engine<PL> {
 
         let (copy_submission, fb_submission) = userlib.update(self, bb_index, dt);
         let pr = self.presenter.render_and_present(
-            &self.g,
-            &self.last_rendering_completion.object(),
-            &self.g.graphics_queue.q,
+            &mut self.g,
+            self.last_rendering_completion.object_mut(),
             bb_index,
             fb_submission,
             copy_submission,

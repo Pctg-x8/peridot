@@ -49,9 +49,9 @@ impl StateFence {
     }
 
     /// Return internal fence object
-    pub fn object(&self) -> &br::Fence {
-        match *self {
-            StateFence::Signaled(ref f) | StateFence::Unsignaled(ref f) => f,
+    pub fn object_mut(&mut self) -> &mut br::Fence {
+        match self {
+            Self::Signaled(f) | Self::Unsignaled(f) => f,
         }
     }
 }

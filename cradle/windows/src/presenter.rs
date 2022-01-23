@@ -57,7 +57,6 @@ impl peridot::PlatformPresenter for Presenter {
         &'s mut self,
         g: &mut peridot::Graphics,
         last_render_fence: &mut br::Fence,
-        present_queue: &br::Queue,
         backbuffer_index: u32,
         render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
@@ -65,7 +64,6 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.render_and_present(
             g,
             last_render_fence,
-            present_queue,
             backbuffer_index,
             render_submission,
             update_submission,
@@ -401,7 +399,6 @@ impl peridot::PlatformPresenter for Presenter {
         &'s mut self,
         g: &mut peridot::Graphics,
         last_render_fence: &mut br::Fence,
-        _present_queue: &br::Queue,
         _backbuffer_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
