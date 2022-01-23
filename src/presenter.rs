@@ -15,8 +15,8 @@ pub trait PlatformPresenter {
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s>(
         &'s mut self,
-        g: &crate::Graphics,
-        last_render_fence: &br::Fence,
+        g: &mut crate::Graphics,
+        last_render_fence: &mut br::Fence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
         render_submission: br::SubmissionBatch<'s>,
