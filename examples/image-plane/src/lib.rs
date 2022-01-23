@@ -72,7 +72,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     descriptor: (
         br::DescriptorSetLayout,
         br::DescriptorPool,
-        Vec<br::vk::VkDescriptorSet>,
+        Vec<br::DescriptorSet>,
     ),
     _sampler: br::Sampler,
     vertices_offset: u64,
@@ -118,7 +118,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut_uniform_offset = bp_mut.add(BufferContent::uniform::<Uniform>());
 
         let mut tfb = TransferBatch::new();
-        let buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
+        let mut buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
 
         let mut cam = Camera {
@@ -219,7 +219,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             ],
         )
         .expect("Create DescriptorSetLayout");
-        let descriptor_pool = br::DescriptorPool::new(
+        let mut descriptor_pool = br::DescriptorPool::new(
             &e.graphics(),
             1,
             &[
@@ -320,7 +320,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 true,
             );
             gp.bind(&mut cr);
-            cr.bind_graphics_descriptor_sets(0, &descriptor_main, &[]);
+            cr.bind_graphics_descriptor_sets(
+                0,
+                unsafe { std::mem::transmute(&descriptor_main[..]) },
+                &[],
+            );
             cr.bind_vertex_buffers(0, &[(&buffers.buffer.0, vertices_offset as _)]);
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
@@ -352,14 +356,15 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
         self.rot += dtsec * 15.0;
+        let (mut_uniform_offset, rot) = (self.mut_uniform_offset, self.rot);
         self.buffers
             .mut_buffer
             .0
             .guard_map(
                 0..self.mut_uniform_offset + size_of::<Uniform>() as u64,
                 |m| unsafe {
-                    m.get_mut::<Uniform>(self.mut_uniform_offset as _).object =
-                        Quaternion::new(self.rot, Vector3F32::up()).into();
+                    m.get_mut::<Uniform>(mut_uniform_offset as _).object =
+                        Quaternion::new(rot, Vector3F32::up()).into();
                 },
             )
             .expect("Update DynamicStgBuffer");
@@ -405,7 +410,11 @@ impl<PL: peridot::NativeLinker> Game<PL> {
                 true,
             );
             self.gp_main.bind(&mut cr);
-            cr.bind_graphics_descriptor_sets(0, &self.descriptor.2, &[]);
+            cr.bind_graphics_descriptor_sets(
+                0,
+                unsafe { std::mem::transmute(&self.descriptor.2[..]) },
+                &[],
+            );
             cr.bind_vertex_buffers(0, &[(&self.buffers.buffer.0, self.vertices_offset as _)]);
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
