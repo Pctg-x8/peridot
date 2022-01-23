@@ -55,8 +55,8 @@ impl peridot::PlatformPresenter for Presenter {
     }
     fn render_and_present<'s>(
         &'s mut self,
-        g: &peridot::Graphics,
-        last_render_fence: &br::Fence,
+        g: &mut peridot::Graphics,
+        last_render_fence: &mut br::Fence,
         present_queue: &br::Queue,
         backbuffer_index: u32,
         render_submission: br::SubmissionBatch<'s>,
@@ -399,8 +399,8 @@ impl peridot::PlatformPresenter for Presenter {
     }
     fn render_and_present<'s>(
         &'s mut self,
-        g: &peridot::Graphics,
-        last_render_fence: &br::Fence,
+        g: &mut peridot::Graphics,
+        last_render_fence: &mut br::Fence,
         _present_queue: &br::Queue,
         _backbuffer_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
@@ -426,7 +426,7 @@ impl peridot::PlatformPresenter for Presenter {
                 .push(&self.present_order);
 
             let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = render_submission
-                .wait_semaphores
+                .wait_semaphoresg
                 .iter()
                 .map(|(s, st)| (s.native_ptr(), st.0))
                 .unzip();
