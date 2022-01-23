@@ -38,7 +38,7 @@ impl StateFence {
     ///
     /// After waiting, a fence will be resetted and state will be set to Unsignaled state
     pub fn wait(&mut self) -> br::Result<()> {
-        if let StateFence::Signaled(ref f) = *self {
+        if let StateFence::Signaled(ref mut f) = *self {
             f.wait()?;
             f.reset()?;
         }

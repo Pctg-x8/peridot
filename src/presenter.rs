@@ -226,20 +226,16 @@ impl IntegratedSwapchain {
     }
     pub fn render_and_present<'s>(
         &'s mut self,
-        g: &crate::Graphics,
-        last_render_fence: &br::Fence,
+        g: &mut crate::Graphics,
+        last_render_fence: &mut br::Fence,
         q: &br::Queue,
         bb_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
     ) -> br::Result<()> {
-        if let Some(cs) = update_submission {
+        if let Some(mut cs) = update_submission {
             // copy -> render
-            let signal_semaphores = cs
-                .signal_semaphores
-                .into_iter()
-                .chain(std::iter::once(&mut self.buffer_ready_order))
-                .collect::<Vec<_>>();
+            cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
             render_submission.wait_semaphores.to_mut().extend(vec![
                 (
                     &self.rendering_order,

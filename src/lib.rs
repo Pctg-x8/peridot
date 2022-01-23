@@ -6,7 +6,7 @@ use bedrock as br;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::CStr;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant as InstantTimer};
@@ -195,7 +195,7 @@ impl<PL: NativeLinker> Engine<PL> {
         nativelink: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
-        let g = Graphics::new(
+        let mut g = Graphics::new(
             name,
             version,
             nativelink.instance_extensions(),
@@ -260,14 +260,14 @@ impl<NL: NativeLinker> Engine<NL> {
         &mut self.ip
     }
 
-    pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(
-        &self,
-        generator: Gen,
+    pub fn submit_commands(
+        &mut self,
+        generator: impl FnOnce(&mut br::CmdRecord),
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
     pub fn submit_buffered_commands(
-        &self,
+        &mut self,
         batches: &[br::SubmissionBatch],
         fence: &mut br::Fence,
     ) -> br::Result<()> {
@@ -342,7 +342,10 @@ impl<PL: NativeLinker> Engine<PL> {
         userlib.discard_backbuffer_resources();
         let needs_reinit_backbuffers = self.presenter.resize(&self.g, new_size.clone());
         if needs_reinit_backbuffers {
-            self.submit_commands(|r| self.presenter.emit_initialize_backbuffer_commands(r))
+            let pres = &self.presenter;
+
+            self.g
+                .submit_commands(|r| pres.emit_initialize_backbuffer_commands(r))
                 .expect("Initializing Backbuffers");
         }
         userlib.on_resize(self, new_size);
@@ -662,13 +665,13 @@ impl Graphics {
     }
 
     /// Submits any commands as transient commands.
-    pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(
-        &self,
-        generator: Gen,
+    pub fn submit_commands(
+        &mut self,
+        generator: impl FnOnce(&mut br::CmdRecord),
     ) -> br::Result<()> {
-        let cb = LocalCommandBundle(
+        let mut cb = LocalCommandBundle(
             self.cp_onetime_submit.alloc(1, true)?,
-            &self.cp_onetime_submit,
+            &mut self.cp_onetime_submit,
         );
         generator(unsafe { &mut cb[0].begin_once()? });
         self.graphics_queue.q.submit(
@@ -681,14 +684,14 @@ impl Graphics {
         self.graphics_queue.q.wait()
     }
     pub fn submit_buffered_commands(
-        &self,
+        &mut self,
         batches: &[br::SubmissionBatch],
         fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue.q.submit(batches, Some(fence))
     }
     pub fn submit_buffered_commands_raw(
-        &self,
+        &mut self,
         batches: &[br::vk::VkSubmitInfo],
         fence: &mut br::Fence,
     ) -> br::Result<()> {
@@ -728,11 +731,17 @@ impl GameTimer {
     }
 }
 
-struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
+struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p mut br::CommandPool);
 impl<'p> Deref for LocalCommandBundle<'p> {
     type Target = [br::CommandBuffer];
+
     fn deref(&self) -> &[br::CommandBuffer] {
         &self.0
+    }
+}
+impl DerefMut for LocalCommandBundle<'_> {
+    fn deref_mut(&mut self) -> &mut [br::CommandBuffer] {
+        &mut self.0
     }
 }
 impl<'p> Drop for LocalCommandBundle<'p> {
@@ -755,6 +764,11 @@ impl Deref for CommandBundle {
         &self.0
     }
 }
+impl DerefMut for CommandBundle {
+    fn deref_mut(&mut self) -> &mut [br::CommandBuffer] {
+        &mut self.0
+    }
+}
 impl Drop for CommandBundle {
     fn drop(&mut self) {
         unsafe {
@@ -768,10 +782,10 @@ impl CommandBundle {
             CBSubmissionType::Graphics => g.graphics_queue.family,
             CBSubmissionType::Transfer => g.graphics_queue.family,
         };
-        let cp = br::CommandPool::new(&g.device, qf, false, false)?;
+        let mut cp = br::CommandPool::new(&g.device, qf, false, false)?;
         return Ok(CommandBundle(cp.alloc(count as _, true)?, cp));
     }
-    pub fn reset(&self) -> br::Result<()> {
+    pub fn reset(&mut self) -> br::Result<()> {
         self.1.reset(true)
     }
 }
