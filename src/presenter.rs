@@ -233,9 +233,13 @@ impl IntegratedSwapchain {
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
     ) -> br::Result<()> {
-        if let Some(mut cs) = update_submission {
+        if let Some(cs) = update_submission {
             // copy -> render
-            cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
+            let signal_semaphores = cs
+                .signal_semaphores
+                .into_iter()
+                .chain(std::iter::once(&mut self.buffer_ready_order))
+                .collect::<Vec<_>>();
             render_submission.wait_semaphores.to_mut().extend(vec![
                 (
                     &self.rendering_order,

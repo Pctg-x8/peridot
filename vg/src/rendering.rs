@@ -48,7 +48,7 @@ impl RendererParams {
 pub struct RendererExternalInstances<'r> {
     pub interior_pipeline: &'r LayoutedPipeline,
     pub curve_pipeline: &'r LayoutedPipeline,
-    pub transform_buffer_descriptor_set: br::vk::VkDescriptorSet,
+    pub transform_buffer_descriptor_set: br::DescriptorSet,
     pub target_pixels: Vector2<f32>,
 }
 impl ModelData for Context {
@@ -213,7 +213,7 @@ impl<'e> DefaultRenderCommands<'e> for RendererParams {
         extras.interior_pipeline.bind(cmd);
         cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &renderscale);
         cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 3, &0u32);
-        cmd.bind_graphics_descriptor_sets(0, &[extras.transform_buffer_descriptor_set], &[]);
+        cmd.bind_graphics_descriptor_sets(0, &[extras.transform_buffer_descriptor_set.into()], &[]);
 
         cmd.bind_vertex_buffers(0, &[(buffer, self.buffer_offsets.interior_positions)]);
         cmd.bind_index_buffer(

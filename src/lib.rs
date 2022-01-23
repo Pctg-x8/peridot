@@ -3,7 +3,6 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
-use br::Waitable;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::CStr;
@@ -270,7 +269,7 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn submit_buffered_commands(
         &self,
         batches: &[br::SubmissionBatch],
-        fence: &br::Fence,
+        fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
@@ -357,7 +356,9 @@ impl<PL: NativeLinker> Engine<PL> {
 }
 impl<NL: NativeLinker> Drop for Engine<NL> {
     fn drop(&mut self) {
-        self.graphics().device.wait().expect("device error");
+        unsafe {
+            self.graphics().device.wait().expect("device error");
+        }
     }
 }
 
@@ -669,7 +670,7 @@ impl Graphics {
             self.cp_onetime_submit.alloc(1, true)?,
             &self.cp_onetime_submit,
         );
-        generator(&mut cb[0].begin_once()?);
+        generator(unsafe { &mut cb[0].begin_once()? });
         self.graphics_queue.q.submit(
             &[br::SubmissionBatch {
                 command_buffers: Cow::from(&cb[..]),
@@ -682,14 +683,14 @@ impl Graphics {
     pub fn submit_buffered_commands(
         &self,
         batches: &[br::SubmissionBatch],
-        fence: &br::Fence,
+        fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue.q.submit(batches, Some(fence))
     }
     pub fn submit_buffered_commands_raw(
         &self,
         batches: &[br::vk::VkSubmitInfo],
-        fence: &br::Fence,
+        fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue.q.submit_raw(batches, Some(fence))
     }
@@ -736,7 +737,9 @@ impl<'p> Deref for LocalCommandBundle<'p> {
 }
 impl<'p> Drop for LocalCommandBundle<'p> {
     fn drop(&mut self) {
-        self.1.free(&self.0[..]);
+        unsafe {
+            self.1.free(&self.0[..]);
+        }
     }
 }
 
@@ -754,7 +757,9 @@ impl Deref for CommandBundle {
 }
 impl Drop for CommandBundle {
     fn drop(&mut self) {
-        self.1.free(&self.0[..]);
+        unsafe {
+            self.1.free(&self.0[..]);
+        }
     }
 }
 impl CommandBundle {

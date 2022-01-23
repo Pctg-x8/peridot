@@ -309,19 +309,19 @@ impl DescriptorSetUpdateBatch {
     /// Write an information to bound index and array index in destination.
     pub fn write_index(
         &mut self,
-        dest: br::vk::VkDescriptorSet,
+        dest: impl Into<br::vk::VkDescriptorSet>,
         bound: u32,
         array: u32,
         info: br::DescriptorUpdateInfo,
     ) -> &mut Self {
         self.0
-            .push(br::DescriptorSetWriteInfo(dest, bound, array, info));
+            .push(br::DescriptorSetWriteInfo(dest.into(), bound, array, info));
         return self;
     }
     /// Write an information to bound index in destination.
     pub fn write(
         &mut self,
-        dest: br::vk::VkDescriptorSet,
+        dest: impl Into<br::vk::VkDescriptorSet>,
         bound: u32,
         info: br::DescriptorUpdateInfo,
     ) -> &mut Self {
