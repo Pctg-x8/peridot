@@ -61,7 +61,7 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(
         &mut self,
-        _e: &Engine<PL>,
+        _e: &mut Engine<PL>,
         _on_backbuffer_of: u32,
         _delta_time: Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -71,15 +71,15 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
     fn discard_backbuffer_resources(&mut self) {}
     /// Called when backbuffer has resized
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
-    fn on_resize(&mut self, _e: &Engine<PL>, _new_size: math::Vector2<usize>) {}
+    fn on_resize(&mut self, _e: &mut Engine<PL>, _new_size: math::Vector2<usize>) {}
 
     // Render Resource Persistency(Recovering) //
 
     /// Storing recovered render resources for discarding
-    fn store_render_resources(&mut self, _e: &Engine<PL>) {}
+    fn store_render_resources(&mut self, _e: &mut Engine<PL>) {}
 
     /// Recovering render resources
-    fn recover_render_resources(&mut self, _e: &Engine<PL>) {}
+    fn recover_render_resources(&mut self, _e: &mut Engine<PL>) {}
 }
 impl<PL: NativeLinker> EngineEvents<PL> for () {
     fn init(_e: &mut Engine<PL>) -> Self {
@@ -226,6 +226,9 @@ impl<PL: NativeLinker> Engine<PL> {
 impl<NL: NativeLinker> Engine<NL> {
     pub fn graphics(&self) -> &Graphics {
         &self.g
+    }
+    pub fn graphics_mut(&mut self) -> &mut Graphics {
+        &mut self.g
     }
     pub fn graphics_device(&self) -> &br::Device {
         &self.g.device

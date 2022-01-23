@@ -229,14 +229,14 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         );
         dsub.submit(e.graphics());
 
-        let main_commands = peridot::CommandBundle::new(
+        let mut main_commands = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
             e.backbuffer_count(),
         )
         .expect("Failed to allocate render commands");
-        for (b, fb) in main_commands.iter().zip(&framebuffers) {
-            let mut rec = b.begin().expect("Failed to begin recording main commands");
+        for (b, fb) in main_commands.iter_mut().zip(&framebuffers) {
+            let mut rec = unsafe { b.begin().expect("Failed to begin recording main commands") };
             rec.begin_render_pass(
                 &renderpass,
                 fb,
@@ -269,13 +269,15 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             offset: peridot::math::Vector2(0.0, 0.0),
             _resv: 0.0,
         };
-        let update_commands =
+        let mut update_commands =
             peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Transfer, 1)
                 .expect("Failed to allocate update commands");
         {
-            let mut r = update_commands[0]
-                .begin()
-                .expect("Failed to begin recording update commands");
+            let mut r = unsafe {
+                update_commands[0]
+                    .begin()
+                    .expect("Failed to begin recording update commands")
+            };
             let enter_barriers = [
                 br::BufferMemoryBarrier::new(
                     &buffers.mut_buffer.0,
@@ -347,7 +349,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
 
     fn update(
         &mut self,
-        e: &peridot::Engine<NL>,
+        e: &mut peridot::Engine<NL>,
         on_backbuffer_of: u32,
         delta_time: std::time::Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {

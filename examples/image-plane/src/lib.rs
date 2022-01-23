@@ -173,10 +173,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         })
         .expect("Failure in transferring initial data");
 
-        let update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
+        let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
             .expect("Alloc UpdateCB");
         {
-            let mut rec = update_cb[0].begin().expect("Begin UpdateCmdRec");
+            let mut rec = unsafe { update_cb[0].begin().expect("Begin UpdateCmdRec") };
             tfb_mut.sink_transfer_commands(&mut rec);
             tfb_mut.sink_graphics_ready_commands(&mut rec);
         }
@@ -292,13 +292,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .expect("Failed to set pipeline name");
         let gp = LayoutedPipeline::combine(gp, &pl);
 
-        let render_cb = CommandBundle::new(
+        let mut render_cb = CommandBundle::new(
             e.graphics(),
             CBSubmissionType::Graphics,
             e.backbuffer_count(),
         )
         .expect("Alloc RenderCB");
-        for (n, (cb, fb)) in render_cb.iter().zip(&framebuffers).enumerate() {
+        for (n, (cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
             #[cfg(feature = "debug")]
             br::DebugUtilsObjectNameInfo::new(
                 cb,
@@ -309,7 +309,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             )
             .apply(e.graphics())
             .expect("Failed to set render cb name");
-            let mut cr = cb.begin().expect("Begin CmdRecord");
+            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
             cr.begin_render_pass(
                 &renderpass,
                 fb,
@@ -346,7 +346,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
     fn update(
         &mut self,
-        _e: &peridot::Engine<PL>,
+        _e: &mut peridot::Engine<PL>,
         on_backbuffer_of: u32,
         delta_time: Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -382,7 +382,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.framebuffers.clear();
         self.render_cb.reset().expect("Resetting RenderCB");
     }
-    fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>) {
+    fn on_resize(&mut self, e: &mut peridot::Engine<PL>, _new_size: Vector2<usize>) {
         self.framebuffers = e
             .iter_backbuffers()
             .map(|b| br::Framebuffer::new(&self.renderpass, &[&b], b.size().as_ref(), 1))
@@ -393,8 +393,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 }
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn populate_render_commands(&mut self) {
-        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
-            let mut cr = cb.begin().expect("Begin CmdRecord");
+        for (cb, fb) in self.render_cb.iter_mut().zip(&self.framebuffers) {
+            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
             cr.begin_render_pass(
                 &self.renderpass,
                 fb,
