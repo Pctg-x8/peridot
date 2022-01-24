@@ -1,19 +1,26 @@
 //! Buffer Resource Helpers
 
+use super::memory::memory_borrow;
+use super::memory::memory_borrow_mut;
+
 use super::AutocloseMappedMemoryRange;
 
 use super::Memory;
 use bedrock as br;
 use br::MemoryBound;
 use num::Integer;
-use std::rc::Rc;
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 /// A refcounted buffer object bound with a memory object.
 #[derive(Clone)]
-pub struct Buffer(Rc<br::Buffer>, Memory, u64);
+pub struct Buffer(SharedPtr<br::Buffer>, Memory, u64);
 impl Buffer {
     pub fn bound(mut b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self> {
-        b.bind(&mem.borrow(), offset as _)
+        b.bind(&memory_borrow(mem), offset as _)
             .map(|_| Buffer(b.into(), mem.clone(), offset))
     }
     /// Reference to a memory object bound with this object.
@@ -21,12 +28,12 @@ impl Buffer {
         &self.1
     }
 
-    pub fn guard_map<F: for<'m> FnOnce(&br::MappedMemoryRange<'m>) -> R, R>(
+    pub fn guard_map<R>(
         &mut self,
         range: std::ops::Range<u64>,
-        f: F,
+        f: impl FnOnce(&br::MappedMemoryRange) -> R,
     ) -> br::Result<R> {
-        let mut mem = self.1.borrow_mut();
+        let mut mem = memory_borrow_mut(&self.1);
         let mapped_range = AutocloseMappedMemoryRange(
             mem.map((self.2 + range.start) as _..(self.2 + range.end) as _)?
                 .into(),

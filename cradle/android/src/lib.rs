@@ -7,15 +7,19 @@ mod userlib;
 use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::{Arc, RwLock};
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 struct Game {
     engine: peridot::Engine<NativeLink>,
     userlib: userlib::Game<NativeLink>,
     snd: NativeAudioEngine,
     stopping_render: bool,
-    pos_cache: std::rc::Rc<std::cell::RefCell<TouchPositionCache>>,
+    pos_cache: SharedPtr<std::cell::RefCell<TouchPositionCache>>,
 }
 impl Game {
     fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
@@ -84,7 +88,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
         self.sc.backbuffer(index)
     }
 
@@ -199,7 +203,7 @@ impl TouchPositionCache {
 }
 
 struct InputNativeLink {
-    pos_cache: std::rc::Rc<std::cell::RefCell<TouchPositionCache>>,
+    pos_cache: SharedPtr<std::cell::RefCell<TouchPositionCache>>,
 }
 impl peridot::NativeInput for InputNativeLink {
     fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)> {
