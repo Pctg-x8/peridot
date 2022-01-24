@@ -8,7 +8,11 @@ use std::fs::File;
 use std::io::Result as IOResult;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
-use std::rc::Rc;
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 mod sound_backend;
 use sound_backend::NativeAudioEngine;
@@ -76,10 +80,10 @@ pub struct WindowHandler {
     dp: *mut xcb::ffi::xcb_connection_t,
     vis: xcb::Visualid,
     wid: xcb::Window,
-    x11_ref: Rc<RefCell<X11>>,
+    x11_ref: SharedPtr<RefCell<X11>>,
 }
 pub struct Presenter {
-    x11_ref: Rc<RefCell<X11>>,
+    x11_ref: SharedPtr<RefCell<X11>>,
     sc: peridot::IntegratedSwapchain,
 }
 impl Presenter {
@@ -114,7 +118,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<std::rc::Rc<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
         self.sc.backbuffer(index)
     }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
@@ -298,7 +302,7 @@ pub struct GameDriver {
     _snd: NativeAudioEngine,
 }
 impl GameDriver {
-    fn new(wh: WindowHandler, x11: &Rc<RefCell<X11>>) -> Self {
+    fn new(wh: WindowHandler, x11: &SharedPtr<RefCell<X11>>) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
             wh,
@@ -330,7 +334,7 @@ impl GameDriver {
 
 fn main() {
     env_logger::init();
-    let x11 = std::rc::Rc::new(RefCell::new(X11::init()));
+    let x11 = SharedPtr::new(RefCell::new(X11::init()));
 
     let mut gd = GameDriver::new(
         WindowHandler {

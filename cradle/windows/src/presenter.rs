@@ -1,6 +1,11 @@
 use bedrock as br;
-use std::{cell::RefCell, rc::Rc};
+use std::cell::RefCell;
 use winapi::shared::windef::HWND;
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 #[cfg(not(feature = "transparent"))]
 pub struct Presenter {
@@ -40,7 +45,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
         self.sc.backbuffer(index)
     }
 
@@ -109,7 +114,7 @@ impl OwnedHandle {
 struct InteropBackbufferResource {
     _shared_handle: OwnedHandle,
     _image: peridot::Image,
-    image_view: Rc<br::ImageView>,
+    image_view: SharedPtr<br::ImageView>,
 }
 #[cfg(feature = "transparent")]
 impl InteropBackbufferResource {
@@ -363,7 +368,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn backbuffer_count(&self) -> usize {
         2
     }
-    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
         self.backbuffers.get(index).map(|b| b.image_view.clone())
     }
 

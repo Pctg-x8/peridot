@@ -10,6 +10,7 @@ name = "pegamelib"
 
 [features]
 debug = ["peridot/debug"]
+mt = ["peridot/mt"]
 
 [dependencies]
 peridot = { path = "../.." }

@@ -7,8 +7,12 @@ use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
-use std::rc::Rc;
 use std::sync::{Arc, RwLock};
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 struct NSLogger;
 impl log::Log for NSLogger {
@@ -191,7 +195,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<Rc<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
         self.sc.backbuffer(index)
     }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
