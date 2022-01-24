@@ -156,7 +156,7 @@ impl InteropBackbufferResource {
                 shared_handle.handle(),
             )
             .expect("Failed to query Handle Memory Properties");
-        let memory = Rc::new(RefCell::new(
+        let memory = SharedPtr::new(RefCell::new(
             br::DeviceMemory::import_win32(
                 &g,
                 image_mreq.size as _,
