@@ -1,5 +1,5 @@
 use bedrock as br;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 use winapi::shared::windef::HWND;
 
 #[cfg(not(feature = "transparent"))]
@@ -151,19 +151,22 @@ impl InteropBackbufferResource {
                 shared_handle.handle(),
             )
             .expect("Failed to query Handle Memory Properties");
-        let memory = br::DeviceMemory::import_win32(
-            &g,
-            image_mreq.size as _,
-            g.memory_type_manager
-                .device_local_index(image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits)
-                .expect("Failed to find matching memory type for importing")
-                .index(),
-            br::ExternalMemoryHandleTypeWin32::D3D12Resource,
-            shared_handle.handle(),
-            &hname,
-        )
-        .expect("Failed to import External Memory from D3D12Resource")
-        .into();
+        let memory = Rc::new(RefCell::new(
+            br::DeviceMemory::import_win32(
+                &g,
+                image_mreq.size as _,
+                g.memory_type_manager
+                    .device_local_index(
+                        image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits,
+                    )
+                    .expect("Failed to find matching memory type for importing")
+                    .index(),
+                br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                shared_handle.handle(),
+                &hname,
+            )
+            .expect("Failed to import External Memory from D3D12Resource"),
+        ));
         let image =
             peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
         let image_view = image
@@ -423,7 +426,7 @@ impl peridot::PlatformPresenter for Presenter {
                 .push(&self.present_order);
 
             let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = render_submission
-                .wait_semaphoresg
+                .wait_semaphores
                 .iter()
                 .map(|(s, st)| (s.native_ptr(), st.0))
                 .unzip();
