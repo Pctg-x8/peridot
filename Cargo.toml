@@ -8,6 +8,7 @@ edition = "2018"
 [features]
 debug = ["bedrock/VK_EXT_debug_utils"]
 derive = ["peridot-derive"]
+mt = ["bedrock/Multithreaded"]
 
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
