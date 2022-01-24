@@ -1,5 +1,5 @@
 use bedrock as br;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 use winapi::shared::windef::HWND;
 
 #[cfg(not(feature = "transparent"))]
@@ -55,9 +55,8 @@ impl peridot::PlatformPresenter for Presenter {
     }
     fn render_and_present<'s>(
         &'s mut self,
-        g: &peridot::Graphics,
-        last_render_fence: &br::Fence,
-        present_queue: &br::Queue,
+        g: &mut peridot::Graphics,
+        last_render_fence: &mut br::Fence,
         backbuffer_index: u32,
         render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
@@ -65,7 +64,6 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.render_and_present(
             g,
             last_render_fence,
-            present_queue,
             backbuffer_index,
             render_submission,
             update_submission,
@@ -153,19 +151,22 @@ impl InteropBackbufferResource {
                 shared_handle.handle(),
             )
             .expect("Failed to query Handle Memory Properties");
-        let memory = br::DeviceMemory::import_win32(
-            &g,
-            image_mreq.size as _,
-            g.memory_type_manager
-                .device_local_index(image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits)
-                .expect("Failed to find matching memory type for importing")
-                .index(),
-            br::ExternalMemoryHandleTypeWin32::D3D12Resource,
-            shared_handle.handle(),
-            &hname,
-        )
-        .expect("Failed to import External Memory from D3D12Resource")
-        .into();
+        let memory = Rc::new(RefCell::new(
+            br::DeviceMemory::import_win32(
+                &g,
+                image_mreq.size as _,
+                g.memory_type_manager
+                    .device_local_index(
+                        image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits,
+                    )
+                    .expect("Failed to find matching memory type for importing")
+                    .index(),
+                br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                shared_handle.handle(),
+                &hname,
+            )
+            .expect("Failed to import External Memory from D3D12Resource"),
+        ));
         let image =
             peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
         let image_view = image
@@ -399,9 +400,8 @@ impl peridot::PlatformPresenter for Presenter {
     }
     fn render_and_present<'s>(
         &'s mut self,
-        g: &peridot::Graphics,
-        last_render_fence: &br::Fence,
-        _present_queue: &br::Queue,
+        g: &mut peridot::Graphics,
+        last_render_fence: &mut br::Fence,
         _backbuffer_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,

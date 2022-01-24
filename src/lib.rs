@@ -3,11 +3,10 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
-use br::Waitable;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::CStr;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant as InstantTimer};
@@ -62,7 +61,7 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(
         &mut self,
-        _e: &Engine<PL>,
+        _e: &mut Engine<PL>,
         _on_backbuffer_of: u32,
         _delta_time: Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -72,15 +71,15 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
     fn discard_backbuffer_resources(&mut self) {}
     /// Called when backbuffer has resized
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
-    fn on_resize(&mut self, _e: &Engine<PL>, _new_size: math::Vector2<usize>) {}
+    fn on_resize(&mut self, _e: &mut Engine<PL>, _new_size: math::Vector2<usize>) {}
 
     // Render Resource Persistency(Recovering) //
 
     /// Storing recovered render resources for discarding
-    fn store_render_resources(&mut self, _e: &Engine<PL>) {}
+    fn store_render_resources(&mut self, _e: &mut Engine<PL>) {}
 
     /// Recovering render resources
-    fn recover_render_resources(&mut self, _e: &Engine<PL>) {}
+    fn recover_render_resources(&mut self, _e: &mut Engine<PL>) {}
 }
 impl<PL: NativeLinker> EngineEvents<PL> for () {
     fn init(_e: &mut Engine<PL>) -> Self {
@@ -196,7 +195,7 @@ impl<PL: NativeLinker> Engine<PL> {
         nativelink: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
-        let g = Graphics::new(
+        let mut g = Graphics::new(
             name,
             version,
             nativelink.instance_extensions(),
@@ -227,6 +226,9 @@ impl<PL: NativeLinker> Engine<PL> {
 impl<NL: NativeLinker> Engine<NL> {
     pub fn graphics(&self) -> &Graphics {
         &self.g
+    }
+    pub fn graphics_mut(&mut self) -> &mut Graphics {
+        &mut self.g
     }
     pub fn graphics_device(&self) -> &br::Device {
         &self.g.device
@@ -261,16 +263,16 @@ impl<NL: NativeLinker> Engine<NL> {
         &mut self.ip
     }
 
-    pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(
-        &self,
-        generator: Gen,
+    pub fn submit_commands(
+        &mut self,
+        generator: impl FnOnce(&mut br::CmdRecord),
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
     pub fn submit_buffered_commands(
-        &self,
+        &mut self,
         batches: &[br::SubmissionBatch],
-        fence: &br::Fence,
+        fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
@@ -311,9 +313,8 @@ impl<PL: NativeLinker> Engine<PL> {
 
         let (copy_submission, fb_submission) = userlib.update(self, bb_index, dt);
         let pr = self.presenter.render_and_present(
-            &self.g,
-            &self.last_rendering_completion.object(),
-            &self.g.graphics_queue.q,
+            &mut self.g,
+            self.last_rendering_completion.object_mut(),
             bb_index,
             fb_submission,
             copy_submission,
@@ -343,7 +344,10 @@ impl<PL: NativeLinker> Engine<PL> {
         userlib.discard_backbuffer_resources();
         let needs_reinit_backbuffers = self.presenter.resize(&self.g, new_size.clone());
         if needs_reinit_backbuffers {
-            self.submit_commands(|r| self.presenter.emit_initialize_backbuffer_commands(r))
+            let pres = &self.presenter;
+
+            self.g
+                .submit_commands(|r| pres.emit_initialize_backbuffer_commands(r))
                 .expect("Initializing Backbuffers");
         }
         userlib.on_resize(self, new_size);
@@ -357,7 +361,9 @@ impl<PL: NativeLinker> Engine<PL> {
 }
 impl<NL: NativeLinker> Drop for Engine<NL> {
     fn drop(&mut self) {
-        self.graphics().device.wait().expect("device error");
+        unsafe {
+            self.graphics().device.wait().expect("device error");
+        }
     }
 }
 
@@ -661,15 +667,15 @@ impl Graphics {
     }
 
     /// Submits any commands as transient commands.
-    pub fn submit_commands<Gen: FnOnce(&mut br::CmdRecord)>(
-        &self,
-        generator: Gen,
+    pub fn submit_commands(
+        &mut self,
+        generator: impl FnOnce(&mut br::CmdRecord),
     ) -> br::Result<()> {
-        let cb = LocalCommandBundle(
+        let mut cb = LocalCommandBundle(
             self.cp_onetime_submit.alloc(1, true)?,
-            &self.cp_onetime_submit,
+            &mut self.cp_onetime_submit,
         );
-        generator(&mut cb[0].begin_once()?);
+        generator(unsafe { &mut cb[0].begin_once()? });
         self.graphics_queue.q.submit(
             &[br::SubmissionBatch {
                 command_buffers: Cow::from(&cb[..]),
@@ -680,16 +686,16 @@ impl Graphics {
         self.graphics_queue.q.wait()
     }
     pub fn submit_buffered_commands(
-        &self,
+        &mut self,
         batches: &[br::SubmissionBatch],
-        fence: &br::Fence,
+        fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue.q.submit(batches, Some(fence))
     }
     pub fn submit_buffered_commands_raw(
-        &self,
+        &mut self,
         batches: &[br::vk::VkSubmitInfo],
-        fence: &br::Fence,
+        fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue.q.submit_raw(batches, Some(fence))
     }
@@ -727,16 +733,24 @@ impl GameTimer {
     }
 }
 
-struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p br::CommandPool);
+struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p mut br::CommandPool);
 impl<'p> Deref for LocalCommandBundle<'p> {
     type Target = [br::CommandBuffer];
+
     fn deref(&self) -> &[br::CommandBuffer] {
         &self.0
     }
 }
+impl DerefMut for LocalCommandBundle<'_> {
+    fn deref_mut(&mut self) -> &mut [br::CommandBuffer] {
+        &mut self.0
+    }
+}
 impl<'p> Drop for LocalCommandBundle<'p> {
     fn drop(&mut self) {
-        self.1.free(&self.0[..]);
+        unsafe {
+            self.1.free(&self.0[..]);
+        }
     }
 }
 
@@ -752,9 +766,16 @@ impl Deref for CommandBundle {
         &self.0
     }
 }
+impl DerefMut for CommandBundle {
+    fn deref_mut(&mut self) -> &mut [br::CommandBuffer] {
+        &mut self.0
+    }
+}
 impl Drop for CommandBundle {
     fn drop(&mut self) {
-        self.1.free(&self.0[..]);
+        unsafe {
+            self.1.free(&self.0[..]);
+        }
     }
 }
 impl CommandBundle {
@@ -763,10 +784,10 @@ impl CommandBundle {
             CBSubmissionType::Graphics => g.graphics_queue.family,
             CBSubmissionType::Transfer => g.graphics_queue.family,
         };
-        let cp = br::CommandPool::new(&g.device, qf, false, false)?;
+        let mut cp = br::CommandPool::new(&g.device, qf, false, false)?;
         return Ok(CommandBundle(cp.alloc(count as _, true)?, cp));
     }
-    pub fn reset(&self) -> br::Result<()> {
+    pub fn reset(&mut self) -> br::Result<()> {
         self.1.reset(true)
     }
 }

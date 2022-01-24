@@ -15,9 +15,8 @@ pub trait PlatformPresenter {
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s>(
         &'s mut self,
-        g: &crate::Graphics,
-        last_render_fence: &br::Fence,
-        present_queue: &br::Queue,
+        g: &mut crate::Graphics,
+        last_render_fence: &mut br::Fence,
         backbuffer_index: u32,
         render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
@@ -226,9 +225,8 @@ impl IntegratedSwapchain {
     }
     pub fn render_and_present<'s>(
         &'s mut self,
-        g: &crate::Graphics,
-        last_render_fence: &br::Fence,
-        q: &br::Queue,
+        g: &mut crate::Graphics,
+        last_render_fence: &mut br::Fence,
         bb_index: u32,
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
@@ -266,10 +264,11 @@ impl IntegratedSwapchain {
                 .expect("Failed to submit render commands");
         }
 
-        self.swapchain
-            .get()
-            .swapchain
-            .queue_present(q, bb_index, &[&self.present_order])
+        self.swapchain.get().swapchain.queue_present(
+            &g.graphics_queue.q,
+            bb_index,
+            &[&self.present_order],
+        )
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {

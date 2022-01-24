@@ -54,7 +54,7 @@ pub struct Game<NL> {
     _dsl: br::DescriptorSetLayout,
     _dsl2: br::DescriptorSetLayout,
     _descriptor_pool: br::DescriptorPool,
-    descriptors: Vec<br::vk::VkDescriptorSet>,
+    descriptors: Vec<br::DescriptorSet>,
     pipeline: peridot::LayoutedPipeline,
     buffers: peridot::FixedMemory,
     main_commands: peridot::CommandBundle,
@@ -118,7 +118,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             )],
         )
         .expect("Failed to create DescriptorSetLayout for FragmentShader");
-        let dp = br::DescriptorPool::new(
+        let mut dp = br::DescriptorPool::new(
             e.graphics(),
             2,
             &[
@@ -184,28 +184,26 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             peridot::FixedMemory::new(e.graphics(), bp, bp_dynamic, tig, &mut fm_init, &mut tfb)
                 .expect("Alloc FixedBuffers");
 
-        e.graphics()
-            .submit_commands(|r| {
-                let buffer_end_barriers = [br::BufferMemoryBarrier::new(
-                    &buffers.mut_buffer.0,
-                    uniform_start_d
-                        ..(uniform_start_d + std::mem::size_of::<UniformValues>() as u64),
-                    0,
-                    br::AccessFlags::HOST.write,
-                )];
+        e.submit_commands(|r| {
+            let buffer_end_barriers = [br::BufferMemoryBarrier::new(
+                &buffers.mut_buffer.0,
+                uniform_start_d..(uniform_start_d + std::mem::size_of::<UniformValues>() as u64),
+                0,
+                br::AccessFlags::HOST.write,
+            )];
 
-                tfb.sink_transfer_commands(r);
-                tfb.sink_graphics_ready_commands(r);
-                r.pipeline_barrier(
-                    br::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    br::PipelineStageFlags::VERTEX_INPUT.host(),
-                    false,
-                    &[],
-                    &buffer_end_barriers,
-                    &[],
-                );
-            })
-            .expect("Failed to execute init command");
+            tfb.sink_transfer_commands(r);
+            tfb.sink_graphics_ready_commands(r);
+            r.pipeline_barrier(
+                br::PipelineStageFlags::BOTTOM_OF_PIPE,
+                br::PipelineStageFlags::VERTEX_INPUT.host(),
+                false,
+                &[],
+                &buffer_end_barriers,
+                &[],
+            );
+        })
+        .expect("Failed to execute init command");
 
         let mut dsub = peridot::DescriptorSetUpdateBatch::new();
         dsub.write(
@@ -229,14 +227,14 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         );
         dsub.submit(e.graphics());
 
-        let main_commands = peridot::CommandBundle::new(
+        let mut main_commands = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
             e.backbuffer_count(),
         )
         .expect("Failed to allocate render commands");
-        for (b, fb) in main_commands.iter().zip(&framebuffers) {
-            let mut rec = b.begin().expect("Failed to begin recording main commands");
+        for (b, fb) in main_commands.iter_mut().zip(&framebuffers) {
+            let mut rec = unsafe { b.begin().expect("Failed to begin recording main commands") };
             rec.begin_render_pass(
                 &renderpass,
                 fb,
@@ -245,7 +243,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 true,
             );
             pipeline.bind(&mut rec);
-            rec.bind_graphics_descriptor_sets(0, &descriptors[..], &[]);
+            rec.bind_graphics_descriptor_sets(
+                0,
+                unsafe { std::mem::transmute(&descriptors[..]) },
+                &[],
+            );
             rec.bind_vertex_buffers(0, &[(&buffers.buffer.0, vertex_start as _)]);
             rec.draw(4, 1, 0, 0);
             rec.end_render_pass();
@@ -269,13 +271,15 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             offset: peridot::math::Vector2(0.0, 0.0),
             _resv: 0.0,
         };
-        let update_commands =
+        let mut update_commands =
             peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Transfer, 1)
                 .expect("Failed to allocate update commands");
         {
-            let mut r = update_commands[0]
-                .begin()
-                .expect("Failed to begin recording update commands");
+            let mut r = unsafe {
+                update_commands[0]
+                    .begin()
+                    .expect("Failed to begin recording update commands")
+            };
             let enter_barriers = [
                 br::BufferMemoryBarrier::new(
                     &buffers.mut_buffer.0,
@@ -347,7 +351,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
 
     fn update(
         &mut self,
-        e: &peridot::Engine<NL>,
+        e: &mut peridot::Engine<NL>,
         on_backbuffer_of: u32,
         delta_time: std::time::Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -363,6 +367,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         }
         self.last_mouse_input = current_mouse_input;
 
+        let update_data = &self.update_data;
         self.buffers
             .mut_buffer
             .0
@@ -370,7 +375,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 self.uniform_start_d
                     ..(self.uniform_start_d + std::mem::size_of::<UniformValues>() as u64),
                 |m| unsafe {
-                    *m.get_mut(0) = self.update_data.clone();
+                    *m.get_mut(0) = update_data.clone();
                 },
             )
             .expect("Failed to map dynamic buffer");
