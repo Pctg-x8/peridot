@@ -4,15 +4,12 @@ use bedrock as br;
 #[cfg(feature = "debug")]
 use br::VkHandle;
 
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as RefCounted;
-#[cfg(feature = "mt")]
-use std::sync::Arc as RefCounted;
+use crate::mthelper::SharedRef;
 
 pub trait PlatformPresenter {
     fn format(&self) -> br::vk::VkFormat;
     fn backbuffer_count(&self) -> usize;
-    fn backbuffer(&self, index: usize) -> Option<RefCounted<br::ImageView>>;
+    fn backbuffer(&self, index: usize) -> Option<SharedRef<br::ImageView>>;
 
     fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord);
     fn next_backbuffer_index(&mut self) -> br::Result<u32>;
@@ -32,7 +29,7 @@ pub trait PlatformPresenter {
 
 struct IntegratedSwapchainObject {
     swapchain: br::Swapchain,
-    backbuffer_images: Vec<RefCounted<br::ImageView>>,
+    backbuffer_images: Vec<SharedRef<br::ImageView>>,
 }
 impl IntegratedSwapchainObject {
     pub fn new(
@@ -90,7 +87,7 @@ impl IntegratedSwapchainObject {
             .expect("Failed to set swapchain name");
 
         let isr_c0 = br::ImageSubresourceRange::color(0, 0);
-        let backbuffer_images: Vec<RefCounted<_>> = chain
+        let backbuffer_images: Vec<SharedRef<_>> = chain
             .get_images()
             .expect("Failed to get backbuffer images")
             .into_iter()
@@ -187,7 +184,7 @@ impl IntegratedSwapchain {
     pub fn backbuffer_count(&self) -> usize {
         self.swapchain.get().backbuffer_images.len()
     }
-    pub fn backbuffer(&self, index: usize) -> Option<RefCounted<br::ImageView>> {
+    pub fn backbuffer(&self, index: usize) -> Option<SharedRef<br::ImageView>> {
         self.swapchain.get().backbuffer_images.get(index).cloned()
     }
 

@@ -2,31 +2,10 @@
 
 use bedrock as br;
 
-#[cfg(feature = "mt")]
-use std::sync::{Arc as SharedPtr, RwLock as DynamicMut};
-#[cfg(not(feature = "mt"))]
-use std::{cell::RefCell as DynamicMut, rc::Rc as SharedPtr};
+use crate::mthelper::{DynamicMut, SharedRef};
 
 /// A refcounted memory object.
-pub type Memory = SharedPtr<DynamicMut<br::DeviceMemory>>;
-
-#[cfg(feature = "mt")]
-pub(super) fn memory_borrow_mut(m: &Memory) -> std::sync::RwLockWriteGuard<br::DeviceMemory> {
-    m.write().expect("poisoned memory")
-}
-#[cfg(not(feature = "mt"))]
-pub(super) fn memory_borrow_mut(m: &Memory) -> std::cell::RefMut<br::DeviceMemory> {
-    m.borrow_mut()
-}
-
-#[cfg(feature = "mt")]
-pub(super) fn memory_borrow(m: &Memory) -> std::sync::RwLockReadGuard<br::DeviceMemory> {
-    m.read().expect("poisoned memory")
-}
-#[cfg(not(feature = "mt"))]
-pub(super) fn memory_borrow(m: &Memory) -> std::cell::Ref<br::DeviceMemory> {
-    m.borrow()
-}
+pub type Memory = SharedRef<DynamicMut<br::DeviceMemory>>;
 
 pub struct MemoryBadget<'g> {
     g: &'g crate::Graphics,
@@ -116,7 +95,7 @@ impl<'g> MemoryBadget<'g> {
             .index();
         log::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
-        let mem = SharedPtr::new(DynamicMut::new(br::DeviceMemory::allocate(
+        let mem = SharedRef::new(DynamicMut::new(br::DeviceMemory::allocate(
             &self.g.device,
             self.total_size as _,
             mt,
@@ -148,7 +127,7 @@ impl<'g> MemoryBadget<'g> {
         }
         log::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt.index(), self.memory_type_bitmask);
-        let mem = SharedPtr::new(DynamicMut::new(br::DeviceMemory::allocate(
+        let mem = SharedRef::new(DynamicMut::new(br::DeviceMemory::allocate(
             &self.g.device,
             self.total_size as _,
             mt.index(),

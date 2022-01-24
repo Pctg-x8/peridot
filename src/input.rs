@@ -1,5 +1,6 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
+
+use crate::mthelper::DynamicMut;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 /// Digital(Buttons) Input
@@ -165,8 +166,8 @@ struct FrameData {
 }
 pub struct InputProcess {
     nativelink: Option<Box<dyn NativeInput>>,
-    collected: RefCell<AsyncCollectedData>,
-    frame: RefCell<FrameData>,
+    collected: DynamicMut<AsyncCollectedData>,
+    frame: DynamicMut<FrameData>,
     buttonmap: InputMap<NativeButtonInput>,
     analogmap: InputMap<NativeAnalogInput>,
     ax_pos_buttonmap:
