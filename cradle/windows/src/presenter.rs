@@ -1,27 +1,27 @@
 use bedrock as br;
-use std::cell::RefCell;
-use winapi::shared::windef::HWND;
 
 #[cfg(not(feature = "mt"))]
 use std::rc::Rc as SharedPtr;
 #[cfg(feature = "mt")]
 use std::sync::Arc as SharedPtr;
 
+use crate::ThreadsafeWindowOps;
+
 #[cfg(not(feature = "transparent"))]
 pub struct Presenter {
-    _window: HWND,
+    _window: SharedPtr<ThreadsafeWindowOps>,
     sc: peridot::IntegratedSwapchain,
 }
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: HWND) -> Self {
+    pub fn new(g: &peridot::Graphics, window: SharedPtr<ThreadsafeWindowOps>) -> Self {
         if !g
             .adapter()
             .win32_presentation_support(g.graphics_queue_family_index())
         {
             panic!("WindowSubsystem does not support Vulkan Rendering");
         }
-        let s = br::Surface::new_win32(g.instance(), super::module_handle(), window)
+        let s = br::Surface::new_win32(g.instance(), super::module_handle(), window.0)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
@@ -88,9 +88,9 @@ impl peridot::PlatformPresenter for Presenter {
 
 #[cfg(feature = "transparent")]
 #[repr(transparent)]
-struct OwnedHandle(winapi::shared::ntdef::HANDLE);
+struct UnsafeThreadsafeHandle(winapi::shared::ntdef::HANDLE);
 #[cfg(feature = "transparent")]
-impl Drop for OwnedHandle {
+impl Drop for UnsafeThreadsafeHandle {
     fn drop(&mut self) {
         unsafe {
             winapi::um::handleapi::CloseHandle(self.0);
@@ -98,21 +98,65 @@ impl Drop for OwnedHandle {
     }
 }
 #[cfg(feature = "transparent")]
-impl From<winapi::shared::ntdef::HANDLE> for OwnedHandle {
+impl From<winapi::shared::ntdef::HANDLE> for UnsafeThreadsafeHandle {
     fn from(h: winapi::shared::ntdef::HANDLE) -> Self {
-        OwnedHandle(h)
+        Self(h)
     }
 }
 #[cfg(feature = "transparent")]
-impl OwnedHandle {
+impl UnsafeThreadsafeHandle {
     pub fn handle(&self) -> winapi::shared::ntdef::HANDLE {
         self.0
     }
 }
+#[cfg(feature = "transparent")]
+unsafe impl Sync for UnsafeThreadsafeHandle {}
+#[cfg(feature = "transparent")]
+unsafe impl Send for UnsafeThreadsafeHandle {}
+
+#[cfg(feature = "transparent")]
+#[repr(transparent)]
+struct ThreadsafeEvent(winapi::shared::ntdef::HANDLE);
+#[cfg(feature = "transparent")]
+impl Drop for ThreadsafeEvent {
+    fn drop(&mut self) {
+        unsafe {
+            winapi::um::handleapi::CloseHandle(self.0);
+        }
+    }
+}
+#[cfg(feature = "transparent")]
+impl ThreadsafeEvent {
+    pub fn new(manual_reset: bool, init_signaled: bool) -> std::io::Result<Self> {
+        let e = unsafe {
+            winapi::um::synchapi::CreateEventA(
+                std::ptr::null_mut(),
+                manual_reset as _,
+                init_signaled as _,
+                std::ptr::null(),
+            )
+        };
+        if e.is_null() {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(Self(e))
+        }
+    }
+
+    pub fn wait(&mut self, timeout: winapi::shared::minwindef::DWORD) {
+        unsafe {
+            winapi::um::synchapi::WaitForSingleObject(self.0, timeout);
+        }
+    }
+}
+#[cfg(feature = "transparent")]
+unsafe impl Sync for ThreadsafeEvent {}
+#[cfg(feature = "transparent")]
+unsafe impl Send for ThreadsafeEvent {}
 
 #[cfg(feature = "transparent")]
 struct InteropBackbufferResource {
-    _shared_handle: OwnedHandle,
+    _shared_handle: UnsafeThreadsafeHandle,
     _image: peridot::Image,
     image_view: SharedPtr<br::ImageView>,
 }
@@ -133,7 +177,7 @@ impl InteropBackbufferResource {
             name_suffix
         ))
         .expect("Failed to encode to WideString");
-        let shared_handle = OwnedHandle(
+        let shared_handle = UnsafeThreadsafeHandle(
             device
                 .create_shared_handle(resource, None, &hname)
                 .expect("Failed to create SharedHandle from D3D12"),
@@ -156,7 +200,7 @@ impl InteropBackbufferResource {
                 shared_handle.handle(),
             )
             .expect("Failed to query Handle Memory Properties");
-        let memory = SharedPtr::new(RefCell::new(
+        let memory = SharedPtr::new(
             br::DeviceMemory::import_win32(
                 &g,
                 image_mreq.size as _,
@@ -170,8 +214,9 @@ impl InteropBackbufferResource {
                 shared_handle.handle(),
                 &hname,
             )
-            .expect("Failed to import External Memory from D3D12Resource"),
-        ));
+            .expect("Failed to import External Memory from D3D12Resource")
+            .into(),
+        );
         let image =
             peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
         let image_view = image
@@ -200,15 +245,15 @@ struct Composition {
 }
 #[cfg(feature = "transparent")]
 impl Composition {
-    fn new(w: HWND, swapchain: &comdrive::dxgi::SwapChain) -> Self {
+    fn new(w: &ThreadsafeWindowOps, swapchain: &comdrive::dxgi::SwapChain) -> Self {
         use comdrive::dcomp::TargetProvider;
 
-        let device =
+        let mut device =
             comdrive::dcomp::Device::new(None).expect("Failed to create DirectComposition Device");
-        let target = device
-            .new_target_for(&w)
+        let mut target = device
+            .new_target_for(&w.0)
             .expect("Failed to create DirectComposition Target");
-        let root = device
+        let mut root = device
             .new_visual()
             .expect("Failed to create DirectComposition Visual");
 
@@ -229,7 +274,7 @@ impl Composition {
 
 #[cfg(feature = "transparent")]
 pub struct Presenter {
-    _window: HWND,
+    _window: SharedPtr<ThreadsafeWindowOps>,
     _comp: Composition,
     device12: comdrive::d3d12::Device,
     q: comdrive::d3d12::CommandQueue,
@@ -241,18 +286,14 @@ pub struct Presenter {
     present_completion_fence: comdrive::d3d12::Fence,
     render_completion_counter: u64,
     present_completion_counter: u64,
-    _render_completion_fence_handle: OwnedHandle,
-    present_completion_event: OwnedHandle,
+    _render_completion_fence_handle: UnsafeThreadsafeHandle,
+    present_completion_event: ThreadsafeEvent,
     present_inflight: bool,
 }
 #[cfg(feature = "transparent")]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: HWND) -> Self {
-        let mut rc = std::mem::MaybeUninit::uninit();
-        let rc = unsafe {
-            winapi::um::winuser::GetClientRect(window, rc.as_mut_ptr());
-            rc.assume_init()
-        };
+    pub fn new(g: &peridot::Graphics, window: SharedPtr<ThreadsafeWindowOps>) -> Self {
+        let rc = window.get_client_rect();
 
         let factory = comdrive::dxgi::Factory::new(cfg!(debug_assertions))
             .expect("Failed to create DXGI Factory");
@@ -277,7 +318,7 @@ impl Presenter {
                 false,
             )
             .expect("Failed to create SwapChain");
-        let comp = Composition::new(window, &sc);
+        let comp = Composition::new(&window, &sc);
         let bb_size = br::vk::VkExtent2D {
             width: (rc.right - rc.left) as _,
             height: (rc.bottom - rc.top) as _,
@@ -312,7 +353,7 @@ impl Presenter {
         let render_completion_fence_name =
             widestring::WideCString::from_str("LocalRenderCompletionFenceShared")
                 .expect("Failed to encode widestring");
-        let render_completion_fence_handle = OwnedHandle(
+        let render_completion_fence_handle = UnsafeThreadsafeHandle(
             device12
                 .create_shared_handle(
                     &render_completion_fence,
@@ -327,19 +368,8 @@ impl Presenter {
             &render_completion_fence_name,
         )
         .expect("Failed to import Render Completion Fence");
-        let pce = unsafe {
-            winapi::um::synchapi::CreateEventA(
-                std::ptr::null_mut(),
-                false as _,
-                true as _,
-                b"LocalPeridotPresentNotification".as_ptr() as _,
-            )
-        };
-        if pce.is_null() {
-            Result::<(), _>::Err(std::io::Error::last_os_error())
-                .expect("Failed to create Present Completion Event");
-        }
-        let present_completion_event = OwnedHandle(pce);
+        let present_completion_event =
+            ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
 
         Presenter {
             _window: window,
@@ -526,12 +556,8 @@ impl peridot::PlatformPresenter for Presenter {
         }
 
         if self.present_inflight {
-            unsafe {
-                winapi::um::synchapi::WaitForSingleObject(
-                    self.present_completion_event.handle(),
-                    winapi::um::winbase::INFINITE,
-                );
-            }
+            self.present_completion_event
+                .wait(winapi::um::winbase::INFINITE);
             self.present_inflight = false;
         }
 
@@ -553,7 +579,7 @@ impl peridot::PlatformPresenter for Presenter {
         self.present_completion_fence
             .set_event_notification(
                 self.present_completion_counter,
-                self.present_completion_event.handle(),
+                self.present_completion_event.0,
             )
             .expect("Failed to set Completion Event");
         self.present_inflight = true;
@@ -563,12 +589,8 @@ impl peridot::PlatformPresenter for Presenter {
     /// Returns whether re-initializing is needed for backbuffer resources
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
         if self.present_inflight {
-            unsafe {
-                winapi::um::synchapi::WaitForSingleObject(
-                    self.present_completion_event.handle(),
-                    winapi::um::winbase::INFINITE,
-                );
-            }
+            self.present_completion_event
+                .wait(winapi::um::winbase::INFINITE);
             self.present_inflight = false;
         }
 
@@ -604,11 +626,7 @@ impl peridot::PlatformPresenter for Presenter {
 #[cfg(feature = "transparent")]
 impl Drop for Presenter {
     fn drop(&mut self) {
-        unsafe {
-            winapi::um::synchapi::WaitForSingleObject(
-                self.present_completion_event.handle(),
-                winapi::um::winbase::INFINITE,
-            );
-        }
+        self.present_completion_event
+            .wait(winapi::um::winbase::INFINITE);
     }
 }

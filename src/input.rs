@@ -1,5 +1,6 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
+
+use crate::mthelper::{DynamicMut, DynamicMutabilityProvider};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 /// Digital(Buttons) Input
@@ -147,6 +148,11 @@ pub trait NativeInput {
     fn pull(&self, p: &InputProcess) {}
 }
 
+#[cfg(not(feature = "mt"))]
+type BoxedNativeInputRef = Box<dyn NativeInput>;
+#[cfg(feature = "mt")]
+type BoxedNativeInputRef = Box<dyn NativeInput + Send + Sync>;
+
 const MAX_MOUSE_BUTTONS: usize = 5;
 struct AsyncCollectedData {
     button_pressing: Vec<bool>,
@@ -164,9 +170,9 @@ struct FrameData {
     analog_values_abs: Vec<f32>,
 }
 pub struct InputProcess {
-    nativelink: Option<Box<dyn NativeInput>>,
-    collected: RefCell<AsyncCollectedData>,
-    frame: RefCell<FrameData>,
+    nativelink: Option<BoxedNativeInputRef>,
+    collected: DynamicMut<AsyncCollectedData>,
+    frame: DynamicMut<FrameData>,
     buttonmap: InputMap<NativeButtonInput>,
     analogmap: InputMap<NativeAnalogInput>,
     ax_pos_buttonmap:
@@ -205,7 +211,7 @@ impl InputProcess {
             max_analog_id: 0,
         };
     }
-    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput>) {
+    pub fn set_nativelink(&mut self, n: BoxedNativeInputRef) {
         self.nativelink = Some(n);
     }
 

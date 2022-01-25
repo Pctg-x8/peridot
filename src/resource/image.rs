@@ -1,21 +1,16 @@
 //! Image Resource Helper
 
-use super::memory::memory_borrow;
-
 use bedrock as br;
 use br::MemoryBound;
 
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
+use crate::mthelper::{DynamicMutabilityProvider, SharedRef};
 
 /// A refcounted image object bound with a memory object.
 #[derive(Clone)]
-pub struct Image(SharedPtr<br::Image>, super::Memory, u64);
+pub struct Image(SharedRef<br::Image>, super::Memory, u64);
 impl Image {
     pub fn bound(mut r: br::Image, mem: &super::Memory, offset: u64) -> br::Result<Self> {
-        r.bind(&memory_borrow(&mem), offset as _)
+        r.bind(&mem.borrow(), offset as _)
             .map(|_| Image(r.into(), mem.clone(), offset))
     }
     /// Reference to a memory object bound with this object.

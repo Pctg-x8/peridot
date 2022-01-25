@@ -4,16 +4,11 @@ pub use peridot_math as math;
 
 use bedrock as br;
 use std::borrow::Cow;
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Ref, RefCell};
 use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant as InstantTimer};
-
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as RefCounted;
-#[cfg(feature = "mt")]
-use std::sync::Arc as RefCounted;
 
 mod state_track;
 use self::state_track::StateFence;
@@ -41,6 +36,11 @@ mod layout_cache;
 pub use self::layout_cache::*;
 mod presenter;
 pub use self::presenter::*;
+
+pub mod mthelper;
+use mthelper::{
+    DynamicMut, DynamicMutabilityProvider, MappableGuardObject, MappableMutGuardObject, SharedRef,
+};
 
 #[cfg(feature = "derive")]
 pub use peridot_derive::*;
@@ -250,10 +250,10 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn backbuffer_count(&self) -> usize {
         self.presenter.backbuffer_count()
     }
-    pub fn backbuffer(&self, index: usize) -> Option<RefCounted<br::ImageView>> {
+    pub fn backbuffer(&self, index: usize) -> Option<SharedRef<br::ImageView>> {
         self.presenter.backbuffer(index)
     }
-    pub fn iter_backbuffers(&self) -> impl Iterator<Item = RefCounted<br::ImageView>> + '_ {
+    pub fn iter_backbuffers(&self) -> impl Iterator<Item = SharedRef<br::ImageView>> + '_ {
         (0..self.backbuffer_count())
             .map(move |x| self.backbuffer(x).expect("unreachable while iteration"))
     }
@@ -383,10 +383,10 @@ impl<T> LateInit<T> {
         Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
     }
 }
-pub struct Discardable<T>(RefCell<Option<T>>);
+pub struct Discardable<T>(DynamicMut<Option<T>>);
 impl<T> Discardable<T> {
     pub fn new() -> Self {
-        Discardable(RefCell::new(None))
+        Discardable(DynamicMut::new(None))
     }
     pub fn set(&self, v: T) {
         *self.0.borrow_mut() = v.into();
@@ -394,12 +394,19 @@ impl<T> Discardable<T> {
     pub fn set_lw(&mut self, v: T) {
         *self.0.get_mut() = v.into();
     }
-    pub fn get(&self) -> Ref<T> {
-        Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
+
+    pub fn get<'v>(&'v self) -> impl Deref<Target = T> + 'v {
+        self.0
+            .borrow()
+            .map_guarded_value(|x| x.as_ref().expect("uninitialized"))
     }
-    pub fn get_mut(&self) -> RefMut<T> {
-        RefMut::map(self.0.borrow_mut(), |x| x.as_mut().expect("uninitialized"))
+
+    pub fn get_mut<'v>(&'v self) -> impl Deref<Target = T> + DerefMut + 'v {
+        self.0
+            .borrow_mut()
+            .map_guarded_value(|x| x.as_mut().expect("uninitialized"))
     }
+
     pub fn get_mut_lw(&mut self) -> &mut T {
         self.0.get_mut().as_mut().expect("uninitialized")
     }
@@ -415,7 +422,7 @@ impl<T> Discardable<T> {
 }
 impl<T> From<T> for Discardable<T> {
     fn from(v: T) -> Self {
-        Discardable(RefCell::new(Some(v)))
+        Discardable(DynamicMut::new(Some(v)))
     }
 }
 
@@ -851,15 +858,15 @@ pub trait SpecConstantStorage {
     fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, br::DynamicDataCell);
 }
 
-pub struct LayoutedPipeline(br::Pipeline, RefCounted<br::PipelineLayout>);
+pub struct LayoutedPipeline(br::Pipeline, SharedRef<br::PipelineLayout>);
 impl LayoutedPipeline {
-    pub fn combine(p: br::Pipeline, layout: &RefCounted<br::PipelineLayout>) -> Self {
+    pub fn combine(p: br::Pipeline, layout: &SharedRef<br::PipelineLayout>) -> Self {
         LayoutedPipeline(p, layout.clone())
     }
     pub fn pipeline(&self) -> &br::Pipeline {
         &self.0
     }
-    pub fn layout(&self) -> &RefCounted<br::PipelineLayout> {
+    pub fn layout(&self) -> &SharedRef<br::PipelineLayout> {
         &self.1
     }
     pub fn bind(&self, rec: &mut br::CmdRecord) {

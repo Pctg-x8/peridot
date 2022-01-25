@@ -8,7 +8,7 @@ edition = "2018"
 [features]
 debug = ["bedrock/VK_EXT_debug_utils"]
 derive = ["peridot-derive"]
-mt = ["bedrock/Multithreaded"]
+mt = ["parking_lot", "bedrock/Multithreaded"]
 
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
@@ -17,6 +17,7 @@ libc = "*"
 rayon = "1.0"
 num_cpus = "1.0"
 num = "*"
+parking_lot = { version = "0.11", optional = true }
 
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
