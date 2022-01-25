@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::mthelper::DynamicMut;
+use crate::mthelper::{DynamicMut, DynamicMutabilityProvider};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 /// Digital(Buttons) Input

@@ -4,7 +4,7 @@ pub use peridot_math as math;
 
 use bedrock as br;
 use std::borrow::Cow;
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Ref, RefCell};
 use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock};
@@ -38,7 +38,9 @@ mod presenter;
 pub use self::presenter::*;
 
 mod mthelper;
-use mthelper::SharedRef;
+use mthelper::{
+    DynamicMut, DynamicMutabilityProvider, MappableGuardObject, MappableMutGuardObject, SharedRef,
+};
 
 #[cfg(feature = "derive")]
 pub use peridot_derive::*;
@@ -381,10 +383,10 @@ impl<T> LateInit<T> {
         Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
     }
 }
-pub struct Discardable<T>(RefCell<Option<T>>);
+pub struct Discardable<T>(DynamicMut<Option<T>>);
 impl<T> Discardable<T> {
     pub fn new() -> Self {
-        Discardable(RefCell::new(None))
+        Discardable(DynamicMut::new(None))
     }
     pub fn set(&self, v: T) {
         *self.0.borrow_mut() = v.into();
@@ -392,12 +394,19 @@ impl<T> Discardable<T> {
     pub fn set_lw(&mut self, v: T) {
         *self.0.get_mut() = v.into();
     }
-    pub fn get(&self) -> Ref<T> {
-        Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
+
+    pub fn get<'v>(&'v self) -> impl Deref<Target = T> + 'v {
+        self.0
+            .borrow()
+            .map_guarded_value(|x| x.as_ref().expect("uninitialized"))
     }
-    pub fn get_mut(&self) -> RefMut<T> {
-        RefMut::map(self.0.borrow_mut(), |x| x.as_mut().expect("uninitialized"))
+
+    pub fn get_mut<'v>(&'v self) -> impl Deref<Target = T> + DerefMut + 'v {
+        self.0
+            .borrow_mut()
+            .map_guarded_value(|x| x.as_mut().expect("uninitialized"))
     }
+
     pub fn get_mut_lw(&mut self) -> &mut T {
         self.0.get_mut().as_mut().expect("uninitialized")
     }
@@ -413,7 +422,7 @@ impl<T> Discardable<T> {
 }
 impl<T> From<T> for Discardable<T> {
     fn from(v: T) -> Self {
-        Discardable(RefCell::new(Some(v)))
+        Discardable(DynamicMut::new(Some(v)))
     }
 }
 

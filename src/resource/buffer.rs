@@ -7,6 +7,7 @@ use bedrock as br;
 use br::MemoryBound;
 use num::Integer;
 
+use crate::mthelper::DynamicMutabilityProvider;
 use crate::mthelper::SharedRef;
 
 /// A refcounted buffer object bound with a memory object.
