@@ -37,7 +37,7 @@ pub use self::layout_cache::*;
 mod presenter;
 pub use self::presenter::*;
 
-mod mthelper;
+pub mod mthelper;
 use mthelper::{
     DynamicMut, DynamicMutabilityProvider, MappableGuardObject, MappableMutGuardObject, SharedRef,
 };

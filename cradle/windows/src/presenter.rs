@@ -14,14 +14,14 @@ pub struct Presenter {
 }
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: HWND) -> Self {
+    pub fn new(g: &peridot::Graphics, window: SharedPtr<ThreadsafeWindowOps>) -> Self {
         if !g
             .adapter()
             .win32_presentation_support(g.graphics_queue_family_index())
         {
             panic!("WindowSubsystem does not support Vulkan Rendering");
         }
-        let s = br::Surface::new_win32(g.instance(), super::module_handle(), window)
+        let s = br::Surface::new_win32(g.instance(), super::module_handle(), window.0)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
