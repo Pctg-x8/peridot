@@ -109,7 +109,9 @@ impl UnsafeThreadsafeHandle {
         self.0
     }
 }
+#[cfg(feature = "transparent")]
 unsafe impl Sync for UnsafeThreadsafeHandle {}
+#[cfg(feature = "transparent")]
 unsafe impl Send for UnsafeThreadsafeHandle {}
 
 #[cfg(feature = "transparent")]
@@ -147,7 +149,9 @@ impl ThreadsafeEvent {
         }
     }
 }
+#[cfg(feature = "transparent")]
 unsafe impl Sync for ThreadsafeEvent {}
+#[cfg(feature = "transparent")]
 unsafe impl Send for ThreadsafeEvent {}
 
 #[cfg(feature = "transparent")]
