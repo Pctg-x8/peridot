@@ -248,12 +248,12 @@ impl Composition {
     fn new(w: &ThreadsafeWindowOps, swapchain: &comdrive::dxgi::SwapChain) -> Self {
         use comdrive::dcomp::TargetProvider;
 
-        let device =
+        let mut device =
             comdrive::dcomp::Device::new(None).expect("Failed to create DirectComposition Device");
-        let target = device
+        let mut target = device
             .new_target_for(&w.0)
             .expect("Failed to create DirectComposition Target");
-        let root = device
+        let mut root = device
             .new_visual()
             .expect("Failed to create DirectComposition Visual");
 
