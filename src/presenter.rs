@@ -264,7 +264,7 @@ impl IntegratedSwapchain {
             g.submit_buffered_commands(&[render_submission], last_render_fence)?;
         }
 
-        // FIXME: なんとかunsafeしなくていいようにしたい（SubmissionBatchの寿命をもうちょっと縮められれば行ける気がするんだけど）
+        // TODO: なんとかunsafeしなくていいようにしたい（SubmissionBatchの寿命をもうちょっと縮められれば行ける気がするんだけど）
         self.swapchain.get_mut_lw().swapchain.queue_present(
             &mut g.graphics_queue.q,
             bb_index,
