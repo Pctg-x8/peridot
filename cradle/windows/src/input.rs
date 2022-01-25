@@ -1,7 +1,6 @@
 use log::*;
 use parking_lot::RwLock;
 use peridot::{NativeAnalogInput, NativeButtonInput};
-use std::sync::Arc;
 use winapi::shared::minwindef::{FALSE, LPARAM, TRUE};
 use winapi::shared::windef::POINT;
 use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
@@ -15,6 +14,11 @@ use winapi::um::winuser::{
 use winapi::um::xinput::*;
 
 use crate::ThreadsafeWindowOps;
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 pub struct RawInputHandler {}
 impl RawInputHandler {
@@ -188,11 +192,11 @@ impl RawInputHandler {
 }
 
 pub struct NativeInputHandler {
-    target_hw: Arc<ThreadsafeWindowOps>,
+    target_hw: SharedPtr<ThreadsafeWindowOps>,
     xi_handler: RwLock<XInputHandler>,
 }
 impl NativeInputHandler {
-    pub fn new(hw: Arc<ThreadsafeWindowOps>) -> Self {
+    pub fn new(hw: SharedPtr<ThreadsafeWindowOps>) -> Self {
         NativeInputHandler {
             target_hw: hw,
             xi_handler: RwLock::new(XInputHandler::new()),
