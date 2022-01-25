@@ -1,16 +1,17 @@
 use std::io::{Error as IOError, Result as IOResult};
 use winapi::shared::minwindef::{DWORD, HINSTANCE, HIWORD, LOWORD, LPARAM, LRESULT, UINT, WPARAM};
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::{HWND, POINT, RECT};
 use winapi::shared::winerror::{HRESULT, SUCCEEDED};
 use winapi::um::combaseapi::{CoInitializeEx, CoUninitialize};
 use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::um::objbase::COINIT_MULTITHREADED;
 use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use winapi::um::winuser::{
-    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetWindowLongPtrA,
-    LoadCursorA, PeekMessageA, PostQuitMessage, RegisterClassExA, SetWindowLongPtrA, ShowWindow,
-    TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WM_INPUT,
-    WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
+    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
+    GetWindowLongPtrA, LoadCursorA, MapWindowPoints, PeekMessageA, PostQuitMessage,
+    RegisterClassExA, SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT,
+    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WM_INPUT, WM_SIZE, WNDCLASSEXA,
+    WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
 };
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 
@@ -24,6 +25,11 @@ use peridot::{EngineEvents, FeatureRequests};
 
 mod presenter;
 use self::presenter::Presenter;
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
@@ -51,6 +57,25 @@ impl Drop for CoScopeGuard {
     }
 }
 
+pub struct ThreadsafeWindowOps(HWND);
+unsafe impl Sync for ThreadsafeWindowOps {}
+unsafe impl Send for ThreadsafeWindowOps {}
+impl ThreadsafeWindowOps {
+    pub fn map_point_from_desktop(&self, p: &mut POINT) {
+        unsafe {
+            MapWindowPoints(std::ptr::null_mut(), self.0, p, 1);
+        }
+    }
+
+    pub fn get_client_rect(&self) -> RECT {
+        let mut rc = std::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(self.0, rc.as_mut_ptr());
+            rc.assume_init()
+        }
+    }
+}
+
 pub struct GameDriver {
     base: peridot::Engine<NativeLink>,
     usercode: userlib::Game<NativeLink>,
@@ -60,9 +85,11 @@ pub struct GameDriver {
 }
 impl GameDriver {
     fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
+        let window = SharedPtr::new(ThreadsafeWindowOps(window));
+
         let nl = NativeLink {
             al: AssetProvider::new(),
-            window,
+            window: window.clone(),
         };
         let mut base = peridot::Engine::new(
             userlib::Game::<NativeLink>::NAME,
@@ -73,7 +100,9 @@ impl GameDriver {
         let usercode = userlib::Game::init(&mut base);
         let ri_handler = self::input::RawInputHandler::init();
         base.input_mut()
-            .set_nativelink(Box::new(self::input::NativeInputHandler::new(window)));
+            .set_nativelink(Box::new(self::input::NativeInputHandler::new(
+                window.clone(),
+            )));
         base.postinit();
         let _snd =
             NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
@@ -305,7 +334,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
 
 struct NativeLink {
     al: AssetProvider,
-    window: HWND,
+    window: SharedPtr<ThreadsafeWindowOps>,
 }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;
@@ -335,6 +364,6 @@ impl peridot::NativeLinker for NativeLink {
         &self.al
     }
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
-        Presenter::new(g, self.window)
+        Presenter::new(g, self.window.clone())
     }
 }

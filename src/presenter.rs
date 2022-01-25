@@ -212,11 +212,11 @@ impl IntegratedSwapchain {
             &image_barriers,
         );
     }
-    pub fn acquire_next_backbuffer_index(&self) -> br::Result<u32> {
+    pub fn acquire_next_backbuffer_index(&mut self) -> br::Result<u32> {
         self.swapchain
-            .get()
+            .get_mut_lw()
             .swapchain
-            .acquire_next(None, br::CompletionHandler::from(&self.rendering_order))
+            .acquire_next(None, br::CompletionHandler::from(&mut self.rendering_order))
     }
     pub fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         (
@@ -224,51 +224,68 @@ impl IntegratedSwapchain {
             br::PipelineStageFlags::TOP_OF_PIPE,
         )
     }
-    pub fn render_and_present<'s>(
-        &'s mut self,
+
+    fn submit_render<'s>(
         g: &mut crate::Graphics,
         last_render_fence: &mut br::Fence,
-        bb_index: u32,
+        buffer_ready_order: &'s br::Semaphore,
+        rendering_order: &'s br::Semaphore,
+        present_order: &'s br::Semaphore,
         mut render_submission: br::SubmissionBatch<'s>,
         update_submission: Option<br::SubmissionBatch<'s>>,
     ) -> br::Result<()> {
         if let Some(mut cs) = update_submission {
             // copy -> render
-            cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
+            cs.signal_semaphores.to_mut().push(buffer_ready_order);
             render_submission.wait_semaphores.to_mut().extend(vec![
                 (
-                    &self.rendering_order,
+                    rendering_order,
                     br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 ),
-                (
-                    &self.buffer_ready_order,
-                    br::PipelineStageFlags::VERTEX_INPUT,
-                ),
+                (buffer_ready_order, br::PipelineStageFlags::VERTEX_INPUT),
             ]);
             render_submission
                 .signal_semaphores
                 .to_mut()
-                .push(&self.present_order);
+                .push(present_order);
             g.submit_buffered_commands(&[cs, render_submission], last_render_fence)
-                .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
             render_submission
                 .signal_semaphores
                 .to_mut()
-                .push(&self.present_order);
+                .push(present_order);
             render_submission.wait_semaphores.to_mut().push((
-                &self.rendering_order,
+                rendering_order,
                 br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             ));
             g.submit_buffered_commands(&[render_submission], last_render_fence)
-                .expect("Failed to submit render commands");
         }
+    }
 
-        self.swapchain.get().swapchain.queue_present(
-            &g.graphics_queue.q,
+    pub fn render_and_present<'s>(
+        &'s mut self,
+        g: &mut crate::Graphics,
+        last_render_fence: &mut br::Fence,
+        bb_index: u32,
+        render_submission: br::SubmissionBatch<'s>,
+        update_submission: Option<br::SubmissionBatch<'s>>,
+    ) -> br::Result<()> {
+        Self::submit_render(
+            g,
+            last_render_fence,
+            &self.buffer_ready_order,
+            &self.rendering_order,
+            &self.present_order,
+            render_submission,
+            update_submission,
+        )?;
+
+        // TODO: あとでunsafeなんとかする（できるのか......？）
+        self.swapchain.get_mut_lw().swapchain.queue_present(
+            &mut g.graphics_queue.q,
             bb_index,
-            &[&self.present_order],
+            &[unsafe { &mut *(&self.present_order as *const _ as *mut _) }],
         )
     }
 
