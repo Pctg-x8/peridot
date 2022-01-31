@@ -387,7 +387,11 @@ fn main() {
             } else if e.u64 == 1 {
                 input.process_monitor_event(&ep);
             } else {
-                input.process_device_event(gd.engine.input(), e.u64, &x11.borrow());
+                input.process_device_event(
+                    &mut gd.engine.input_mut().make_event_receiver(),
+                    e.u64,
+                    &x11.borrow(),
+                );
             }
         }
     }

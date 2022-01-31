@@ -325,7 +325,7 @@ impl InputSystem {
     }
     pub fn process_device_event(
         &mut self,
-        input: &peridot::NativeEventReceiver,
+        input: &mut peridot::NativeEventReceiver,
         ep_value: u64,
         x11: &crate::X11,
     ) {

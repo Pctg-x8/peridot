@@ -251,6 +251,13 @@ impl InputProcess {
         .dispatch_analog_event(ty, value, is_absolute);
     }
 
+    pub fn make_event_receiver(&mut self) -> NativeEventReceiver {
+        NativeEventReceiver {
+            collect: &mut self.collected,
+            input_map: &self.input_map,
+        }
+    }
+
     pub fn prepare_for_frame(&mut self, delta_time: std::time::Duration) {
         if let Some(ref mut p) = self.nativelink {
             p.pull(NativeEventReceiver {
