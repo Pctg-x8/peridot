@@ -153,10 +153,20 @@ struct InputMaps {
     max_analog_id: <NativeAnalogInput as MappableNativeInputType>::ID,
 }
 
+#[cfg(not(feature = "mt"))]
+type BoxedNativeInputRef = Box<dyn NativeInput>;
+#[cfg(feature = "mt")]
+type BoxedNativeInputRef = Box<dyn NativeInput + Send + Sync>;
+
 struct AsyncCollectedData {
     button_pressing: Vec<bool>,
     ax_button_pressing: Vec<(bool, bool)>,
     analog_values: Vec<f32>,
+}
+#[derive(Debug)]
+struct FrameData {
+    button_press_time: Vec<std::time::Duration>,
+    analog_values_abs: Vec<f32>,
 }
 
 pub struct NativeEventReceiver<'s> {
@@ -188,13 +198,8 @@ impl NativeEventReceiver<'_> {
     }
 }
 
-#[derive(Debug)]
-struct FrameData {
-    button_press_time: Vec<std::time::Duration>,
-    analog_values_abs: Vec<f32>,
-}
 pub struct InputProcess {
-    nativelink: Option<Box<dyn NativeInput>>,
+    nativelink: Option<BoxedNativeInputRef>,
     collected: AsyncCollectedData,
     frame: FrameData,
     input_map: InputMaps,
@@ -225,7 +230,7 @@ impl InputProcess {
             },
         };
     }
-    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput>) {
+    pub fn set_nativelink(&mut self, n: BoxedNativeInputRef) {
         self.nativelink = Some(n);
     }
 

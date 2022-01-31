@@ -575,7 +575,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             .unwrap_buffer();
         let mut mb_upload = peridot::MemoryBadget::new(e.graphics());
         mb_upload.add(buffer_init);
-        let buffer_init = mb_upload
+        let mut buffer_init = mb_upload
             .alloc_upload()
             .expect("Failed to allocate init buffer memory")
             .pop()
@@ -708,14 +708,14 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             outline_rects_count: outline_rects_count as _,
             invert_fill_rect_offset: flip_fill_rect,
         };
-        let cmd = peridot::CommandBundle::new(
+        let mut cmd = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
             e.backbuffer_count(),
         )
         .expect("Failed to create CommandBundle");
         for (cx, fb) in fb.iter().enumerate() {
-            let mut rec = cmd[cx].begin().expect("Failed to begin recording commands");
+            let mut rec = unsafe { cmd[cx].begin().expect("Failed to begin recording commands") };
             sdf_renderer.populate_commands(&mut rec, fb, &buffers);
             rec.end_render_pass();
         }
@@ -733,7 +733,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
 
     fn update(
         &mut self,
-        _e: &Engine<NL>,
+        _e: &mut Engine<NL>,
         on_backbuffer_of: u32,
         _delta_time: std::time::Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
@@ -751,7 +751,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
     fn discard_backbuffer_resources(&mut self) {
         self.fb.clear();
     }
-    fn on_resize(&mut self, e: &peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
+    fn on_resize(&mut self, e: &mut peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
         // rebuild font meshes
         let font = peridot_vg::FontProvider::new()
             .expect("Failed to create font provider")
@@ -816,7 +816,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             .unwrap_buffer();
         let mut mb_upload = peridot::MemoryBadget::new(e.graphics());
         mb_upload.add(buffer_init);
-        let buffer_init = mb_upload
+        let mut buffer_init = mb_upload
             .alloc_upload()
             .expect("Failed to allocate init buffer memory")
             .pop()
@@ -957,14 +957,14 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             outline_rects_count: outline_rects_count as _,
             invert_fill_rect_offset: flip_fill_rect,
         };
-        let cmd = peridot::CommandBundle::new(
+        let mut cmd = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
             e.backbuffer_count(),
         )
         .expect("Failed to create CommandBundle");
         for (cx, fb) in self.fb.iter().enumerate() {
-            let mut rec = cmd[cx].begin().expect("Failed to begin recording commands");
+            let mut rec = unsafe { cmd[cx].begin().expect("Failed to begin recording commands") };
             self.sdf_renderer.populate_commands(&mut rec, fb, &buffers);
             rec.end_render_pass();
         }

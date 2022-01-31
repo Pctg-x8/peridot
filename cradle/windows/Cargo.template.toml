@@ -10,6 +10,7 @@ UseExternalAssetPath = []
 transparent = ["winapi/handleapi", "winapi/synchapi", "winapi/winbase", "comdrive", "metrics", "widestring", "bedrock/VK_KHR_external_memory_win32", "bedrock/VK_KHR_external_semaphore_win32"]
 IterationBuild = []
 debug = ["peridot/debug"]
+mt = ["peridot/mt"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Presentation", "Implements", "VK_KHR_win32_surface"] }
@@ -21,6 +22,7 @@ num_cpus = "1.0"
 comdrive = { git = "https://github.com/Pctg-x8/comdrive", optional = true }
 metrics = { git = "https://github.com/Pctg-x8/metrics", optional = true }
 widestring = { version = "0.4", optional = true }
+parking_lot = "0.11"
 
 [dependencies.winapi]
 version = "0.3"

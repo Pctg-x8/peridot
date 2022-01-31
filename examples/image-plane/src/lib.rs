@@ -72,7 +72,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     descriptor: (
         br::DescriptorSetLayout,
         br::DescriptorPool,
-        Vec<br::vk::VkDescriptorSet>,
+        Vec<br::DescriptorSet>,
     ),
     _sampler: br::Sampler,
     vertices_offset: u64,
@@ -118,7 +118,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut_uniform_offset = bp_mut.add(BufferContent::uniform::<Uniform>());
 
         let mut tfb = TransferBatch::new();
-        let buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
+        let mut buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
 
         let mut cam = Camera {
@@ -173,10 +173,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         })
         .expect("Failure in transferring initial data");
 
-        let update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
+        let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
             .expect("Alloc UpdateCB");
         {
-            let mut rec = update_cb[0].begin().expect("Begin UpdateCmdRec");
+            let mut rec = unsafe { update_cb[0].begin().expect("Begin UpdateCmdRec") };
             tfb_mut.sink_transfer_commands(&mut rec);
             tfb_mut.sink_graphics_ready_commands(&mut rec);
         }
@@ -219,7 +219,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             ],
         )
         .expect("Create DescriptorSetLayout");
-        let descriptor_pool = br::DescriptorPool::new(
+        let mut descriptor_pool = br::DescriptorPool::new(
             &e.graphics(),
             1,
             &[
@@ -292,13 +292,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .expect("Failed to set pipeline name");
         let gp = LayoutedPipeline::combine(gp, &pl);
 
-        let render_cb = CommandBundle::new(
+        let mut render_cb = CommandBundle::new(
             e.graphics(),
             CBSubmissionType::Graphics,
             e.backbuffer_count(),
         )
         .expect("Alloc RenderCB");
-        for (n, (cb, fb)) in render_cb.iter().zip(&framebuffers).enumerate() {
+        for (n, (cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
             #[cfg(feature = "debug")]
             br::DebugUtilsObjectNameInfo::new(
                 cb,
@@ -309,7 +309,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             )
             .apply(e.graphics())
             .expect("Failed to set render cb name");
-            let mut cr = cb.begin().expect("Begin CmdRecord");
+            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
             cr.begin_render_pass(
                 &renderpass,
                 fb,
@@ -320,7 +320,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 true,
             );
             gp.bind(&mut cr);
-            cr.bind_graphics_descriptor_sets(0, &descriptor_main, &[]);
+            cr.bind_graphics_descriptor_sets(
+                0,
+                unsafe { std::mem::transmute(&descriptor_main[..]) },
+                &[],
+            );
             cr.bind_vertex_buffers(0, &[(&buffers.buffer.0, vertices_offset as _)]);
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();
@@ -346,20 +350,21 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
     fn update(
         &mut self,
-        _e: &peridot::Engine<PL>,
+        _e: &mut peridot::Engine<PL>,
         on_backbuffer_of: u32,
         delta_time: Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
         self.rot += dtsec * 15.0;
+        let (mut_uniform_offset, rot) = (self.mut_uniform_offset, self.rot);
         self.buffers
             .mut_buffer
             .0
             .guard_map(
                 0..self.mut_uniform_offset + size_of::<Uniform>() as u64,
                 |m| unsafe {
-                    m.get_mut::<Uniform>(self.mut_uniform_offset as _).object =
-                        Quaternion::new(self.rot, Vector3F32::up()).into();
+                    m.get_mut::<Uniform>(mut_uniform_offset as _).object =
+                        Quaternion::new(rot, Vector3F32::up()).into();
                 },
             )
             .expect("Update DynamicStgBuffer");
@@ -382,7 +387,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.framebuffers.clear();
         self.render_cb.reset().expect("Resetting RenderCB");
     }
-    fn on_resize(&mut self, e: &peridot::Engine<PL>, _new_size: Vector2<usize>) {
+    fn on_resize(&mut self, e: &mut peridot::Engine<PL>, _new_size: Vector2<usize>) {
         self.framebuffers = e
             .iter_backbuffers()
             .map(|b| br::Framebuffer::new(&self.renderpass, &[&b], b.size().as_ref(), 1))
@@ -393,8 +398,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 }
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn populate_render_commands(&mut self) {
-        for (cb, fb) in self.render_cb.iter().zip(&self.framebuffers) {
-            let mut cr = cb.begin().expect("Begin CmdRecord");
+        for (cb, fb) in self.render_cb.iter_mut().zip(&self.framebuffers) {
+            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
             cr.begin_render_pass(
                 &self.renderpass,
                 fb,
@@ -405,7 +410,11 @@ impl<PL: peridot::NativeLinker> Game<PL> {
                 true,
             );
             self.gp_main.bind(&mut cr);
-            cr.bind_graphics_descriptor_sets(0, &self.descriptor.2, &[]);
+            cr.bind_graphics_descriptor_sets(
+                0,
+                unsafe { std::mem::transmute(&self.descriptor.2[..]) },
+                &[],
+            );
             cr.bind_vertex_buffers(0, &[(&self.buffers.buffer.0, self.vertices_offset as _)]);
             cr.draw(4, 1, 0, 0);
             cr.end_render_pass();

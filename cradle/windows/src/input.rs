@@ -1,6 +1,10 @@
 use log::*;
+use parking_lot::RwLock;
+use peridot::{NativeAnalogInput, NativeButtonInput};
 use peridot::{NativeAnalogInput, NativeButtonInput};
 use winapi::shared::minwindef::{FALSE, LPARAM, TRUE};
+use winapi::shared::minwindef::{FALSE, LPARAM, TRUE};
+use winapi::shared::windef::POINT;
 use winapi::shared::windef::{HWND, POINT};
 use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use winapi::um::errhandlingapi::GetLastError;
@@ -11,6 +15,13 @@ use winapi::um::winuser::{
     RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
 };
 use winapi::um::xinput::*;
+
+use crate::ThreadsafeWindowOps;
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Rc as SharedPtr;
+#[cfg(feature = "mt")]
+use std::sync::Arc as SharedPtr;
 
 pub struct RawInputHandler {}
 impl RawInputHandler {
@@ -184,14 +195,14 @@ impl RawInputHandler {
 }
 
 pub struct NativeInputHandler {
-    target_hw: HWND,
-    xi_handler: XInputHandler,
+    target_hw: SharedPtr<ThreadsafeWindowOps>,
+    xi_handler: RwLock<XInputHandler>,
 }
 impl NativeInputHandler {
-    pub fn new(hw: HWND) -> Self {
-        NativeInputHandler {
+    pub fn new(hw: SharedPtr<ThreadsafeWindowOps>) -> Self {
+        Self {
             target_hw: hw,
-            xi_handler: XInputHandler::new(),
+            xi_handler: RwLock::new(XInputHandler::new()),
         }
     }
 }
@@ -204,12 +215,13 @@ impl peridot::NativeInput for NativeInputHandler {
         let mut p0 = POINT { x: 0, y: 0 };
         unsafe {
             GetCursorPos(&mut p0);
-            MapWindowPoints(std::ptr::null_mut(), self.target_hw, &mut p0, 1);
+            self.target_hw.map_point_from_desktop(&mut p0);
         }
         Some((p0.x as _, p0.y as _))
     }
-    fn pull(&mut self, p: peridot::NativeEventReceiver) {
-        self.xi_handler.process_state_changes(p);
+
+    fn pull(&mut self, p: &peridot::NativeEventReceiver) {
+        self.xi_handler.write().process_state_changes(p);
     }
 }
 

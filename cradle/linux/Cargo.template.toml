@@ -8,6 +8,7 @@ edition = "2018"
 UseExternalAssetPath = []
 IterationBuild = []
 debug = ["peridot/debug"]
+mt = ["peridot/mt"]
 
 [dependencies]
 peridot = { path = "../.." }
