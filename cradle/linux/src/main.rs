@@ -76,12 +76,14 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         self.get(path, ext)
     }
 }
+
 pub struct WindowHandler {
     dp: *mut xcb::ffi::xcb_connection_t,
     vis: xcb::Visualid,
     wid: xcb::Window,
     x11_ref: SharedPtr<RefCell<X11>>,
 }
+
 pub struct Presenter {
     x11_ref: SharedPtr<RefCell<X11>>,
     sc: peridot::IntegratedSwapchain,
