@@ -38,6 +38,7 @@ members = [
     "image",
     "vg",
     "derive",
+    "transition",
     "tools/shaderbuild",
     "tools/archiver",
     "tools/cli",
