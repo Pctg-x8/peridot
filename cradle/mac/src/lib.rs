@@ -493,7 +493,7 @@ impl NativeAudioEngine {
 pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Down Event: {}", character);
     unsafe {
-        (*g).engine.input().dispatch_button_event(
+        (*g).engine.input_mut().dispatch_button_event(
             peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
             true,
         );
@@ -503,7 +503,7 @@ pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
 pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Up Event: {}", character);
     unsafe {
-        (*g).engine.input().dispatch_button_event(
+        (*g).engine.input_mut().dispatch_button_event(
             peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
             false,
         );
@@ -527,7 +527,9 @@ pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
         _ => return,
     };
     unsafe {
-        (*g).engine.input().dispatch_button_event(code_to_bty, true);
+        (*g).engine
+            .input_mut()
+            .dispatch_button_event(code_to_bty, true);
     }
 }
 #[no_mangle]
@@ -543,7 +545,7 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
     };
     unsafe {
         (*g).engine
-            .input()
+            .input_mut()
             .dispatch_button_event(code_to_bty, false);
     }
 }
@@ -575,7 +577,7 @@ impl peridot::NativeInput for NativeInputHandler {
 pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
     unsafe {
         (*g).engine
-            .input()
+            .input_mut()
             .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), true);
     }
 }
@@ -583,7 +585,7 @@ pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
 pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
     unsafe {
         (*g).engine
-            .input()
+            .input_mut()
             .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false);
     }
 }
@@ -592,12 +594,12 @@ pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
 pub extern "C" fn report_mouse_move_abs(g: *mut GameDriver, x: f32, y: f32) {
     unsafe {
         let scale = nsscreen_backing_scale_factor();
-        (*g).engine.input().dispatch_analog_event(
+        (*g).engine.input_mut().dispatch_analog_event(
             peridot::NativeAnalogInput::MouseX,
             x * scale,
             true,
         );
-        (*g).engine.input().dispatch_analog_event(
+        (*g).engine.input_mut().dispatch_analog_event(
             peridot::NativeAnalogInput::MouseY,
             y * scale,
             true,

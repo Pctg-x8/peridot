@@ -197,7 +197,7 @@ pub struct NativeInputHandler {
 }
 impl NativeInputHandler {
     pub fn new(hw: SharedPtr<ThreadsafeWindowOps>) -> Self {
-        NativeInputHandler {
+        Self {
             target_hw: hw,
             xi_handler: RwLock::new(XInputHandler::new()),
         }
@@ -216,7 +216,8 @@ impl peridot::NativeInput for NativeInputHandler {
         }
         Some((p0.x as _, p0.y as _))
     }
-    fn pull(&self, p: &peridot::InputProcess) {
+
+    fn pull(&mut self, p: peridot::NativeEventReceiver) {
         self.xi_handler.write().process_state_changes(p);
     }
 }
@@ -237,7 +238,7 @@ impl XInputHandler {
         }
     }
 
-    pub fn process_state_changes(&mut self, p: &peridot::InputProcess) {
+    pub fn process_state_changes(&mut self, mut p: peridot::NativeEventReceiver) {
         for n in 0..Self::MAX_CONTROLLERS {
             let mut new_state = std::mem::MaybeUninit::<XINPUT_STATE>::uninit();
             let r = unsafe { XInputGetState(n as _, new_state.as_mut_ptr()) };
@@ -251,11 +252,11 @@ impl XInputHandler {
                     Self::dispatch_diff(
                         &old_state,
                         unsafe { &std::mem::MaybeUninit::zeroed().assume_init() },
-                        p,
+                        &mut p,
                     );
                 } else if old_state.dwPacketNumber != new_state.dwPacketNumber {
                     // has changes
-                    Self::dispatch_diff(&old_state, &new_state, p);
+                    Self::dispatch_diff(&old_state, &new_state, &mut p);
                 }
             } else if connected {
                 // new connected controller
@@ -263,7 +264,7 @@ impl XInputHandler {
                 Self::dispatch_diff(
                     unsafe { &std::mem::MaybeUninit::zeroed().assume_init() },
                     &new_state,
-                    p,
+                    &mut p,
                 );
             }
 
@@ -274,7 +275,7 @@ impl XInputHandler {
     fn dispatch_diff(
         old_state: &XINPUT_STATE,
         new_state: &XINPUT_STATE,
-        p: &peridot::InputProcess,
+        p: &mut peridot::NativeEventReceiver,
     ) {
         let button_diff_bits = new_state.Gamepad.wButtons ^ old_state.Gamepad.wButtons;
         for &(bit, ity) in &[

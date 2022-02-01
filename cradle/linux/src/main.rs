@@ -2,17 +2,14 @@
 extern crate log;
 
 use bedrock as br;
-use peridot::{EngineEvents, FeatureRequests};
-use std::cell::RefCell;
+use peridot::{
+    mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef},
+    EngineEvents, FeatureRequests,
+};
 use std::fs::File;
 use std::io::Result as IOResult;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
-
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
 
 mod sound_backend;
 use sound_backend::NativeAudioEngine;
@@ -76,25 +73,27 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         self.get(path, ext)
     }
 }
+
 pub struct WindowHandler {
-    dp: *mut xcb::ffi::xcb_connection_t,
     vis: xcb::Visualid,
     wid: xcb::Window,
-    x11_ref: SharedPtr<RefCell<X11>>,
+    x11_ref: SharedRef<DynamicMut<X11>>,
 }
+
 pub struct Presenter {
-    x11_ref: SharedPtr<RefCell<X11>>,
+    x11_ref: SharedRef<DynamicMut<X11>>,
     sc: peridot::IntegratedSwapchain,
 }
 impl Presenter {
     fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &WindowHandler) -> Self {
-        if !g
-            .adapter()
-            .xcb_presentation_support(renderer_queue_family, w.dp, w.vis)
-        {
+        if !g.adapter().xcb_presentation_support(
+            renderer_queue_family,
+            w.x11_ref.borrow().con.get_raw_conn(),
+            w.vis,
+        ) {
             panic!("Vulkan Presentation is not supported!");
         }
-        let so = br::Surface::new_xcb(g.instance(), w.dp, w.wid)
+        let so = br::Surface::new_xcb(g.instance(), w.x11_ref.borrow().con.get_raw_conn(), w.wid)
             .expect("Failed to create Surface object");
         if !g
             .adapter()
@@ -118,7 +117,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedRef<br::ImageView>> {
         self.sc.backbuffer(index)
     }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
@@ -302,7 +301,7 @@ pub struct GameDriver {
     _snd: NativeAudioEngine,
 }
 impl GameDriver {
-    fn new(wh: WindowHandler, x11: &SharedPtr<RefCell<X11>>) -> Self {
+    fn new(wh: WindowHandler, x11: &SharedRef<DynamicMut<X11>>) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
             wh,
@@ -334,11 +333,10 @@ impl GameDriver {
 
 fn main() {
     env_logger::init();
-    let x11 = SharedPtr::new(RefCell::new(X11::init()));
+    let x11 = SharedRef::new(DynamicMut::new(X11::init()));
 
     let mut gd = GameDriver::new(
         WindowHandler {
-            dp: x11.borrow().con.get_raw_conn(),
             vis: x11.borrow().vis,
             wid: x11.borrow().mainwnd_id,
             x11_ref: x11.clone(),
@@ -385,7 +383,11 @@ fn main() {
             } else if e.u64 == 1 {
                 input.process_monitor_event(&ep);
             } else {
-                input.process_device_event(gd.engine.input(), e.u64, &x11.borrow());
+                input.process_device_event(
+                    &mut gd.engine.input_mut().make_event_receiver(),
+                    e.u64,
+                    &x11.borrow(),
+                );
             }
         }
     }
