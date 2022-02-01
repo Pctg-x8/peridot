@@ -1,4 +1,4 @@
-use image::hdr::{HdrDecoder, HdrMetadata, Rgbe8Pixel};
+use image::codecs::hdr::{HdrDecoder, HdrMetadata, Rgbe8Pixel};
 use image::{ImageDecoder, ImageError, ImageResult};
 use peridot::{DecodedPixelData, FromAsset, LDRImageAsset, LogicalAssetData, PixelFormat};
 use std::io::{BufReader, Read, Seek};
@@ -27,8 +27,6 @@ fn format_map(fmt: image::ColorType) -> PixelFormat {
     match fmt {
         image::ColorType::Rgb8 => PixelFormat::RGB24,
         image::ColorType::Rgba8 => PixelFormat::RGBA32,
-        image::ColorType::Bgr8 => PixelFormat::BGR24,
-        image::ColorType::Bgra8 => PixelFormat::BGRA32,
         _ => unimplemented!("unsupported color type: {:?}", fmt),
     }
 }
@@ -70,7 +68,7 @@ impl FromAsset for PNG {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::png::PngDecoder::new(asset)
+        image::codecs::png::PngDecoder::new(asset)
             .and_then(load_image)
             .map(PNG)
     }
@@ -79,7 +77,7 @@ impl FromAsset for TGA {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::tga::TgaDecoder::new(asset)
+        image::codecs::tga::TgaDecoder::new(asset)
             .and_then(load_image)
             .map(TGA)
     }
@@ -88,7 +86,7 @@ impl FromAsset for TIFF {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::tiff::TiffDecoder::new(asset)
+        image::codecs::tiff::TiffDecoder::new(asset)
             .and_then(load_image)
             .map(TIFF)
     }
@@ -97,7 +95,7 @@ impl FromAsset for WebP {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::webp::WebPDecoder::new(asset)
+        image::codecs::webp::WebPDecoder::new(asset)
             .and_then(load_image)
             .map(WebP)
     }
@@ -106,7 +104,7 @@ impl FromAsset for BMP {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::bmp::BmpDecoder::new(asset)
+        image::codecs::bmp::BmpDecoder::new(asset)
             .and_then(load_image)
             .map(BMP)
     }
