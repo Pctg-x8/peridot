@@ -1,18 +1,15 @@
 use log::*;
 use parking_lot::RwLock;
 use peridot::{NativeAnalogInput, NativeButtonInput};
-use peridot::{NativeAnalogInput, NativeButtonInput};
-use winapi::shared::minwindef::{FALSE, LPARAM, TRUE};
 use winapi::shared::minwindef::{FALSE, LPARAM, TRUE};
 use winapi::shared::windef::POINT;
-use winapi::shared::windef::{HWND, POINT};
 use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::winuser as wu;
 use winapi::um::winuser::{
-    GetCursorPos, GetRawInputData, MapVirtualKeyA, MapWindowPoints, RegisterRawInputDevices,
-    MAPVK_VK_TO_CHAR, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RIDEV_NOLEGACY, RID_INPUT,
-    RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+    GetCursorPos, GetRawInputData, MapVirtualKeyA, RegisterRawInputDevices, MAPVK_VK_TO_CHAR,
+    RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RIDEV_NOLEGACY, RID_INPUT, RIM_TYPEKEYBOARD,
+    RIM_TYPEMOUSE,
 };
 use winapi::um::xinput::*;
 
@@ -220,7 +217,7 @@ impl peridot::NativeInput for NativeInputHandler {
         Some((p0.x as _, p0.y as _))
     }
 
-    fn pull(&mut self, p: &peridot::NativeEventReceiver) {
+    fn pull(&mut self, p: peridot::NativeEventReceiver) {
         self.xi_handler.write().process_state_changes(p);
     }
 }
