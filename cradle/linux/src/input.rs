@@ -1,16 +1,20 @@
 //! Input Handlers
 
 use crate::{epoll::Epoll, kernel_input, udev};
-use std::cell::RefCell;
-use std::rc::Rc;
+use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
+
+#[cfg(not(feature = "mt"))]
+use std::rc::Weak as SharedWeakRef;
+#[cfg(feature = "mt")]
+use std::sync::Weak as SharedWeakRef;
 
 pub struct InputNativeLink {
-    ws_ref: std::rc::Weak<RefCell<super::X11>>,
+    ws_ref: SharedWeakRef<DynamicMut<super::X11>>,
 }
 impl InputNativeLink {
-    pub fn new(ws: &Rc<RefCell<super::X11>>) -> Self {
+    pub fn new(ws: &SharedRef<DynamicMut<super::X11>>) -> Self {
         InputNativeLink {
-            ws_ref: std::rc::Rc::downgrade(ws),
+            ws_ref: SharedRef::downgrade(ws),
         }
     }
 }
