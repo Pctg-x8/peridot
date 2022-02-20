@@ -286,41 +286,27 @@ impl InputProcess {
                 self.frame.button_press_time[n] = std::time::Duration::default();
             }
         }
-        for (n, (&a, f)) in self
-            .collected
-            .analog_values
-            .iter()
-            .zip(self.collected.ax_button_pressing.iter_mut())
-            .enumerate()
-        {
+
+        let analog_values = self.collected.analog_values.iter().copied().chain(
+            std::iter::repeat(0.0).take(
+                self.collected
+                    .ax_button_pressing
+                    .len()
+                    .saturating_sub(self.collected.analog_values.len()),
+            ),
+        );
+        let emulated_analog_values = self.collected.ax_button_pressing.iter().chain(
+            std::iter::repeat(&(false, false)).take(
+                self.collected
+                    .analog_values
+                    .len()
+                    .saturating_sub(self.collected.ax_button_pressing.len()),
+            ),
+        );
+        for (n, (a, f)) in analog_values.zip(emulated_analog_values).enumerate() {
             let (pos, neg) = *f;
             self.frame.analog_values_abs[n] =
                 a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
-        }
-        // ax_button_pressingがない分
-        if self.collected.analog_values.len() > self.collected.ax_button_pressing.len() {
-            for (n, &a) in self
-                .collected
-                .analog_values
-                .iter()
-                .enumerate()
-                .skip(self.collected.ax_button_pressing.len())
-            {
-                self.frame.analog_values_abs[n] = a;
-            }
-        }
-        // analog_valuesがない分
-        if self.collected.ax_button_pressing.len() > self.collected.analog_values.len() {
-            for (n, &(pos, neg)) in self
-                .collected
-                .ax_button_pressing
-                .iter()
-                .enumerate()
-                .skip(self.collected.analog_values.len())
-            {
-                self.frame.analog_values_abs[n] =
-                    (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
-            }
         }
     }
 
