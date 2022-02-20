@@ -303,8 +303,7 @@ impl InputProcess {
                     .saturating_sub(self.collected.ax_button_pressing.len()),
             ),
         );
-        for (n, (a, f)) in analog_values.zip(emulated_analog_values).enumerate() {
-            let (pos, neg) = *f;
+        for (n, (a, &(pos, neg))) in analog_values.zip(emulated_analog_values).enumerate() {
             self.frame.analog_values_abs[n] =
                 a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
         }
