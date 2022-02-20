@@ -273,16 +273,28 @@ impl Deref for DeviceWorkingTexture3D {
     }
 }
 
+/// RenderCubeTexture without Readback to CPU
+pub struct DeviceWorkingCubeTexture {
+    size: math::Vector2<u32>,
+    format: PixelFormat,
+    res: Image,
+    view: br::ImageView,
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct DeviceWorkingTexture2DRef(usize);
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct DeviceWorkingTexture3DRef(usize);
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct DeviceWorkingCubeTextureRef(usize);
 /// DeviceWorkingTexture Management Arena
 pub struct DeviceWorkingTextureAllocator<'d> {
     planes: Vec<br::ImageDesc<'d>>,
     volumes: Vec<br::ImageDesc<'d>>,
+    cube: Vec<br::ImageDesc<'d>>,
 }
 impl DeviceWorkingTextureAllocator<'_> {
     /// Initializes the allocator
@@ -290,6 +302,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         DeviceWorkingTextureAllocator {
             planes: Vec::new(),
             volumes: Vec::new(),
+            cube: Vec::new(),
         }
     }
 
@@ -325,18 +338,37 @@ impl DeviceWorkingTextureAllocator<'_> {
         DeviceWorkingTexture3DRef(self.volumes.len() - 1)
     }
 
+    /// Add new DeviceWorkingCubeTexture allocation
+    pub fn new_cube(
+        &mut self,
+        size: math::Vector2<u32>,
+        format: PixelFormat,
+        usage: br::ImageUsage,
+    ) -> DeviceWorkingCubeTextureRef {
+        let mut id = br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized);
+        id.flags(br::ImageFlags::CUBE_COMPATIBLE).array_layers(6);
+        self.cube.push(id);
+
+        DeviceWorkingCubeTextureRef(self.cube.len() - 1)
+    }
+
     /// Allocates all of added textures
     pub fn alloc(self, g: &Graphics) -> br::Result<DeviceWorkingTextureStore> {
         let images2 = self.planes.iter().map(|d| d.create(g));
+        let images_cube = self.cube.iter().map(|d| d.create(g));
         let images3 = self.volumes.iter().map(|d| d.create(g));
-        let images: Vec<_> = images2.chain(images3).collect::<Result<_, _>>()?;
+        let images: Vec<_> = images2
+            .chain(images_cube)
+            .chain(images3)
+            .collect::<Result<_, _>>()?;
         let mut mb = MemoryBadget::new(g);
         for img in images {
             mb.add(img);
         }
         let mut bound_images = mb.alloc()?;
 
-        let v3s = bound_images.split_off(bound_images.len() - self.volumes.len());
+        let mut cs_v3s = bound_images.split_off(self.planes.len());
+        let v3s = cs_v3s.split_off(self.cube.len());
         Ok(DeviceWorkingTextureStore {
             planes: self
                 .planes
@@ -352,6 +384,27 @@ impl DeviceWorkingTextureAllocator<'_> {
                     )?;
 
                     Ok(DeviceWorkingTexture2D {
+                        size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
+                        format: unsafe { std::mem::transmute(d.as_ref().format) },
+                        view,
+                        res,
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            cubes: self
+                .cube
+                .into_iter()
+                .zip(cs_v3s.into_iter())
+                .map(|(d, res)| {
+                    let res = res.unwrap_image();
+                    let view = res.create_view(
+                        None,
+                        Some(br::vk::VK_IMAGE_VIEW_TYPE_CUBE),
+                        &br::ComponentMapping::default(),
+                        &br::ImageSubresourceRange::color(0..1, 0..6),
+                    )?;
+
+                    Ok(DeviceWorkingCubeTexture {
                         size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
                         format: unsafe { std::mem::transmute(d.as_ref().format) },
                         view,
@@ -390,6 +443,7 @@ impl DeviceWorkingTextureAllocator<'_> {
 /// Allocated DeviceWorkingTexture Arena
 pub struct DeviceWorkingTextureStore {
     planes: Vec<DeviceWorkingTexture2D>,
+    cubes: Vec<DeviceWorkingCubeTexture>,
     volumes: Vec<DeviceWorkingTexture3D>,
 }
 /// DeviceWorkingTexture Reference
@@ -410,12 +464,21 @@ impl DeviceWorkingTextureStore {
 }
 impl DeviceWorkingTextureRef for DeviceWorkingTexture2DRef {
     type TextureT = DeviceWorkingTexture2D;
+
     fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingTexture2D {
         &store.planes[self.0]
     }
 }
+impl DeviceWorkingTextureRef for DeviceWorkingCubeTextureRef {
+    type TextureT = DeviceWorkingCubeTexture;
+
+    fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingCubeTexture {
+        &store.cubes[self.0]
+    }
+}
 impl DeviceWorkingTextureRef for DeviceWorkingTexture3DRef {
     type TextureT = DeviceWorkingTexture3D;
+
     fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingTexture3D {
         &store.volumes[self.0]
     }
