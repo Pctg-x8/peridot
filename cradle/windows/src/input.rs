@@ -92,7 +92,7 @@ impl RawInputHandler {
                     kd.Message,
                     kd.VKey
                 );*/
-                let is_press = (kd.Flags as u32 & wu::RI_KEY_BREAK) != 0;
+                let is_press = (kd.Flags as u32 & wu::RI_KEY_BREAK) == 0;
                 let ty = match kd.VKey as i32 {
                     wu::VK_BACK => NativeButtonInput::Backspace,
                     wu::VK_RETURN => NativeButtonInput::Enter,
