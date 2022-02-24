@@ -280,6 +280,37 @@ pub struct DeviceWorkingCubeTexture {
     res: Image,
     view: br::ImageView,
 }
+impl DeviceWorkingCubeTexture {
+    /// Size of a plane in this texture
+    pub fn size(&self) -> &math::Vector2<u32> {
+        &self.size
+    }
+
+    /// Width of a plane in this texture
+    pub fn width(&self) -> u32 {
+        self.size.0
+    }
+
+    /// Height of a plane in this texture
+    pub fn height(&self) -> u32 {
+        self.size.1
+    }
+
+    /// Format of a plane in this texture
+    pub fn format(&self) -> PixelFormat {
+        self.format
+    }
+
+    /// Gets underlying resource object
+    pub fn underlying(&self) -> &Image {
+        &self.res
+    }
+
+    /// Gets underlying resource view object
+    pub fn view(&self) -> &br::ImageView {
+        &self.view
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
