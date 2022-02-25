@@ -126,7 +126,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 fov: 75.0f32.to_radians(),
             }),
             position: Vector3(-4.0, -1.0, -3.0),
-            rotation: Quaternion::new(45.0f32.to_radians(), Vector3::up()),
+            rotation: Quaternion::new(45.0f32.to_radians(), Vector3::UP),
             // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
             depth_range: 1.0..10.0,
         };
@@ -364,7 +364,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 0..self.mut_uniform_offset + size_of::<Uniform>() as u64,
                 |m| unsafe {
                     m.get_mut::<Uniform>(mut_uniform_offset as _).object =
-                        Quaternion::new(rot, Vector3F32::up()).into();
+                        Quaternion::new(rot, Vector3F32::UP).into();
                 },
             )
             .expect("Update DynamicStgBuffer");
