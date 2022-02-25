@@ -120,19 +120,19 @@ impl<T: Zero + One + Neg<Output = T>> Vector2<T> {
     pub fn left() -> Self {
         Vector2(-T::ONE, T::ZERO)
     }
-    pub fn up() -> Self {
+    pub fn down() -> Self {
         Vector2(T::ZERO, -T::ONE)
     }
 }
 impl<T: Zero + One> Vector2<T> {
     pub const RIGHT: Self = Vector2(T::ONE, T::ZERO);
-    pub const DOWN: Self = Vector2(T::ZERO, T::ONE);
+    pub const UP: Self = Vector2(T::ZERO, T::ONE);
 }
 impl<T: Zero + One + Neg<Output = T>> Vector3<T> {
     pub fn left() -> Self {
         Vector3(-T::ONE, T::ZERO, T::ZERO)
     }
-    pub fn up() -> Self {
+    pub fn down() -> Self {
         Vector3(T::ZERO, -T::ONE, T::ZERO)
     }
     pub fn back() -> Self {
@@ -141,7 +141,7 @@ impl<T: Zero + One + Neg<Output = T>> Vector3<T> {
 }
 impl<T: Zero + One> Vector3<T> {
     pub const RIGHT: Self = Vector3(T::ONE, T::ZERO, T::ZERO);
-    pub const DOWN: Self = Vector3(T::ZERO, T::ONE, T::ZERO);
+    pub const UP: Self = Vector3(T::ZERO, T::ONE, T::ZERO);
     pub const FORWARD: Self = Vector3(T::ZERO, T::ZERO, T::ONE);
 }
 
