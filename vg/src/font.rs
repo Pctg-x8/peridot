@@ -6,6 +6,7 @@ use lyon_path::builder::PathBuilder;
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))] use appkit::ObjcObjectBase;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))] mod dwrite_driver;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))] use self::dwrite_driver::*;
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))] use comdrive::AsRawHandle;
 #[cfg(feature = "use-freetype")] mod ft_drivers;
 #[cfg(feature = "use-fontconfig")] mod fc_drivers;
 
@@ -41,7 +42,10 @@ impl FontProperties
 #[derive(Debug)]
 pub enum FontConstructionError
 {
-    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error)
+    SysAPICallError(&'static str), MatcherUnavailable, IO(std::io::Error),
+    UnsupportedFontFile,
+    #[cfg(feature = "use-freetype")]
+    FT2(freetype2::FT_Error)
 }
 impl From<std::io::Error> for FontConstructionError
 {
@@ -97,13 +101,12 @@ type UnderlyingHandle = comdrive::dwrite::FontFace;
 type UnderlyingHandle = self::ft_drivers::FaceGroup;
 pub struct Font(UnderlyingHandle, f32);
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-impl FontProvider
-{
+impl FontProvider {
     const CTFONT_DEFAULT_SIZE: f32 = 12.0;
 
-    pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
-        -> Result<Font, FontConstructionError>
-    {
+    pub fn best_match(
+        &self, family_name: &str, properties: &FontProperties, size: f32
+    ) -> Result<Font, FontConstructionError> {
         let traits = appkit::NSMutableDictionary::with_capacity(2)
             .map_err(|_| FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity"))?;
         let weight_num = appkit::NSNumber::from_float(properties.native_weight())
@@ -126,10 +129,24 @@ impl FontProvider
             .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
             .map(|x| Font(x, size))
     }
+
+    pub fn load<NL: peridot::NativeLinker>(
+        &self, e: &peridot::Engine<NL>, asset_path: &str, size: f32
+    ) -> Result<Font, FontConstructionError> {
+        let a: TTFBlob = e.load(asset_path)?;
+        let d = appkit::CFData::new(&a.0).ok_or(FontConstructionError::SysAPICallError("CFData::new"))?;
+        let fd = appkit::CTFontDescriptor::from_data(&d)
+            .ok_or(FontConstructionError::SysAPICallError("CTFontDescriptor::from_data"))?;
+        
+        appkit::CTFont::from_font_descriptor(&fd, Self::CTFONT_DEFAULT_SIZE as _, None)
+            .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
+            .map(|x| Font(x, size))
+    }
 }
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    pub fn size(&self) -> f32 { self.1 }
     pub fn scale_value(&self) -> f32 { self.1 / FontProvider::CTFONT_DEFAULT_SIZE }
     pub fn ascent(&self) -> f32 { self.0.ascent() as f32 * self.scale_value() }
 
@@ -198,11 +215,10 @@ impl Font {
 }
 
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-impl FontProvider
-{
-    pub fn best_match(&self, family_name: &str, properties: &FontProperties, size: f32)
-        -> Result<Font, FontConstructionError>
-    {
+impl FontProvider {
+    pub fn best_match(
+        &self, family_name: &str, properties: &FontProperties, size: f32
+    ) -> Result<Font, FontConstructionError> {
         let collection = self.factory.system_font_collection(false)?;
         let family_index = collection.find_family_name(family_name)?.unwrap_or(0);
         let family = collection.font_family(family_index)?;
@@ -219,11 +235,27 @@ impl FontProvider
         
         font.new_font_face().map(|x| Font(x, size)).map_err(From::from)
     }
+
+    pub fn load<NL: peridot::NativeLinker>(
+        &self, e: &peridot::Engine<NL>, asset_path: &str, size: f32
+    ) -> Result<Font, FontConstructionError> {
+        let a: TTFBlob = e.load(asset_path)?;
+        let conv = ATFRegisterScope::register(&self.factory, comdrive::ComPtr(AssetToFontConverter::new(a)))?;
+        let fntfile = self.factory.new_custom_font_file_reference(&1u32, conv.object())?;
+        let (is_supported, _, face_type, _) = fntfile.analyze()?;
+        if !is_supported {
+            return Err(FontConstructionError::UnsupportedFontFile);
+        }
+        
+        self.factory.new_font_face(face_type, &[fntfile.as_raw_handle()], 0, comdrive::dwrite::FONT_SIMULATIONS_NONE)
+            .map(|x| Font(x, size))
+            .map_err(From::from)
+    }
 }
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-impl Font
-{
+impl Font {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; }
+    pub fn size(&self) -> f32 { self.1 }
     pub fn scale_value(&self) -> f32 { (96.0 * self.1 / 72.0) / self.units_per_em() as f32 }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 { self.0.metrics().ascent as f32 }
@@ -283,15 +315,14 @@ impl FontProvider
         pat.default_substitute();
         let fonts = self.fc.sort_fonts(&pat).ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
 
-        let group_desc: Vec<(*const i8, freetype2::FT_Long)> = fonts.iter().map(|f|
+        let group_desc = fonts.iter().map(|f|
         {
             let font_path = f.get_filepath().ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
             let face_index = f.get_face_index().ok_or(FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
 
-            Ok((font_path.as_ptr(), face_index as _))
+            Ok(ft_drivers::FaceGroupEntry::unloaded(font_path, face_index as _))
         }).collect::<Result<_, FontConstructionError>>()?;
-        
-        let face = self.ftlib.new_face_group(&group_desc[..]);
+        let face = self.ftlib.new_face_group(group_desc);
         face.set_size(size);
 
         Ok(Font(face, size))
@@ -303,11 +334,23 @@ impl FontProvider
 
         Err(FontConstructionError::MatcherUnavailable)
     }
+
+    pub fn load<NL: peridot::NativeLinker>(
+        &self, e: &peridot::Engine<NL>, asset_path: &str, size: f32
+    ) -> Result<Font, FontConstructionError> {
+        let a: TTFBlob = e.load(asset_path)?;
+        let f = self.ftlib.new_face_from_mem(&a.0, 0).map_err(FontConstructionError::FT2)?;
+        let face = self.ftlib.new_face_group(vec![ft_drivers::FaceGroupEntry::LoadedMem(f, a.0.into())]);
+        face.set_size(size);
+
+        Ok(Font(face, size))
+    }
 }
 #[cfg(feature = "use-freetype")]
 impl Font
 {
     pub fn set_em_size(&mut self, size: f32) { self.1 = size; self.0.set_size(size); }
+    pub fn size(&self) -> f32 { self.1 }
     pub fn scale_value(&self) -> f32 { self.1 / self.units_per_em() as f32 }
     pub fn ascent(&self) -> f32 { self.0.ascender() as _ }
 
@@ -341,4 +384,18 @@ impl Font
     }
 
     pub fn units_per_em(&self) -> u32 { self.0.units_per_em() as _ }
+}
+
+/// An asset represents ttf blob
+pub struct TTFBlob(pub(crate) Vec<u8>);
+impl peridot::LogicalAssetData for TTFBlob {
+    const EXT: &'static str = "ttf";
+}
+impl peridot::FromAsset for TTFBlob {
+    type Error = std::io::Error;
+
+    fn from_asset<Asset: std::io::Read + std::io::Seek + 'static>(mut asset: Asset) -> Result<Self, Self::Error> {
+        let mut bin = Vec::new();
+        asset.read_to_end(&mut bin).map(move |_| TTFBlob(bin))
+    }
 }
