@@ -760,11 +760,8 @@ impl SkyboxPrecomputedTextures {
 }
 
 pub struct Descriptors {
-    camera_input_layout: br::DescriptorSetLayout,
-    skybox_renderer_input_layout: br::DescriptorSetLayout,
     _static_sampler: br::Sampler,
-    _descriptors: br::DescriptorPool,
-    descriptors: Vec<br::DescriptorSet>,
+    descriptors: ImmutableDescriptorSets,
 }
 impl Descriptors {
     pub fn new(
@@ -782,86 +779,52 @@ impl Descriptors {
             )
             .create(g)
             .expect("Failed to create linear sampler");
-        let camera_input_layout = br::DescriptorSetLayout::new(
+        let mut dub = peridot::DescriptorSetUpdateBatch::new();
+        let descriptors = ImmutableDescriptorSets::new(
             g,
-            &[br::DescriptorSetLayoutBinding::UniformBuffer(
-                1,
-                br::ShaderStage::FRAGMENT.vertex(),
-            )],
-        )
-        .expect("Failed to create camera input layout");
-        let skybox_renderer_input_layout = br::DescriptorSetLayout::new(
-            g,
-            &[
-                br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                    1,
-                    br::ShaderStage::FRAGMENT,
-                    &[linear_sampler.native_ptr()],
-                ),
-                br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                    1,
-                    br::ShaderStage::FRAGMENT,
-                    &[linear_sampler.native_ptr()],
-                ),
-            ],
-        )
-        .expect("Failed to create skybox renderer input layout");
-
-        let mut dp = br::DescriptorPool::new(
-            g,
-            2,
-            &[
-                br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 2),
-                br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1),
-            ],
-            false,
-        )
-        .expect("Failed to create descriptor pool");
-        let descriptors = dp
-            .alloc(&[&camera_input_layout, &skybox_renderer_input_layout])
-            .expect("Failed to alloc descriptor sets");
-        g.update_descriptor_sets(
-            &[
-                br::DescriptorSetWriteInfo(
-                    descriptors[0].into(),
-                    0,
-                    0,
+            vec![
+                vec![(
+                    br::ShaderStage::FRAGMENT.vertex(),
                     br::DescriptorUpdateInfo::UniformBuffer(vec![(
                         buf.buffer.0.native_ptr(),
                         buf_offsets.uniform_range.clone(),
                     )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    descriptors[1].into(),
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(precomputes.scatter).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    descriptors[1].into(),
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(precomputes.transmittance).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
+                )],
+                vec![
+                    (
+                        br::ShaderStage::FRAGMENT,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(precomputes.scatter).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::FRAGMENT,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(precomputes.transmittance).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                ],
             ],
-            &[],
-        );
+            &mut dub,
+        )
+        .expect("Failed to alloc descriptor sets");
+        dub.submit(g);
 
         Descriptors {
-            camera_input_layout,
-            skybox_renderer_input_layout,
             _static_sampler: linear_sampler,
-            _descriptors: dp,
             descriptors,
         }
+    }
+
+    pub fn camera_input_layout(&self) -> &br::DescriptorSetLayout {
+        &self.descriptors.layouts_for_set[0]
+    }
+    pub fn skybox_renderer_input_layout(&self) -> &br::DescriptorSetLayout {
+        &self.descriptors.layouts_for_set[1]
     }
 
     pub fn camera_uniform(&self) -> br::DescriptorSet {
@@ -885,8 +848,8 @@ impl SkyboxRenderer {
         let layout: Rc<_> = br::PipelineLayout::new(
             e.graphics(),
             &[
-                &descriptors.camera_input_layout,
-                &descriptors.skybox_renderer_input_layout,
+                descriptors.camera_input_layout(),
+                descriptors.skybox_renderer_input_layout(),
             ],
             &[],
         )
@@ -979,7 +942,7 @@ impl GridRenderer {
         descriptors: &Descriptors,
     ) -> Self {
         let pl: Rc<_> =
-            br::PipelineLayout::new(e.graphics(), &[&descriptors.camera_input_layout], &[])
+            br::PipelineLayout::new(e.graphics(), &[descriptors.camera_input_layout()], &[])
                 .expect("Failed to create GridRender pipeline layout")
                 .into();
 
