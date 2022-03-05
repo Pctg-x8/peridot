@@ -4,10 +4,140 @@ use bedrock as br;
 use br::VkHandle;
 use peridot::{Engine, EngineEvents, FeatureRequests, NativeLinker};
 use peridot_vertex_processing_pack::PvpShaderModules;
-use std::rc::Rc;
+use std::{
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
 
 #[repr(C, align(4))]
 pub struct RGBA32(u8, u8, u8, u8);
+
+pub struct ImmutableDescriptorSets {
+    _pool: br::DescriptorPool,
+    layouts_for_set: Vec<Rc<br::DescriptorSetLayout>>,
+    sets: Vec<br::DescriptorSet>,
+}
+impl ImmutableDescriptorSets {
+    pub fn new(
+        dev: &br::Device,
+        set_bindings: Vec<Vec<(br::ShaderStage, br::DescriptorUpdateInfo)>>,
+        dub: &mut peridot::DescriptorSetUpdateBatch,
+    ) -> br::Result<Self> {
+        let mut layouts = HashMap::new();
+        let mut layouts_for_set = Vec::new();
+        let mut pool_sizes = BTreeMap::new();
+        for b in &set_bindings {
+            let layout_bindings = b
+                .iter()
+                .map(|&(ss, ref e)| match e {
+                    br::DescriptorUpdateInfo::Sampler(ref xs) => {
+                        *pool_sizes.entry(br::DescriptorType::Sampler).or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::Sampler(xs.len() as _, ss, &[])
+                    }
+                    br::DescriptorUpdateInfo::CombinedImageSampler(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::CombinedImageSampler)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::CombinedImageSampler(xs.len() as _, ss, &[])
+                    }
+                    br::DescriptorUpdateInfo::SampledImage(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::SampledImage)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::SampledImage(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::StorageImage(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::StorageImage)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::StorageImage(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::InputAttachment(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::InputAttachment)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::InputAttachment(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::UniformBuffer(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::UniformBuffer)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::UniformBuffer(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::StorageBuffer(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::StorageBuffer)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::StorageBuffer(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::UniformBufferDynamic(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::UniformBufferDynamic)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::UniformBufferDynamic(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::StorageBufferDynamic(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::StorageBufferDynamic)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::StorageBufferDynamic(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::UniformTexelBuffer(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::UniformTexelBuffer)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::UniformTexelBuffer(xs.len() as _, ss)
+                    }
+                    br::DescriptorUpdateInfo::StorageTexelBuffer(ref xs) => {
+                        *pool_sizes
+                            .entry(br::DescriptorType::StorageTexelBuffer)
+                            .or_insert(0) += 1;
+                        br::DescriptorSetLayoutBinding::StorageTexelBuffer(xs.len() as _, ss)
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let layout = match layouts.entry(layout_bindings) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    let r = br::DescriptorSetLayout::new(dev, v.key())?;
+                    v.insert(std::rc::Rc::new(r)).clone()
+                }
+                std::collections::hash_map::Entry::Occupied(o) => o.get().clone(),
+            };
+            layouts_for_set.push(layout);
+        }
+
+        let mut pool = br::DescriptorPool::new(
+            dev,
+            layouts_for_set.len() as _,
+            &pool_sizes
+                .into_iter()
+                .map(|(ty, a)| br::DescriptorPoolSize(ty, a))
+                .collect::<Vec<_>>(),
+            false,
+        )?;
+        let sets = pool.alloc(&layouts_for_set.iter().map(|l| &**l).collect::<Vec<_>>())?;
+
+        for (b, s) in set_bindings.into_iter().zip(sets.iter()) {
+            for (n, (_, b1)) in b.into_iter().enumerate() {
+                dub.write(*s, n as _, b1);
+            }
+        }
+
+        Ok(Self {
+            _pool: pool,
+            layouts_for_set,
+            sets,
+        })
+    }
+}
+impl std::ops::Deref for ImmutableDescriptorSets {
+    type Target = [br::DescriptorSet];
+
+    fn deref(&self) -> &Self::Target {
+        &self.sets
+    }
+}
 
 pub struct SkyboxPrecomputedTextures {
     transmittance: peridot::DeviceWorkingTexture2DRef,
@@ -63,260 +193,180 @@ impl SkyboxPrecomputedTextures {
             )
             .create(e.graphics())
             .expect("Failed to create linear_sampler");
-        let tex1_layout = br::DescriptorSetLayout::new(
+        let mut dub = peridot::DescriptorSetUpdateBatch::new();
+        let precompute_sets = ImmutableDescriptorSets::new(
             e.graphics(),
-            &[br::DescriptorSetLayoutBinding::StorageImage(
-                1,
-                br::ShaderStage::COMPUTE,
-            )],
-        )
-        .expect("failed to create tex1_layout");
-        let tex_r1w1_layout = br::DescriptorSetLayout::new(
-            e.graphics(),
-            &[
-                br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                    1,
+            vec![
+                vec![(
                     br::ShaderStage::COMPUTE,
-                    &[linear_sampler.native_ptr()],
-                ),
-                br::DescriptorSetLayoutBinding::StorageImage(1, br::ShaderStage::COMPUTE),
-            ],
-        )
-        .expect("failed to create tex_r1w1_layout");
-        let tex_r2w1_layout = br::DescriptorSetLayout::new(
-            e.graphics(),
-            &[
-                br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                    1,
-                    br::ShaderStage::COMPUTE,
-                    &[linear_sampler.native_ptr()],
-                ),
-                br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                    1,
-                    br::ShaderStage::COMPUTE,
-                    &[linear_sampler.native_ptr()],
-                ),
-                br::DescriptorSetLayoutBinding::StorageImage(1, br::ShaderStage::COMPUTE),
-            ],
-        )
-        .expect("failed to create tex_r1w1_layout");
-        let tex_pureio_layout = br::DescriptorSetLayout::new(
-            e.graphics(),
-            &[
-                br::DescriptorSetLayoutBinding::StorageImage(1, br::ShaderStage::COMPUTE),
-                br::DescriptorSetLayoutBinding::StorageImage(1, br::ShaderStage::COMPUTE),
-            ],
-        )
-        .expect("failed to create tex1_layout");
-        let mut dp = br::DescriptorPool::new(
-            e.graphics(),
-            8,
-            &[
-                br::DescriptorPoolSize(br::DescriptorType::StorageImage, 10),
-                br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 7),
-            ],
-            false,
-        )
-        .expect("failed to create DescriptorPool");
-        let precompute_sets = dp
-            .alloc(&[
-                &tex1_layout,
-                &tex_r1w1_layout,
-                &tex_r1w1_layout,
-                &tex_r2w1_layout,
-                &tex_r1w1_layout,
-                &tex_pureio_layout,
-                &tex_pureio_layout,
-                &tex_r2w1_layout,
-            ])
-            .expect("failed to allocate DescriptorSets for Precomputation");
-        e.graphics().update_descriptor_sets(
-            &[
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[0].0,
-                    0,
-                    0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
                         None,
                         dwt.get(self.transmittance).native_ptr(),
                         br::ImageLayout::General,
                     )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[1].0,
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(self.transmittance).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[1].0,
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.scatter).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[2].0,
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(self.scatter).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[2].0,
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.gathered).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[3].into(),
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(self.transmittance).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[3].into(),
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(self.gathered).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[3].into(),
-                    2,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.k_scatter).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[4].into(),
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(self.k_scatter).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[4].into(),
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.k_gathered).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[5].into(),
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.k_scatter).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[5].into(),
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.scatter).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[6].into(),
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.k_gathered).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[6].into(),
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.gathered).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[7].into(),
-                    0,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(self.transmittance).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[7].0,
-                    1,
-                    0,
-                    br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                        None,
-                        dwt.get(self.k_gathered).native_ptr(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )]),
-                ),
-                br::DescriptorSetWriteInfo(
-                    precompute_sets[7].0,
-                    2,
-                    0,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.k_scatter).native_ptr(),
-                        br::ImageLayout::General,
-                    )]),
-                ),
+                )],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(self.transmittance).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.scatter).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                ],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(self.scatter).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.gathered).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                ],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(self.transmittance).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(self.gathered).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.k_scatter).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                ],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(self.k_scatter).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.k_gathered).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                ],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.k_scatter).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.scatter).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                ],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.k_gathered).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.gathered).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                ],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(self.transmittance).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                            Some(linear_sampler.native_ptr()),
+                            dwt.get(self.k_gathered).native_ptr(),
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorUpdateInfo::StorageImage(vec![(
+                            None,
+                            dwt.get(self.k_scatter).native_ptr(),
+                            br::ImageLayout::General,
+                        )]),
+                    ),
+                ],
             ],
-            &[],
-        );
+            &mut dub,
+        )
+        .expect("Failed to allocate descriptor sets for Precomputation");
+        dub.submit(e.graphics());
 
-        let inputonly_layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&tex1_layout], &[])
-            .expect("inputonly_layout creating failed")
-            .into();
-        let texio_layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&tex_r1w1_layout], &[])
-            .expect("texio_layout creating failed")
-            .into();
-        let texi2o_layout: Rc<_> = br::PipelineLayout::new(e.graphics(), &[&tex_r2w1_layout], &[])
-            .expect("texi2o_layout creating failed")
-            .into();
+        let inputonly_layout: Rc<_> =
+            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[0]], &[])
+                .expect("inputonly_layout creating failed")
+                .into();
+        let texio_layout: Rc<_> =
+            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[1]], &[])
+                .expect("texio_layout creating failed")
+                .into();
+        let texi2o_layout: Rc<_> =
+            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[3]], &[])
+                .expect("texi2o_layout creating failed")
+                .into();
         let texio_pure_layout: Rc<_> =
-            br::PipelineLayout::new(e.graphics(), &[&tex_pureio_layout], &[])
+            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[5]], &[])
                 .expect("texio_pure_layout creating failed")
                 .into();
         let transmittance_compute = e
