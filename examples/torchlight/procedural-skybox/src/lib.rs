@@ -50,7 +50,11 @@ impl SkyboxPrecomputedTextures {
             ),
         }
     }
-    pub fn init<NL: NativeLinker>(&self, e: &Engine<NL>, dwt: &peridot::DeviceWorkingTextureStore) {
+    pub fn init<NL: NativeLinker>(
+        &self,
+        e: &mut Engine<NL>,
+        dwt: &peridot::DeviceWorkingTextureStore,
+    ) {
         let linear_sampler = br::SamplerBuilder::default()
             .addressing(
                 br::AddressingMode::ClampToEdge,
@@ -104,7 +108,7 @@ impl SkyboxPrecomputedTextures {
             ],
         )
         .expect("failed to create tex1_layout");
-        let dp = br::DescriptorPool::new(
+        let mut dp = br::DescriptorPool::new(
             e.graphics(),
             8,
             &[
@@ -129,7 +133,7 @@ impl SkyboxPrecomputedTextures {
         e.graphics().update_descriptor_sets(
             &[
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[0],
+                    precompute_sets[0].0,
                     0,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -139,7 +143,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[1],
+                    precompute_sets[1].0,
                     0,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -149,7 +153,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[1],
+                    precompute_sets[1].0,
                     1,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -159,7 +163,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[2],
+                    precompute_sets[2].0,
                     0,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -169,7 +173,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[2],
+                    precompute_sets[2].0,
                     1,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -179,7 +183,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[3],
+                    precompute_sets[3].into(),
                     0,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -189,7 +193,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[3],
+                    precompute_sets[3].into(),
                     1,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -199,7 +203,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[3],
+                    precompute_sets[3].into(),
                     2,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -209,7 +213,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[4],
+                    precompute_sets[4].into(),
                     0,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -219,7 +223,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[4],
+                    precompute_sets[4].into(),
                     1,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -229,7 +233,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[5],
+                    precompute_sets[5].into(),
                     0,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -239,7 +243,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[5],
+                    precompute_sets[5].into(),
                     1,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -249,7 +253,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[6],
+                    precompute_sets[6].into(),
                     0,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -259,7 +263,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[6],
+                    precompute_sets[6].into(),
                     1,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -269,7 +273,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[7],
+                    precompute_sets[7].into(),
                     0,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -279,7 +283,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[7],
+                    precompute_sets[7].0,
                     1,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -289,7 +293,7 @@ impl SkyboxPrecomputedTextures {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    precompute_sets[7],
+                    precompute_sets[7].0,
                     2,
                     0,
                     br::DescriptorUpdateInfo::StorageImage(vec![(
@@ -561,7 +565,7 @@ impl SkyboxPrecomputedTextures {
                 &ib_init,
             )
             .bind_compute_pipeline_pair(&compute_pipelines[0], &inputonly_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[0]], &[])
+            .bind_compute_descriptor_sets(0, &[precompute_sets[0].into()], &[])
             .dispatch(
                 Self::TRANSMITTANCE_SIZE.0 / 32,
                 Self::TRANSMITTANCE_SIZE.1 / 32,
@@ -576,7 +580,7 @@ impl SkyboxPrecomputedTextures {
                 &transmittance_fin,
             )
             .bind_compute_pipeline_pair(&compute_pipelines[1], &texio_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[1]], &[])
+            .bind_compute_descriptor_sets(0, &[precompute_sets[1].into()], &[])
             .dispatch(
                 Self::SCATTER_SIZE.0 / 8,
                 Self::SCATTER_SIZE.1 / 8,
@@ -592,7 +596,7 @@ impl SkyboxPrecomputedTextures {
                 &scatter_to_readable,
             )
             .bind_compute_pipeline_pair(&compute_pipelines[2], &texio_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[2]], &[])
+            .bind_compute_descriptor_sets(0, &[precompute_sets[2].into()], &[])
             .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
             // multiple scatter
             .pipeline_barrier(
@@ -604,7 +608,7 @@ impl SkyboxPrecomputedTextures {
                 &gather_to_readable,
             )
             .bind_compute_pipeline_pair(&compute_pipelines[3], &texi2o_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[3]], &[])
+            .bind_compute_descriptor_sets(0, &[precompute_sets[3].into()], &[])
             .dispatch(
                 Self::SCATTER_SIZE.0 / 8,
                 Self::SCATTER_SIZE.1 / 8,
@@ -620,7 +624,7 @@ impl SkyboxPrecomputedTextures {
                 &k_scatter_to_readable,
             )
             .bind_compute_pipeline_pair(&compute_pipelines[2], &texio_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[4]], &[])
+            .bind_compute_descriptor_sets(0, &[precompute_sets[4].into()], &[])
             .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
             // accum
             .pipeline_barrier(
@@ -632,10 +636,10 @@ impl SkyboxPrecomputedTextures {
                 &accum_gather,
             )
             .bind_compute_pipeline_pair(&compute_pipelines[4], &texio_pure_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[6]], &[])
+            .bind_compute_descriptor_sets(0, &[precompute_sets[6].into()], &[])
             .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
             .bind_compute_pipeline_pair(&compute_pipelines[5], &texio_pure_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[5]], &[])
+            .bind_compute_descriptor_sets(0, &[precompute_sets[5].into()], &[])
             .dispatch(
                 Self::SCATTER_SIZE.0 / 8,
                 Self::SCATTER_SIZE.1 / 8,
@@ -654,7 +658,7 @@ impl SkyboxPrecomputedTextures {
                     &gather_cont,
                 )
                 .bind_compute_pipeline_pair(&compute_pipelines[3], &texi2o_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[7]], &[])
+                .bind_compute_descriptor_sets(0, &[precompute_sets[7].into()], &[])
                 .dispatch(
                     Self::SCATTER_SIZE.0 / 8,
                     Self::SCATTER_SIZE.1 / 8,
@@ -670,7 +674,7 @@ impl SkyboxPrecomputedTextures {
                     &ready_k_gather,
                 )
                 .bind_compute_pipeline_pair(&compute_pipelines[2], &texio_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[4]], &[])
+                .bind_compute_descriptor_sets(0, &[precompute_sets[4].into()], &[])
                 .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
                 // accum
                 .pipeline_barrier(
@@ -682,10 +686,10 @@ impl SkyboxPrecomputedTextures {
                     &accum_gather2,
                 )
                 .bind_compute_pipeline_pair(&compute_pipelines[4], &texio_pure_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[6]], &[])
+                .bind_compute_descriptor_sets(0, &[precompute_sets[6].into()], &[])
                 .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
                 .bind_compute_pipeline_pair(&compute_pipelines[5], &texio_pure_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[5]], &[])
+                .bind_compute_descriptor_sets(0, &[precompute_sets[5].into()], &[])
                 .dispatch(
                     Self::SCATTER_SIZE.0 / 8,
                     Self::SCATTER_SIZE.1 / 8,
@@ -710,7 +714,7 @@ pub struct Descriptors {
     skybox_renderer_input_layout: br::DescriptorSetLayout,
     _static_sampler: br::Sampler,
     _descriptors: br::DescriptorPool,
-    descriptors: Vec<br::vk::VkDescriptorSet>,
+    descriptors: Vec<br::DescriptorSet>,
 }
 impl Descriptors {
     pub fn new(
@@ -753,7 +757,7 @@ impl Descriptors {
         )
         .expect("Failed to create skybox renderer input layout");
 
-        let dp = br::DescriptorPool::new(
+        let mut dp = br::DescriptorPool::new(
             g,
             2,
             &[
@@ -769,7 +773,7 @@ impl Descriptors {
         g.update_descriptor_sets(
             &[
                 br::DescriptorSetWriteInfo(
-                    descriptors[0],
+                    descriptors[0].into(),
                     0,
                     0,
                     br::DescriptorUpdateInfo::UniformBuffer(vec![(
@@ -778,7 +782,7 @@ impl Descriptors {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    descriptors[1],
+                    descriptors[1].into(),
                     0,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -788,7 +792,7 @@ impl Descriptors {
                     )]),
                 ),
                 br::DescriptorSetWriteInfo(
-                    descriptors[1],
+                    descriptors[1].into(),
                     1,
                     0,
                     br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
@@ -810,10 +814,10 @@ impl Descriptors {
         }
     }
 
-    pub fn camera_uniform(&self) -> br::vk::VkDescriptorSet {
+    pub fn camera_uniform(&self) -> br::DescriptorSet {
         self.descriptors[0]
     }
-    pub fn skybox_precomputed_textures(&self) -> br::vk::VkDescriptorSet {
+    pub fn skybox_precomputed_textures(&self) -> br::DescriptorSet {
         self.descriptors[1]
     }
 }
@@ -845,13 +849,19 @@ impl SkyboxRenderer {
         )
         .expect("Instantiating shader failed");
 
-        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
-        let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(
-            backbuffer_size.0,
-            backbuffer_size.1,
-        ))];
-        let full_viewports =
-            [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0..1.0).into_inner()];
+        let bb0 = e.backbuffer(0).expect("no backbuffers?");
+        let backbuffer_size = bb0.size();
+        let full_scissors = [br::vk::VkRect2D {
+            offset: br::vk::VkOffset2D { x: 0, y: 0 },
+            extent: br::vk::VkExtent2D {
+                width: backbuffer_size.width,
+                height: backbuffer_size.height,
+            },
+        }];
+        let full_viewports = [br::vk::VkViewport::from_rect_with_depth_range(
+            &full_scissors[0],
+            0.0..1.0,
+        )];
 
         let main_vps =
             main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
@@ -874,13 +884,19 @@ impl SkyboxRenderer {
     }
 
     fn recreate_pipeline<NL: NativeLinker>(&mut self, e: &Engine<NL>, drt: &DetailedRenderTargets) {
-        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
-        let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(
-            backbuffer_size.0,
-            backbuffer_size.1,
-        ))];
-        let full_viewports =
-            [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0..1.0).into_inner()];
+        let bb0 = e.backbuffer(0).expect("no backbuffers?");
+        let backbuffer_size = bb0.size();
+        let full_scissors = [br::vk::VkRect2D {
+            offset: br::vk::VkOffset2D { x: 0, y: 0 },
+            extent: br::vk::VkExtent2D {
+                width: backbuffer_size.width,
+                height: backbuffer_size.height,
+            },
+        }];
+        let full_viewports = [br::vk::VkViewport::from_rect_with_depth_range(
+            &full_scissors[0],
+            0.0..1.0,
+        )];
 
         let main_vps = self
             .main_render_shader
@@ -924,13 +940,19 @@ impl GridRenderer {
         )
         .expect("Instantiating grid render shader failed");
 
-        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
-        let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(
-            backbuffer_size.0,
-            backbuffer_size.1,
-        ))];
-        let full_viewports =
-            [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0..1.0).into_inner()];
+        let bb0 = e.backbuffer(0).expect("no backbuffers?");
+        let backbuffer_size = bb0.size();
+        let full_scissors = [br::vk::VkRect2D {
+            offset: br::vk::VkOffset2D { x: 0, y: 0 },
+            extent: br::vk::VkExtent2D {
+                width: backbuffer_size.width,
+                height: backbuffer_size.height,
+            },
+        }];
+        let full_viewports = [br::vk::VkViewport::from_rect_with_depth_range(
+            &full_scissors[0],
+            0.0..1.0,
+        )];
 
         let main_vps = main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
         let mp = br::MultisampleState::new();
@@ -952,13 +974,19 @@ impl GridRenderer {
     }
 
     fn recreate_pipeline<NL: NativeLinker>(&mut self, e: &Engine<NL>, drt: &DetailedRenderTargets) {
-        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
-        let full_scissors = [br::vk::VkRect2D::from(br::Extent2D(
-            backbuffer_size.0,
-            backbuffer_size.1,
-        ))];
-        let full_viewports =
-            [br::Viewport::from_rect_with_depth_range(&full_scissors[0], 0.0..1.0).into_inner()];
+        let bb0 = e.backbuffer(0).expect("no backbuffers?");
+        let backbuffer_size = bb0.size();
+        let full_scissors = [br::vk::VkRect2D {
+            offset: br::vk::VkOffset2D { x: 0, y: 0 },
+            extent: br::vk::VkExtent2D {
+                width: backbuffer_size.width,
+                height: backbuffer_size.height,
+            },
+        }];
+        let full_viewports = [br::vk::VkViewport::from_rect_with_depth_range(
+            &full_scissors[0],
+            0.0..1.0,
+        )];
 
         let main_vps = self
             .main_render_shader
@@ -989,7 +1017,7 @@ pub struct DetailedRenderTargets {
 impl DetailedRenderTargets {
     pub fn new<NL: NativeLinker>(e: &Engine<NL>) -> Self {
         let depth_buffer = br::ImageDesc::new(
-            e.backbuffer(0).expect("no backbuffers?").size(),
+            AsRef::<br::vk::VkExtent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()),
             br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
@@ -1021,11 +1049,12 @@ impl DetailedRenderTargets {
         )
         .create(e.graphics())
         .expect("Creating RenderPass failed");
-        let backbuffer_size = e.backbuffer(0).expect("no backbuffers?").size().clone();
+        let bb0 = e.backbuffer(0).expect("no backbuffers?");
+        let backbuffer_size = bb0.size();
         let fb = e
             .iter_backbuffers()
             .map(|bb| {
-                br::Framebuffer::new(&rp, &[&bb, &depth_buffer_view], &backbuffer_size, 1)
+                br::Framebuffer::new(&rp, &[&bb, &depth_buffer_view], backbuffer_size.as_ref(), 1)
                     .expect("Creating Framebuffer failed")
             })
             .collect();
@@ -1046,10 +1075,11 @@ impl DetailedRenderTargets {
         e: &Engine<NL>,
         size: &peridot::math::Vector2<usize>,
     ) {
-        let su32: br::Extent2D = peridot::math::Vector2::<u32>(size.0 as _, size.1 as _).into();
+        let su32: br::vk::VkExtent2D =
+            peridot::math::Vector2::<u32>(size.0 as _, size.1 as _).into();
 
         let depth_buffer = br::ImageDesc::new(
-            e.backbuffer(0).expect("no backbuffers?").size(),
+            AsRef::<br::vk::VkExtent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()),
             br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
@@ -1157,7 +1187,7 @@ impl RenderCommands {
     }
 
     fn generate_commands<NL: NativeLinker>(
-        &self,
+        &mut self,
         e: &Engine<NL>,
         skybox_renderer: &SkyboxRenderer,
         grid_renderer: &GridRenderer,
@@ -1166,36 +1196,43 @@ impl RenderCommands {
         buf: &peridot::FixedMemory,
         buf_offsets: &FixedBufferOffsets,
     ) {
-        let render_area = br::vk::VkRect2D::from(
-            AsRef::<br::Extent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()).clone(),
-        );
+        let render_area = br::vk::VkRect2D {
+            offset: br::vk::VkOffset2D { x: 0, y: 0 },
+            extent: AsRef::<br::vk::VkExtent2D>::as_ref(
+                e.backbuffer(0).expect("no backbuffers?").size(),
+            )
+            .clone(),
+        };
 
         let clear_values = [
             br::ClearValue::color([0.0; 4]),
             br::ClearValue::depth_stencil(1.0, 0),
         ];
-        for (b, fb) in self.main_commands.iter().zip(&drt.fb) {
-            b.begin()
-                .expect("Failed to begin record main command")
+        for (b, fb) in self.main_commands.iter_mut().zip(&drt.fb) {
+            unsafe { b.begin().expect("Failed to begin record main command") }
                 .begin_render_pass(&drt.rp, fb, render_area.clone(), &clear_values, true)
                 .bind_graphics_pipeline_pair(
                     grid_renderer.pipeline.pipeline(),
                     grid_renderer.pipeline.layout(),
                 )
-                .bind_graphics_descriptor_sets(0, &[descriptors.camera_uniform()], &[])
+                .bind_graphics_descriptor_sets(0, &[descriptors.camera_uniform().into()], &[])
                 .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.grid_vertices as _)])
                 .draw(buf_offsets.grid_vertex_count, 1, 0, 0)
                 .bind_graphics_pipeline_pair(
                     skybox_renderer.pipeline.pipeline(),
                     skybox_renderer.pipeline.layout(),
                 )
-                .bind_graphics_descriptor_sets(1, &[descriptors.skybox_precomputed_textures()], &[])
+                .bind_graphics_descriptor_sets(
+                    1,
+                    &[descriptors.skybox_precomputed_textures().into()],
+                    &[],
+                )
                 .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.fill_plane as _)])
                 .draw(4, 1, 0, 0)
                 .end_render_pass();
         }
     }
-    fn clear_commands(&self) {
+    fn clear_commands(&mut self) {
         self.main_commands.reset().expect("Resetting failed");
     }
 }
@@ -1260,7 +1297,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             .backbuffer(0)
             .map(|b| {
                 let s = b.size();
-                s.0 as f32 / s.1 as f32
+                s.width as f32 / s.height as f32
             })
             .expect("no backbuffers?");
         let main_camera = peridot::math::Camera {
@@ -1307,7 +1344,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             grid_vertices_offset,
         };
         let mut tfb = peridot::TransferBatch::new();
-        let buf = peridot::FixedMemory::new(
+        let mut buf = peridot::FixedMemory::new(
             e.graphics(),
             bp,
             mbp,
@@ -1355,11 +1392,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             mut_update_range,
             br::AccessFlags::UNIFORM_READ,
         );
-        let update_cb =
+        let mut update_cb =
             peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, 1)
                 .expect("Alloc CommandBundle failed(copy)");
         {
-            let mut r = update_cb[0].begin().expect("Begin UpdateCmdRec");
+            let mut r = unsafe { update_cb[0].begin().expect("Begin UpdateCmdRec") };
             tfb_update.sink_transfer_commands(&mut r);
             tfb_update.sink_graphics_ready_commands(&mut r);
         }
@@ -1377,7 +1414,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let grid = GridRenderer::new(e, &rt, &descriptors);
 
         skybox_precomputed.init(e, &precompute_textures);
-        let cmds = RenderCommands::new(e);
+        let mut cmds = RenderCommands::new(e);
         cmds.generate_commands(e, &skybox, &grid, &descriptors, &rt, &buf, &buf_offsets);
 
         e.submit_commands(|r| {
@@ -1410,38 +1447,39 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
     }
     fn update(
         &mut self,
-        e: &Engine<NL>,
+        e: &mut Engine<NL>,
         on_backbuffer_of: u32,
         dt: std::time::Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
         let my_diff = self.mouse_y_diff.update(e.input().analog_value_abs(0));
         let mx_diff = self.mouse_x_diff.update(e.input().analog_value_abs(1));
         if e.input().button_pressing_time(0) > std::time::Duration::new(0, 0) {
-            self.view_zenith_angle -= my_diff * 0.1;
-            self.azimuth_angle -= mx_diff * 0.1;
+            self.view_zenith_angle += my_diff * 0.1;
+            self.azimuth_angle += mx_diff * 0.1;
             self.main_camera.rotation = peridot::math::Quaternion::new(
                 (self.view_zenith_angle - 90.0).to_radians(),
-                peridot::math::Vector3::left(),
+                peridot::math::Vector3::RIGHT,
             ) * peridot::math::Quaternion::new(
                 self.azimuth_angle.to_radians(),
-                peridot::math::Vector3::up(),
+                peridot::math::Vector3::UP,
             );
         }
 
         self.total_time += dt.as_secs() as f32 + dt.subsec_micros() as f32 / 10_000_000.0;
+        let buf_offsets = &self.buf_offsets;
+        let main_camera = &self.main_camera;
+        let aspect_wh = self.aspect_wh;
         self.buf
             .mut_buffer
             .0
             .guard_map(
                 0..self.buf_offsets.mut_uniform_offset + std::mem::size_of::<Uniform>() as u64,
                 |m| unsafe {
-                    *m.get_mut(self.buf_offsets.mut_uniform_offset as _) = Uniform {
-                        main_view_projection: self
-                            .main_camera
-                            .view_projection_matrix(self.aspect_wh),
-                        main_view: self.main_camera.view_matrix(),
+                    *m.get_mut(buf_offsets.mut_uniform_offset as _) = Uniform {
+                        main_view_projection: main_camera.view_projection_matrix(aspect_wh),
+                        main_view: main_camera.view_matrix(),
                         persp_fov_rad: 70.0f32.to_radians(),
-                        aspect_wh: self.aspect_wh,
+                        aspect_wh,
                     };
                 },
             )
@@ -1467,7 +1505,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         self.cmds.clear_commands();
         self.rt.discard_framebuffers();
     }
-    fn on_resize(&mut self, e: &Engine<NL>, new_size: peridot::math::Vector2<usize>) {
+    fn on_resize(&mut self, e: &mut Engine<NL>, new_size: peridot::math::Vector2<usize>) {
         self.aspect_wh = new_size.0 as f32 / new_size.1 as f32;
 
         self.rt.recreate_framebuffers(e, &new_size);
