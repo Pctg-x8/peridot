@@ -12,6 +12,12 @@ use std::{
 #[repr(C, align(4))]
 pub struct RGBA32(u8, u8, u8, u8);
 
+#[repr(C)]
+#[derive(Clone)]
+pub struct SunLightData {
+    pub incident_light_dir: peridot::math::Vector4F32,
+}
+
 pub struct ImmutableDescriptorSets {
     _pool: br::DescriptorPool,
     layouts_for_set: Vec<Rc<br::DescriptorSetLayout>>,
@@ -783,13 +789,22 @@ impl Descriptors {
         let descriptors = ImmutableDescriptorSets::new(
             g,
             vec![
-                vec![(
-                    br::ShaderStage::FRAGMENT.vertex(),
-                    br::DescriptorUpdateInfo::UniformBuffer(vec![(
-                        buf.buffer.0.native_ptr(),
-                        buf_offsets.uniform_range.clone(),
-                    )]),
-                )],
+                vec![
+                    (
+                        br::ShaderStage::FRAGMENT.vertex(),
+                        br::DescriptorUpdateInfo::UniformBuffer(vec![(
+                            buf.buffer.0.native_ptr(),
+                            buf_offsets.uniform_range.clone(),
+                        )]),
+                    ),
+                    (
+                        br::ShaderStage::FRAGMENT,
+                        br::DescriptorUpdateInfo::UniformBuffer(vec![(
+                            buf.buffer.0.native_ptr(),
+                            buf_offsets.sun_light_uniform_range.clone(),
+                        )]),
+                    ),
+                ],
                 vec![
                     (
                         br::ShaderStage::FRAGMENT,
@@ -1148,7 +1163,10 @@ pub struct FixedBufferOffsets {
     grid_vertices: u64,
     grid_vertex_count: u32,
     mut_uniform_offset: u64,
+    mut_sun_light_uniform_offset: u64,
+    mut_buffer_size: u64,
     uniform_range: std::ops::Range<usize>,
+    sun_light_uniform_range: std::ops::Range<usize>,
 }
 pub struct FixedBufferInitializer {
     fill_plane: peridot::Primitive<peridot::VertexUV2D>,
@@ -1275,6 +1293,83 @@ where
     }
 }
 
+pub enum MouseButtonControlState {
+    None,
+    Camera,
+    SunDirection,
+}
+pub struct MouseControl {
+    state: MouseButtonControlState,
+    x_diff: Differential<f32>,
+    y_diff: Differential<f32>,
+    view_zenith_angle: f32,
+    azimuth_angle: f32,
+    sunlight_zenith_angle: f32,
+    sunlight_azimuth_angle: f32,
+}
+impl MouseControl {
+    pub fn new() -> Self {
+        Self {
+            state: MouseButtonControlState::None,
+            x_diff: Differential::new(0.0),
+            y_diff: Differential::new(0.0),
+            view_zenith_angle: 90.0,
+            azimuth_angle: 0.0,
+            sunlight_zenith_angle: 85.0,
+            sunlight_azimuth_angle: 180.0,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        e: &peridot::Engine<impl peridot::NativeLinker>,
+        main_camera: &mut peridot::math::Camera,
+        sun_light_data: &mut SunLightData,
+    ) {
+        let xd = self.x_diff.update(e.input().analog_value_abs(1));
+        let yd = self.y_diff.update(e.input().analog_value_abs(0));
+
+        self.state = if !e.input().button_pressing_time(0).is_zero() {
+            MouseButtonControlState::Camera
+        } else if !e.input().button_pressing_time(1).is_zero() {
+            MouseButtonControlState::SunDirection
+        } else {
+            MouseButtonControlState::None
+        };
+
+        match self.state {
+            MouseButtonControlState::None => { /* nop */ }
+            MouseButtonControlState::Camera => {
+                self.view_zenith_angle += yd * 0.1;
+                self.azimuth_angle += xd * 0.1;
+
+                main_camera.rotation = peridot::math::Quaternion::new(
+                    (self.view_zenith_angle - 90.0).to_radians(),
+                    peridot::math::Vector3::RIGHT,
+                ) * peridot::math::Quaternion::new(
+                    self.azimuth_angle.to_radians(),
+                    peridot::math::Vector3::UP,
+                );
+            }
+            MouseButtonControlState::SunDirection => {
+                self.sunlight_zenith_angle += yd * 0.1;
+                self.sunlight_azimuth_angle -= xd * 0.1;
+
+                let d1 = peridot::math::Matrix4::from(
+                    peridot::math::Quaternion::new(
+                        (self.sunlight_zenith_angle - 90.0).to_radians(),
+                        peridot::math::Vector3::RIGHT,
+                    ) * peridot::math::Quaternion::new(
+                        self.sunlight_azimuth_angle.to_radians(),
+                        peridot::math::Vector3::UP,
+                    ),
+                ) * peridot::math::Vector3::FORWARD;
+                sun_light_data.incident_light_dir = peridot::math::Vector4(d1.0, d1.1, d1.2, 0.0);
+            }
+        }
+    }
+}
+
 pub struct Game<NL> {
     rt: DetailedRenderTargets,
     descriptors: Descriptors,
@@ -1287,12 +1382,10 @@ pub struct Game<NL> {
     cmds: RenderCommands,
     update_cmds: peridot::CommandBundle,
     total_time: f32,
-    view_zenith_angle: f32,
-    azimuth_angle: f32,
     main_camera: peridot::math::Camera,
     aspect_wh: f32,
-    mouse_x_diff: Differential<f32>,
-    mouse_y_diff: Differential<f32>,
+    sun_light_data: SunLightData,
+    mouse_control: MouseControl,
     ph: std::marker::PhantomData<*const NL>,
 }
 impl<NL> Game<NL> {
@@ -1303,6 +1396,7 @@ impl<NL> FeatureRequests for Game<NL> {}
 impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
     fn init(e: &mut Engine<NL>) -> Self {
         e.input_mut().map(peridot::NativeButtonInput::Mouse(0), 0);
+        e.input_mut().map(peridot::NativeButtonInput::Mouse(1), 1);
         e.input_mut().map(peridot::NativeAnalogInput::MouseY, 0);
         e.input_mut().map(peridot::NativeAnalogInput::MouseX, 1);
 
@@ -1350,6 +1444,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             ));
         let mut mbp = peridot::BufferPrealloc::new(e.graphics());
         let uniform_offset = mbp.add(peridot::BufferContent::uniform::<Uniform>());
+        let sun_light_data_offset = mbp.add(peridot::BufferContent::uniform::<SunLightData>());
+        let mut_buffer_size = mbp.total_size();
         let mut fb_data = FixedBufferInitializer {
             fill_plane,
             fill_plane_offset,
@@ -1371,23 +1467,29 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             grid_vertices: fb_data.grid_vertices_offset,
             grid_vertex_count: fb_data.grid_vertices.vertices.len() as _,
             mut_uniform_offset: uniform_offset,
+            mut_sun_light_uniform_offset: sun_light_data_offset,
+            mut_buffer_size,
             uniform_range: (buf.mut_buffer_placement + uniform_offset) as usize
                 ..(buf.mut_buffer_placement + uniform_offset) as usize
                     + std::mem::size_of::<Uniform>(),
+            sun_light_uniform_range: (buf.mut_buffer_placement + sun_light_data_offset) as usize
+                ..(buf.mut_buffer_placement + sun_light_data_offset) as usize
+                    + std::mem::size_of::<SunLightData>(),
+        };
+        let sun_light_data = SunLightData {
+            incident_light_dir: peridot::math::Vector4(0.0f32, -0.6, 0.8, 0.0).normalize(),
         };
         buf.mut_buffer
             .0
-            .guard_map(
-                0..uniform_offset + std::mem::size_of::<Uniform>() as u64,
-                |m| unsafe {
-                    *m.get_mut(uniform_offset as _) = Uniform {
-                        main_view_projection: main_camera.view_projection_matrix(aspect_wh),
-                        main_view: main_camera.view_matrix(),
-                        persp_fov_rad: 70.0f32.to_radians(),
-                        aspect_wh,
-                    };
-                },
-            )
+            .guard_map(0..mut_buffer_size as u64, |m| unsafe {
+                *m.get_mut(uniform_offset as _) = Uniform {
+                    main_view_projection: main_camera.view_projection_matrix(aspect_wh),
+                    main_view: main_camera.view_matrix(),
+                    persp_fov_rad: 70.0f32.to_radians(),
+                    aspect_wh,
+                };
+                *m.get_mut(sun_light_data_offset as _) = sun_light_data.clone();
+            })
             .expect("Staging MutBuffer failed");
         let mut tfb_update = peridot::TransferBatch::new();
         let mut_update_range = buf.mut_buffer_placement + uniform_offset
@@ -1403,6 +1505,22 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             br::PipelineStageFlags::FRAGMENT_SHADER,
             &buf.buffer.0,
             mut_update_range,
+            br::AccessFlags::UNIFORM_READ,
+        );
+        tfb_update.add_copying_buffer(
+            buf.mut_buffer.0.with_dev_offset(sun_light_data_offset),
+            buf.buffer
+                .0
+                .with_dev_offset(buf.mut_buffer_placement + sun_light_data_offset),
+            std::mem::size_of::<SunLightData>() as _,
+        );
+        tfb_update.add_buffer_graphics_ready(
+            br::PipelineStageFlags::FRAGMENT_SHADER,
+            &buf.buffer.0,
+            buf.mut_buffer_placement + sun_light_data_offset
+                ..buf.mut_buffer_placement
+                    + sun_light_data_offset
+                    + std::mem::size_of::<SunLightData>() as u64,
             br::AccessFlags::UNIFORM_READ,
         );
         let mut update_cb =
@@ -1449,12 +1567,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             cmds,
             update_cmds: update_cb,
             total_time: 0.0,
-            view_zenith_angle: 90.0,
-            azimuth_angle: 0.0,
             main_camera,
             aspect_wh,
-            mouse_x_diff: Differential::new(0.0),
-            mouse_y_diff: Differential::new(0.0),
+            sun_light_data,
+            mouse_control: MouseControl::new(),
             ph: std::marker::PhantomData,
         }
     }
@@ -1464,38 +1580,26 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         on_backbuffer_of: u32,
         dt: std::time::Duration,
     ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        let my_diff = self.mouse_y_diff.update(e.input().analog_value_abs(0));
-        let mx_diff = self.mouse_x_diff.update(e.input().analog_value_abs(1));
-        if e.input().button_pressing_time(0) > std::time::Duration::new(0, 0) {
-            self.view_zenith_angle += my_diff * 0.1;
-            self.azimuth_angle += mx_diff * 0.1;
-            self.main_camera.rotation = peridot::math::Quaternion::new(
-                (self.view_zenith_angle - 90.0).to_radians(),
-                peridot::math::Vector3::RIGHT,
-            ) * peridot::math::Quaternion::new(
-                self.azimuth_angle.to_radians(),
-                peridot::math::Vector3::UP,
-            );
-        }
+        self.mouse_control
+            .update(e, &mut self.main_camera, &mut self.sun_light_data);
 
         self.total_time += dt.as_secs() as f32 + dt.subsec_micros() as f32 / 10_000_000.0;
         let buf_offsets = &self.buf_offsets;
         let main_camera = &self.main_camera;
+        let sun_light_data = &self.sun_light_data;
         let aspect_wh = self.aspect_wh;
         self.buf
             .mut_buffer
             .0
-            .guard_map(
-                0..self.buf_offsets.mut_uniform_offset + std::mem::size_of::<Uniform>() as u64,
-                |m| unsafe {
-                    *m.get_mut(buf_offsets.mut_uniform_offset as _) = Uniform {
-                        main_view_projection: main_camera.view_projection_matrix(aspect_wh),
-                        main_view: main_camera.view_matrix(),
-                        persp_fov_rad: 70.0f32.to_radians(),
-                        aspect_wh,
-                    };
-                },
-            )
+            .guard_map(0..self.buf_offsets.mut_buffer_size, |m| unsafe {
+                *m.get_mut(buf_offsets.mut_uniform_offset as _) = Uniform {
+                    main_view_projection: main_camera.view_projection_matrix(aspect_wh),
+                    main_view: main_camera.view_matrix(),
+                    persp_fov_rad: 70.0f32.to_radians(),
+                    aspect_wh,
+                };
+                *m.get_mut(buf_offsets.mut_sun_light_uniform_offset as _) = sun_light_data.clone();
+            })
             .expect("Staging MutBuffer failed");
 
         (

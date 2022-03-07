@@ -18,6 +18,9 @@ Uniform[FragmentShader](0, 0) ViewUniform {
     mat4 main_view;
     float persp_fov_rad, aspect_wh;
 }
+Uniform[FragmentShader](0, 1) SunLightData {
+    vec4 incidentLightDir;
+}
 
 Header[FragmentShader] {
     layout(set = 1, binding = 0) uniform sampler3D scatter;
@@ -93,9 +96,8 @@ FragmentShader {
     const vec3 viewvec = normalize((main_view * vec4((2.0 * uv.x - 1.0) * aspect_wh, -(2.0 * uv.y - 1.0), zd, 0.0)).xyz);
     const float cv = dot(viewvec, vec3(0.0, 1.0, 0.0));
     const float camHeight = (main_view * vec4(0.0, 0.0, 0.0, 1.0)).y;
-    const vec3 incidentLightDir = normalize(vec3(0.0, -0.6, -0.8));
-    const float cs = dot(-incidentLightDir, vec3(0.0, 1.0, 0.0));
-    const float vs_cos = dot(incidentLightDir, -viewvec);
+    const float cs = dot(-incidentLightDir.xyz, vec3(0.0, 1.0, 0.0));
+    const float vs_cos = dot(incidentLightDir.xyz, -viewvec);
 
     const vec4 scatter = getScatterLight(camHeight, cv, cs);
     const vec3 mieRgb = phaseMie(vs_cos) * estimateMieRgb(scatter);
