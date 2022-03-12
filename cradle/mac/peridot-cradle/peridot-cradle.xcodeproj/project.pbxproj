@@ -39,8 +39,8 @@
 		4BAF7A2821B2A4B00006BE24 /* PeridotRenderableViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeridotRenderableViewController.swift; sourceTree = "<group>"; };
 		4BAF7A3021B313B00006BE24 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		4BAF7A3221B3C0990006BE24 /* peridot-cradle-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "peridot-cradle-Bridging-Header.h"; sourceTree = "<group>"; };
-		4BB1535E27DC9CB300A214E0 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = macOS/Frameworks/vulkan.framework; sourceTree = "<group>"; };
 		4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libpegamelib.a; path = rlibs/libpegamelib.a; sourceTree = SOURCE_ROOT; };
+		4BB1564427DC9F6200A214E0 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = macOS/Frameworks/vulkan.framework; sourceTree = "<group>"; };
 		4BC8ED1C21B3F4C900FB4AF9 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
 		4BC8ED1E21B3F4EC00FB4AF9 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		4BC8ED2021B3F50B00FB4AF9 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
@@ -48,8 +48,7 @@
 		4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInterface.swift; sourceTree = "<group>"; };
-		980100B523AF192B004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = ../../../../../VulkanSDK/1.3.204.1/macOS/Frameworks/vulkan.framework; sourceTree = "<group>"; };
-		985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MoltenVK.xcframework; path = ../../../../../VulkanSDK/1.3.204.1/MoltenVK/MoltenVK.xcframework; sourceTree = "<group>"; };
+		985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MoltenVK.xcframework; path = MoltenVK/MoltenVK.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,7 +74,6 @@
 		4BAF7A0A21B2554B0006BE24 = {
 			isa = PBXGroup;
 			children = (
-				4BB1535A27DC9C8600A214E0 /* VulkanSDK */,
 				4B40D4B621DCFB5B00C1B31F /* assets.par */,
 				4BAF7A1521B2554B0006BE24 /* peridot-cradle */,
 				4BAF7A1421B2554B0006BE24 /* Products */,
@@ -110,12 +108,11 @@
 		4BAF7A3321B3C7380006BE24 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				4BB1564327DC9F3000A214E0 /* VulkanSDK */,
 				4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */,
 				4B696EF1231BDB4900C2417C /* CoreAudio.framework */,
 				4B696EEF231BDB3200C2417C /* AudioToolbox.framework */,
 				4B696EED231BD4E000C2417C /* AudioUnit.framework */,
-				985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */,
-				980100B523AF192B004DEEF8 /* vulkan.framework */,
 				4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */,
 				4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */,
 				4BC8ED2221B3F51600FB4AF9 /* IOSurface.framework */,
@@ -126,10 +123,11 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
-		4BB1535A27DC9C8600A214E0 /* VulkanSDK */ = {
+		4BB1564327DC9F3000A214E0 /* VulkanSDK */ = {
 			isa = PBXGroup;
 			children = (
-				4BB1535E27DC9CB300A214E0 /* vulkan.framework */,
+				4BB1564427DC9F6200A214E0 /* vulkan.framework */,
+				985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */,
 			);
 			name = VulkanSDK;
 			path = /Users/pctgx8/VulkanSDK/1.3.204.1;
