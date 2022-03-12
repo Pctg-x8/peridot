@@ -65,9 +65,6 @@
 		4B699C9F21DA336D0048FA7F /* libVkLayer_core_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_core_validation.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libVkLayer_core_validation.dylib; sourceTree = "<group>"; };
 		4B699CA021DA336D0048FA7F /* libVkLayer_parameter_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_parameter_validation.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libVkLayer_parameter_validation.dylib; sourceTree = "<group>"; };
 		4B699CA121DA336D0048FA7F /* libVkLayer_object_tracker.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_object_tracker.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libVkLayer_object_tracker.dylib; sourceTree = "<group>"; };
-		4B699CA721DA40F80048FA7F /* libvulkan.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libvulkan.dylib"; sourceTree = "<group>"; };
-		4B699CA921DA41400048FA7F /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
-		4B699CAB21DA41520048FA7F /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../foreign/vksdk-1.0.69.0/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
 		4B699CAD21DA41720048FA7F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = MoltenVK_icd.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"; sourceTree = "<group>"; };
 		4B699CAF21DA418E0048FA7F /* VkLayer_standard_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_standard_validation.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_standard_validation.json"; sourceTree = "<group>"; };
 		4B699CB021DA418E0048FA7F /* VkLayer_unique_objects.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_unique_objects.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_unique_objects.json"; sourceTree = "<group>"; };
@@ -75,14 +72,12 @@
 		4B699CB221DA418E0048FA7F /* VkLayer_core_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_core_validation.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_core_validation.json"; sourceTree = "<group>"; };
 		4B699CB321DA418E0048FA7F /* VkLayer_parameter_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_parameter_validation.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_parameter_validation.json"; sourceTree = "<group>"; };
 		4B699CB421DA418E0048FA7F /* VkLayer_object_tracker.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_object_tracker.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_object_tracker.json"; sourceTree = "<group>"; };
-		4B699CBB21DA41A50048FA7F /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
 		4B699CBD21DA41B40048FA7F /* libVkLayer_threading.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_threading.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_threading.dylib"; sourceTree = "<group>"; };
 		4B699CBE21DA41B40048FA7F /* libVkLayer_unique_objects.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_unique_objects.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_unique_objects.dylib"; sourceTree = "<group>"; };
 		4B699CBF21DA41B40048FA7F /* libVkLayer_utils.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_utils.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_utils.dylib"; sourceTree = "<group>"; };
 		4B699CC021DA41B40048FA7F /* libVkLayer_object_tracker.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_object_tracker.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_object_tracker.dylib"; sourceTree = "<group>"; };
 		4B699CC121DA41B40048FA7F /* libVkLayer_parameter_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_parameter_validation.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_parameter_validation.dylib"; sourceTree = "<group>"; };
 		4B699CC221DA41B40048FA7F /* libVkLayer_core_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_core_validation.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_core_validation.dylib"; sourceTree = "<group>"; };
-		4B699CCD21DA43D20048FA7F /* libvulkan.1.1.92.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.1.92.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libvulkan.1.1.92.dylib; sourceTree = "<group>"; };
 		4B9C87B021B3EF4800FE559E /* MoltenVK.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MoltenVK.framework; path = ../../../../foreign/MoltenVK/Package/Release/MoltenVK/macOS/MoltenVK.framework; sourceTree = "<group>"; };
 		4BA45A0021DB564400915AC9 /* libVkLayer_threading.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_threading.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libVkLayer_threading.dylib; sourceTree = "<group>"; };
 		4BA45A0121DB564400915AC9 /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libMoltenVK.dylib; sourceTree = "<group>"; };
@@ -108,8 +103,6 @@
 		4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInterface.swift; sourceTree = "<group>"; };
-		4BF8B2E321DA0686007F80AB /* libvulkan.1.1.92.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.1.92.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libvulkan.1.1.92.dylib; sourceTree = "<group>"; };
-		4BF8B2E521DA06A4007F80AB /* libvulkan.1.1.92.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.1.92.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libvulkan.1.1.92.dylib; sourceTree = "<group>"; };
 		980100B523AF192B004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = ../../../../../VulkanSDK/1.3.204.1/macOS/Frameworks/vulkan.framework; sourceTree = "<group>"; };
 		980100B923AF1D49004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = ../../../../../VulkanSDK/1.3.204.1/macOS/Frameworks/vulkan.framework; sourceTree = "<group>"; };
 		980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = ../../../../../VulkanSDK/1.3.204.1/macOS/lib/libMoltenVK.dylib; sourceTree = "<group>"; };
@@ -185,14 +178,12 @@
 				4BA45A0321DB564400915AC9 /* libVkLayer_parameter_validation.dylib */,
 				4BA45A0021DB564400915AC9 /* libVkLayer_threading.dylib */,
 				4BA45A0521DB564500915AC9 /* libVkLayer_unique_objects.dylib */,
-				4B699CCD21DA43D20048FA7F /* libvulkan.1.1.92.dylib */,
 				4B699CC221DA41B40048FA7F /* libVkLayer_core_validation.dylib */,
 				4B699CC021DA41B40048FA7F /* libVkLayer_object_tracker.dylib */,
 				4B699CC121DA41B40048FA7F /* libVkLayer_parameter_validation.dylib */,
 				4B699CBD21DA41B40048FA7F /* libVkLayer_threading.dylib */,
 				4B699CBE21DA41B40048FA7F /* libVkLayer_unique_objects.dylib */,
 				4B699CBF21DA41B40048FA7F /* libVkLayer_utils.dylib */,
-				4B699CBB21DA41A50048FA7F /* libMoltenVK.dylib */,
 				4B699CB221DA418E0048FA7F /* VkLayer_core_validation.json */,
 				4B699CB421DA418E0048FA7F /* VkLayer_object_tracker.json */,
 				4B699CB321DA418E0048FA7F /* VkLayer_parameter_validation.json */,
@@ -200,9 +191,6 @@
 				4B699CB121DA418E0048FA7F /* VkLayer_threading.json */,
 				4B699CB021DA418E0048FA7F /* VkLayer_unique_objects.json */,
 				4B699CAD21DA41720048FA7F /* MoltenVK_icd.json */,
-				4B699CAB21DA41520048FA7F /* vulkan.framework */,
-				4B699CA921DA41400048FA7F /* libMoltenVK.dylib */,
-				4B699CA721DA40F80048FA7F /* libvulkan.dylib */,
 				4B699C9F21DA336D0048FA7F /* libVkLayer_core_validation.dylib */,
 				4B699CA121DA336D0048FA7F /* libVkLayer_object_tracker.dylib */,
 				4B699CA021DA336D0048FA7F /* libVkLayer_parameter_validation.dylib */,
@@ -216,8 +204,6 @@
 				4B699C9321DA318C0048FA7F /* VkLayer_unique_objects.json */,
 				4B699C8C21DA30B50048FA7F /* MoltenVK_icd.json */,
 				4B699C8921DA30910048FA7F /* libMoltenVK.dylib */,
-				4BF8B2E321DA0686007F80AB /* libvulkan.1.1.92.dylib */,
-				4BF8B2E521DA06A4007F80AB /* libvulkan.1.1.92.dylib */,
 				4BAF7A1521B2554B0006BE24 /* peridot-cradle */,
 				4BAF7A1421B2554B0006BE24 /* Products */,
 				4BAF7A3321B3C7380006BE24 /* Frameworks */,
