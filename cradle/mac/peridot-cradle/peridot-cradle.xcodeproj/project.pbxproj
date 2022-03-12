@@ -41,13 +41,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		4B40D4A021DB5B9E00C1B31F /* VkLayer_unique_objects.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_unique_objects.json; sourceTree = "<group>"; };
-		4B40D4A121DB5B9E00C1B31F /* VkLayer_threading.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_threading.json; sourceTree = "<group>"; };
-		4B40D4A221DB5B9E00C1B31F /* VkLayer_standard_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_standard_validation.json; sourceTree = "<group>"; };
-		4B40D4A321DB5B9E00C1B31F /* VkLayer_core_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_core_validation.json; sourceTree = "<group>"; };
-		4B40D4A421DB5B9E00C1B31F /* VkLayer_parameter_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_parameter_validation.json; sourceTree = "<group>"; };
-		4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_object_tracker.json; sourceTree = "<group>"; };
-		4B40D4A721DB5B9E00C1B31F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = MoltenVK_icd.json; sourceTree = "<group>"; };
 		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
 		4B696EED231BD4E000C2417C /* AudioUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioUnit.framework; path = System/Library/Frameworks/AudioUnit.framework; sourceTree = SDKROOT; };
 		4B696EEF231BDB3200C2417C /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
@@ -129,37 +122,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		4B40D49E21DB5B9E00C1B31F /* vulkan */ = {
-			isa = PBXGroup;
-			children = (
-				4B40D49F21DB5B9E00C1B31F /* explicit_layer.d */,
-				4B40D4A621DB5B9E00C1B31F /* icd.d */,
-			);
-			name = vulkan;
-			path = ../../../../../VulkanSDK/1.3.204.1/macOS/etc/vulkan;
-			sourceTree = "<group>";
-		};
-		4B40D49F21DB5B9E00C1B31F /* explicit_layer.d */ = {
-			isa = PBXGroup;
-			children = (
-				4B40D4A021DB5B9E00C1B31F /* VkLayer_unique_objects.json */,
-				4B40D4A121DB5B9E00C1B31F /* VkLayer_threading.json */,
-				4B40D4A221DB5B9E00C1B31F /* VkLayer_standard_validation.json */,
-				4B40D4A321DB5B9E00C1B31F /* VkLayer_core_validation.json */,
-				4B40D4A421DB5B9E00C1B31F /* VkLayer_parameter_validation.json */,
-				4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */,
-			);
-			path = explicit_layer.d;
-			sourceTree = "<group>";
-		};
-		4B40D4A621DB5B9E00C1B31F /* icd.d */ = {
-			isa = PBXGroup;
-			children = (
-				4B40D4A721DB5B9E00C1B31F /* MoltenVK_icd.json */,
-			);
-			path = icd.d;
-			sourceTree = "<group>";
-		};
 		4BAF7A0A21B2554B0006BE24 = {
 			isa = PBXGroup;
 			children = (
@@ -167,7 +129,6 @@
 				980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */,
 				980100B923AF1D49004DEEF8 /* vulkan.framework */,
 				4B40D4B621DCFB5B00C1B31F /* assets.par */,
-				4B40D49E21DB5B9E00C1B31F /* vulkan */,
 				4BA45A0121DB564400915AC9 /* libMoltenVK.dylib */,
 				4BA45A0221DB564400915AC9 /* libVkLayer_core_validation.dylib */,
 				4BA45A0421DB564500915AC9 /* libVkLayer_object_tracker.dylib */,
