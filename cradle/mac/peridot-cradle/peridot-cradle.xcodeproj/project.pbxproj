@@ -22,23 +22,8 @@
 		4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */; };
 		4BC8ED2721B3F54900FB4AF9 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */; };
 		4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */; };
-		980100BC23AF202B004DEEF8 /* libMoltenVK.dylib in Copy Vulkan Frameworks */ = {isa = PBXBuildFile; fileRef = 980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		985C79C525D5234C00CDBC0F /* MoltenVK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */; };
 /* End PBXBuildFile section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		4B40D49D21DB5B8000C1B31F /* Copy Vulkan Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				980100BC23AF202B004DEEF8 /* libMoltenVK.dylib in Copy Vulkan Frameworks */,
-			);
-			name = "Copy Vulkan Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
@@ -221,8 +206,6 @@
 				4BAF7A0F21B2554B0006BE24 /* Sources */,
 				4BAF7A1021B2554B0006BE24 /* Frameworks */,
 				4BAF7A1121B2554B0006BE24 /* Resources */,
-				4B40D49D21DB5B8000C1B31F /* Copy Vulkan Frameworks */,
-				4B699CCF21DA43D80048FA7F /* ShellScript */,
 			);
 			buildRules = (
 			);
@@ -278,26 +261,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		4B699CCF21DA43D80048FA7F /* ShellScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "#!/bin/bash\n# Type a script or drag a script file from your workspace to insert its path.\n\n# $PROJECT_DIR/edit-package.sh\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4BAF7A0F21B2554B0006BE24 /* Sources */ = {
