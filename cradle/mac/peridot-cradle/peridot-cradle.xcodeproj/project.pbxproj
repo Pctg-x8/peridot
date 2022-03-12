@@ -49,7 +49,6 @@
 		4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInterface.swift; sourceTree = "<group>"; };
 		980100B523AF192B004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = ../../../../../VulkanSDK/1.3.204.1/macOS/Frameworks/vulkan.framework; sourceTree = "<group>"; };
-		980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = macOS/lib/libMoltenVK.dylib; sourceTree = "<group>"; };
 		985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MoltenVK.xcframework; path = ../../../../../VulkanSDK/1.3.204.1/MoltenVK/MoltenVK.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -130,7 +129,6 @@
 		4BB1535A27DC9C8600A214E0 /* VulkanSDK */ = {
 			isa = PBXGroup;
 			children = (
-				980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */,
 				4BB1535E27DC9CB300A214E0 /* vulkan.framework */,
 			);
 			name = VulkanSDK;
