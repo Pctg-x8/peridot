@@ -3,9 +3,12 @@ name = "vg-example"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
+build = "build.rs"
 
 [features]
 default = []
+use-freetype = ["peridot-vg/use-freetype"]
+use-fontconfig = ["peridot-vg/use-fontconfig"]
 
 [dependencies]
 peridot = { path = "../.." }
