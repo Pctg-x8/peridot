@@ -1046,7 +1046,7 @@ impl DetailedRenderTargets {
     pub fn new<NL: NativeLinker>(e: &Engine<NL>) -> Self {
         let depth_buffer = br::ImageDesc::new(
             AsRef::<br::vk::VkExtent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()),
-            br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+            br::vk::VK_FORMAT_D32_SFLOAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
         )
@@ -1071,7 +1071,7 @@ impl DetailedRenderTargets {
 
         let rp = peridot::RenderPassTemplates::single_render_with_depth(
             e.backbuffer_format(),
-            br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+            br::vk::VK_FORMAT_D32_SFLOAT_S8_UINT,
             e.requesting_backbuffer_layout().0,
             false,
         )
@@ -1108,7 +1108,7 @@ impl DetailedRenderTargets {
 
         let depth_buffer = br::ImageDesc::new(
             AsRef::<br::vk::VkExtent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()),
-            br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+            br::vk::VK_FORMAT_D32_SFLOAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
         )
@@ -1253,9 +1253,10 @@ impl RenderCommands {
                     skybox_renderer.pipeline.pipeline(),
                     skybox_renderer.pipeline.layout(),
                 )
+                // reset first common descriptor for moltenvk bug
                 .bind_graphics_descriptor_sets(
-                    1,
-                    &[descriptors.skybox_precomputed_textures().into()],
+                    0,
+                    &[descriptors.camera_uniform().into(), descriptors.skybox_precomputed_textures().into()],
                     &[],
                 )
                 .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.fill_plane as _)])
