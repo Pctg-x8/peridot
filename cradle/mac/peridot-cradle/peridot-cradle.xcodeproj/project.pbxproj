@@ -360,7 +360,6 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
-					"$(SRCROOT)/rlibs",
 					"$(PROJECT_DIR)/rlibs",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
@@ -394,7 +393,6 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
-					"$(SRCROOT)/rlibs",
 					"$(PROJECT_DIR)/rlibs",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
