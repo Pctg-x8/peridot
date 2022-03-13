@@ -99,7 +99,7 @@ FragmentShader {
     const float cs = dot(-incidentLightDir.xyz, vec3(0.0, 1.0, 0.0));
     const float vs_cos = dot(incidentLightDir.xyz, -viewvec);
 
-    const vec4 scatter = getScatterLight(camHeight, cv, cs);
-    const vec3 mieRgb = phaseMie(vs_cos) * estimateMieRgb(scatter);
-    Target[0] = tonemap(vec4(10.0 * (/*lookupTransmittance(eyeHeight, cs).xyz + */phaseRayleigh(vs_cos) * scatter.xyz + mieRgb), 1.0));
+    const vec4 scatterLight = getScatterLight(camHeight, cv, cs);
+    const vec3 mieRgb = phaseMie(vs_cos) * estimateMieRgb(scatterLight);
+    Target[0] = tonemap(vec4(10.0 * (/*lookupTransmittance(eyeHeight, cs).xyz + */phaseRayleigh(vs_cos) * scatterLight.xyz + mieRgb), 1.0));
 }
