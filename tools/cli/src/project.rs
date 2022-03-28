@@ -5,8 +5,11 @@ pub struct Project {
     pub app_package_id: String,
     pub entry_type_name: Option<String>,
     pub asset_dir: std::path::PathBuf,
+    #[serde(default)]
     pub features: Vec<String>,
+    #[serde(default)]
     pub engine_features: Vec<String>,
+    #[serde(default)]
     pub platform: HashMap<String, PlatformOverrides>,
 }
 
