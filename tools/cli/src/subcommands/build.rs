@@ -65,13 +65,22 @@ impl Args {
                 .collect(),
             engine_features,
             update_deps: self.update_deps,
-            ext_asset_path: self.asset_directory.as_deref(),
+            ext_asset_path: self
+                .asset_directory
+                .as_deref()
+                .map(std::borrow::Cow::Borrowed)
+                .or(project_config
+                    .asset_dir
+                    .map(|p| std::borrow::Cow::Owned(self.userlib_path.join(p)))),
             entry_ty_name: self
                 .entry_ty_name
                 .as_deref()
                 .or(project_config.entry_type_name)
                 .unwrap_or("Game"),
-            appid: self.app_package_id.as_deref().unwrap_or(project_config.app_package_id),
+            appid: self
+                .app_package_id
+                .as_deref()
+                .unwrap_or(project_config.app_package_id),
             fast_build: self.fast_build,
             release: self.release,
         }

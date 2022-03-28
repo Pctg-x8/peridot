@@ -21,7 +21,7 @@ pub struct BuildOptions<'s> {
     pub features: Vec<&'s str>,
     pub engine_features: Vec<&'s str>,
     pub update_deps: bool,
-    pub ext_asset_path: Option<&'s Path>,
+    pub ext_asset_path: Option<std::borrow::Cow<'s, Path>>,
     pub entry_ty_name: &'s str,
     pub appid: &'s str,
     pub fast_build: bool,

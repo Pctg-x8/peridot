@@ -4,7 +4,7 @@ use std::collections::HashMap;
 pub struct Project {
     pub app_package_id: String,
     pub entry_type_name: Option<String>,
-    pub asset_dir: std::path::PathBuf,
+    pub asset_dir: Option<std::path::PathBuf>,
     #[serde(default)]
     pub features: Vec<String>,
     #[serde(default)]
@@ -24,7 +24,7 @@ pub struct PlatformOverrides {
 pub struct PlatformConfiguration<'s> {
     pub app_package_id: &'s str,
     pub entry_type_name: Option<&'s str>,
-    pub asset_dir: &'s std::path::Path,
+    pub asset_dir: Option<&'s std::path::Path>,
     pub features: &'s [String],
     pub engine_features: &'s [String],
 }
@@ -39,8 +39,8 @@ impl Project {
                 .unwrap_or(&self.app_package_id as &str),
             entry_type_name: self.entry_type_name.as_deref(),
             asset_dir: overrides
-                .and_then(|o| o.asset_dir.as_ref())
-                .unwrap_or(&self.asset_dir),
+                .and_then(|o| o.asset_dir.as_deref())
+                .or(self.asset_dir.as_deref()),
             features: overrides
                 .and_then(|o| o.features.as_ref())
                 .unwrap_or(&self.features),
