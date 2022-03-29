@@ -31,6 +31,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         options.features.clone(),
     );
     gen_build_files(&ctx, options.appid);
+    // Note: Androidはタイトルを別ファイル（string.xml）で指定するので、ここで渡した値は使われない
     steps::gen_userlib_import_code(
         &ctx,
         project_name,
