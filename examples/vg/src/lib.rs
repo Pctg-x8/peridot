@@ -46,7 +46,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     ph: PhantomData<*const PL>,
 }
 impl<PL: peridot::NativeLinker> Game<PL> {
-    pub const NAME: &'static str = "Peridot Examples - VectorGraphics";
+    pub const NAME: &'static str = "";
     pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
