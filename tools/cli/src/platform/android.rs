@@ -11,7 +11,16 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         .package
         .as_ref()
         .and_then(|p| p.name.as_deref())
-        .unwrap_or("?Unnamed Project?");
+        .unwrap_or("<Unnamed Peridot Project>");
+    let project_version = semver::Version::parse(
+        user_manifest
+            .package
+            .as_ref()
+            .and_then(|p| p.version.as_deref())
+            .unwrap_or("0.0.0"),
+    )
+    .expect("illformed project version");
+
     super::print_start_build("Android", project_name);
 
     let ctx = steps::BuildContext::new("android");
@@ -22,7 +31,13 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         options.features.clone(),
     );
     gen_build_files(&ctx, options.appid);
-    steps::gen_userlib_import_code(&ctx, project_name, options.entry_ty_name);
+    steps::gen_userlib_import_code(
+        &ctx,
+        project_name,
+        project_name,
+        &project_version,
+        options.entry_ty_name,
+    );
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
     steps::merge_assets(

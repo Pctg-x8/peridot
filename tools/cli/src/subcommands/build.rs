@@ -41,7 +41,7 @@ pub struct Args {
 impl Args {
     pub fn to_build_options<'s>(
         &'s self,
-        project_config: PlatformConfiguration<'s>,
+        project_config: &PlatformConfiguration<'s>,
     ) -> crate::platform::BuildOptions<'s> {
         let mut engine_features: Vec<_> = self
             .engine_feature
@@ -108,10 +108,13 @@ pub fn run(args: BuildArgs) {
     .expect("Invalid project configuration");
 
     for p in &args.base.platform {
-        let options = args
-            .base
-            .to_build_options(project.resolve_config(p.identifier()));
-        p.build(&options, if args.run { "run" } else { "build" });
+        let project_config = project.resolve_config(p.identifier());
+        let options = args.base.to_build_options(&project_config);
+        p.build(
+            &options,
+            &project_config,
+            if args.run { "run" } else { "build" },
+        );
     }
 }
 
@@ -123,8 +126,9 @@ pub fn run_check(args: Args) {
     .expect("Invalid project configuration");
 
     for p in &args.platform {
-        let options = args.to_build_options(project.resolve_config(p.identifier()));
-        p.build(&options, "check");
+        let project_config = project.resolve_config(p.identifier());
+        let options = args.to_build_options(&project_config);
+        p.build(&options, &project_config, "check");
     }
 }
 
@@ -136,7 +140,8 @@ pub fn run_test(args: Args) {
     .expect("Invalid project configuration");
 
     for p in &args.platform {
-        let options = args.to_build_options(project.resolve_config(p.identifier()));
-        p.build(&options, "test");
+        let project_config = project.resolve_config(p.identifier());
+        let options = args.to_build_options(&project_config);
+        p.build(&options, &project_config, "test");
     }
 }

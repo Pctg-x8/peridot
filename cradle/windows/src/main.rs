@@ -31,7 +31,7 @@ use std::rc::Rc as SharedPtr;
 #[cfg(feature = "mt")]
 use std::sync::Arc as SharedPtr;
 
-const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
+const LPSZCLASSNAME: &'static str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
 fn module_handle() -> HINSTANCE {
     unsafe { GetModuleHandleA(std::ptr::null()) }
@@ -92,8 +92,8 @@ impl GameDriver {
             window: window.clone(),
         };
         let mut base = peridot::Engine::new(
-            userlib::Game::<NativeLink>::NAME,
-            userlib::Game::<NativeLink>::VERSION,
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
             nl,
             userlib::Game::<NativeLink>::requested_features(),
         );
@@ -152,15 +152,7 @@ fn main() {
         panic!("Register Class Failed!");
     }
 
-    let wname = format!(
-        "{} v{}.{}.{}",
-        userlib::Game::<NativeLink>::NAME,
-        userlib::Game::<NativeLink>::VERSION.0,
-        userlib::Game::<NativeLink>::VERSION.1,
-        userlib::Game::<NativeLink>::VERSION.2
-    );
-    let wname_c = std::ffi::CString::new(wname).expect("Unable to generate a c-style string");
-
+    let wname_c = std::ffi::CString::new(userlib::APP_TITLE).expect("Unable to generate a c-style string");
     let wsex = if cfg!(feature = "transparent") {
         WS_EX_APPWINDOW | winapi::um::winuser::WS_EX_NOREDIRECTIONBITMAP
     } else {

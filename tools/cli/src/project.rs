@@ -3,6 +3,7 @@ use std::collections::HashMap;
 #[derive(serde::Deserialize)]
 pub struct Project {
     pub app_package_id: String,
+    pub title: Option<String>,
     pub entry_type_name: Option<String>,
     pub asset_dir: Option<std::path::PathBuf>,
     #[serde(default)]
@@ -23,6 +24,7 @@ pub struct PlatformOverrides {
 
 pub struct PlatformConfiguration<'s> {
     pub app_package_id: &'s str,
+    pub title: Option<&'s str>,
     pub entry_type_name: Option<&'s str>,
     pub asset_dir: Option<&'s std::path::Path>,
     pub features: &'s [String],
@@ -37,6 +39,7 @@ impl Project {
             app_package_id: overrides
                 .and_then(|o| o.app_package_id.as_deref())
                 .unwrap_or(&self.app_package_id as &str),
+            title: self.title.as_deref(),
             entry_type_name: self.entry_type_name.as_deref(),
             asset_dir: overrides
                 .and_then(|o| o.asset_dir.as_deref())
