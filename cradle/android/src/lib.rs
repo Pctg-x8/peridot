@@ -28,8 +28,8 @@ impl Game {
             w: window,
         };
         let mut engine = peridot::Engine::new(
-            userlib::Game::<NativeLink>::NAME,
-            userlib::Game::<NativeLink>::VERSION,
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
             nl,
             userlib::Game::<NativeLink>::requested_features(),
         );

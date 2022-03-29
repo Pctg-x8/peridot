@@ -208,13 +208,6 @@ impl X11 {
             .expect("No WM_DELETE_WINDOW")
             .atom();
 
-        let title = format!(
-            "{} v{}.{}.{}",
-            userlib::Game::<NativeLink>::NAME,
-            userlib::Game::<NativeLink>::VERSION.0,
-            userlib::Game::<NativeLink>::VERSION.1,
-            userlib::Game::<NativeLink>::VERSION.2
-        );
         let mainwnd_id = con.generate_id();
         xcb::create_window(
             &con,
@@ -237,7 +230,7 @@ impl X11 {
             xcb::ATOM_WM_NAME,
             xcb::ATOM_STRING,
             8,
-            title.as_bytes(),
+            userlib::APP_TITLE.as_bytes(),
         );
         xcb::change_property(
             &con,
@@ -307,8 +300,8 @@ impl GameDriver {
             wh,
         };
         let mut engine = peridot::Engine::new(
-            userlib::Game::<NativeLink>::NAME,
-            userlib::Game::<NativeLink>::VERSION,
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
             nl,
             userlib::Game::<NativeLink>::requested_features(),
         );

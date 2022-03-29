@@ -280,7 +280,12 @@ pub struct GameDriver {
 impl GameDriver {
     pub fn new(rt_view: *mut libc::c_void) -> Self {
         let nl = NativeLink::new(rt_view);
-        let mut engine = Engine::new(Game::NAME, Game::VERSION, nl, Game::requested_features());
+        let mut engine = Engine::new(
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
+            nl,
+            Game::requested_features(),
+        );
         let usercode = Game::init(&mut engine);
         let nih = Box::new(NativeInputHandler::new(rt_view));
         engine.input_mut().set_nativelink(nih);
@@ -341,15 +346,9 @@ pub extern "C" fn resize_game(g: *mut GameDriver, w: u32, h: u32) {
 }
 #[no_mangle]
 pub extern "C" fn captionbar_text() -> *mut c_void {
-    NSString::from_str(&format!(
-        "{} v{}.{}.{}",
-        Game::NAME,
-        Game::VERSION.0,
-        Game::VERSION.1,
-        Game::VERSION.2
-    ))
-    .expect("CaptionbarText NSString Allocation")
-    .into_id() as *mut _
+    NSString::from_str(userlib::APP_TITLE)
+        .expect("CaptionbarText NSString Allocation")
+        .into_id() as *mut _
 }
 
 pub struct OutputAU(appkit::AudioUnit);
