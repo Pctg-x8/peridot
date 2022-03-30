@@ -1,0 +1,3 @@
+app_package_id = "io.ct2.peridot.examples.vg"
+title = "Peridot Examples - VectorGraphics"
+asset_dir = "./assets"

@@ -495,9 +495,6 @@ pub struct Game<NL> {
     ph: std::marker::PhantomData<*const NL>,
 }
 impl<NL> Game<NL> {
-    pub const NAME: &'static str = "peridot-vg SDF Renderer";
-    pub const VERSION: (u32, u32, u32) = (0, 1, 0);
-
     const SDF_SIZE: f32 = 32.0;
 }
 impl<NL> FeatureRequests for Game<NL> {}

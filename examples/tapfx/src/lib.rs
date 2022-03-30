@@ -65,10 +65,6 @@ pub struct Game<NL> {
     _ph: std::marker::PhantomData<*const NL>,
 }
 impl<NL> peridot::FeatureRequests for Game<NL> {}
-impl<NL> Game<NL> {
-    pub const NAME: &'static str = "Peridot Examples: Tap Effect";
-    pub const VERSION: (u32, u32, u32) = (0, 1, 0);
-}
 impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn init(e: &mut peridot::Engine<NL>) -> Self {
         e.input_mut()

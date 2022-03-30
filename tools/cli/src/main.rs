@@ -2,6 +2,7 @@
 mod shellutil;
 mod path;
 mod manifest;
+mod project;
 mod steps;
 mod platform;
 mod subcommands;
