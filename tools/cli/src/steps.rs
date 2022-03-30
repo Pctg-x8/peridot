@@ -98,35 +98,86 @@ pub fn update_deps(ctx: &BuildContext) {
         .expect("Failed to wait `cargo update`");
     crate::shellutil::handle_process_result("`cargo update`", e);
 }
-pub fn cargo(
-    ctx: &BuildContext,
-    subcmd: &str,
-    ext_features: Vec<&str>,
-    env: HashMap<&str, &str>,
-    target_spec: Option<&str>,
-    release: bool,
-) {
-    ctx.print_step("Compiling code...");
 
-    let ext_features = ext_features.join(",");
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.arg(subcmd).envs(env);
-    if let Some(t) = target_spec {
-        cmd.args(&["--target", t]);
-    }
-    if !ext_features.is_empty() {
-        cmd.args(&["--features", &ext_features]);
-    }
-    if release {
-        cmd.args(&["--release"]);
-    }
-    let e = cmd
-        .spawn()
-        .expect("Failed to spawn cargo build command")
-        .wait()
-        .expect("Failed to wait cargo build command");
-    crate::shellutil::handle_process_result("cargo build command", e);
+pub struct Cargo<'x> {
+    ctx: &'x BuildContext<'x>,
+    ext_features: Vec<&'x str>,
+    env: HashMap<&'x str, &'x str>,
+    target_spec: Option<&'x str>,
+    release: bool,
 }
+impl<'x> Cargo<'x> {
+    pub fn with_ext_features(mut self, ext_features: Vec<&'x str>) -> Self {
+        self.ext_features = ext_features;
+        self
+    }
+
+    pub fn with_env(mut self, env: HashMap<&'x str, &'x str>) -> Self {
+        self.env = env;
+        self
+    }
+
+    pub fn with_target_spec(mut self, spec: &'x str) -> Self {
+        self.target_spec = Some(spec);
+        self
+    }
+
+    pub fn enable_release_build(mut self) -> Self {
+        self.release = true;
+        self
+    }
+
+    fn run_raw_subcommand(self, subcommand: &str) {
+        self.ctx.print_step("Compiling code...");
+
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.arg(subcommand).envs(self.env);
+        if let Some(t) = self.target_spec {
+            cmd.args(&["--target", t]);
+        }
+        if !self.ext_features.is_empty() {
+            let ext_features = self.ext_features.join(",");
+            cmd.args(vec![String::from("--features"), ext_features]);
+        }
+        if self.release {
+            cmd.args(&["--release"]);
+        }
+
+        let e = cmd
+            .spawn()
+            .expect("Failed to spawn cargo command")
+            .wait()
+            .expect("Failed to wait cargo command");
+        crate::shellutil::handle_process_result("cargo command", e);
+    }
+
+    pub fn build(self) {
+        self.run_raw_subcommand("build");
+    }
+
+    pub fn run(self) {
+        self.run_raw_subcommand("run");
+    }
+
+    pub fn test(self) {
+        self.run_raw_subcommand("test");
+    }
+
+    pub fn check(self) {
+        self.run_raw_subcommand("check");
+    }
+}
+
+pub fn cargo<'x>(ctx: &'x BuildContext) -> Cargo<'x> {
+    Cargo {
+        ctx,
+        ext_features: Vec::new(),
+        env: HashMap::new(),
+        target_spec: None,
+        release: false,
+    }
+}
+
 pub fn package_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
     // Prerequired build step
     let stg_path = std::env::temp_dir().join(".peridot/build/assets");

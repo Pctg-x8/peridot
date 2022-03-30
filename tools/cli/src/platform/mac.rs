@@ -1,14 +1,15 @@
 use crate::manifest::*;
 use crate::project::PlatformConfiguration;
 use crate::steps;
+use crate::subcommands::build::BuildMode;
 
 pub fn build(
     options: &super::BuildOptions,
     project_config: &PlatformConfiguration,
-    cargo_cmd: &str,
+    build_mode: BuildMode,
 ) {
-    let postlink = cargo_cmd == "build" || cargo_cmd == "run";
-    let after_run = cargo_cmd == "run";
+    let postlink = build_mode == BuildMode::Normal || build_mode == BuildMode::Run;
+    let after_run = build_mode == BuildMode::Run;
 
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
@@ -55,20 +56,15 @@ pub fn build(
             steps::update_deps(&ctx);
         }
 
-        let env = std::collections::HashMap::new();
-        let ext_features = options.engine_features.clone();
-        steps::cargo(
-            &ctx,
-            if cargo_cmd == "run" {
-                "build"
-            } else {
-                cargo_cmd
-            },
-            ext_features,
-            env,
-            None,
-            options.release,
-        );
+        let mut cargo = steps::cargo(&ctx).with_ext_features(options.engine_features.clone());
+        if options.release {
+            cargo = cargo.enable_release_build();
+        }
+        match build_mode {
+            BuildMode::Normal | BuildMode::Run => cargo.build(),
+            BuildMode::Test => cargo.test(),
+            BuildMode::Check => cargo.check(),
+        }
     });
 
     if postlink {

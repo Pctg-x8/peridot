@@ -1,8 +1,9 @@
 use crate::manifest::*;
 use crate::steps;
+use crate::subcommands::build::BuildMode;
 use std::path::Path;
 
-pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
+pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest =
@@ -73,10 +74,10 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
         env.insert("PACKAGE_ID", options.appid);
         cargo_ndk(
             &ctx,
-            if cargo_cmd == "run" {
-                "build"
-            } else {
-                cargo_cmd
+            match build_mode {
+                BuildMode::Normal | BuildMode::Run => "build",
+                BuildMode::Test => "test",
+                BuildMode::Check => "check",
             },
             ext_features,
             env,
@@ -95,7 +96,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     std::env::set_current_dir(ctx.cradle_directory.join("apkbuild"))
         .expect("Failed to change working directory for apkbuild");
     build_apk(&ctx);
-    if cargo_cmd == "run" {
+    if build_mode == BuildMode::Run {
         run_apk(&ctx, options.appid);
     }
 }

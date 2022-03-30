@@ -106,15 +106,16 @@ pub fn run(args: BuildArgs) {
             .expect("Failed to load project configuration"),
     )
     .expect("Invalid project configuration");
+    let build_mode = if args.run {
+        BuildMode::Run
+    } else {
+        BuildMode::Normal
+    };
 
     for p in &args.base.platform {
         let project_config = project.resolve_config(p.identifier());
         let options = args.base.to_build_options(&project_config);
-        p.build(
-            &options,
-            &project_config,
-            if args.run { "run" } else { "build" },
-        );
+        p.build(&options, &project_config, build_mode);
     }
 }
 
@@ -128,7 +129,7 @@ pub fn run_check(args: Args) {
     for p in &args.platform {
         let project_config = project.resolve_config(p.identifier());
         let options = args.to_build_options(&project_config);
-        p.build(&options, &project_config, "check");
+        p.build(&options, &project_config, BuildMode::Check);
     }
 }
 
@@ -142,6 +143,14 @@ pub fn run_test(args: Args) {
     for p in &args.platform {
         let project_config = project.resolve_config(p.identifier());
         let options = args.to_build_options(&project_config);
-        p.build(&options, &project_config, "test");
+        p.build(&options, &project_config, BuildMode::Test);
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildMode {
+    Normal,
+    Run,
+    Test,
+    Check,
 }
