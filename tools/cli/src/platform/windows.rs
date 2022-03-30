@@ -1,11 +1,12 @@
 use crate::manifest::*;
 use crate::project::PlatformConfiguration;
 use crate::steps;
+use crate::subcommands::build::BuildMode;
 
 pub fn build(
     options: &super::BuildOptions,
     project_config: &PlatformConfiguration,
-    cargo_cmd: &str,
+    build_mode: BuildMode,
 ) {
     let builtin_assets_path = crate::path::builtin_assets_path();
     let asset_path_abs = options
@@ -71,12 +72,17 @@ pub fn build(
         );
         ext_features.push("IterationBuild");
     }
-    steps::cargo(
-        &ctx,
-        cargo_cmd,
-        ext_features,
-        env,
-        Some("x86_64-pc-windows-msvc"),
-        options.release,
-    );
+    let mut cargo = steps::cargo(&ctx)
+        .with_env(env)
+        .with_ext_features(ext_features)
+        .with_target_spec("x86_64-pc-windows-msvc");
+    if options.release {
+        cargo = cargo.enable_release_build();
+    }
+    match build_mode {
+        BuildMode::Normal => cargo.build(),
+        BuildMode::Run => cargo.run(),
+        BuildMode::Test => cargo.test(),
+        BuildMode::Check => cargo.check(),
+    }
 }

@@ -1,8 +1,9 @@
 use crate::manifest::*;
 use crate::steps;
+use crate::subcommands::build::BuildMode;
 use std::path::Path;
 
-pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
+pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest =
@@ -69,20 +70,15 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
             .parse()
             .expect("invalid number in NDK_PLATFORM_TARGET");
         let mut env = std::collections::HashMap::new();
-        let ext_features = options.engine_features.clone();
         env.insert("PACKAGE_ID", options.appid);
-        cargo_ndk(
-            &ctx,
-            if cargo_cmd == "run" {
-                "build"
-            } else {
-                cargo_cmd
-            },
-            ext_features,
-            env,
-            "arm64-v8a",
-            compile_version,
-        );
+        let cargo_step = CargoNdk::new(&ctx, compile_version)
+            .with_env(env)
+            .with_ext_features(options.engine_features.clone());
+        match build_mode {
+            BuildMode::Normal | BuildMode::Run => cargo_step.build(),
+            BuildMode::Test => cargo_step.test(),
+            BuildMode::Check => cargo_step.check(),
+        }
 
         if !jnilibs_path.exists() {
             std::fs::create_dir_all(&jnilibs_path)
@@ -95,7 +91,7 @@ pub fn build(options: &super::BuildOptions, cargo_cmd: &str) {
     std::env::set_current_dir(ctx.cradle_directory.join("apkbuild"))
         .expect("Failed to change working directory for apkbuild");
     build_apk(&ctx);
-    if cargo_cmd == "run" {
+    if build_mode == BuildMode::Run {
         run_apk(&ctx, options.appid);
     }
 }
@@ -152,63 +148,108 @@ fn mirror_ext_libraries(ctx: &steps::BuildContext, userlib: &Path) {
         );
     }
 }
-fn cargo_ndk(
-    ctx: &steps::BuildContext,
-    subcmd: &str,
-    ext_features: Vec<&str>,
-    env: std::collections::HashMap<&str, &str>,
-    target_spec: &str,
-    ndk_platform_target: u32,
-) {
-    ctx.print_step("Compiling code with ndk...");
 
-    let mut cmd = std::process::Command::new("cargo");
-    let ndk_platform_target_str = ndk_platform_target.to_string();
-    cmd.envs(env).args(&[
-        "ndk",
-        "--target",
-        target_spec,
-        "--platform",
-        &ndk_platform_target_str,
-        "--",
-        subcmd,
-    ]);
-    let joined_ext_features = ext_features.join(",");
-    if !joined_ext_features.is_empty() {
-        cmd.args(&["--features", &joined_ext_features]);
+struct CargoNdk<'s> {
+    ctx: &'s steps::BuildContext<'s>,
+    ext_features: Vec<&'s str>,
+    env: std::collections::HashMap<&'s str, &'s str>,
+    target_spec: &'s str,
+    platform_target: u32,
+}
+impl<'s> CargoNdk<'s> {
+    pub fn new(ctx: &'s steps::BuildContext<'s>, platform_target: u32) -> Self {
+        Self {
+            ctx,
+            platform_target,
+            ext_features: Vec::new(),
+            env: std::collections::HashMap::new(),
+            target_spec: "arm64-v8a",
+        }
     }
 
-    let e = cmd
-        .spawn()
-        .expect("Failed to spawn cargo ndk")
-        .wait()
-        .expect("Failed to wait cargo ndk");
-    crate::shellutil::handle_process_result("`cargo ndk`", e);
+    pub fn with_ext_features(mut self, ext_features: Vec<&'s str>) -> Self {
+        self.ext_features = ext_features;
+        self
+    }
+
+    pub fn with_env(mut self, env: std::collections::HashMap<&'s str, &'s str>) -> Self {
+        self.env = env;
+        self
+    }
+
+    fn run_raw_subcommand(self, subcmd: &str) {
+        self.ctx.print_step("Compiling code with ndk...");
+
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.envs(self.env).args(&[
+            "ndk",
+            "--target",
+            self.target_spec,
+            "--platform",
+            &self.platform_target.to_string(),
+            "--",
+            subcmd,
+        ]);
+        if !self.ext_features.is_empty() {
+            cmd.args(vec![
+                String::from("--features"),
+                self.ext_features.join(","),
+            ]);
+        }
+
+        let e = cmd
+            .spawn()
+            .expect("Failed to spawn cargo ndk")
+            .wait()
+            .expect("Failed to wait cargo ndk");
+        crate::shellutil::handle_process_result("`cargo ndk`", e);
+    }
+
+    pub fn build(self) {
+        self.run_raw_subcommand("build")
+    }
+
+    pub fn test(self) {
+        self.run_raw_subcommand("test")
+    }
+
+    pub fn check(self) {
+        self.run_raw_subcommand("check")
+    }
 }
-#[cfg(windows)]
+
+pub struct GradleWrapper {}
+impl GradleWrapper {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub fn assemble_debug(self) {
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(&["/c", "gradlew.bat"]);
+            cmd
+        };
+        #[cfg(not(windows))]
+        let mut cmd = std::process::Command::new("./gradlew");
+
+        let e = cmd
+            .arg("assembleDebug")
+            .spawn()
+            .expect("Failed to spawn gradle")
+            .wait()
+            .expect("Failed to wait gradle");
+        crate::shellutil::handle_process_result("gradle", e);
+    }
+}
+
 fn build_apk(ctx: &steps::BuildContext) {
     ctx.print_step("Building apk...");
 
-    let e = std::process::Command::new("cmd")
-        .args(&["/c", "gradlew.bat", "assembleDebug"])
-        .spawn()
-        .expect("Failed to spawn gradle")
-        .wait()
-        .expect("Failed to wait gradle");
-    crate::shellutil::handle_process_result("gradle", e);
+    GradleWrapper::new().assemble_debug();
 }
-#[cfg(not(windows))]
-fn build_apk(ctx: &steps::BuildContext) {
-    ctx.print_step("Building apk...");
 
-    let e = std::process::Command::new("./gradlew")
-        .args(&["assembleDebug"])
-        .spawn()
-        .expect("Failed to spawn gradle")
-        .wait()
-        .expect("Failed to wait gradle");
-    crate::shellutil::handle_process_result("gradle", e);
-}
 fn run_apk(ctx: &steps::BuildContext, package_id: &str) {
     ctx.print_step("Installing apk...");
 

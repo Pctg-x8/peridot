@@ -6,7 +6,7 @@ mod windows;
 use std::path::{Path, PathBuf};
 use structopt::clap::arg_enum;
 
-use crate::project::PlatformConfiguration;
+use crate::{project::PlatformConfiguration, subcommands::build::BuildMode};
 
 arg_enum! {
     #[derive(Debug, Clone, Copy)]
@@ -68,13 +68,13 @@ impl Platform {
         self,
         options: &BuildOptions,
         project_config: &PlatformConfiguration,
-        final_cargo_cmd: &str,
+        build_mode: BuildMode,
     ) {
         match self {
-            Self::Windows => self::windows::build(options, project_config, final_cargo_cmd),
-            Self::Mac => self::mac::build(options, project_config, final_cargo_cmd),
-            Self::Linux => self::linux::build(options, project_config, final_cargo_cmd),
-            Self::Android => self::android::build(options, final_cargo_cmd),
+            Self::Windows => self::windows::build(options, project_config, build_mode),
+            Self::Mac => self::mac::build(options, project_config, build_mode),
+            Self::Linux => self::linux::build(options, project_config, build_mode),
+            Self::Android => self::android::build(options, build_mode),
         }
     }
 
