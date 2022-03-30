@@ -7,14 +7,41 @@ build = "build.rs"
 
 [features]
 UseExternalAssetPath = []
+transparent = ["winapi/handleapi", "winapi/synchapi", "winapi/winbase", "comdrive", "metrics", "widestring", "bedrock/VK_KHR_external_memory_win32", "bedrock/VK_KHR_external_semaphore_win32"]
+IterationBuild = []
+debug = ["peridot/debug"]
+mt = ["peridot/mt"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Presentation", "Implements", "VK_KHR_win32_surface"] }
 peridot = { path = "../.." }
 log = "0.4"
 env_logger = "0.5"
-#%KERNEL_CRATE_NAME% = { path = "%KERNEL_CRATE_PATH%" }
+rayon = "1.0"
+num_cpus = "1.0"
+comdrive = { git = "https://github.com/Pctg-x8/comdrive", optional = true }
+metrics = { git = "https://github.com/Pctg-x8/metrics", optional = true }
+widestring = { version = "0.4", optional = true }
+parking_lot = "0.11"
 
 [dependencies.winapi]
 version = "0.3"
-features = ["winuser", "libloaderapi"]
+features = [
+    "winuser",
+    "libloaderapi",
+    "mmdeviceapi",
+    "combaseapi",
+    "propsys",
+    "coml2api",
+    "devpkey",
+    "objbase",
+    "audioclient",
+    "ksmedia",
+    "shellscalingapi",
+    "xinput",
+    "mmreg",
+    "wtypes",
+    "propidl",
+    "strmif",
+    "audiosessiontypes"
+]
