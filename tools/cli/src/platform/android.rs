@@ -218,30 +218,38 @@ impl<'s> CargoNdk<'s> {
     }
 }
 
-#[cfg(windows)]
+pub struct GradleWrapper {}
+impl GradleWrapper {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub fn assemble_debug(self) {
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(&["/c", "gradlew.bat"]);
+            cmd
+        };
+        #[cfg(not(windows))]
+        let mut cmd = std::process::Command::new("./gradlew");
+
+        let e = cmd
+            .arg("assembleDebug")
+            .spawn()
+            .expect("Failed to spawn gradle")
+            .wait()
+            .expect("Failed to wait gradle");
+        crate::shellutil::handle_process_result("gradle", e);
+    }
+}
+
 fn build_apk(ctx: &steps::BuildContext) {
     ctx.print_step("Building apk...");
 
-    let e = std::process::Command::new("cmd")
-        .args(&["/c", "gradlew.bat", "assembleDebug"])
-        .spawn()
-        .expect("Failed to spawn gradle")
-        .wait()
-        .expect("Failed to wait gradle");
-    crate::shellutil::handle_process_result("gradle", e);
+    GradleWrapper::new().assemble_debug();
 }
-#[cfg(not(windows))]
-fn build_apk(ctx: &steps::BuildContext) {
-    ctx.print_step("Building apk...");
 
-    let e = std::process::Command::new("./gradlew")
-        .args(&["assembleDebug"])
-        .spawn()
-        .expect("Failed to spawn gradle")
-        .wait()
-        .expect("Failed to wait gradle");
-    crate::shellutil::handle_process_result("gradle", e);
-}
 fn run_apk(ctx: &steps::BuildContext, package_id: &str) {
     ctx.print_step("Installing apk...");
 
