@@ -70,20 +70,15 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
             .parse()
             .expect("invalid number in NDK_PLATFORM_TARGET");
         let mut env = std::collections::HashMap::new();
-        let ext_features = options.engine_features.clone();
         env.insert("PACKAGE_ID", options.appid);
-        cargo_ndk(
-            &ctx,
-            match build_mode {
-                BuildMode::Normal | BuildMode::Run => "build",
-                BuildMode::Test => "test",
-                BuildMode::Check => "check",
-            },
-            ext_features,
-            env,
-            "arm64-v8a",
-            compile_version,
-        );
+        let cargo_step = CargoNdk::new(&ctx, compile_version)
+            .with_env(env)
+            .with_ext_features(options.engine_features.clone());
+        match build_mode {
+            BuildMode::Normal | BuildMode::Run => cargo_step.build(),
+            BuildMode::Test => cargo_step.test(),
+            BuildMode::Check => cargo_step.check(),
+        }
 
         if !jnilibs_path.exists() {
             std::fs::create_dir_all(&jnilibs_path)
@@ -153,39 +148,76 @@ fn mirror_ext_libraries(ctx: &steps::BuildContext, userlib: &Path) {
         );
     }
 }
-fn cargo_ndk(
-    ctx: &steps::BuildContext,
-    subcmd: &str,
-    ext_features: Vec<&str>,
-    env: std::collections::HashMap<&str, &str>,
-    target_spec: &str,
-    ndk_platform_target: u32,
-) {
-    ctx.print_step("Compiling code with ndk...");
 
-    let mut cmd = std::process::Command::new("cargo");
-    let ndk_platform_target_str = ndk_platform_target.to_string();
-    cmd.envs(env).args(&[
-        "ndk",
-        "--target",
-        target_spec,
-        "--platform",
-        &ndk_platform_target_str,
-        "--",
-        subcmd,
-    ]);
-    let joined_ext_features = ext_features.join(",");
-    if !joined_ext_features.is_empty() {
-        cmd.args(&["--features", &joined_ext_features]);
+struct CargoNdk<'s> {
+    ctx: &'s steps::BuildContext<'s>,
+    ext_features: Vec<&'s str>,
+    env: std::collections::HashMap<&'s str, &'s str>,
+    target_spec: &'s str,
+    platform_target: u32,
+}
+impl<'s> CargoNdk<'s> {
+    pub fn new(ctx: &'s steps::BuildContext<'s>, platform_target: u32) -> Self {
+        Self {
+            ctx,
+            platform_target,
+            ext_features: Vec::new(),
+            env: std::collections::HashMap::new(),
+            target_spec: "arm64-v8a",
+        }
     }
 
-    let e = cmd
-        .spawn()
-        .expect("Failed to spawn cargo ndk")
-        .wait()
-        .expect("Failed to wait cargo ndk");
-    crate::shellutil::handle_process_result("`cargo ndk`", e);
+    pub fn with_ext_features(mut self, ext_features: Vec<&'s str>) -> Self {
+        self.ext_features = ext_features;
+        self
+    }
+
+    pub fn with_env(mut self, env: std::collections::HashMap<&'s str, &'s str>) -> Self {
+        self.env = env;
+        self
+    }
+
+    fn run_raw_subcommand(self, subcmd: &str) {
+        self.ctx.print_step("Compiling code with ndk...");
+
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.envs(self.env).args(&[
+            "ndk",
+            "--target",
+            self.target_spec,
+            "--platform",
+            &self.platform_target.to_string(),
+            "--",
+            subcmd,
+        ]);
+        if !self.ext_features.is_empty() {
+            cmd.args(vec![
+                String::from("--features"),
+                self.ext_features.join(","),
+            ]);
+        }
+
+        let e = cmd
+            .spawn()
+            .expect("Failed to spawn cargo ndk")
+            .wait()
+            .expect("Failed to wait cargo ndk");
+        crate::shellutil::handle_process_result("`cargo ndk`", e);
+    }
+
+    pub fn build(self) {
+        self.run_raw_subcommand("build")
+    }
+
+    pub fn test(self) {
+        self.run_raw_subcommand("test")
+    }
+
+    pub fn check(self) {
+        self.run_raw_subcommand("check")
+    }
 }
+
 #[cfg(windows)]
 fn build_apk(ctx: &steps::BuildContext) {
     ctx.print_step("Building apk...");

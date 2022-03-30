@@ -74,19 +74,8 @@ pub fn build(
         let executable_path = ctx
             .cradle_directory
             .join("peridot-cradle/build/Debug/peridot-cradle.app");
-        let e = std::process::Command::new("lldb")
-            .args(&[
-                "-o",
-                "run",
-                executable_path
-                    .to_str()
-                    .expect("invalid sequence in executable path"),
-            ])
-            .spawn()
-            .expect("Failed to spawn lldb session")
-            .wait()
-            .expect("Failed to wait lldb section");
-        crate::shellutil::handle_process_result("`lldb`", e);
+
+        LLDB::new(&executable_path).with_init_command("run").run();
     }
 }
 
@@ -106,19 +95,74 @@ fn build_app_bundle(ctx: &steps::BuildContext) {
     let xcode_project_path = ctx
         .cradle_directory
         .join("peridot-cradle/peridot-cradle.xcodeproj");
-    let e = std::process::Command::new("xcodebuild")
-        .args(&[
-            "-project",
-            xcode_project_path
-                .to_str()
-                .expect("invalid sequence in xcode project path"),
-            "-configuration",
-            "Debug",
-            "build",
-        ])
-        .spawn()
-        .expect("Failed to spawn xcodebuild")
-        .wait()
-        .expect("Failed to wait xcodebuild");
-    crate::shellutil::handle_process_result("`xcodebuild`", e);
+    XcodeBuild::new(&xcode_project_path)
+        .with_configuration("Debug")
+        .build();
+}
+
+pub struct LLDB<'s> {
+    init_command: Option<&'s str>,
+    executable_path: &'s std::path::Path,
+}
+impl<'s> LLDB<'s> {
+    pub fn new(executable_path: &'s std::path::Path) -> Self {
+        Self {
+            executable_path,
+            init_command: None,
+        }
+    }
+
+    pub fn with_init_command(mut self, command: &'s str) -> Self {
+        self.init_command = Some(command);
+        self
+    }
+
+    pub fn run(self) {
+        let mut cmd = std::process::Command::new("lldb");
+        if let Some(c) = self.init_command {
+            cmd.args(&["-o", c]);
+        }
+
+        let e = cmd
+            .arg(self.executable_path)
+            .spawn()
+            .expect("Failed to spawn lldb session")
+            .wait()
+            .expect("Failed to wait lldb section");
+        crate::shellutil::handle_process_result("`lldb`", e);
+    }
+}
+
+pub struct XcodeBuild<'s> {
+    project_path: &'s std::path::Path,
+    configuration: Option<&'s str>,
+}
+impl<'s> XcodeBuild<'s> {
+    pub fn new(project_path: &'s std::path::Path) -> Self {
+        Self {
+            project_path,
+            configuration: None,
+        }
+    }
+
+    pub fn with_configuration(mut self, configuration: &'s str) -> Self {
+        self.configuration = Some(configuration);
+        self
+    }
+
+    pub fn build(self) {
+        let mut cmd = std::process::Command::new("xcodebuild");
+        cmd.arg("-project").arg(self.project_path);
+        if let Some(cfg) = self.configuration {
+            cmd.args(&["-configuration", cfg]);
+        }
+
+        let e = cmd
+            .arg("build")
+            .spawn()
+            .expect("Failed to spawn xcodebuild")
+            .wait()
+            .expect("Failed to wait xcodebuild");
+        crate::shellutil::handle_process_result("`xcodebuild`", e);
+    }
 }
