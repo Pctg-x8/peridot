@@ -383,6 +383,23 @@ impl DeviceWorkingTextureAllocator<'_> {
         DeviceWorkingCubeTextureRef(self.cube.len() - 1)
     }
 
+    /// Add new mipmapped DeviceWorkingTexture allocation
+    pub fn new_cube_mipmapped(
+        &mut self,
+        size: math::Vector2<u32>,
+        format: PixelFormat,
+        usage: br::ImageUsage,
+        mipmaps: u32,
+    ) -> DeviceWorkingCubeTextureRef {
+        let mut id = br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized);
+        id.flags(br::ImageFlags::CUBE_COMPATIBLE)
+            .array_layers(6)
+            .mip_levels(mipmaps);
+        self.cube.push(id);
+
+        DeviceWorkingCubeTextureRef(self.cube.len() - 1)
+    }
+
     /// Allocates all of added textures
     pub fn alloc(self, g: &Graphics) -> br::Result<DeviceWorkingTextureStore> {
         let images2 = self.planes.iter().map(|d| d.create(g));
