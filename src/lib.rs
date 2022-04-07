@@ -282,6 +282,9 @@ impl<NL: NativeLinker> Engine<NL> {
         self.g.submit_buffered_commands(batches, fence)
     }
 
+    /// Submits any commands as transient commands.
+    /// ## Note
+    /// Unlike other futures, commands are submitted immediately(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
         generator: impl FnOnce(&mut br::CmdRecord) + 's,
@@ -847,6 +850,8 @@ impl Graphics {
     }
 
     /// Submits any commands as transient commands.
+    /// ## Note
+    /// Unlike other futures, commands are submitted immediately(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
         generator: impl FnOnce(&mut br::CmdRecord),
