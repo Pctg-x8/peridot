@@ -7,6 +7,7 @@ use bedrock as br;
 use br::MemoryBound;
 use num::Integer;
 
+#[allow(unused_imports)]
 use crate::mthelper::DynamicMutabilityProvider;
 use crate::mthelper::SharedRef;
 

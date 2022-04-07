@@ -3,7 +3,9 @@
 use bedrock as br;
 use br::MemoryBound;
 
-use crate::mthelper::{DynamicMutabilityProvider, SharedRef};
+#[allow(unused_imports)]
+use crate::mthelper::DynamicMutabilityProvider;
+use crate::mthelper::SharedRef;
 
 /// A refcounted image object bound with a memory object.
 #[derive(Clone)]

@@ -266,7 +266,7 @@ impl IntegratedSwapchain {
 
         // TODO: なんとかunsafeしなくていいようにしたい（SubmissionBatchの寿命をもうちょっと縮められれば行ける気がするんだけど）
         self.swapchain.get_mut_lw().swapchain.queue_present(
-            &mut g.graphics_queue.q,
+            g.graphics_queue.q.get_mut(),
             bb_index,
             &[unsafe { &mut *(&self.present_order as *const _ as *mut _) }],
         )
