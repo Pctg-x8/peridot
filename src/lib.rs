@@ -3,6 +3,7 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
+use br::Status;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::ffi::CStr;
@@ -279,6 +280,13 @@ impl<NL: NativeLinker> Engine<NL> {
         fence: &mut br::Fence,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
+    }
+
+    pub fn submit_commands_async<'s>(
+        &'s self,
+        generator: impl FnOnce(&mut br::CmdRecord) + 's,
+    ) -> impl std::future::Future<Output = br::Result<()>> + 's {
+        self.g.submit_commands_async(generator)
     }
 
     pub fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> {
@@ -581,9 +589,104 @@ impl MemoryTypeManager {
     }
 }
 
+struct FenceReactorThread {
+    pending_fences:
+        std::sync::Arc<parking_lot::RwLock<Vec<(std::task::Waker, std::sync::Weak<br::Fence>)>>>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread_handle: Option<std::thread::JoinHandle<()>>,
+}
+impl FenceReactorThread {
+    pub fn new() -> Self {
+        let pending_fences = std::sync::Arc::new(parking_lot::RwLock::new(Vec::new()));
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let pf2 = pending_fences.clone();
+        let s2 = shutdown.clone();
+        let thread_handle = std::thread::Builder::new()
+            .name(String::from("Peridot Fence Reactor"))
+            .spawn(move || {
+                let mut managed_fences =
+                    Vec::<(std::task::Waker, std::sync::Weak<br::Fence>)>::new();
+                let mut signaled_indexes = Vec::new();
+
+                while !s2.load(std::sync::atomic::Ordering::Acquire) {
+                    managed_fences.extend(pf2.write().drain(..));
+                    if !managed_fences.is_empty() {
+                        for (n, (_, f)) in managed_fences.iter().enumerate().rev() {
+                            if let Some(f) = f.upgrade() {
+                                if f.status().expect("Failed to get fence status") {
+                                    signaled_indexes.push((n, true));
+                                }
+                            } else {
+                                // observing fence was dropped externally
+                                signaled_indexes.push((n, false));
+                            }
+                        }
+                        // signaled_indexes is sorted larger to smaller
+                        for (dx, wake) in signaled_indexes.drain(..) {
+                            let (wk, _) = managed_fences.remove(dx);
+                            if wake {
+                                wk.wake();
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("Failed to spawn Fence Reactor Thread");
+
+        Self {
+            pending_fences,
+            shutdown,
+            thread_handle: Some(thread_handle),
+        }
+    }
+
+    pub fn register(&self, fence: &std::sync::Arc<br::Fence>, waker: std::task::Waker) {
+        self.pending_fences
+            .write()
+            .push((waker, std::sync::Arc::downgrade(fence)));
+    }
+}
+impl Drop for FenceReactorThread {
+    fn drop(&mut self) {
+        if let Some(th) = self.thread_handle.take() {
+            self.shutdown
+                .store(true, std::sync::atomic::Ordering::Release);
+            th.join().expect("Joining Fence Reactor Thread failed");
+        }
+    }
+}
+
+struct FenceWaitFuture<'d> {
+    reactor: &'d FenceReactorThread,
+    object: std::sync::Arc<br::Fence>,
+    registered: bool,
+}
+impl std::future::Future for FenceWaitFuture<'_> {
+    type Output = br::Result<()>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match self.object.status() {
+            Err(e) => std::task::Poll::Ready(Err(e)),
+            Ok(true) => std::task::Poll::Ready(Ok(())),
+            Ok(false) => {
+                if !self.registered {
+                    self.reactor.register(&self.object, cx.waker().clone());
+                    self.get_mut().registered = true;
+                }
+
+                std::task::Poll::Pending
+            }
+        }
+    }
+}
+
 /// Queue object with family index
 pub struct Queue {
-    q: br::Queue,
+    q: parking_lot::Mutex<br::Queue>,
     family: u32,
 }
 /// Graphics manager
@@ -594,6 +697,7 @@ pub struct Graphics {
     graphics_queue: Queue,
     cp_onetime_submit: br::CommandPool,
     pub memory_type_manager: MemoryTypeManager,
+    fence_reactor: FenceReactorThread,
 }
 impl Graphics {
     fn new(
@@ -667,13 +771,14 @@ impl Graphics {
         return Ok(Graphics {
             cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
             graphics_queue: Queue {
-                q: device.queue(gqf_index, 0),
+                q: parking_lot::Mutex::new(device.queue(gqf_index, 0)),
                 family: gqf_index,
             },
             instance,
             adapter,
             device,
             memory_type_manager,
+            fence_reactor: FenceReactorThread::new(),
         });
     }
 
@@ -687,28 +792,61 @@ impl Graphics {
             &mut self.cp_onetime_submit,
         );
         generator(unsafe { &mut cb[0].begin_once()? });
-        self.graphics_queue.q.submit(
+        self.graphics_queue.q.get_mut().submit(
             &[br::SubmissionBatch {
                 command_buffers: Cow::from(&cb[..]),
                 ..Default::default()
             }],
             None,
         )?;
-        self.graphics_queue.q.wait()
+        self.graphics_queue.q.get_mut().wait()
     }
     pub fn submit_buffered_commands(
         &mut self,
         batches: &[br::SubmissionBatch],
         fence: &mut br::Fence,
     ) -> br::Result<()> {
-        self.graphics_queue.q.submit(batches, Some(fence))
+        self.graphics_queue.q.get_mut().submit(batches, Some(fence))
     }
     pub fn submit_buffered_commands_raw(
         &mut self,
         batches: &[br::vk::VkSubmitInfo],
         fence: &mut br::Fence,
     ) -> br::Result<()> {
-        self.graphics_queue.q.submit_raw(batches, Some(fence))
+        self.graphics_queue
+            .q
+            .get_mut()
+            .submit_raw(batches, Some(fence))
+    }
+
+    /// Submits any commands as transient commands.
+    pub async fn submit_commands_async(
+        &self,
+        generator: impl FnOnce(&mut br::CmdRecord),
+    ) -> br::Result<()> {
+        let mut fence = std::sync::Arc::new(br::Fence::new(&self.device, false)?);
+        let mut pool = br::CommandPool::new(
+            &self.device,
+            self.graphics_queue_family_index(),
+            true,
+            false,
+        )?;
+        let mut cb = LocalCommandBundle(pool.alloc(1, true)?, &mut pool);
+        generator(unsafe { &mut cb[0].begin_once()? });
+        self.graphics_queue.q.lock().submit(
+            &[br::SubmissionBatch {
+                command_buffers: Cow::from(&cb[..]),
+                ..Default::default()
+            }],
+            Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
+        )?;
+
+        FenceWaitFuture {
+            reactor: &self.fence_reactor,
+            object: fence,
+            registered: false,
+        }
+        .await
     }
 
     pub fn instance(&self) -> &br::Instance {

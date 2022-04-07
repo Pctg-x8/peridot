@@ -163,10 +163,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             br::AccessFlags::UNIFORM_READ,
         );
 
-        e.submit_commands(|r| {
+        async_std::task::block_on(e.submit_commands_async(|r| {
             tfb.sink_transfer_commands(r);
             tfb.sink_graphics_ready_commands(r);
-        })
+        }))
         .expect("Failure in transferring initial data");
 
         let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
