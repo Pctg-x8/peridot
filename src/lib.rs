@@ -869,11 +869,19 @@ impl Graphics {
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
         ));
 
-        Box::pin(FenceWaitFuture {
+        Box::pin(self.await_fence(fence))
+    }
+
+    /// Awaits fence on background thread
+    pub fn await_fence<'s>(
+        &'s self,
+        fence: std::sync::Arc<br::Fence>,
+    ) -> impl std::future::Future<Output = br::Result<()>> + 's {
+        FenceWaitFuture {
             reactor: &self.fence_reactor,
             object: fence,
             registered: false,
-        })
+        }
     }
 
     pub fn instance(&self) -> &br::Instance {
