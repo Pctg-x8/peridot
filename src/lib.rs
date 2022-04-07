@@ -702,6 +702,15 @@ impl std::future::Future for FenceWaitFuture<'_> {
     }
 }
 
+macro_rules! try_future {
+    (boxed $e: expr) => {
+        match $e {
+            Ok(x) => x,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        }
+    };
+}
+
 /// Queue object with family index
 pub struct Queue {
     q: parking_lot::Mutex<br::Queue>,
@@ -842,41 +851,23 @@ impl Graphics {
         &'s self,
         generator: impl FnOnce(&mut br::CmdRecord),
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = br::Result<()>> + 's>> {
-        let mut fence = std::sync::Arc::new(match br::Fence::new(&self.device, false) {
-            Ok(f) => f,
-            Err(e) => return Box::pin(std::future::ready(Err(e))),
-        });
+        let mut fence = std::sync::Arc::new(try_future!(boxed br::Fence::new(&self.device, false)));
 
-        let mut pool = match br::CommandPool::new(
+        let mut pool = try_future!(boxed br::CommandPool::new(
             &self.device,
             self.graphics_queue_family_index(),
             true,
             false,
-        ) {
-            Ok(p) => p,
-            Err(e) => return Box::pin(std::future::ready(Err(e))),
-        };
-        let mut cb = LocalCommandBundle(
-            match pool.alloc(1, true) {
-                Ok(c) => c,
-                Err(e) => return Box::pin(std::future::ready(Err(e))),
-            },
-            &mut pool,
-        );
-        generator(&mut match unsafe { cb[0].begin_once() } {
-            Ok(r) => r,
-            Err(e) => return Box::pin(std::future::ready(Err(e))),
-        });
-        match self.graphics_queue.q.lock().submit(
+        ));
+        let mut cb = LocalCommandBundle(try_future!(boxed pool.alloc(1, true)), &mut pool);
+        generator(&mut try_future!(boxed unsafe { cb[0].begin_once() }));
+        try_future!(boxed self.graphics_queue.q.lock().submit(
             &[br::SubmissionBatch {
                 command_buffers: Cow::from(&cb[..]),
                 ..Default::default()
             }],
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
-        ) {
-            Ok(x) => x,
-            Err(e) => return Box::pin(std::future::ready(Err(e))),
-        }
+        ));
 
         Box::pin(FenceWaitFuture {
             reactor: &self.fence_reactor,
