@@ -838,33 +838,51 @@ impl Graphics {
     }
 
     /// Submits any commands as transient commands.
-    pub async fn submit_commands_async(
-        &self,
+    pub fn submit_commands_async<'s>(
+        &'s self,
         generator: impl FnOnce(&mut br::CmdRecord),
-    ) -> br::Result<()> {
-        let mut fence = std::sync::Arc::new(br::Fence::new(&self.device, false)?);
-        let mut pool = br::CommandPool::new(
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = br::Result<()>> + 's>> {
+        let mut fence = std::sync::Arc::new(match br::Fence::new(&self.device, false) {
+            Ok(f) => f,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        });
+
+        let mut pool = match br::CommandPool::new(
             &self.device,
             self.graphics_queue_family_index(),
             true,
             false,
-        )?;
-        let mut cb = LocalCommandBundle(pool.alloc(1, true)?, &mut pool);
-        generator(unsafe { &mut cb[0].begin_once()? });
-        self.graphics_queue.q.lock().submit(
+        ) {
+            Ok(p) => p,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        };
+        let mut cb = LocalCommandBundle(
+            match pool.alloc(1, true) {
+                Ok(c) => c,
+                Err(e) => return Box::pin(std::future::ready(Err(e))),
+            },
+            &mut pool,
+        );
+        generator(&mut match unsafe { cb[0].begin_once() } {
+            Ok(r) => r,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        });
+        match self.graphics_queue.q.lock().submit(
             &[br::SubmissionBatch {
                 command_buffers: Cow::from(&cb[..]),
                 ..Default::default()
             }],
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
-        )?;
+        ) {
+            Ok(x) => x,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        }
 
-        FenceWaitFuture {
+        Box::pin(FenceWaitFuture {
             reactor: &self.fence_reactor,
             object: fence,
             registered: false,
-        }
-        .await
+        })
     }
 
     pub fn instance(&self) -> &br::Instance {
