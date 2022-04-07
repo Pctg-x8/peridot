@@ -591,17 +591,20 @@ impl MemoryTypeManager {
 
 struct FenceReactorThread {
     pending_fences:
-        std::sync::Arc<parking_lot::RwLock<Vec<(std::task::Waker, std::sync::Weak<br::Fence>)>>>,
+        std::sync::Arc<parking_lot::Mutex<Vec<(std::task::Waker, std::sync::Weak<br::Fence>)>>>,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
+    thread_waker: std::sync::Arc<parking_lot::Condvar>,
 }
 impl FenceReactorThread {
     pub fn new() -> Self {
-        let pending_fences = std::sync::Arc::new(parking_lot::RwLock::new(Vec::new()));
+        let pending_fences = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_waker = std::sync::Arc::new(parking_lot::Condvar::new());
 
         let pf2 = pending_fences.clone();
         let s2 = shutdown.clone();
+        let tw2 = thread_waker.clone();
         let thread_handle = std::thread::Builder::new()
             .name(String::from("Peridot Fence Reactor"))
             .spawn(move || {
@@ -609,8 +612,20 @@ impl FenceReactorThread {
                     Vec::<(std::task::Waker, std::sync::Weak<br::Fence>)>::new();
                 let mut signaled_indexes = Vec::new();
 
-                while !s2.load(std::sync::atomic::Ordering::Acquire) {
-                    managed_fences.extend(pf2.write().drain(..));
+                loop {
+                    {
+                        let mut pf = pf2.lock();
+                        if managed_fences.is_empty() {
+                            tw2.wait(&mut pf);
+                        }
+
+                        if s2.load(std::sync::atomic::Ordering::Acquire) {
+                            break;
+                        }
+
+                        managed_fences.extend(pf.drain(..));
+                    }
+
                     if !managed_fences.is_empty() {
                         for (n, (_, f)) in managed_fences.iter().enumerate().rev() {
                             if let Some(f) = f.upgrade() {
@@ -638,13 +653,15 @@ impl FenceReactorThread {
             pending_fences,
             shutdown,
             thread_handle: Some(thread_handle),
+            thread_waker,
         }
     }
 
     pub fn register(&self, fence: &std::sync::Arc<br::Fence>, waker: std::task::Waker) {
         self.pending_fences
-            .write()
+            .lock()
             .push((waker, std::sync::Arc::downgrade(fence)));
+        self.thread_waker.notify_all();
     }
 }
 impl Drop for FenceReactorThread {
@@ -652,6 +669,7 @@ impl Drop for FenceReactorThread {
         if let Some(th) = self.thread_handle.take() {
             self.shutdown
                 .store(true, std::sync::atomic::Ordering::Release);
+            self.thread_waker.notify_all();
             th.join().expect("Joining Fence Reactor Thread failed");
         }
     }
