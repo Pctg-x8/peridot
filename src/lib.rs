@@ -287,7 +287,7 @@ impl<NL: NativeLinker> Engine<NL> {
     /// Unlike other futures, commands are submitted immediately(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(&mut br::CmdRecord) + 's,
+        generator: impl FnOnce(&mut br::CmdRecord),
     ) -> impl std::future::Future<Output = br::Result<()>> + 's {
         self.g.submit_commands_async(generator)
     }
