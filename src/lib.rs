@@ -859,7 +859,7 @@ impl Graphics {
             true,
             false,
         ));
-        let mut cb = LocalCommandBundle(try_future!(boxed pool.alloc(1, true)), &mut pool);
+        let mut cb = CommandBundle(try_future!(boxed pool.alloc(1, true)), pool);
         generator(&mut try_future!(boxed unsafe { cb[0].begin_once() }));
         try_future!(boxed self.graphics_queue.q.lock().submit(
             &[br::SubmissionBatch {
@@ -869,7 +869,14 @@ impl Graphics {
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
         ));
 
-        Box::pin(self.await_fence(fence))
+        Box::pin(async move {
+            self.await_fence(fence).await?;
+
+            // keep alive command buffers while execution
+            drop(cb);
+
+            Ok(())
+        })
     }
 
     /// Awaits fence on background thread
