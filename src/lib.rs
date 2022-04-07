@@ -39,9 +39,9 @@ mod presenter;
 pub use self::presenter::*;
 
 pub mod mthelper;
-use mthelper::{
-    DynamicMut, DynamicMutabilityProvider, MappableGuardObject, MappableMutGuardObject, SharedRef,
-};
+#[allow(unused_imports)]
+use mthelper::DynamicMutabilityProvider;
+use mthelper::{DynamicMut, MappableGuardObject, MappableMutGuardObject, SharedRef};
 
 #[cfg(feature = "derive")]
 pub use peridot_derive::*;
