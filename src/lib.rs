@@ -287,8 +287,8 @@ impl<NL: NativeLinker> Engine<NL> {
     /// Unlike other futures, commands are submitted immediately(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(&mut br::CmdRecord),
-    ) -> impl std::future::Future<Output = br::Result<()>> + 's {
+        generator: impl FnOnce(&mut br::CmdRecord) + 's,
+    ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
     }
 
@@ -705,15 +705,6 @@ impl std::future::Future for FenceWaitFuture<'_> {
     }
 }
 
-macro_rules! try_future {
-    (boxed $e: expr) => {
-        match $e {
-            Ok(x) => x,
-            Err(e) => return Box::pin(std::future::ready(Err(e))),
-        }
-    };
-}
-
 /// Queue object with family index
 pub struct Queue {
     q: parking_lot::Mutex<br::Queue>,
@@ -855,26 +846,26 @@ impl Graphics {
     pub fn submit_commands_async<'s>(
         &'s self,
         generator: impl FnOnce(&mut br::CmdRecord),
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = br::Result<()>> + 's>> {
-        let mut fence = std::sync::Arc::new(try_future!(boxed br::Fence::new(&self.device, false)));
+    ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
+        let mut fence = std::sync::Arc::new(br::Fence::new(&self.device, false)?);
 
-        let mut pool = try_future!(boxed br::CommandPool::new(
+        let mut pool = br::CommandPool::new(
             &self.device,
             self.graphics_queue_family_index(),
             true,
             false,
-        ));
-        let mut cb = CommandBundle(try_future!(boxed pool.alloc(1, true)), pool);
-        generator(&mut try_future!(boxed unsafe { cb[0].begin_once() }));
-        try_future!(boxed self.graphics_queue.q.lock().submit(
+        )?;
+        let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
+        generator(&mut unsafe { cb[0].begin_once()? });
+        self.graphics_queue.q.lock().submit(
             &[br::SubmissionBatch {
                 command_buffers: Cow::from(&cb[..]),
                 ..Default::default()
             }],
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
-        ));
+        )?;
 
-        Box::pin(async move {
+        Ok(async move {
             self.await_fence(fence).await?;
 
             // keep alive command buffers while execution
