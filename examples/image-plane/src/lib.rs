@@ -163,10 +163,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             br::AccessFlags::UNIFORM_READ,
         );
 
-        let preconfigure_task = e.submit_commands_async(|r| {
-            tfb.sink_transfer_commands(r);
-            tfb.sink_graphics_ready_commands(r);
-        });
+        let preconfigure_task = e
+            .submit_commands_async(|r| {
+                tfb.sink_transfer_commands(r);
+                tfb.sink_graphics_ready_commands(r);
+            })
+            .expect("Failed to submit preconfigure commands");
 
         let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
             .expect("Alloc UpdateCB");
