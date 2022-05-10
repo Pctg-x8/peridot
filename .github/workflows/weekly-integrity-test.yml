@@ -3,6 +3,8 @@ jobs:
     name: Base Layer
     needs:
     - preconditions
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: 'true'
@@ -26,10 +28,20 @@ jobs:
       name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -43,6 +55,8 @@ jobs:
     needs:
     - preconditions
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "macos-latest"
     steps:
     - if: 'true'
@@ -63,19 +77,40 @@ jobs:
           ~/.cargo/git
           target
     - if: 'true'
+      name: Build CLI
+      run: "cargo build --release"
+      "working-directory": tools/cli
+    - if: 'true'
+      name: Build archiver
+      run: "cargo build --release"
+      "working-directory": tools/archiver
+    - if: 'true'
       name: install requirements
       run: brew install coreutils
     - env:
-        VK_SDK_PATH: ''
+        PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/target/release/peridot-archiver', github.workspace) }}"
+        PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+        VULKAN_SDK: /Users
       if: 'true'
       name: cargo check
-      run: "./build.sh mac examples/basic --RunChecks 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      run: "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
       shell: bash
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -89,6 +124,8 @@ jobs:
     needs:
     - preconditions
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "windows-latest"
     steps:
     - if: 'true'
@@ -108,25 +145,41 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
+    - if: 'true'
+      name: Build CLI
+      run: "cargo build --release"
+      "working-directory": tools/cli
     - env:
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VK_SDK_PATH: ''
       if: 'true'
       name: cargo check
       run: |
         $ErrorActionPreference = "Continue"
-        pwsh -c './build.ps1 windows examples/basic -RunTests -Features bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VK_SDK_PATH: ''
       if: 'true'
       name: "cargo check for transparent-back"
       run: |
             $ErrorActionPreference = "Continue"
-            pwsh -c './build.ps1 windows examples/basic -RunTests -Features ''transparent,bedrock/DynamicLoaded''' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+            pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -140,6 +193,8 @@ jobs:
     needs:
     - preconditions
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: 'true'
@@ -159,16 +214,26 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: 'true'
+    - env:
+        TARGET_PATH: examples
+      if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: examples
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -181,6 +246,8 @@ jobs:
     name: Code Formats
     needs:
     - preconditions
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: 'true'
@@ -191,26 +258,36 @@ jobs:
     - if: 'true'
       name: Checking out
       uses: "actions/checkout@v2"
-    - if: 'true'
+    - env:
+        RUN_SCRIPT: codeform_check
+      if: 'true'
       name: "Running Check: Line Width"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: codeform_check
-    - if: 'true'
+    - env:
+        RUN_SCRIPT: vulnerabilities_elliminator
+      if: 'true'
       name: "Running Check: Debugging Weaks"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: vulnerabilities_elliminator
-    - if: 'true'
+    - env:
+        RUN_SCRIPT: trailing_newline_checker
+      if: 'true'
       name: "Running Check: Trailing Newline for Source Code Files"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: trailing_newline_checker
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -224,6 +301,8 @@ jobs:
     needs:
     - preconditions
     - "check-baselayer"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: 'true'
@@ -243,16 +322,26 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: 'true'
+    - env:
+        TARGET_PATH: '.'
+      if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: '.'
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -266,6 +355,8 @@ jobs:
     needs:
     - preconditions
     - "check-baselayer"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: 'true'
@@ -285,16 +376,26 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: 'true'
+    - env:
+        TARGET_PATH: tools
+      if: 'true'
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
-      with:
-        path: tools
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
       if: "failure()"
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -320,6 +421,8 @@ jobs:
     - "check-formats"
     - "check-cradle-windows"
     - "check-cradle-macos"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
@@ -329,10 +432,19 @@ jobs:
     - name: Checking out
       uses: "actions/checkout@v2"
     - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
         AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      name: Notify as Success
+        AWS_ROLE_ARN: "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+        AWS_WEB_IDENTITY_TOKEN_FILE: /tmp/awstoken
+      id: cfgNotification
+      name: Configure for Slack Notification
+      run: |
+        # re-export configs for further step
+        echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
+        echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
+        echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
+
+        curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
+    - name: Notify as Success
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         begintime: "${{ needs.preconditions.outputs.begintime }}"

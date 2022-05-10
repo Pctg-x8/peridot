@@ -3,17 +3,18 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 50;
+	objectVersion = 52;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */ = {isa = PBXBuildFile; fileRef = 4B40D4B621DCFB5B00C1B31F /* assets.par */; };
+		4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B696EED231BD4E000C2417C /* AudioUnit.framework */; };
 		4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1821B2554E0006BE24 /* Assets.xcassets */; };
 		4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1A21B2554E0006BE24 /* MainMenu.xib */; };
 		4BAF7A2721B29F1F0006BE24 /* PeridotRenderableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BAF7A2621B29F1F0006BE24 /* PeridotRenderableView.swift */; };
 		4BAF7A2921B2A4B00006BE24 /* PeridotRenderableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BAF7A2821B2A4B00006BE24 /* PeridotRenderableViewController.swift */; };
 		4BAF7A3121B313B00006BE24 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BAF7A3021B313B00006BE24 /* AppDelegate.swift */; };
-		4BAF7A3721B3C85B0006BE24 /* libpegamelib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BAF7A3621B3C85B0006BE24 /* libpegamelib.a */; };
+		4BB1536027DC9E5A00A214E0 /* libpegamelib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */; };
 		4BC8ED1D21B3F4C900FB4AF9 /* libc++.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED1C21B3F4C900FB4AF9 /* libc++.tbd */; };
 		4BC8ED1F21B3F4EC00FB4AF9 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED1E21B3F4EC00FB4AF9 /* Metal.framework */; };
 		4BC8ED2121B3F50B00FB4AF9 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2021B3F50B00FB4AF9 /* IOKit.framework */; };
@@ -21,74 +22,14 @@
 		4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */; };
 		4BC8ED2721B3F54900FB4AF9 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */; };
 		4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */; };
-		980100B623AF192B004DEEF8 /* vulkan.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 980100B523AF192B004DEEF8 /* vulkan.framework */; };
-		980100BC23AF202B004DEEF8 /* libMoltenVK.dylib in Copy Vulkan Frameworks */ = {isa = PBXBuildFile; fileRef = 980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		980100BE23AF2049004DEEF8 /* vulkan.framework in Copy Vulkan Frameworks */ = {isa = PBXBuildFile; fileRef = 980100BD23AF2049004DEEF8 /* vulkan.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		980100C323AF2605004DEEF8 /* MoltenVK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 980100C223AF2605004DEEF8 /* MoltenVK.framework */; };
+		985C79C525D5234C00CDBC0F /* MoltenVK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		4B40D49D21DB5B8000C1B31F /* Copy Vulkan Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				980100BE23AF2049004DEEF8 /* vulkan.framework in Copy Vulkan Frameworks */,
-				980100BC23AF202B004DEEF8 /* libMoltenVK.dylib in Copy Vulkan Frameworks */,
-			);
-			name = "Copy Vulkan Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
-		4B40D4A021DB5B9E00C1B31F /* VkLayer_unique_objects.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_unique_objects.json; sourceTree = "<group>"; };
-		4B40D4A121DB5B9E00C1B31F /* VkLayer_threading.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_threading.json; sourceTree = "<group>"; };
-		4B40D4A221DB5B9E00C1B31F /* VkLayer_standard_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_standard_validation.json; sourceTree = "<group>"; };
-		4B40D4A321DB5B9E00C1B31F /* VkLayer_core_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_core_validation.json; sourceTree = "<group>"; };
-		4B40D4A421DB5B9E00C1B31F /* VkLayer_parameter_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_parameter_validation.json; sourceTree = "<group>"; };
-		4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = VkLayer_object_tracker.json; sourceTree = "<group>"; };
-		4B40D4A721DB5B9E00C1B31F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = MoltenVK_icd.json; sourceTree = "<group>"; };
 		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
-		4B699C8921DA30910048FA7F /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
-		4B699C8C21DA30B50048FA7F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = MoltenVK_icd.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"; sourceTree = "<group>"; };
-		4B699C8F21DA318C0048FA7F /* VkLayer_core_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_core_validation.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_core_validation.json"; sourceTree = "<group>"; };
-		4B699C9021DA318C0048FA7F /* VkLayer_object_tracker.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_object_tracker.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_object_tracker.json"; sourceTree = "<group>"; };
-		4B699C9121DA318C0048FA7F /* VkLayer_standard_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_standard_validation.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_standard_validation.json"; sourceTree = "<group>"; };
-		4B699C9221DA318C0048FA7F /* VkLayer_parameter_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_parameter_validation.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_parameter_validation.json"; sourceTree = "<group>"; };
-		4B699C9321DA318C0048FA7F /* VkLayer_unique_objects.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_unique_objects.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_unique_objects.json"; sourceTree = "<group>"; };
-		4B699C9421DA318C0048FA7F /* VkLayer_threading.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_threading.json; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan/explicit_layer.d/VkLayer_threading.json"; sourceTree = "<group>"; };
-		4B699C9D21DA336D0048FA7F /* libVkLayer_threading.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_threading.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_threading.dylib"; sourceTree = "<group>"; };
-		4B699C9E21DA336D0048FA7F /* libVkLayer_unique_objects.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_unique_objects.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_unique_objects.dylib"; sourceTree = "<group>"; };
-		4B699C9F21DA336D0048FA7F /* libVkLayer_core_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_core_validation.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_core_validation.dylib"; sourceTree = "<group>"; };
-		4B699CA021DA336D0048FA7F /* libVkLayer_parameter_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_parameter_validation.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_parameter_validation.dylib"; sourceTree = "<group>"; };
-		4B699CA121DA336D0048FA7F /* libVkLayer_object_tracker.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_object_tracker.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_object_tracker.dylib"; sourceTree = "<group>"; };
-		4B699CA721DA40F80048FA7F /* libvulkan.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libvulkan.dylib"; sourceTree = "<group>"; };
-		4B699CA921DA41400048FA7F /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
-		4B699CAB21DA41520048FA7F /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../foreign/vksdk-1.0.69.0/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
-		4B699CAD21DA41720048FA7F /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = MoltenVK_icd.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"; sourceTree = "<group>"; };
-		4B699CAF21DA418E0048FA7F /* VkLayer_standard_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_standard_validation.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_standard_validation.json"; sourceTree = "<group>"; };
-		4B699CB021DA418E0048FA7F /* VkLayer_unique_objects.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_unique_objects.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_unique_objects.json"; sourceTree = "<group>"; };
-		4B699CB121DA418E0048FA7F /* VkLayer_threading.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_threading.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_threading.json"; sourceTree = "<group>"; };
-		4B699CB221DA418E0048FA7F /* VkLayer_core_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_core_validation.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_core_validation.json"; sourceTree = "<group>"; };
-		4B699CB321DA418E0048FA7F /* VkLayer_parameter_validation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_parameter_validation.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_parameter_validation.json"; sourceTree = "<group>"; };
-		4B699CB421DA418E0048FA7F /* VkLayer_object_tracker.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = VkLayer_object_tracker.json; path = "../../../../foreign/vksdk-1.0.69.0/macOS/etc/vulkan/explicit_layers.d/VkLayer_object_tracker.json"; sourceTree = "<group>"; };
-		4B699CBB21DA41A50048FA7F /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
-		4B699CBD21DA41B40048FA7F /* libVkLayer_threading.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_threading.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_threading.dylib"; sourceTree = "<group>"; };
-		4B699CBE21DA41B40048FA7F /* libVkLayer_unique_objects.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_unique_objects.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_unique_objects.dylib"; sourceTree = "<group>"; };
-		4B699CBF21DA41B40048FA7F /* libVkLayer_utils.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_utils.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_utils.dylib"; sourceTree = "<group>"; };
-		4B699CC021DA41B40048FA7F /* libVkLayer_object_tracker.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_object_tracker.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_object_tracker.dylib"; sourceTree = "<group>"; };
-		4B699CC121DA41B40048FA7F /* libVkLayer_parameter_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_parameter_validation.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_parameter_validation.dylib"; sourceTree = "<group>"; };
-		4B699CC221DA41B40048FA7F /* libVkLayer_core_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_core_validation.dylib; path = "../../../../foreign/vksdk-1.0.69.0/macOS/lib/libVkLayer_core_validation.dylib"; sourceTree = "<group>"; };
-		4B699CCD21DA43D20048FA7F /* libvulkan.1.1.92.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.1.92.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libvulkan.1.1.92.dylib"; sourceTree = "<group>"; };
-		4B9C87B021B3EF4800FE559E /* MoltenVK.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MoltenVK.framework; path = ../../../../foreign/MoltenVK/Package/Release/MoltenVK/macOS/MoltenVK.framework; sourceTree = "<group>"; };
-		4BA45A0021DB564400915AC9 /* libVkLayer_threading.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_threading.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_threading.dylib"; sourceTree = "<group>"; };
-		4BA45A0121DB564400915AC9 /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
-		4BA45A0221DB564400915AC9 /* libVkLayer_core_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_core_validation.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_core_validation.dylib"; sourceTree = "<group>"; };
-		4BA45A0321DB564400915AC9 /* libVkLayer_parameter_validation.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_parameter_validation.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_parameter_validation.dylib"; sourceTree = "<group>"; };
-		4BA45A0421DB564500915AC9 /* libVkLayer_object_tracker.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_object_tracker.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_object_tracker.dylib"; sourceTree = "<group>"; };
-		4BA45A0521DB564500915AC9 /* libVkLayer_unique_objects.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libVkLayer_unique_objects.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libVkLayer_unique_objects.dylib"; sourceTree = "<group>"; };
+		4B696EED231BD4E000C2417C /* AudioUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioUnit.framework; path = System/Library/Frameworks/AudioUnit.framework; sourceTree = SDKROOT; };
+		4B696EEF231BDB3200C2417C /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		4B696EF1231BDB4900C2417C /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
 		4BAF7A1321B2554B0006BE24 /* peridot-cradle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "peridot-cradle.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4BAF7A1821B2554E0006BE24 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4BAF7A1B21B2554E0006BE24 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
@@ -98,25 +39,16 @@
 		4BAF7A2821B2A4B00006BE24 /* PeridotRenderableViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeridotRenderableViewController.swift; sourceTree = "<group>"; };
 		4BAF7A3021B313B00006BE24 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		4BAF7A3221B3C0990006BE24 /* peridot-cradle-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "peridot-cradle-Bridging-Header.h"; sourceTree = "<group>"; };
-		4BAF7A3421B3C7390006BE24 /* libperidot.rlib */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libperidot.rlib; path = ../../../target/release/libperidot.rlib; sourceTree = "<group>"; };
-		4BAF7A3621B3C85B0006BE24 /* libpegamelib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libpegamelib.a; path = ../../../target/debug/libpegamelib.a; sourceTree = "<group>"; };
+		4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libpegamelib.a; path = rlibs/libpegamelib.a; sourceTree = SOURCE_ROOT; };
+		4BB1564427DC9F6200A214E0 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = macOS/Frameworks/vulkan.framework; sourceTree = "<group>"; };
 		4BC8ED1C21B3F4C900FB4AF9 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
 		4BC8ED1E21B3F4EC00FB4AF9 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		4BC8ED2021B3F50B00FB4AF9 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		4BC8ED2221B3F51600FB4AF9 /* IOSurface.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOSurface.framework; path = System/Library/Frameworks/IOSurface.framework; sourceTree = SDKROOT; };
 		4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
-		4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
 		4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInterface.swift; sourceTree = "<group>"; };
-		4BF8B2E021D1C0C8007F80AB /* MoltenVK.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MoltenVK.framework; path = "../../../../../vulkansdk-macos-1.1.92.1/MoltenVK/macOS/framework/MoltenVK.framework"; sourceTree = "<group>"; };
-		4BF8B2E321DA0686007F80AB /* libvulkan.1.1.92.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.1.92.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libvulkan.1.1.92.dylib"; sourceTree = "<group>"; };
-		4BF8B2E521DA06A4007F80AB /* libvulkan.1.1.92.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.1.92.dylib; path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/lib/libvulkan.1.1.92.dylib"; sourceTree = "<group>"; };
-		980100B523AF192B004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../../vulkansdk-macos-1.1.130.0/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
-		980100B923AF1D49004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../../vulkansdk-macos-1.1.130.0/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
-		980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libMoltenVK.dylib; path = "../../../../../vulkansdk-macos-1.1.130.0/macOS/lib/libMoltenVK.dylib"; sourceTree = "<group>"; };
-		980100BD23AF2049004DEEF8 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = "../../../../../vulkansdk-macos-1.1.130.0/macOS/Frameworks/vulkan.framework"; sourceTree = "<group>"; };
-		980100C023AF252E004DEEF8 /* MoltenVK_icd.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = MoltenVK_icd.json; path = "../../../../../vulkansdk-macos-1.1.130.0/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"; sourceTree = "<group>"; };
-		980100C223AF2605004DEEF8 /* MoltenVK.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MoltenVK.framework; path = "../../../../../vulkansdk-macos-1.1.130.0/MoltenVK/macOS/framework/MoltenVK.framework"; sourceTree = "<group>"; };
+		985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MoltenVK.xcframework; path = MoltenVK/MoltenVK.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,100 +56,25 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				980100C323AF2605004DEEF8 /* MoltenVK.framework in Frameworks */,
+				4BB1536027DC9E5A00A214E0 /* libpegamelib.a in Frameworks */,
+				4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */,
+				985C79C525D5234C00CDBC0F /* MoltenVK.xcframework in Frameworks */,
 				4BC8ED2721B3F54900FB4AF9 /* QuartzCore.framework in Frameworks */,
 				4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */,
 				4BC8ED2321B3F51600FB4AF9 /* IOSurface.framework in Frameworks */,
 				4BC8ED2121B3F50B00FB4AF9 /* IOKit.framework in Frameworks */,
 				4BC8ED1F21B3F4EC00FB4AF9 /* Metal.framework in Frameworks */,
-				980100B623AF192B004DEEF8 /* vulkan.framework in Frameworks */,
 				4BC8ED1D21B3F4C900FB4AF9 /* libc++.tbd in Frameworks */,
-				4BAF7A3721B3C85B0006BE24 /* libpegamelib.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		4B40D49E21DB5B9E00C1B31F /* vulkan */ = {
-			isa = PBXGroup;
-			children = (
-				4B40D49F21DB5B9E00C1B31F /* explicit_layer.d */,
-				4B40D4A621DB5B9E00C1B31F /* icd.d */,
-			);
-			name = vulkan;
-			path = "../../../../../vulkansdk-macos-1.1.92.1/macOS/etc/vulkan";
-			sourceTree = "<group>";
-		};
-		4B40D49F21DB5B9E00C1B31F /* explicit_layer.d */ = {
-			isa = PBXGroup;
-			children = (
-				4B40D4A021DB5B9E00C1B31F /* VkLayer_unique_objects.json */,
-				4B40D4A121DB5B9E00C1B31F /* VkLayer_threading.json */,
-				4B40D4A221DB5B9E00C1B31F /* VkLayer_standard_validation.json */,
-				4B40D4A321DB5B9E00C1B31F /* VkLayer_core_validation.json */,
-				4B40D4A421DB5B9E00C1B31F /* VkLayer_parameter_validation.json */,
-				4B40D4A521DB5B9E00C1B31F /* VkLayer_object_tracker.json */,
-			);
-			path = explicit_layer.d;
-			sourceTree = "<group>";
-		};
-		4B40D4A621DB5B9E00C1B31F /* icd.d */ = {
-			isa = PBXGroup;
-			children = (
-				4B40D4A721DB5B9E00C1B31F /* MoltenVK_icd.json */,
-			);
-			path = icd.d;
-			sourceTree = "<group>";
-		};
 		4BAF7A0A21B2554B0006BE24 = {
 			isa = PBXGroup;
 			children = (
-				980100C023AF252E004DEEF8 /* MoltenVK_icd.json */,
-				980100BD23AF2049004DEEF8 /* vulkan.framework */,
-				980100BB23AF202B004DEEF8 /* libMoltenVK.dylib */,
-				980100B923AF1D49004DEEF8 /* vulkan.framework */,
 				4B40D4B621DCFB5B00C1B31F /* assets.par */,
-				4B40D49E21DB5B9E00C1B31F /* vulkan */,
-				4BA45A0121DB564400915AC9 /* libMoltenVK.dylib */,
-				4BA45A0221DB564400915AC9 /* libVkLayer_core_validation.dylib */,
-				4BA45A0421DB564500915AC9 /* libVkLayer_object_tracker.dylib */,
-				4BA45A0321DB564400915AC9 /* libVkLayer_parameter_validation.dylib */,
-				4BA45A0021DB564400915AC9 /* libVkLayer_threading.dylib */,
-				4BA45A0521DB564500915AC9 /* libVkLayer_unique_objects.dylib */,
-				4B699CCD21DA43D20048FA7F /* libvulkan.1.1.92.dylib */,
-				4B699CC221DA41B40048FA7F /* libVkLayer_core_validation.dylib */,
-				4B699CC021DA41B40048FA7F /* libVkLayer_object_tracker.dylib */,
-				4B699CC121DA41B40048FA7F /* libVkLayer_parameter_validation.dylib */,
-				4B699CBD21DA41B40048FA7F /* libVkLayer_threading.dylib */,
-				4B699CBE21DA41B40048FA7F /* libVkLayer_unique_objects.dylib */,
-				4B699CBF21DA41B40048FA7F /* libVkLayer_utils.dylib */,
-				4B699CBB21DA41A50048FA7F /* libMoltenVK.dylib */,
-				4B699CB221DA418E0048FA7F /* VkLayer_core_validation.json */,
-				4B699CB421DA418E0048FA7F /* VkLayer_object_tracker.json */,
-				4B699CB321DA418E0048FA7F /* VkLayer_parameter_validation.json */,
-				4B699CAF21DA418E0048FA7F /* VkLayer_standard_validation.json */,
-				4B699CB121DA418E0048FA7F /* VkLayer_threading.json */,
-				4B699CB021DA418E0048FA7F /* VkLayer_unique_objects.json */,
-				4B699CAD21DA41720048FA7F /* MoltenVK_icd.json */,
-				4B699CAB21DA41520048FA7F /* vulkan.framework */,
-				4B699CA921DA41400048FA7F /* libMoltenVK.dylib */,
-				4B699CA721DA40F80048FA7F /* libvulkan.dylib */,
-				4B699C9F21DA336D0048FA7F /* libVkLayer_core_validation.dylib */,
-				4B699CA121DA336D0048FA7F /* libVkLayer_object_tracker.dylib */,
-				4B699CA021DA336D0048FA7F /* libVkLayer_parameter_validation.dylib */,
-				4B699C9D21DA336D0048FA7F /* libVkLayer_threading.dylib */,
-				4B699C9E21DA336D0048FA7F /* libVkLayer_unique_objects.dylib */,
-				4B699C8F21DA318C0048FA7F /* VkLayer_core_validation.json */,
-				4B699C9021DA318C0048FA7F /* VkLayer_object_tracker.json */,
-				4B699C9221DA318C0048FA7F /* VkLayer_parameter_validation.json */,
-				4B699C9121DA318C0048FA7F /* VkLayer_standard_validation.json */,
-				4B699C9421DA318C0048FA7F /* VkLayer_threading.json */,
-				4B699C9321DA318C0048FA7F /* VkLayer_unique_objects.json */,
-				4B699C8C21DA30B50048FA7F /* MoltenVK_icd.json */,
-				4B699C8921DA30910048FA7F /* libMoltenVK.dylib */,
-				4BF8B2E321DA0686007F80AB /* libvulkan.1.1.92.dylib */,
-				4BF8B2E521DA06A4007F80AB /* libvulkan.1.1.92.dylib */,
 				4BAF7A1521B2554B0006BE24 /* peridot-cradle */,
 				4BAF7A1421B2554B0006BE24 /* Products */,
 				4BAF7A3321B3C7380006BE24 /* Frameworks */,
@@ -251,22 +108,30 @@
 		4BAF7A3321B3C7380006BE24 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				980100C223AF2605004DEEF8 /* MoltenVK.framework */,
-				980100B523AF192B004DEEF8 /* vulkan.framework */,
-				4BF8B2E021D1C0C8007F80AB /* MoltenVK.framework */,
-				4BC8ED2821B3F5FA00FB4AF9 /* vulkan.framework */,
+				4BB1564327DC9F3000A214E0 /* VulkanSDK */,
+				4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */,
+				4B696EF1231BDB4900C2417C /* CoreAudio.framework */,
+				4B696EEF231BDB3200C2417C /* AudioToolbox.framework */,
+				4B696EED231BD4E000C2417C /* AudioUnit.framework */,
 				4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */,
 				4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */,
 				4BC8ED2221B3F51600FB4AF9 /* IOSurface.framework */,
 				4BC8ED2021B3F50B00FB4AF9 /* IOKit.framework */,
 				4BC8ED1E21B3F4EC00FB4AF9 /* Metal.framework */,
 				4BC8ED1C21B3F4C900FB4AF9 /* libc++.tbd */,
-				4B9C87B021B3EF4800FE559E /* MoltenVK.framework */,
-				4BAF7A3621B3C85B0006BE24 /* libpegamelib.a */,
-				4BAF7A3421B3C7390006BE24 /* libperidot.rlib */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
+		};
+		4BB1564327DC9F3000A214E0 /* VulkanSDK */ = {
+			isa = PBXGroup;
+			children = (
+				4BB1564427DC9F6200A214E0 /* vulkan.framework */,
+				985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */,
+			);
+			name = VulkanSDK;
+			path = /Users/pctgx8/VulkanSDK/1.3.204.1;
+			sourceTree = "<absolute>";
 		};
 /* End PBXGroup section */
 
@@ -278,8 +143,6 @@
 				4BAF7A0F21B2554B0006BE24 /* Sources */,
 				4BAF7A1021B2554B0006BE24 /* Frameworks */,
 				4BAF7A1121B2554B0006BE24 /* Resources */,
-				4B40D49D21DB5B8000C1B31F /* Copy Vulkan Frameworks */,
-				4B699CCF21DA43D80048FA7F /* ShellScript */,
 			);
 			buildRules = (
 			);
@@ -302,6 +165,7 @@
 				TargetAttributes = {
 					4BAF7A1221B2554B0006BE24 = {
 						CreatedOnToolsVersion = 10.1;
+						LastSwiftMigration = 1320;
 					};
 				};
 			};
@@ -335,26 +199,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		4B699CCF21DA43D80048FA7F /* ShellScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "#!/bin/bash\n# Type a script or drag a script file from your workspace to insert its path.\n\n# $PROJECT_DIR/edit-package.sh\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4BAF7A0F21B2554B0006BE24 /* Sources */ = {
@@ -500,58 +344,66 @@
 		4BAF7A2221B2554E0006BE24 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "peridot-cradle/peridot_cradle.entitlements";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(HOME)/vulkansdk-macos-1.1.130.0/macOS/Frameworks",
-					"$(HOME)/vulkansdk-macos-1.1.130.0/MoltenVK/macOS/framework",
+					"$(VULKAN_SDK)/Frameworks",
+					"$(VULKAN_SDK)/../MoltenVK",
 				);
 				INFOPLIST_FILE = "peridot-cradle/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/rlibs";
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/rlibs",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.cterm2.peridot.cradle.peridot-cradle";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
+				VULKAN_SDK = "$(HOME)/VulkanSDK/1.3.204.1/macOS";
 			};
 			name = Debug;
 		};
 		4BAF7A2321B2554E0006BE24 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "peridot-cradle/peridot_cradle.entitlements";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(HOME)/vulkansdk-macos-1.1.130.0/macOS/Frameworks",
-					"$(HOME)/vulkansdk-macos-1.1.130.0/MoltenVK/macOS/framework",
+					"$(VULKAN_SDK)/Frameworks",
+					"$(VULKAN_SDK)/../MoltenVK",
 				);
 				INFOPLIST_FILE = "peridot-cradle/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/rlibs";
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/rlibs",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.cterm2.peridot.cradle.peridot-cradle";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
+				VULKAN_SDK = "$(HOME)/VulkanSDK/1.3.204.1/macOS";
 			};
 			name = Release;
 		};

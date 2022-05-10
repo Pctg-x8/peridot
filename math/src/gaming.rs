@@ -1,8 +1,8 @@
 //! Peridot Extended Mathematics: Gaming Utils(Camera, ModelMatrix)
 
 use crate::linarg::*;
-use std::ops::Range;
 use crate::{One, Zero};
+use std::ops::Range;
 
 /// How the camera will project vertices?
 pub enum ProjectionMethod {
@@ -12,11 +12,14 @@ pub enum ProjectionMethod {
     Perspective { fov: f32 },
     /// UI layouting optimized projection: (0, 0)-(design_width, design_height) will be mapped to (-1, -1)-(1, 1)
     /// This projection ignores aspect ratio.
-    UI { design_width: f32, design_height: f32 }
+    UI {
+        design_width: f32,
+        design_height: f32,
+    },
 }
 /// A camera
 /// ## Examples
-/// 
+///
 /// ```
 /// # use peridot_math::*;
 /// let c = Camera {
@@ -36,7 +39,7 @@ pub struct Camera {
     /// Eye direction of the camera.
     pub rotation: QuaternionF32,
     /// Z range to be rendered.
-    pub depth_range: Range<f32>
+    pub depth_range: Range<f32>,
 }
 
 impl Camera {
@@ -46,29 +49,46 @@ impl Camera {
             Some(ProjectionMethod::Perspective { fov }) => {
                 let scaling_tan = (fov / 2.0).tan();
                 let zdiff = self.depth_range.end - self.depth_range.start;
-                let zscale = (self.depth_range.end / zdiff,
-                    -(self.depth_range.end * self.depth_range.start) / zdiff);
-                
+                let zscale = (
+                    self.depth_range.end / zdiff,
+                    -(self.depth_range.end * self.depth_range.start) / zdiff,
+                );
+
                 Matrix4(
-                    [(aspect_wh * scaling_tan).recip(), 0.0, 0.0, 0.0], [0.0, -scaling_tan.recip(), 0.0, 0.0],
-                    [0.0, 0.0, zscale.0, zscale.1], [0.0, 0.0, 1.0, 0.0]
+                    [(aspect_wh * scaling_tan).recip(), 0.0, 0.0, 0.0],
+                    [0.0, -scaling_tan.recip(), 0.0, 0.0],
+                    [0.0, 0.0, zscale.0, zscale.1],
+                    [0.0, 0.0, 1.0, 0.0],
                 )
-            },
+            }
             Some(ProjectionMethod::Orthographic { size }) => {
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let t = Matrix4::translation(Vector3(0.0, 0.0, -self.depth_range.start));
-                let s = Matrix4::scale(Vector4((aspect_wh * size).recip(), -size.recip(), zdiff.recip(), 1.0));
+                let s = Matrix4::scale(Vector4(
+                    (aspect_wh * size).recip(),
+                    -size.recip(),
+                    zdiff.recip(),
+                    1.0,
+                ));
 
                 s * t
-            },
-            Some(ProjectionMethod::UI { design_width, design_height }) => {
+            }
+            Some(ProjectionMethod::UI {
+                design_width,
+                design_height,
+            }) => {
                 let zdiff = self.depth_range.end - self.depth_range.start;
                 let t = Matrix4::translation(Vector3(-1.0, -1.0, 0.0));
-                let s = Matrix4::scale(Vector4(2.0 / design_width, 2.0 / design_height, zdiff.recip(), 1.0));
+                let s = Matrix4::scale(Vector4(
+                    2.0 / design_width,
+                    2.0 / design_height,
+                    zdiff.recip(),
+                    1.0,
+                ));
 
                 t * s
-            },
-            None => Matrix4::scale(Vector4(aspect_wh.recip(), 1.0, 1.0, 1.0))
+            }
+            None => Matrix4::scale(Vector4(aspect_wh.recip(), 1.0, 1.0, 1.0)),
         }
     }
     /// calculates the camera view matrix
@@ -89,9 +109,9 @@ impl Camera {
     pub fn look_at(&mut self, target: Vector3F32) {
         let eyedir = (target - self.position.clone()).normalize();
         let basedir = Vector3(0.0f32, 0.0, 1.0);
-        
+
         let axis = basedir.cross(&eyedir).normalize();
-        let angle = basedir.dot(&eyedir).acos();
+        let angle = basedir.dot(eyedir).acos();
         self.rotation = Quaternion::new(-angle, axis);
     }
 }
@@ -99,10 +119,12 @@ impl Default for Camera {
     /// Default value of the Camera, that has identity view transform and Perspective projection with fov=60deg.
     fn default() -> Self {
         Camera {
-            projection: Some(ProjectionMethod::Perspective { fov: 60.0f32.to_radians() }),
+            projection: Some(ProjectionMethod::Perspective {
+                fov: 60.0f32.to_radians(),
+            }),
             position: Vector3::ZERO,
             rotation: Quaternion::ONE,
-            depth_range: 0.0 .. 1.0
+            depth_range: 0.0..1.0,
         }
     }
 }
