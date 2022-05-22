@@ -1,3 +1,5 @@
+#![feature(backtrace)]
+
 use log::*;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
@@ -719,6 +721,8 @@ pub struct Graphics {
     cp_onetime_submit: br::CommandPool,
     pub memory_type_manager: MemoryTypeManager,
     fence_reactor: FenceReactorThread,
+    #[cfg(feature = "debug")]
+    _debug_instance: br::DebugUtilsMessenger
 }
 impl Graphics {
     fn new(
@@ -759,13 +763,14 @@ impl Graphics {
         #[cfg(feature = "debug")]
         {
             ib.add_extension("VK_EXT_debug_utils");
-            ib.add_ext_structure(
-                br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
-                    .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning()),
-            );
             debug!("Debug reporting activated");
         }
         let instance = ib.create()?;
+
+        #[cfg(feature = "debug")]
+        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
+            .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
+            .create(&instance)?;
 
         let adapter = instance
             .iter_physical_devices()?
@@ -800,6 +805,8 @@ impl Graphics {
             device,
             memory_type_manager,
             fence_reactor: FenceReactorThread::new(),
+            #[cfg(feature = "debug")]
+            _debug_instance
         });
     }
 
