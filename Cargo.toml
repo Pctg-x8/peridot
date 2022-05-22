@@ -23,6 +23,11 @@ peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
 peridot-derive = { path = "derive", optional = true }
 
+image = "*"
+
+[dependencies.async-std]
+version = "1.5"
+
 [dependencies.bedrock]
 git = "https://github.com/Pctg-x8/bedrock"
 branch = "peridot"

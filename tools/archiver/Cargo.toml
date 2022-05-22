@@ -9,3 +9,7 @@ peridot-archive = { path = "../../archive" }
 clap = "2.32"
 glob = "0.2"
 libc = "0.2"
+
+[dependencies.async-std]
+version = "1.5"
+features = ["attributes"]

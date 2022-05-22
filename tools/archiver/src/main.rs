@@ -1,19 +1,20 @@
 
 extern crate clap; extern crate glob; extern crate libc;
 use clap::{App, Arg, ArgMatches};
-use std::fs::{metadata, read_dir, read, File};
+use async_std::fs::{read, File};
+use std::fs::{metadata, read_dir};
 use std::io::prelude::Write;
 use std::io::Result as IOResult;
 extern crate peridot_archive as par;
 
-fn extract(args: &ArgMatches)
+async fn extract<'a>(args: &ArgMatches<'a>)
 {
     let mut archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),
-        args.is_present("check")).expect("reading archive error");
+        args.is_present("check")).await.expect("reading archive error");
 
     if let Some(apath) = args.value_of("apath")
     {
-        if let Some(b) = archive.read_bin(apath).expect("readbin")
+        if let Some(b) = archive.read_bin(apath).await.expect("readbin")
         {
             let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
             NativeOfstream::from_stream_ptr(foptr).expect("open stream").write_all(&b[..]).expect("writing");
@@ -21,14 +22,15 @@ fn extract(args: &ArgMatches)
         else { panic!("Entry not found in archive: {}", apath); }
     }
 }
-fn list(args: &ArgMatches)
+async fn list<'a>(args: &ArgMatches<'a>)
 {
     let archive = par::ArchiveRead::from_file(args.value_of("arc").expect("arc not found"),
-        args.is_present("check")).expect("check not found");
+        args.is_present("check")).await.expect("check not found");
 
     for n in archive.entry_names() { println!("{}", n); }
 }
-fn main()
+#[async_std::main]
+async fn main()
 {
     let extract_matcher = App::new("extract").version("0.1").author("S.Percentage <Syn.Tri.Naga@gmail.com>")
         .arg(Arg::with_name("arc").value_name("FILE").required(true).help("Archive file"))
@@ -49,12 +51,12 @@ fn main()
         .subcommands(vec![extract_matcher, create_matcher, ls_matcher]);
     let matches = matcher.get_matches();
 
-    if let Some(matches) = matches.subcommand_matches("new") { new(matches); }
-    if let Some(matches) = matches.subcommand_matches("list") { list(matches); }
-    if let Some(matches) = matches.subcommand_matches("extract") { extract(matches); }
+    if let Some(matches) = matches.subcommand_matches("new") { new(matches).await; }
+    if let Some(matches) = matches.subcommand_matches("list") { list(matches).await; }
+    if let Some(matches) = matches.subcommand_matches("extract") { extract(matches).await; }
 }
 
-fn new(args: &ArgMatches)
+async fn new<'a>(args: &ArgMatches<'a>)
 {
     let ifiled = args.values_of("ifiled").expect("noargs: ifiled");
     #[cfg(windows)]
@@ -82,19 +84,21 @@ fn new(args: &ArgMatches)
         let fstr = f.to_str().expect("nullchar");
         let ename = if fstr.starts_with(&basedir) { &fstr[basedir.len()..] } else { &fstr };
         if fstr.is_empty() { eprintln!("Warn: empty entry name. wont be written"); }
-        if !archive.add(ename.to_owned(), read(&f).expect("file io error"))
+        if !archive.add(ename.to_owned(), read(&f).await.expect("file io error"))
         {
             eprintln!("Warn: {:?} has already been added", fstr);
         }
     }
     if let Some(ofpath) = args.value_of("ofile")
     {
-        archive.write(&mut File::create(ofpath).expect("file open error"))
+        archive.write(&mut File::create(ofpath).await.expect("file open error")).await
     }
     else
     {
-        let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
-        archive.write(&mut NativeOfstream::from_stream_ptr(foptr).expect("fstream open error"))
+        // fixme: NativeOfstreamにAsyncWriteをつける必要があって、ちょっと面倒なのでいったんstdoutへの出力はoffにする
+        /*let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
+        archive.write(&mut NativeOfstream::from_stream_ptr(foptr).expect("fstream open error"))*/
+        unimplemented!("fixme! AsyncWrite for NativeOfstream")
     }.expect("fileio write error")
 }
 

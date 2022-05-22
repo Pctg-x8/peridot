@@ -2,6 +2,7 @@
 name = "peridot-vertex-processing-pack"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
 
 [features]
 default = ["with-loader-impl"]
@@ -11,3 +12,5 @@ with-loader-impl = ["peridot"]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = "..", optional = true }
 peridot-serialization-utils = { path = "../serialization-utils" }
+async-std = "1.5"
+futures-core = "0.3"

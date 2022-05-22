@@ -7,7 +7,7 @@ use bedrock as br;
 use peridot::{EngineEvents, FeatureRequests};
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
-use std::sync::{Arc, RwLock};
+use async_std::sync::{Arc, RwLock};
 
 #[cfg(not(feature = "mt"))]
 use std::rc::Rc as SharedPtr;
@@ -83,6 +83,7 @@ impl<R: Read + Seek> Seek for ReaderView<R> {
 }
 pub struct PlatformAssetLoader {
     par_path: CocoaObject<NSString>,
+    par: RwLock<Option<Arc<peridot::archive::ArchiveRead>>>
 }
 impl PlatformAssetLoader {
     fn new() -> Self {
@@ -94,6 +95,18 @@ impl PlatformAssetLoader {
         };
 
         PlatformAssetLoader { par_path }
+    }
+
+    async fn acquire_primary_archive(&self) -> Arc<peridot::archive::ArchiveRead>
+    {
+        if let Some(ref a) = self.par.read().await { return a.clone(); }
+
+        let w = self.par.write().await;
+        if let Some(ref a) = w { return a.clone(); }
+        let obj = Arc::new(peridot::archive::ArchiveRead::from_file(self.par_path.to_str(), false).await
+            .expect("Reading Primary Archive failed!"));
+        *w = Some(obj.clone());
+        obj
     }
 }
 use peridot::archive as par;

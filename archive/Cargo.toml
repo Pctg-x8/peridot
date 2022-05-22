@@ -10,3 +10,7 @@ lz4-compression = "0.6"
 libflate = "0.1"
 zstd = "0.4"
 peridot-serialization-utils = { path = "../serialization-utils" }
+
+[dependencies.async-std]
+version = "1.5"
+features = ["unstable"]
