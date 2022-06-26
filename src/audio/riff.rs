@@ -194,7 +194,7 @@ impl<F: Read + Seek> RIFFLoader<F> {
                 channels: ch as _,
                 bits: bits as _,
             }),
-            (ch, b, f) => unimplemented!("unhandleable triple: ch={} bits={} fmt={}", ch, b, f),
+            (ch, b, f) => unimplemented!("unhandleable triple: ch={ch} bits={b} fmt={f}"),
         }
     }
 }
@@ -300,7 +300,7 @@ impl<F: InputStream> RIFFStreamingLoader<F> {
                         .collect(),
                 ))
             }
-            (ch, b, f) => unimplemented!("unhandleable triple: ch={} bits={} fmt={}", ch, b, f),
+            (ch, b, f) => unimplemented!("unhandleable triple: ch={ch} bits={b} fmt={f}"),
         }
     }
 }

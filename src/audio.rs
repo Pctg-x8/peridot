@@ -63,7 +63,7 @@ pub struct Mixer {
 impl Mixer {
     pub fn new() -> Self {
         let parallelize = (num_cpus::get() >> 1) as u32;
-        log::info!("Processing Audio with {} threads.", parallelize);
+        log::info!("Processing Audio with {parallelize} threads.");
         let subprocess_pool = ThreadPoolBuilder::new()
             .num_threads(parallelize as _)
             .build()
@@ -404,11 +404,12 @@ impl super::FromAsset for PreloadedPlayableWav {
         let mut loader = RIFFLoader::new(asset)?;
         let fmt = loader.read_fmt()?;
         let data = WaveSamples::from(loader.read_data_uncompressed(&fmt)?).into();
-        return Ok(PreloadedPlayableWav {
+
+        Ok(PreloadedPlayableWav {
             samples: data,
             current_smp: 0,
             state: PlayableAudioState::Ready,
-        });
+        })
     }
 }
 impl Processor for PreloadedPlayableWav {
@@ -450,7 +451,7 @@ impl super::FromStreamingAsset for StreamingPlayableWav {
         let mut loader = RIFFStreamingLoader::from(BoxedInputStream::new(asset));
         loader.file.skip(4 * 3)?;
         let fmt = loader.read_fmt()?;
-        log::debug!("fmt: {:?}", fmt);
+        log::debug!("fmt: {fmt:?}");
         loader.seek_data()?;
         // initial buffering
         let mut buffered_samples = Vec::with_capacity(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
@@ -534,7 +535,7 @@ impl StreamingPlayableWav {
                 self.state = PlayableAudioState::EndOfBuffer;
                 return;
             }
-            Err(e) => panic!("Buffering WaveSample: {:?}", e),
+            Err(e) => panic!("Buffering WaveSample: {e:?}"),
         };
         loaded.copy_into_stereo(&mut self.buffered_samples);
         self.buffered_smp = 0;
