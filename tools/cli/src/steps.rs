@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::project::WindowExtents;
+
 pub struct BuildContext<'s> {
     pub cradle_directory: PathBuf,
     cradle_name: &'s str,
@@ -63,6 +65,7 @@ pub fn gen_userlib_import_code(
     userlib_title: &str,
     userlib_version: &semver::Version,
     entry_ty_name: &str,
+    default_extents: &WindowExtents,
 ) {
     ctx.print_step("Generating Userlib Entry code...");
 
@@ -79,11 +82,13 @@ pub fn gen_userlib_import_code(
 pub use {}::{entry_ty_name} as Game;
 pub const APP_IDENTIFIER: &'static str = {userlib_name:?};
 pub const APP_TITLE: &'static str = {userlib_title:?};
-pub const APP_VERSION: (u32, u32, u32) = ({}, {}, {});",
+pub const APP_VERSION: (u32, u32, u32) = ({}, {}, {});
+pub const APP_DEFAULT_EXTENTS: peridot::WindowExtents = {}",
         userlib_name.replace('-', "_"),
         userlib_version.major,
         userlib_version.minor,
-        userlib_version.patch
+        userlib_version.patch,
+        default_extents.map_peridot_code()
     )
     .expect("Failed to write userlib.rs");
 }

@@ -773,7 +773,7 @@ impl Graphics {
             );
             debug!("Debug reporting activated");
         }
-        // TODO: あとでこれをGraphicsどこかにうつす
+        // TODO: あとでこれをどこかにうつす
         // if requires_fullscreen {
         //     ib.add_extension("VK_EXT_full_screen_exclusive")
         //         .add_extension("VK_KHR_get_surface_capabilities2");
