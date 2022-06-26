@@ -1,6 +1,7 @@
 use bedrock as br;
 use bedrock::traits::*;
 use log::*;
+use parking_lot::RwLock;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector2F32, Vector3,
     Vector3F32,
@@ -16,7 +17,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct IPFixedBufferInitializer {
@@ -329,7 +330,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         async_std::task::block_on(preconfigure_task).expect("Failed to preconfigure resources");
 
-        bgm.write().expect("Starting BGM").play();
+        bgm.write().play();
 
         Game {
             render_cb,
