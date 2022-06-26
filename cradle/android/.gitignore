@@ -4,4 +4,6 @@
 **/*.lib
 src/userlib
 src/userlib.rs
-android-build
+Cargo.toml
+/.cargo/
+/assets

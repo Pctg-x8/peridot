@@ -1,59 +1,72 @@
-use bedrock as br;
-use libc::{size_t, c_char, c_void};
+use bedrock::vk::*;
+use libc::c_void;
 use std::ffi::CStr;
+use log::*;
 
-pub struct DebugReport(br::DebugReportCallback);
-impl DebugReport
-{
-    pub fn new(instance: &br::Instance) -> br::Result<Self>
-    {
-        let obj = br::DebugReportCallbackBuilder::new(instance, Self::debug_output)
-            .report_error().report_warning().report_performance_warning().create()?;
-        return Ok(DebugReport(obj));
+pub extern "system" fn debug_utils_out(
+    severity: VkDebugUtilsMessageSeverityFlagBitsEXT,
+    ty: VkDebugUtilsMessageTypeFlagsEXT,
+    callback_data: *const VkDebugUtilsMessengerCallbackDataEXT,
+    _user_data: *mut c_void
+) -> VkBool32 {
+    let callback_data = unsafe { callback_data.as_ref().expect("null callback data received at debug_utils_out") };
+    let msg = unsafe { CStr::from_ptr(callback_data.pMessage).to_str().unwrap_or("message has illegal character") };
+
+    let mut tys = Vec::with_capacity(3);
+    if (ty & VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT) != 0 {
+        tys.push("GENERAL");
+    }
+    if (ty & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) != 0 {
+        tys.push("VALIDATION");
+    }
+    if (ty & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT) != 0 {
+        tys.push("PERFORMANCE");
+    }
+    let tystr = tys.join("/");
+
+    match severity {
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT => {
+            error!("vkerr[{}]: {}", tystr, msg);
+            error!("  id: {}", callback_data.messageIdNumber);
+            error!(
+                "  object-counts: q={} c={} o={}",
+                callback_data.queueLabelCount,
+                callback_data.cmdBufLabelCount,
+                callback_data.objectCount
+            );
+        },
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT => {
+            warn!("vkwarn[{}]: {}", tystr, msg);
+            warn!("  id: {}", callback_data.messageIdNumber);
+            warn!(
+                "  object-counts: q={} c={} o={}",
+                callback_data.queueLabelCount,
+                callback_data.cmdBufLabelCount,
+                callback_data.objectCount
+            );
+        },
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT => {
+            info!("vkinfo[{}]: {}", tystr, msg);
+            info!("  id: {}", callback_data.messageIdNumber);
+            info!(
+                "  object-counts: q={} c={} o={}",
+                callback_data.queueLabelCount,
+                callback_data.cmdBufLabelCount,
+                callback_data.objectCount
+            );
+        },
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT => {
+            trace!("vk[{}]: {}", tystr, msg);
+            trace!("  id: {}", callback_data.messageIdNumber);
+            trace!(
+                "  object-counts: q={} c={} o={}",
+                callback_data.queueLabelCount,
+                callback_data.cmdBufLabelCount,
+                callback_data.objectCount
+            );
+        },
+        _ => unreachable!("unknown severity flag")
     }
 
-    extern "system" fn debug_output(flags: br::vk::VkDebugReportFlagsEXT,
-        object_type: br::vk::VkDebugReportObjectTypeEXT, object: u64,
-        location: size_t, message_code: i32, layer_prefix: *const c_char,
-        message: *const c_char, _: *mut c_void) -> br::vk::VkBool32
-    {
-        let msg = unsafe { CStr::from_ptr(message).to_str().unwrap_or("msg has illegal character") };
-        let layer_prefix = unsafe {
-            CStr::from_ptr(layer_prefix).to_str().unwrap_or("layer_prefix has illegal character")
-        };
-
-        if (flags & br::vk::VK_DEBUG_REPORT_ERROR_BIT_EXT) != 0
-        {
-            error!("vkerr: {}", msg);
-            error!("  Code: {}", message_code);
-            error!("  Object: {} type={}", object, object_type);
-            error!("  Location: {}", location);
-            error!("  Layer-Prefix: {}", layer_prefix);
-        }
-        else if (flags & br::vk::VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) != 0
-        {
-            warn!("vkwarn_perf: {}", msg);
-            warn!("  Code: {}", message_code);
-            warn!("  Object: {} type={}", object, object_type);
-            warn!("  Location: {}", location);
-            warn!("  Layer-Prefix: {}", layer_prefix);
-        }
-        else if (flags & br::vk::VK_DEBUG_REPORT_WARNING_BIT_EXT) != 0
-        {
-            warn!("vkwarn: {}", msg);
-            warn!("  Code: {}", message_code);
-            warn!("  Object: {} type={}", object, object_type);
-            warn!("  Location: {}", location);
-            warn!("  Layer-Prefix: {}", layer_prefix);
-        }
-        else
-        {
-            info!("vkinfo: {}", msg);
-            info!("  Code: {}", message_code);
-            info!("  Object: {} type={}", object, object_type);
-            info!("  Location: {}", location);
-            info!("  Layer-Prefix: {}", layer_prefix);
-        }
-        ((flags & br::vk::VK_DEBUG_REPORT_ERROR_BIT_EXT) != 0) as _
-    }
+    VK_FALSE
 }

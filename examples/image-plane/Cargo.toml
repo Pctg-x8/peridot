@@ -4,7 +4,15 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
+[features]
+debug = ["bedrock/VK_EXT_debug_utils", "peridot/debug"]
+
 [dependencies]
-peridot = { path = ".." }
-bedrock = { git = "https://github.com/Pctg-x8/bedrock" }
-peridot-math = { path = "../math" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+peridot = { path = "../.." }
+peridot-math = { path = "../../math" }
+peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-image = { path = "../../image" }
+async-std = "1.7"
+
+log = "0.4"
