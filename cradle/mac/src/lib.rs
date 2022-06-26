@@ -451,17 +451,12 @@ impl NativeAudioEngine {
         }
     }
     fn start(&mut self, mixer: Arc<RwLock<peridot::audio::Mixer>>) {
-        let bptr = Box::into_raw(Box::new(mixer));
-        self.amixer = Some(unsafe { Box::from_raw(bptr) });
+        let mut mixer = Box::new(mixer);
         self.output
-            .set_render_callback(Self::render as _, bptr as *mut _);
+            .set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
         self.output.start();
-        self.amixer
-            .as_ref()
-            .expect("no audio?")
-            .write()
-            .expect("Poisoning Audio")
-            .start();
+        mixer.write().expect("Poisoned Audio").start();
+        self.amixer = Some(mixer);
     }
 
     extern "C" fn render(
