@@ -4,10 +4,11 @@ use log::*;
 use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
+use parking_lot::RwLock;
 use peridot::{EngineEvents, FeatureRequests};
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 #[cfg(not(feature = "mt"))]
 use std::rc::Rc as SharedPtr;
@@ -275,6 +276,7 @@ type Engine = peridot::Engine<NativeLink>;
 pub struct GameDriver {
     engine: Engine,
     usercode: Game,
+    #[allow(dead_code)]
     nae: NativeAudioEngine,
 }
 impl GameDriver {
@@ -455,7 +457,7 @@ impl NativeAudioEngine {
         self.output
             .set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
         self.output.start();
-        mixer.write().expect("Poisoned Audio").start();
+        mixer.write().start();
         self.amixer = Some(mixer);
     }
 
@@ -477,7 +479,7 @@ impl NativeAudioEngine {
         for v in bufptr.iter_mut() {
             *v = 0.0;
         }
-        ctx.write().expect("Processing WriteLock").process(bufptr);
+        ctx.write().process(bufptr);
         // trace!("render callback! {:?} {}", unsafe { &(*io_data).buffers[0] }, in_number_frames);
         0
     }

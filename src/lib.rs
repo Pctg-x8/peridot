@@ -4,11 +4,12 @@ pub use peridot_math as math;
 
 use bedrock as br;
 use br::Status;
+use parking_lot::RwLock;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant as InstantTimer};
 
 mod state_track;
