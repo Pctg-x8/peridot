@@ -83,7 +83,7 @@ pub use {}::{entry_ty_name} as Game;
 pub const APP_IDENTIFIER: &'static str = {userlib_name:?};
 pub const APP_TITLE: &'static str = {userlib_title:?};
 pub const APP_VERSION: (u32, u32, u32) = ({}, {}, {});
-pub const APP_DEFAULT_EXTENTS: peridot::WindowExtents = {}",
+pub const APP_DEFAULT_EXTENTS: peridot::WindowExtents = {};",
         userlib_name.replace('-', "_"),
         userlib_version.major,
         userlib_version.minor,

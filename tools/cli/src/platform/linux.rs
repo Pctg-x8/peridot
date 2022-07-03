@@ -47,6 +47,7 @@ pub fn build(
         project_config.title.unwrap_or(project_name),
         &project_version,
         options.entry_ty_name,
+        &project_config.default_extent,
     );
     ctx.cwd_cradle_dir();
     if options.update_deps {

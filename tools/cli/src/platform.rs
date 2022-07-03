@@ -29,21 +29,6 @@ pub struct BuildOptions<'s> {
     pub fast_build: bool,
     pub release: bool,
 }
-impl<'s> Default for BuildOptions<'s> {
-    fn default() -> Self {
-        BuildOptions {
-            userlib: Path::new(""),
-            features: Vec::new(),
-            engine_features: Vec::new(),
-            update_deps: false,
-            ext_asset_path: None,
-            entry_ty_name: "",
-            appid: "",
-            fast_build: false,
-            release: false,
-        }
-    }
-}
 
 impl Platform {
     pub const fn identifier(self) -> &'static str {
@@ -74,7 +59,7 @@ impl Platform {
             Self::Windows => self::windows::build(options, project_config, build_mode),
             Self::Mac => self::mac::build(options, project_config, build_mode),
             Self::Linux => self::linux::build(options, project_config, build_mode),
-            Self::Android => self::android::build(options, build_mode),
+            Self::Android => self::android::build(options, project_config, build_mode),
         }
     }
 

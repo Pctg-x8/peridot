@@ -1,9 +1,14 @@
 use crate::manifest::*;
+use crate::project::PlatformConfiguration;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
 use std::path::Path;
 
-pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
+pub fn build(
+    options: &super::BuildOptions,
+    platform_config: &PlatformConfiguration,
+    build_mode: BuildMode,
+) {
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest =
@@ -39,6 +44,7 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
         project_name,
         &project_version,
         options.entry_ty_name,
+        &platform_config.default_extent,
     );
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
