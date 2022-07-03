@@ -170,8 +170,6 @@ pub trait FeatureRequests {
     const SPARSE_BINDING: bool = false;
     const SPARSE_RESIDENCY_SUPPORT_BITS: SparseResidencySupportBits =
         SparseResidencySupportBits::EMPTY;
-    /// The Size of Main Window. default=640x480, non-resizable
-    const WINDOW_EXTENTS: WindowExtents = WindowExtents::Fixed(640, 480);
 
     fn requested_features() -> br::vk::VkPhysicalDeviceFeatures {
         br::vk::VkPhysicalDeviceFeatures {

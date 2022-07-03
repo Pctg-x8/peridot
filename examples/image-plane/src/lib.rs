@@ -79,9 +79,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     buffers: FixedMemory,
     mut_uniform_offset: u64,
 }
-impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {
-    const WINDOW_EXTENTS: peridot::WindowExtents = peridot::WindowExtents::Fixed(320, 240);
-}
+impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &mut peridot::Engine<PL>) -> Self {
         let screen_size = e.backbuffer(0).expect("no backbuffers").size().clone();

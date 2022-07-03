@@ -19,6 +19,9 @@ const uint8_t KEYMOD_CONTROL = 3;
 const uint8_t KEYMOD_COMMAND = 4;
 const uint8_t KEYMOD_CAPSLOCK = 5;
 
+unsigned char is_resizable();
+unsigned char default_window_extent(uint16_t* width, uint16_t* height);
+
 GameRun* launch_game(void* viewptr);
 void terminate_game(GameRun* engineptr);
 void update_game(GameRun* engineptr);

@@ -320,6 +320,26 @@ extern "C" {
 }
 
 #[no_mangle]
+pub extern "C" fn is_resizable() -> libc::c_uchar {
+    match userlib::APP_DEFAULT_EXTENTS {
+        peridot::WindowExtents::Fixed(_, _) => 0,
+        _ => 1,
+    }
+}
+#[no_mangle]
+pub extern "C" fn default_window_extent(width: *mut u16, height: *mut u16) -> libc::c_uchar {
+    match userlib::APP_DEFAULT_EXTENTS {
+        peridot::WindowExtents::Fixed(w, h) | peridot::WindowExtents::Resizable(w, h) => unsafe {
+            std::ptr::write(width, w);
+            std::ptr::write(height, h);
+
+            1
+        },
+        _ => 0,
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameDriver {
     log::set_logger(&LOGGER).expect("Failed to set logger");
     log::set_max_level(log::LevelFilter::Trace);
