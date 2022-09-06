@@ -11,9 +11,6 @@ let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
 
-let SlackNotifierAction =
-      https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
-
 let List/concat = https://prelude.dhall-lang.org/List/concat
 
 let List/map = https://prelude.dhall-lang.org/List/map
@@ -37,11 +34,6 @@ let ePullRequestBaseHash =
       GithubActions.mkExpression "github.event.pull_request.base.sha"
 
 let eSecretGithubToken = GithubActions.mkExpression "secrets.GITHUB_TOKEN"
-
-let eSecretAWSAccessKey = GithubActions.mkExpression "secrets.AWS_ACCESS_KEY_ID"
-
-let eSecretAWSAccessSecret =
-      GithubActions.mkExpression "secrets.AWS_ACCESS_SECRET"
 
 let depends =
       λ(deps : List Text) →
@@ -79,7 +71,7 @@ let preconditionRecordBeginTimeStep =
 let preconditionBeginTimestampOutputDef =
       toMap
         { begintime =
-            GithubActions.mkExpression "steps.begintime.outputs.begintime"
+            GithubActions.mkRefStepOutputExpression "begintime" "begintime"
         }
 
 let checkoutStep = actions/checkout.stepv3 actions/checkout.Params::{=}
@@ -113,77 +105,11 @@ let cacheStep =
           )
       }
 
-let slackNotifyIfFailureStep =
-      λ(stepName : Text) →
-        SlackNotifierAction.step
-          { status = SlackNotifierAction.Status.Failure stepName
-          , begintime =
-              GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-          , report_name = "PR Integrity Check"
-          , mode =
-              SlackNotifierAction.Mode.Diff
-                { head_sha = ePullRequestHeadHash
-                , base_sha = ePullRequestBaseHash
-                , pr_number = ePullRequestNumber
-                , pr_title = ePullRequestTitle
-                }
-          }
-
-let slackNotifySuccessStep =
-      SlackNotifierAction.step
-        { status = SlackNotifierAction.Status.Success
-        , begintime =
-            GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , report_name = "PR Integrity Check"
-        , mode =
-            SlackNotifierAction.Mode.Diff
-              { head_sha = ePullRequestHeadHash
-              , base_sha = ePullRequestBaseHash
-              , pr_number = ePullRequestNumber
-              , pr_title = ePullRequestTitle
-              }
-        }
-
-let weeklySlackNotifyAsFailureStep =
-      λ(stepName : Text) →
-        SlackNotifierAction.step
-          { status = SlackNotifierAction.Status.Failure stepName
-          , begintime =
-              GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-          , report_name = "Weekly Check"
-          , mode = SlackNotifierAction.Mode.Branch
-          }
-
-let weeklySlackNotifyAsSuccessStep =
-      SlackNotifierAction.step
-        { status = SlackNotifierAction.Status.Success
-        , begintime =
-            GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , report_name = "Weekly Check"
-        , mode = SlackNotifierAction.Mode.Branch
-        }
-
 let SlackNotification = < Success | Failure : Text >
 
 let SlackNotifyProvider =
       { Success : GithubActions.Step.Type
       , Failure : Text → GithubActions.Step.Type
-      }
-
-let prSlackNotifyProvider =
-      { Success = slackNotifySuccessStep ⫽ { name = "Notify as Success" }
-      , Failure =
-          λ(phase : Text) →
-            slackNotifyIfFailureStep phase ⫽ { name = "Notify as Failure" }
-      }
-
-let weeklySlackNotifyProvider =
-      { Success =
-          weeklySlackNotifyAsSuccessStep ⫽ { name = "Notify as Success" }
-      , Failure =
-          λ(phase : Text) →
-              weeklySlackNotifyAsFailureStep phase
-            ⫽ { name = "Notify as Failure" }
       }
 
 let slackNotify =
@@ -506,12 +432,12 @@ in  { depends
     , eRepositoryOwnerLogin
     , eRepositoryName
     , ePullRequestNumber
+    , ePullRequestTitle
+    , ePullRequestHeadHash
+    , ePullRequestBaseHash
     , eSecretGithubToken
     , configureSlackNotification
-    , slackNotifyIfFailureStep
-    , slackNotifySuccessStep
-    , prSlackNotifyProvider
-    , weeklySlackNotifyProvider
+    , SlackNotifyProvider
     , checkoutHeadStep
     , checkoutStep
     , checkFormats
