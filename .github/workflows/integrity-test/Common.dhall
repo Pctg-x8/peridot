@@ -1,15 +1,15 @@
 let GithubActions =
       https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 
-let ProvidedSteps =
-      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
+let actions/checkout =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/actions/checkout.dhall
+
+let aws-actions/configure-aws-credentials =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/aws-actions/configure-aws-credentials.dhall
 
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
-
-let SlackNotifierAction =
-      https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
 
 let List/concat = https://prelude.dhall-lang.org/List/concat
 
@@ -35,11 +35,6 @@ let ePullRequestBaseHash =
 
 let eSecretGithubToken = GithubActions.mkExpression "secrets.GITHUB_TOKEN"
 
-let eSecretAWSAccessKey = GithubActions.mkExpression "secrets.AWS_ACCESS_KEY_ID"
-
-let eSecretAWSAccessSecret =
-      GithubActions.mkExpression "secrets.AWS_ACCESS_SECRET"
-
 let depends =
       λ(deps : List Text) →
       λ(job : GithubActions.Job.Type) →
@@ -58,26 +53,13 @@ let withConditionStep =
 let runStepOnFailure = withConditionStep "failure()"
 
 let configureSlackNotification =
-      GithubActions.Step::{
-      , name = "Configure for Slack Notification"
-      , id = Some "cfgNotification"
-      , run = Some
-          ''
-          # re-export configs for further step
-          echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
-          echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
-          echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
-
-          curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
-          ''
-      , env = Some
-          ( toMap
-              { AWS_ROLE_ARN = "arn:aws:iam::208140986057:role/GHALambdaInvoker"
-              , AWS_WEB_IDENTITY_TOKEN_FILE = "/tmp/awstoken"
-              , AWS_DEFAULT_REGION = "ap-northeast-1"
-              }
-          )
-      }
+        aws-actions/configure-aws-credentials.step
+          aws-actions/configure-aws-credentials.Params::{
+          , awsRegion = "ap-northeast-1"
+          , roleToAssume = Some
+              "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+          }
+      ⫽ { name = "Configure for Slack Notification" }
 
 let preconditionRecordBeginTimeStep =
       GithubActions.Step::{
@@ -89,14 +71,14 @@ let preconditionRecordBeginTimeStep =
 let preconditionBeginTimestampOutputDef =
       toMap
         { begintime =
-            GithubActions.mkExpression "steps.begintime.outputs.begintime"
+            GithubActions.mkRefStepOutputExpression "begintime" "begintime"
         }
 
-let checkoutStep = ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
+let checkoutStep = actions/checkout.stepv3 actions/checkout.Params::{=}
 
 let checkoutHeadStep =
-        ProvidedSteps.checkoutStep
-          ProvidedSteps.CheckoutParams::{ ref = Some ePullRequestHeadHash }
+        actions/checkout.stepv3
+          actions/checkout.Params::{ ref = Some ePullRequestHeadHash }
       ⫽ { name = "Checking out (HEAD commit)" }
 
 let cacheStep =
@@ -106,90 +88,28 @@ let cacheStep =
       , `with` = Some
           ( toMap
               { path =
-                  ''
-                  ~/.cargo/registry
-                  ~/.cargo/git
-                  target
-                  ''
+                  GithubActions.WithParameterType.Text
+                    ''
+                    ~/.cargo/registry
+                    ~/.cargo/git
+                    target
+                    ''
               , key =
-                  "${GithubActions.mkExpression
-                       "runner.os"}-cargo-${GithubActions.mkExpression
-                                              "hashFiles('**/Cargo.lock')"}"
+                  let os = GithubActions.mkExpression "runner.os"
+
+                  let hash =
+                        GithubActions.mkExpression "hashFiles('**/Cargo.lock')"
+
+                  in  GithubActions.WithParameterType.Text "${os}-cargo-${hash}"
               }
           )
       }
-
-let slackNotifyIfFailureStep =
-      λ(stepName : Text) →
-        SlackNotifierAction.step
-          { status = SlackNotifierAction.Status.Failure stepName
-          , begintime =
-              GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-          , report_name = "PR Integrity Check"
-          , mode =
-              SlackNotifierAction.Mode.Diff
-                { head_sha = ePullRequestHeadHash
-                , base_sha = ePullRequestBaseHash
-                , pr_number = ePullRequestNumber
-                , pr_title = ePullRequestTitle
-                }
-          }
-
-let slackNotifySuccessStep =
-      SlackNotifierAction.step
-        { status = SlackNotifierAction.Status.Success
-        , begintime =
-            GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , report_name = "PR Integrity Check"
-        , mode =
-            SlackNotifierAction.Mode.Diff
-              { head_sha = ePullRequestHeadHash
-              , base_sha = ePullRequestBaseHash
-              , pr_number = ePullRequestNumber
-              , pr_title = ePullRequestTitle
-              }
-        }
-
-let weeklySlackNotifyAsFailureStep =
-      λ(stepName : Text) →
-        SlackNotifierAction.step
-          { status = SlackNotifierAction.Status.Failure stepName
-          , begintime =
-              GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-          , report_name = "Weekly Check"
-          , mode = SlackNotifierAction.Mode.Branch
-          }
-
-let weeklySlackNotifyAsSuccessStep =
-      SlackNotifierAction.step
-        { status = SlackNotifierAction.Status.Success
-        , begintime =
-            GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , report_name = "Weekly Check"
-        , mode = SlackNotifierAction.Mode.Branch
-        }
 
 let SlackNotification = < Success | Failure : Text >
 
 let SlackNotifyProvider =
       { Success : GithubActions.Step.Type
       , Failure : Text → GithubActions.Step.Type
-      }
-
-let prSlackNotifyProvider =
-      { Success = slackNotifySuccessStep ⫽ { name = "Notify as Success" }
-      , Failure =
-          λ(phase : Text) →
-            slackNotifyIfFailureStep phase ⫽ { name = "Notify as Failure" }
-      }
-
-let weeklySlackNotifyProvider =
-      { Success =
-          weeklySlackNotifyAsSuccessStep ⫽ { name = "Notify as Success" }
-      , Failure =
-          λ(phase : Text) →
-              weeklySlackNotifyAsFailureStep phase
-            ⫽ { name = "Notify as Failure" }
       }
 
 let slackNotify =
@@ -512,13 +432,14 @@ in  { depends
     , eRepositoryOwnerLogin
     , eRepositoryName
     , ePullRequestNumber
+    , ePullRequestTitle
+    , ePullRequestHeadHash
+    , ePullRequestBaseHash
     , eSecretGithubToken
     , configureSlackNotification
-    , slackNotifyIfFailureStep
-    , slackNotifySuccessStep
-    , prSlackNotifyProvider
-    , weeklySlackNotifyProvider
+    , SlackNotifyProvider
     , checkoutHeadStep
+    , checkoutStep
     , checkFormats
     , checkBaseLayer
     , checkTools
