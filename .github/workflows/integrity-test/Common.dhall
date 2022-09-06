@@ -1,8 +1,11 @@
 let GithubActions =
       https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 
-let ProvidedSteps =
-      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
+let actions/checkout =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/actions/checkout.dhall
+
+let aws-actions/configure-aws-credentials =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/aws-actions/configure-aws-credentials.dhall
 
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 
@@ -58,26 +61,13 @@ let withConditionStep =
 let runStepOnFailure = withConditionStep "failure()"
 
 let configureSlackNotification =
-      GithubActions.Step::{
-      , name = "Configure for Slack Notification"
-      , id = Some "cfgNotification"
-      , run = Some
-          ''
-          # re-export configs for further step
-          echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
-          echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
-          echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
-
-          curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
-          ''
-      , env = Some
-          ( toMap
-              { AWS_ROLE_ARN = "arn:aws:iam::208140986057:role/GHALambdaInvoker"
-              , AWS_WEB_IDENTITY_TOKEN_FILE = "/tmp/awstoken"
-              , AWS_DEFAULT_REGION = "ap-northeast-1"
-              }
-          )
-      }
+        aws-actions/configure-aws-credentials.step
+          aws-actions/configure-aws-credentials.Params::{
+          , awsRegion = "ap-northeast-1"
+          , roleToAssume = Some
+              "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+          }
+      ⫽ { name = "Configure for Slack Notification" }
 
 let preconditionRecordBeginTimeStep =
       GithubActions.Step::{
@@ -92,11 +82,11 @@ let preconditionBeginTimestampOutputDef =
             GithubActions.mkExpression "steps.begintime.outputs.begintime"
         }
 
-let checkoutStep = ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
+let checkoutStep = actions/checkout.stepv3 actions/checkout.Params::{=}
 
 let checkoutHeadStep =
-        ProvidedSteps.checkoutStep
-          ProvidedSteps.CheckoutParams::{ ref = Some ePullRequestHeadHash }
+        actions/checkout.stepv3
+          actions/checkout.Params::{ ref = Some ePullRequestHeadHash }
       ⫽ { name = "Checking out (HEAD commit)" }
 
 let cacheStep =
@@ -106,15 +96,19 @@ let cacheStep =
       , `with` = Some
           ( toMap
               { path =
-                  ''
-                  ~/.cargo/registry
-                  ~/.cargo/git
-                  target
-                  ''
+                  GithubActions.WithParameterType.Text
+                    ''
+                    ~/.cargo/registry
+                    ~/.cargo/git
+                    target
+                    ''
               , key =
-                  "${GithubActions.mkExpression
-                       "runner.os"}-cargo-${GithubActions.mkExpression
-                                              "hashFiles('**/Cargo.lock')"}"
+                  let os = GithubActions.mkExpression "runner.os"
+
+                  let hash =
+                        GithubActions.mkExpression "hashFiles('**/Cargo.lock')"
+
+                  in  GithubActions.WithParameterType.Text "${os}-cargo-${hash}"
               }
           )
       }
@@ -519,6 +513,7 @@ in  { depends
     , prSlackNotifyProvider
     , weeklySlackNotifyProvider
     , checkoutHeadStep
+    , checkoutStep
     , checkFormats
     , checkBaseLayer
     , checkTools

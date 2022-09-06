@@ -1,9 +1,6 @@
 let GithubActions =
       https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 
-let ProvidedSteps =
-      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
-
 let CommonDefs = ./integrity-test/Common.dhall
 
 let List/map = https://prelude.dhall-lang.org/List/map
@@ -127,7 +124,7 @@ let checkWorkflowSync =
                     preconditionOutputHasWorkflowChanges
                 )
                 [ CommonDefs.checkoutHeadStep
-                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
+                , CommonDefs.checkoutStep
                 , GithubActions.Step::{
                   , name = "Setup Dhall"
                   , run = Some installDhallScript
