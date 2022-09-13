@@ -29,7 +29,7 @@ branch = "peridot"
 features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "Multithreaded"]
 
 [workspace]
-exclude = ["extras/", "cradle/", "examples/"]
+exclude = ["extras/", "cradle/", "examples/", "tools"]
 members = [
     "archive",
     "serialization-utils",
@@ -38,8 +38,5 @@ members = [
     "image",
     "vg",
     "derive",
-    "transition",
-    "tools/shaderbuild",
-    "tools/archiver",
-    "tools/cli",
+    "transition"
 ]
