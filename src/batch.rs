@@ -9,57 +9,36 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 #[repr(transparent)]
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ResourceKey<T: VkHandle>(T);
-impl PartialEq for ResourceKey<crate::Buffer> {
+impl<T: br::VkHandle> PartialEq for ResourceKey<T> {
     fn eq(&self, other: &Self) -> bool {
         (self.0.native_ptr() as u64).eq(&(other.0.native_ptr() as u64))
     }
 }
-impl PartialEq for ResourceKey<crate::Image> {
-    fn eq(&self, other: &Self) -> bool {
-        (self.0.native_ptr() as u64).eq(&(other.0.native_ptr() as u64))
-    }
-}
-impl PartialOrd for ResourceKey<crate::Buffer> {
+impl<T: br::VkHandle> PartialOrd for ResourceKey<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         (self.0.native_ptr() as u64).partial_cmp(&(other.0.native_ptr() as u64))
     }
 }
-impl PartialOrd for ResourceKey<crate::Image> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        (self.0.native_ptr() as u64).partial_cmp(&(other.0.native_ptr() as u64))
-    }
-}
-impl Eq for ResourceKey<crate::Buffer> {}
-impl Ord for ResourceKey<crate::Buffer> {
+impl<T: br::VkHandle> Eq for ResourceKey<T> {}
+impl<T: br::VkHandle> Ord for ResourceKey<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).expect("ord: unreachable")
     }
 }
-impl Eq for ResourceKey<crate::Image> {}
-impl Ord for ResourceKey<crate::Image> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).expect("ord: unreachable")
-    }
-}
-impl Hash for ResourceKey<crate::Buffer> {
+impl<T: br::VkHandle> Hash for ResourceKey<T> {
     fn hash<H: Hasher>(&self, hasher: &mut H) {
         self.0.native_ptr().hash(hasher)
     }
 }
-impl Hash for ResourceKey<crate::Image> {
-    fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.0.native_ptr().hash(hasher)
-    }
+pub struct ReadyResourceBarriers<Buffer: br::Buffer, Image: br::Image> {
+    buffer: Vec<(Buffer, Range<u64>, br::vk::VkAccessFlags)>,
+    image: Vec<(Image, br::ImageSubresourceRange, br::ImageLayout)>,
 }
-pub struct ReadyResourceBarriers {
-    buffer: Vec<(crate::Buffer, Range<u64>, br::vk::VkAccessFlags)>,
-    image: Vec<(crate::Image, br::ImageSubresourceRange, br::ImageLayout)>,
-}
-impl ReadyResourceBarriers {
-    fn new() -> Self {
-        ReadyResourceBarriers {
+impl<Buffer: br::Buffer, Image: br::Image> ReadyResourceBarriers<Buffer, Image> {
+    const fn new() -> Self {
+        Self {
             buffer: Vec::new(),
             image: Vec::new(),
         }
@@ -67,19 +46,44 @@ impl ReadyResourceBarriers {
 }
 
 /// Batching Manager for Transferring Operations.
-pub struct TransferBatch {
-    barrier_range_src: BTreeMap<ResourceKey<crate::Buffer>, Range<br::vk::VkDeviceSize>>,
-    barrier_range_dst: BTreeMap<ResourceKey<crate::Buffer>, Range<br::vk::VkDeviceSize>>,
-    org_layout_src: BTreeMap<ResourceKey<crate::Image>, br::ImageLayout>,
-    org_layout_dst: BTreeMap<ResourceKey<crate::Image>, br::ImageLayout>,
-    copy_buffers:
-        HashMap<(ResourceKey<crate::Buffer>, ResourceKey<crate::Buffer>), Vec<VkBufferCopy>>,
-    init_images: BTreeMap<ResourceKey<crate::Image>, (crate::Buffer, br::vk::VkDeviceSize)>,
-    ready_barriers: BTreeMap<br::PipelineStageFlags, ReadyResourceBarriers>,
+pub struct TransferBatch<'r, Device: br::Device> {
+    barrier_range_src: BTreeMap<
+        ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+        Range<br::vk::VkDeviceSize>,
+    >,
+    barrier_range_dst: BTreeMap<
+        ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+        Range<br::vk::VkDeviceSize>,
+    >,
+    org_layout_src:
+        BTreeMap<ResourceKey<&'r dyn br::Image<ConcreteDevice = Device>>, br::ImageLayout>,
+    org_layout_dst:
+        BTreeMap<ResourceKey<&'r dyn br::Image<ConcreteDevice = Device>>, br::ImageLayout>,
+    copy_buffers: HashMap<
+        (
+            ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+            ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+        ),
+        Vec<VkBufferCopy>,
+    >,
+    init_images: BTreeMap<
+        ResourceKey<&'r dyn br::Image<ConcreteDevice = Device>>,
+        (
+            &'r dyn br::Buffer<ConcreteDevice = Device>,
+            br::vk::VkDeviceSize,
+        ),
+    >,
+    ready_barriers: BTreeMap<
+        br::PipelineStageFlags,
+        ReadyResourceBarriers<
+            &'r dyn br::Buffer<ConcreteDevice = Device>,
+            &'r dyn br::Image<ConcreteDevice = Device>,
+        >,
+    >,
 }
-impl TransferBatch {
-    pub fn new() -> Self {
-        TransferBatch {
+impl<'r, Device: br::Device> TransferBatch<'r, Device> {
+    pub const fn new() -> Self {
+        Self {
             barrier_range_src: BTreeMap::new(),
             barrier_range_dst: BTreeMap::new(),
             org_layout_src: BTreeMap::new(),
@@ -93,22 +97,19 @@ impl TransferBatch {
     /// Add copying operation between buffers.
     pub fn add_copying_buffer(
         &mut self,
-        src: crate::DeviceBufferView,
-        dst: crate::DeviceBufferView,
+        src: crate::DeviceBufferView<&'r impl br::Buffer>,
+        dst: crate::DeviceBufferView<&'r impl br::Buffer>,
         bytes: br::vk::VkDeviceSize,
     ) {
         trace!(
-            "Registering COPYING-BUFFER: ({}, {}) -> {} bytes",
+            "Registering COPYING-BUFFER: ({}, {}) -> {bytes} bytes",
             src.offset,
-            dst.offset,
-            bytes
+            dst.offset
         );
-        let (sk, dk) = (
-            ResourceKey(src.buffer.clone()),
-            ResourceKey(dst.buffer.clone()),
-        );
-        Self::update_barrier_range_for(&mut self.barrier_range_src, sk.clone(), src.range(bytes));
-        Self::update_barrier_range_for(&mut self.barrier_range_dst, dk.clone(), dst.range(bytes));
+
+        let (sk, dk) = (ResourceKey(src.buffer), ResourceKey(dst.buffer));
+        Self::update_barrier_range_for(&mut self.barrier_range_src, sk, src.range(bytes));
+        Self::update_barrier_range_for(&mut self.barrier_range_dst, dk, dst.range(bytes));
         self.copy_buffers
             .entry((sk, dk))
             .or_insert_with(Vec::new)
@@ -118,41 +119,55 @@ impl TransferBatch {
                 size: bytes,
             });
     }
+
     /// Add copying operation between buffers.
     /// Shorthand for copying operation that both BufferViews have same offset.
+    #[inline]
     pub fn add_mirroring_buffer(
         &mut self,
-        src: &crate::Buffer,
-        dst: &crate::Buffer,
+        src: &'r impl br::Buffer,
+        dst: &'r impl br::Buffer,
         offset: br::vk::VkDeviceSize,
         bytes: br::vk::VkDeviceSize,
     ) {
         self.add_copying_buffer(
-            src.with_dev_offset(offset),
-            dst.with_dev_offset(offset),
+            super::DeviceBufferView {
+                buffer: src,
+                offset,
+            },
+            super::DeviceBufferView {
+                buffer: dst,
+                offset,
+            },
             bytes,
         );
     }
+
     /// Add image content initializing operation, from the buffer.
-    pub fn init_image_from(&mut self, dest: &crate::Image, src: crate::DeviceBufferView) {
-        self.init_images
-            .insert(ResourceKey(dest.clone()), (src.buffer.clone(), src.offset));
+    pub fn init_image_from(
+        &mut self,
+        dest: &'r impl br::Image,
+        src: crate::DeviceBufferView<&'r impl br::Buffer>,
+    ) {
         let size =
             (dest.size().width * dest.size().height) as u64 * (dest.format().bpp() >> 3) as u64;
+        let rk_dest = ResourceKey(dest);
+
+        self.init_images.insert(rk_dest, (src.buffer, src.offset));
         Self::update_barrier_range_for(
             &mut self.barrier_range_src,
-            ResourceKey(src.buffer.clone()),
+            ResourceKey(src.buffer),
             src.range(size),
         );
         self.org_layout_dst
-            .insert(ResourceKey(dest.clone()), br::ImageLayout::Preinitialized);
+            .insert(rk_dest, br::ImageLayout::Preinitialized);
     }
 
     /// Add ready barrier for buffers.
     pub fn add_buffer_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: &crate::Buffer,
+        res: &'r impl br::Buffer,
         byterange: Range<br::vk::VkDeviceSize>,
         access_grants: br::vk::VkAccessFlags,
     ) {
@@ -160,33 +175,40 @@ impl TransferBatch {
             .entry(dest_stage)
             .or_insert_with(ReadyResourceBarriers::new)
             .buffer
-            .push((res.clone(), byterange, access_grants));
+            .push((res, byterange, access_grants));
     }
+
     /// Add ready barrier for images.
     pub fn add_image_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: &crate::Image,
+        res: &'r impl br::Image,
         layout: br::ImageLayout,
     ) {
         self.ready_barriers
             .entry(dest_stage)
             .or_insert_with(ReadyResourceBarriers::new)
             .image
-            .push((res.clone(), br::ImageSubresourceRange::color(0, 0), layout));
+            .push((res, br::ImageSubresourceRange::color(0, 0), layout));
     }
+
     /// Have add_copying_buffer, add_mirroring_buffer or init_image_from been called?
     pub fn has_copy_ops(&self) -> bool {
         !self.copy_buffers.is_empty() || !self.init_images.is_empty()
     }
+
     /// Have add_buffer_graphics_ready or add_image_graphics_ready been called?
-    pub fn has_ready_barrier_ops(&self) -> bool {
+    pub const fn has_ready_barrier_ops(&self) -> bool {
         !self.ready_barriers.is_empty()
     }
 
+    #[inline]
     fn update_barrier_range_for(
-        map: &mut BTreeMap<ResourceKey<crate::Buffer>, Range<br::vk::VkDeviceSize>>,
-        k: ResourceKey<crate::Buffer>,
+        map: &mut BTreeMap<
+            ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+            Range<br::vk::VkDeviceSize>,
+        >,
+        k: ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
         new_range: Range<br::vk::VkDeviceSize>,
     ) {
         let r = map.entry(k).or_insert_with(|| new_range.clone());
@@ -195,8 +217,8 @@ impl TransferBatch {
     }
 }
 /// Sinking Commands into CommandBuffers
-impl TransferBatch {
-    pub fn sink_transfer_commands(&self, r: &mut br::CmdRecord) {
+impl<'r, Device: br::Device> TransferBatch<'r, Device> {
+    pub fn sink_transfer_commands(&self, r: &mut br::CmdRecord<impl br::CommandBuffer>) {
         let src_barriers = self.barrier_range_src.iter().map(|(b, r)| {
             br::BufferMemoryBarrier::new(
                 &b.0,
@@ -211,14 +233,16 @@ impl TransferBatch {
         let barriers: Vec<_> = src_barriers.chain(dst_barriers).collect();
         let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
-                &br::ImageSubref::color(&b.0, 0, 0),
+                b.0,
+                &br::ImageSubresourceRange::color(0, 0),
                 l0,
                 br::ImageLayout::TransferSrcOpt,
             )
         });
         let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
-                &br::ImageSubref::color(&b.0, 0, 0),
+                b.0,
+                &br::ImageSubresourceRange::color(0, 0),
                 l0,
                 br::ImageLayout::TransferDestOpt,
             )
@@ -256,7 +280,8 @@ impl TransferBatch {
             );
         }
     }
-    pub fn sink_graphics_ready_commands(&self, r: &mut br::CmdRecord) {
+
+    pub fn sink_graphics_ready_commands(&self, r: &mut br::CmdRecord<impl br::CommandBuffer>) {
         for (
             &stg,
             &ReadyResourceBarriers {
@@ -329,7 +354,7 @@ impl DescriptorSetUpdateBatch {
     }
 
     /// Submit entire batches
-    pub fn submit(&self, d: &br::Device) {
+    pub fn submit(&self, d: &impl br::Device) {
         d.update_descriptor_sets(&self.0, &self.1);
     }
 }

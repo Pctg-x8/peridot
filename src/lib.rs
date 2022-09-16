@@ -3,7 +3,7 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
-use br::Status;
+use br::{CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Status};
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::ffi::CStr;
@@ -33,8 +33,6 @@ pub use self::input::*;
 pub mod audio;
 mod model;
 pub use self::model::*;
-mod layout_cache;
-pub use self::layout_cache::*;
 mod presenter;
 pub use self::presenter::*;
 
@@ -61,19 +59,44 @@ pub trait NativeLinker: Sized {
     }
 }
 
-pub trait EngineEvents<PL: NativeLinker>: Sized {
+pub trait Submission<'d> {
+    type ContainedSemaphore: br::Semaphore + Clone;
+    type ContainedCommandBuffer: br::CommandBuffer + Clone;
+
+    fn make_batch(
+        self,
+    ) -> br::SubmissionBatch<'d, Self::ContainedSemaphore, Self::ContainedCommandBuffer>;
+}
+impl<'d, Semaphore: br::Semaphore + Clone, CommandBuffer: br::CommandBuffer + Clone> Submission<'d>
+    for br::SubmissionBatch<'d, Semaphore, CommandBuffer>
+{
+    type ContainedSemaphore = Semaphore;
+    type ContainedCommandBuffer = CommandBuffer;
+
+    fn make_batch(
+        self,
+    ) -> br::SubmissionBatch<'d, Self::ContainedSemaphore, Self::ContainedCommandBuffer> {
+        self
+    }
+}
+
+pub trait EngineEvents<'d, PL: NativeLinker>: Sized {
+    type CopySubmission: Submission<'d>;
+    type RenderSubmission: Submission<'d>;
+
     fn init(_e: &mut Engine<PL>) -> Self;
+
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(
-        &mut self,
-        _e: &mut Engine<PL>,
+        &'d mut self,
+        _e: &'d mut Engine<PL>,
         _on_backbuffer_of: u32,
         _delta_time: Duration,
-    ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
-        (None, br::SubmissionBatch::default())
-    }
+    ) -> (Option<Self::CopySubmission>, Self::RenderSubmission);
+
     /// Discards backbuffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
     fn discard_backbuffer_resources(&mut self) {}
+
     /// Called when backbuffer has resized
     /// (called after discard_backbuffer_resources so re-create discarded resources here)
     fn on_resize(&mut self, _e: &mut Engine<PL>, _new_size: math::Vector2<usize>) {}
@@ -86,11 +109,33 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
     /// Recovering render resources
     fn recover_render_resources(&mut self, _e: &mut Engine<PL>) {}
 }
-impl<PL: NativeLinker> EngineEvents<PL> for () {
+
+impl<'d, PL: NativeLinker> EngineEvents<'d, PL> for () {
+    type CopySubmission = br::SubmissionBatch<
+        'd,
+        SharedRef<br::SemaphoreObject<DeviceObject>>,
+        SharedRef<br::CommandBufferObject<DeviceObject>>,
+    >;
+    type RenderSubmission = br::SubmissionBatch<
+        'd,
+        SharedRef<br::SemaphoreObject<DeviceObject>>,
+        SharedRef<br::CommandBufferObject<DeviceObject>>,
+    >;
+
     fn init(_e: &mut Engine<PL>) -> Self {
         ()
     }
+
+    fn update(
+        &'d mut self,
+        _e: &'d mut Engine<PL>,
+        _on_backbuffer_of: u32,
+        _delta_time: Duration,
+    ) -> (Option<Self::CopySubmission>, Self::RenderSubmission) {
+        (None, Default::default())
+    }
 }
+
 /// Specifies which type of resource is supports sparse residency?
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -190,7 +235,7 @@ pub struct Engine<NL: NativeLinker> {
     pub(self) g: Graphics,
     ip: InputProcess,
     gametimer: GameTimer,
-    last_rendering_completion: StateFence,
+    last_rendering_completion: StateFence<br::FenceObject<DeviceObject>>,
     amixer: Arc<RwLock<audio::Mixer>>,
 }
 impl<PL: NativeLinker> Engine<PL> {
@@ -215,7 +260,7 @@ impl<PL: NativeLinker> Engine<PL> {
         Engine {
             ip: InputProcess::new().into(),
             gametimer: GameTimer::new(),
-            last_rendering_completion: StateFence::new(&g)
+            last_rendering_completion: StateFence::new(g.device.clone())
                 .expect("Failed to create State Fence for Rendering"),
             amixer: Arc::new(RwLock::new(audio::Mixer::new())),
             nativelink,
@@ -235,7 +280,7 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn graphics_mut(&mut self) -> &mut Graphics {
         &mut self.g
     }
-    pub fn graphics_device(&self) -> &br::Device {
+    pub fn graphics_device(&self) -> &impl br::Device {
         &self.g.device
     }
     pub fn graphics_queue_family_index(&self) -> u32 {
@@ -251,10 +296,16 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn backbuffer_count(&self) -> usize {
         self.presenter.backbuffer_count()
     }
-    pub fn backbuffer(&self, index: usize) -> Option<SharedRef<br::ImageView>> {
+    pub fn backbuffer(
+        &self,
+        index: usize,
+    ) -> Option<SharedRef<<NL::Presenter as PlatformPresenter>::Backbuffer>> {
         self.presenter.backbuffer(index)
     }
-    pub fn iter_backbuffers(&self) -> impl Iterator<Item = SharedRef<br::ImageView>> + '_ {
+    pub fn iter_backbuffers(
+        &self,
+    ) -> impl Iterator<Item = SharedRef<<NL::Presenter as PlatformPresenter>::Backbuffer>> + '_
+    {
         (0..self.backbuffer_count())
             .map(move |x| self.backbuffer(x).expect("unreachable while iteration"))
     }
@@ -270,28 +321,32 @@ impl<NL: NativeLinker> Engine<NL> {
 
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(&mut br::CmdRecord),
+        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>),
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
     pub fn submit_buffered_commands(
         &mut self,
-        batches: &[br::SubmissionBatch],
-        fence: &mut br::Fence,
+        batches: &[br::SubmissionBatch<
+            impl br::Semaphore + Clone,
+            impl br::CommandBuffer + Clone,
+        >],
+        fence: &mut impl br::Fence,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
 
     /// Submits any commands as transient commands.
     /// ## Note
-    /// Unlike other futures, commands are submitted immediately(even if not awaiting the returned future).
+    /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(&mut br::CmdRecord) + 's,
+        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>) + 's,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
     }
 
+    #[inline]
     pub fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> {
         &self.amixer
     }
@@ -309,7 +364,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 }
 impl<PL: NativeLinker> Engine<PL> {
-    pub fn do_update<EH: EngineEvents<PL>>(&mut self, userlib: &mut EH) {
+    pub fn do_update<'d, EH: EngineEvents<'d, PL>>(&'d mut self, userlib: &'d mut EH) {
         let dt = self.gametimer.delta_time();
 
         let bb_index = match self.presenter.next_backbuffer_index() {
@@ -329,10 +384,10 @@ impl<PL: NativeLinker> Engine<PL> {
         let (copy_submission, fb_submission) = userlib.update(self, bb_index, dt);
         let pr = self.presenter.render_and_present(
             &mut self.g,
-            self.last_rendering_completion.object_mut(),
+            self.last_rendering_completion.inner_mut(),
             bb_index,
-            fb_submission,
-            copy_submission,
+            fb_submission.make_batch(),
+            copy_submission.map(Submission::make_batch),
         );
         unsafe {
             self.last_rendering_completion.signal();
@@ -348,10 +403,10 @@ impl<PL: NativeLinker> Engine<PL> {
         }
     }
 
-    pub fn do_resize_backbuffer<EH: EngineEvents<PL>>(
-        &mut self,
+    pub fn do_resize_backbuffer<'d, EH: EngineEvents<'d, PL>>(
+        &'d mut self,
         new_size: math::Vector2<usize>,
-        userlib: &mut EH,
+        userlib: &'d mut EH,
     ) {
         self.last_rendering_completion
             .wait()
@@ -427,6 +482,9 @@ impl<T> Discardable<T> {
     pub fn discard_lw(&mut self) {
         drop(self.0.get_mut().take());
     }
+    pub fn take_lw(&mut self) -> Option<T> {
+        self.0.get_mut().take()
+    }
     pub fn is_available(&self) -> bool {
         self.0.borrow().is_some()
     }
@@ -500,7 +558,7 @@ pub struct MemoryTypeManager {
     host_memory_types: Vec<MemoryType>,
 }
 impl MemoryTypeManager {
-    pub fn new(pd: &br::PhysicalDevice) -> Self {
+    pub fn new(pd: &impl br::PhysicalDevice) -> Self {
         let mem = pd.memory_properties();
         let (device_memory_types, host_memory_types): (Vec<_>, Vec<_>) = mem
             .types()
@@ -524,7 +582,7 @@ impl MemoryTypeManager {
             })
             .unzip();
 
-        MemoryTypeManager {
+        Self {
             device_memory_types: device_memory_types.into_iter().filter_map(|x| x).collect(),
             host_memory_types: host_memory_types.into_iter().filter_map(|x| x).collect(),
         }
@@ -539,6 +597,7 @@ impl MemoryTypeManager {
             .iter()
             .find(|mt| (mask & mt.corresponding_mask()) != 0 && mt.has_property_flags(required))
     }
+
     pub fn host_visible_index(
         &self,
         mask: u32,
@@ -550,13 +609,14 @@ impl MemoryTypeManager {
                 .find(|mt| (mask & mt.corresponding_mask()) != 0)
         })
     }
+
     pub fn device_local_index(&self, mask: u32) -> Option<&MemoryType> {
         self.device_memory_types
             .iter()
             .find(|mt| (mask & mt.corresponding_mask()) != 0)
     }
 
-    fn diagnose_heaps(p: &br::PhysicalDevice) {
+    fn diagnose_heaps(p: &impl br::PhysicalDevice) {
         info!("Memory Heaps: ");
         for (n, &br::vk::VkMemoryHeap { size, flags }) in p.memory_properties().heaps().enumerate()
         {
@@ -580,6 +640,7 @@ impl MemoryTypeManager {
             }
         }
     }
+
     fn diagnose_types(&self) {
         info!("Device Memory Types: ");
         for mt in &self.device_memory_types {
@@ -592,14 +653,20 @@ impl MemoryTypeManager {
     }
 }
 
-struct FenceReactorThread {
-    pending_fences:
-        std::sync::Arc<parking_lot::Mutex<Vec<(std::task::Waker, std::sync::Weak<br::Fence>)>>>,
+struct FenceReactorThread<Device: br::Device> {
+    pending_fences: std::sync::Arc<
+        parking_lot::Mutex<
+            Vec<(
+                std::task::Waker,
+                std::sync::Weak<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
+            )>,
+        >,
+    >,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
     thread_waker: std::sync::Arc<parking_lot::Condvar>,
 }
-impl FenceReactorThread {
+impl<Device: br::Device> FenceReactorThread<Device> {
     pub fn new() -> Self {
         let pending_fences = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -611,8 +678,10 @@ impl FenceReactorThread {
         let thread_handle = std::thread::Builder::new()
             .name(String::from("Peridot Fence Reactor"))
             .spawn(move || {
-                let mut managed_fences =
-                    Vec::<(std::task::Waker, std::sync::Weak<br::Fence>)>::new();
+                let mut managed_fences = Vec::<(
+                    std::task::Waker,
+                    std::sync::Weak<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
+                )>::new();
                 let mut signaled_indexes = Vec::new();
 
                 loop {
@@ -660,14 +729,18 @@ impl FenceReactorThread {
         }
     }
 
-    pub fn register(&self, fence: &std::sync::Arc<br::Fence>, waker: std::task::Waker) {
+    pub fn register(
+        &self,
+        fence: &std::sync::Arc<impl br::Fence<ConcreteDevice = Device> + Send + Sync>,
+        waker: std::task::Waker,
+    ) {
         self.pending_fences
             .lock()
             .push((waker, std::sync::Arc::downgrade(fence)));
         self.thread_waker.notify_all();
     }
 }
-impl Drop for FenceReactorThread {
+impl<Device: br::Device> Drop for FenceReactorThread<Device> {
     fn drop(&mut self) {
         if let Some(th) = self.thread_handle.take() {
             self.shutdown
@@ -678,12 +751,12 @@ impl Drop for FenceReactorThread {
     }
 }
 
-struct FenceWaitFuture<'d> {
-    reactor: &'d FenceReactorThread,
-    object: std::sync::Arc<br::Fence>,
+struct FenceWaitFuture<'d, Fence: br::Fence + Send + Sync> {
+    reactor: &'d FenceReactorThread<Fence::ConcreteDevice>,
+    object: std::sync::Arc<Fence>,
     registered: bool,
 }
-impl std::future::Future for FenceWaitFuture<'_> {
+impl<Fence: br::Fence + Send + Sync> std::future::Future for FenceWaitFuture<'_, Fence> {
     type Output = br::Result<()>;
 
     fn poll(
@@ -705,20 +778,20 @@ impl std::future::Future for FenceWaitFuture<'_> {
     }
 }
 
+pub(crate) type DeviceObject = SharedRef<br::DeviceObject<SharedRef<br::InstanceObject>>>;
 /// Queue object with family index
-pub struct Queue {
-    q: parking_lot::Mutex<br::Queue>,
+pub struct Queue<Device: br::Device> {
+    q: parking_lot::Mutex<br::Queue<Device>>,
     family: u32,
 }
 /// Graphics manager
 pub struct Graphics {
-    pub(self) instance: br::Instance,
-    pub(self) adapter: br::PhysicalDevice,
-    device: br::Device,
-    graphics_queue: Queue,
-    cp_onetime_submit: br::CommandPool,
+    pub(self) adapter: br::PhysicalDeviceObject<SharedRef<br::InstanceObject>>,
+    device: DeviceObject,
+    graphics_queue: Queue<DeviceObject>,
+    cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
-    fence_reactor: FenceReactorThread,
+    fence_reactor: FenceReactorThread<DeviceObject>,
 }
 impl Graphics {
     fn new(
@@ -731,16 +804,14 @@ impl Graphics {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
         #[cfg(debug_assertions)]
-        for l in br::Instance::enumerate_layer_properties()
-            .expect("failed to enumerate layer properties")
-        {
+        for l in br::enumerate_layer_properties().expect("failed to enumerate layer properties") {
             let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
             let name_str = name
                 .to_str()
                 .expect("unexpected invalid sequence in layer name");
             info!(
-                "* {} :: {}/{}",
-                name_str, l.specVersion, l.implementationVersion
+                "* {name_str} :: {}/{}",
+                l.specVersion, l.implementationVersion
             );
             if name_str == "VK_LAYER_KHRONOS_validation" {
                 validation_layer_available = true;
@@ -765,7 +836,7 @@ impl Graphics {
             );
             debug!("Debug reporting activated");
         }
-        let instance = ib.create()?;
+        let instance = SharedRef::new(ib.create()?);
 
         let adapter = instance
             .iter_physical_devices()?
@@ -780,33 +851,32 @@ impl Graphics {
             .expect("No graphics queue");
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
         let device = {
-            let mut db = br::DeviceBuilder::new(&adapter);
+            let mut db = br::DeviceBuilder::new(adapter);
             db.add_extensions(device_extensions).add_queue(qci);
             if validation_layer_available {
                 db.add_layer("VK_LAYER_KHRONOS_validation");
             }
             *db.mod_features() = features;
-            db.create()?
+            SharedRef::new(db.create()?.clone_parent())
         };
 
-        return Ok(Graphics {
-            cp_onetime_submit: br::CommandPool::new(&device, gqf_index, true, false)?,
+        Ok(Self {
+            cp_onetime_submit: device.clone().new_command_pool(gqf_index, true, false)?,
             graphics_queue: Queue {
-                q: parking_lot::Mutex::new(device.queue(gqf_index, 0)),
+                q: parking_lot::Mutex::new(device.clone().queue(gqf_index, 0)),
                 family: gqf_index,
             },
-            instance,
-            adapter,
+            adapter: adapter.clone_parent(),
             device,
             memory_type_manager,
             fence_reactor: FenceReactorThread::new(),
-        });
+        })
     }
 
     /// Submits any commands as transient commands.
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(&mut br::CmdRecord),
+        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>),
     ) -> br::Result<()> {
         let mut cb = LocalCommandBundle(
             self.cp_onetime_submit.alloc(1, true)?,
@@ -814,25 +884,30 @@ impl Graphics {
         );
         generator(unsafe { &mut cb[0].begin_once()? });
         self.graphics_queue.q.get_mut().submit(
-            &[br::SubmissionBatch {
-                command_buffers: Cow::from(&cb[..]),
-                ..Default::default()
-            }],
-            None,
+            &[
+                br::SubmissionBatch::<SharedRef<br::SemaphoreObject<DeviceObject>>, _> {
+                    command_buffers: Cow::from(&cb[..]),
+                    ..Default::default()
+                },
+            ],
+            None::<&mut br::FenceObject<DeviceObject>>,
         )?;
         self.graphics_queue.q.get_mut().wait()
     }
     pub fn submit_buffered_commands(
         &mut self,
-        batches: &[br::SubmissionBatch],
-        fence: &mut br::Fence,
+        batches: &[br::SubmissionBatch<
+            impl br::Semaphore + Clone,
+            impl br::CommandBuffer + Clone,
+        >],
+        fence: &mut impl br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue.q.get_mut().submit(batches, Some(fence))
     }
     pub fn submit_buffered_commands_raw(
         &mut self,
         batches: &[br::vk::VkSubmitInfo],
-        fence: &mut br::Fence,
+        fence: &mut impl br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue
             .q
@@ -842,15 +917,15 @@ impl Graphics {
 
     /// Submits any commands as transient commands.
     /// ## Note
-    /// Unlike other futures, commands are submitted immediately(even if not awaiting the returned future).
+    /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
+    #[cfg(feature = "Multithreaded")]
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(&mut br::CmdRecord),
+        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>),
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
-        let mut fence = std::sync::Arc::new(br::Fence::new(&self.device, false)?);
+        let mut fence = std::sync::Arc::new(self.device.clone().new_fence(false)?);
 
-        let mut pool = br::CommandPool::new(
-            &self.device,
+        let mut pool = self.device.clone().new_command_pool(
             self.graphics_queue_family_index(),
             true,
             false,
@@ -858,10 +933,12 @@ impl Graphics {
         let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
         generator(&mut unsafe { cb[0].begin_once()? });
         self.graphics_queue.q.lock().submit(
-            &[br::SubmissionBatch {
-                command_buffers: Cow::from(&cb[..]),
-                ..Default::default()
-            }],
+            &[
+                br::SubmissionBatch::<SharedRef<br::SemaphoreObject<DeviceObject>>, _> {
+                    command_buffers: Cow::from(&cb[..]),
+                    ..Default::default()
+                },
+            ],
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
         )?;
 
@@ -876,9 +953,10 @@ impl Graphics {
     }
 
     /// Awaits fence on background thread
+    #[cfg(feature = "Multithreaded")]
     pub fn await_fence<'s>(
         &'s self,
-        fence: std::sync::Arc<br::Fence>,
+        fence: std::sync::Arc<impl br::Fence<ConcreteDevice = DeviceObject> + Send + Sync + 's>,
     ) -> impl std::future::Future<Output = br::Result<()>> + 's {
         FenceWaitFuture {
             reactor: &self.fence_reactor,
@@ -887,19 +965,22 @@ impl Graphics {
         }
     }
 
-    pub fn instance(&self) -> &br::Instance {
-        &self.instance
+    pub fn instance(&self) -> &impl br::Instance {
+        self.device.instance()
     }
-    pub fn adapter(&self) -> &br::PhysicalDevice {
+
+    pub fn adapter(&self) -> &impl br::PhysicalDevice {
         &self.adapter
     }
+
     pub fn graphics_queue_family_index(&self) -> u32 {
         self.graphics_queue.family
     }
 }
 impl Deref for Graphics {
-    type Target = br::Device;
-    fn deref(&self) -> &br::Device {
+    type Target = DeviceObject;
+
+    fn deref(&self) -> &DeviceObject {
         &self.device
     }
 }
@@ -920,20 +1001,29 @@ impl GameTimer {
     }
 }
 
-struct LocalCommandBundle<'p>(Vec<br::CommandBuffer>, &'p mut br::CommandPool);
-impl<'p> Deref for LocalCommandBundle<'p> {
-    type Target = [br::CommandBuffer];
+struct LocalCommandBundle<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p>(
+    Vec<CommandBuffer>,
+    &'p mut CommandPool,
+);
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p> Deref
+    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+{
+    type Target = [CommandBuffer];
 
-    fn deref(&self) -> &[br::CommandBuffer] {
+    fn deref(&self) -> &[CommandBuffer] {
         &self.0
     }
 }
-impl DerefMut for LocalCommandBundle<'_> {
-    fn deref_mut(&mut self) -> &mut [br::CommandBuffer] {
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p> DerefMut
+    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+{
+    fn deref_mut(&mut self) -> &mut [CommandBuffer] {
         &mut self.0
     }
 }
-impl<'p> Drop for LocalCommandBundle<'p> {
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p> Drop
+    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+{
     fn drop(&mut self) {
         unsafe {
             self.1.free(&self.0[..]);
@@ -946,34 +1036,42 @@ pub enum CBSubmissionType {
     Graphics,
     Transfer,
 }
-pub struct CommandBundle(Vec<br::CommandBuffer>, br::CommandPool);
-impl Deref for CommandBundle {
-    type Target = [br::CommandBuffer];
-    fn deref(&self) -> &[br::CommandBuffer] {
+pub struct CommandBundle<Device: br::Device>(
+    Vec<br::CommandBufferObject<Device>>,
+    br::CommandPoolObject<Device>,
+);
+impl<Device: br::Device> Deref for CommandBundle<Device> {
+    type Target = [br::CommandBufferObject<Device>];
+
+    fn deref(&self) -> &[br::CommandBufferObject<Device>] {
         &self.0
     }
 }
-impl DerefMut for CommandBundle {
-    fn deref_mut(&mut self) -> &mut [br::CommandBuffer] {
+impl<Device: br::Device> DerefMut for CommandBundle<Device> {
+    fn deref_mut(&mut self) -> &mut [br::CommandBufferObject<Device>] {
         &mut self.0
     }
 }
-impl Drop for CommandBundle {
+impl<Device: br::Device> Drop for CommandBundle<Device> {
     fn drop(&mut self) {
         unsafe {
             self.1.free(&self.0[..]);
         }
     }
 }
-impl CommandBundle {
+impl CommandBundle<DeviceObject> {
     pub fn new(g: &Graphics, submission_type: CBSubmissionType, count: usize) -> br::Result<Self> {
         let qf = match submission_type {
             CBSubmissionType::Graphics => g.graphics_queue.family,
             CBSubmissionType::Transfer => g.graphics_queue.family,
         };
-        let mut cp = br::CommandPool::new(&g.device, qf, false, false)?;
-        return Ok(CommandBundle(cp.alloc(count as _, true)?, cp));
+        let mut cp = g.device.clone().new_command_pool(qf, false, false)?;
+
+        Ok(Self(cp.alloc(count as _, true)?, cp))
     }
+}
+impl<Device: br::Device> CommandBundle<Device> {
+    #[inline]
     pub fn reset(&mut self) -> br::Result<()> {
         self.1.reset(true)
     }
@@ -1026,7 +1124,7 @@ impl RenderPassTemplates {
             None, 0, true,
         ));
 
-        return b;
+        b
     }
 }
 
@@ -1034,18 +1132,21 @@ pub trait SpecConstantStorage {
     fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, br::DynamicDataCell);
 }
 
-pub struct LayoutedPipeline(br::Pipeline, SharedRef<br::PipelineLayout>);
-impl LayoutedPipeline {
-    pub fn combine(p: br::Pipeline, layout: &SharedRef<br::PipelineLayout>) -> Self {
-        LayoutedPipeline(p, layout.clone())
+pub struct LayoutedPipeline<Pipeline: br::Pipeline, Layout: br::PipelineLayout>(Pipeline, Layout);
+impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeline, Layout> {
+    pub const fn combine(p: Pipeline, layout: Layout) -> Self {
+        Self(p, layout)
     }
-    pub fn pipeline(&self) -> &br::Pipeline {
+
+    pub const fn pipeline(&self) -> &Pipeline {
         &self.0
     }
-    pub fn layout(&self) -> &SharedRef<br::PipelineLayout> {
+
+    pub const fn layout(&self) -> &Layout {
         &self.1
     }
-    pub fn bind(&self, rec: &mut br::CmdRecord) {
+
+    pub fn bind(&self, rec: &mut br::CmdRecord<impl br::CommandBuffer>) {
         rec.bind_graphics_pipeline_pair(&self.0, &self.1);
     }
 }

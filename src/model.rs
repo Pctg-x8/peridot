@@ -11,7 +11,7 @@ pub trait ModelData {
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
         offsets: Self::PreallocOffsetType,
     ) -> Self::RendererParams;
 }
@@ -21,8 +21,8 @@ pub trait DefaultRenderCommands<'e> {
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord,
-        buffer: &Buffer,
+        cmd: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        buffer: &impl br::Buffer,
         extras: Self::Extras,
     );
 }
@@ -38,7 +38,11 @@ impl<VT: Clone> ModelData for Primitive<VT> {
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> u64 {
         alloc.add(BufferContent::vertices::<VT>(self.vertices.len()))
     }
-    fn stage_data_into(&self, mem: &br::MappedMemoryRange, vo: u64) {
+    fn stage_data_into(
+        &self,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
+        vo: u64,
+    ) {
         unsafe {
             mem.slice_mut::<VT>(vo as _, self.vertices.len())
                 .clone_from_slice(&self.vertices);
@@ -60,7 +64,11 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
 
         (v, i)
     }
-    fn stage_data_into(&self, mem: &br::MappedMemoryRange, (vo, io): (u64, u64)) {
+    fn stage_data_into(
+        &self,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
+        (vo, io): (u64, u64),
+    ) {
         unsafe {
             mem.slice_mut::<VT>(vo as _, self.vertices.len())
                 .clone_from_slice(&self.vertices);
@@ -70,7 +78,7 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
     }
 }
 impl<VT> Primitive<VT> {
-    pub fn with_indices(self, indices: Vec<u16>) -> IndexedPrimitive<VT> {
+    pub const fn with_indices(self, indices: Vec<u16>) -> IndexedPrimitive<VT> {
         IndexedPrimitive {
             vertices: self.vertices,
             indices,
@@ -81,7 +89,7 @@ impl<VT> Primitive<VT> {
 impl Primitive<math::Vector4F32> {
     /// 0.0 to size squared 2d plane, rendered as triangle strip
     pub fn plane(size: f32) -> Self {
-        Primitive {
+        Self {
             vertices: vec![
                 math::Vector4(0.0, 0.0, 0.0, 1.0),
                 math::Vector4(0.0, size, 0.0, 1.0),
@@ -90,9 +98,10 @@ impl Primitive<math::Vector4F32> {
             ],
         }
     }
+
     /// -size to size squared 2d plane, rendered as triangle strip
     pub fn plane_centric(size: f32) -> Self {
-        Primitive {
+        Self {
             vertices: vec![
                 math::Vector4(-size, -size, 0.0, 1.0),
                 math::Vector4(-size, size, 0.0, 1.0),
@@ -107,6 +116,7 @@ impl IndexedPrimitive<math::Vector4F32> {
     pub fn plane(size: f32) -> Self {
         Primitive::plane(size).with_indices(vec![0, 1, 2, 1, 2, 3])
     }
+
     /// -size to size squared 2d plane, vertices for rendered as triangle strip, indices for rendered as triangle list
     pub fn plane_centric(size: f32) -> Self {
         Primitive::plane_centric(size).with_indices(vec![0, 1, 2, 1, 2, 3])
@@ -129,7 +139,7 @@ impl Primitive<math::Vector4F32> {
             ]
         });
 
-        Primitive {
+        Self {
             vertices: xlines.chain(zlines).collect(),
         }
     }
@@ -165,6 +175,7 @@ impl Primitive<VertexUV2D> {
             ],
         }
     }
+
     /// -size to size squared 2d plane with normalized uv, rendered as triangle strip
     pub fn uv_plane_centric(size: f32) -> Self {
         Primitive {
@@ -195,6 +206,7 @@ impl IndexedPrimitive<VertexUV2D> {
     pub fn uv_plane(size: f32) -> Self {
         Primitive::uv_plane(size).with_indices(vec![0, 1, 2, 1, 2, 3])
     }
+
     /// -size to size squared 2d plane with normalized uv,
     /// vertices for rendered as triangle strip, indices for rendered as triangle list
     pub fn uv_plane_centric(size: f32) -> Self {

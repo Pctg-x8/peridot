@@ -36,14 +36,14 @@ impl PixelFormat {
     }
 }
 
-pub struct Texture2D(br::ImageView, Image);
-impl Texture2D {
+pub struct Texture2D<ImageView: br::ImageView>(ImageView);
+impl<Device: br::Device> Texture2D<br::ImageViewObject<br::ImageObject<Device>>> {
     pub fn init(
-        g: &br::Device,
+        g: Device,
         size: &math::Vector2<u32>,
         format: PixelFormat,
         prealloc: &mut BufferPrealloc,
-    ) -> br::Result<(br::Image, u64)> {
+    ) -> br::Result<(br::ImageObject<Device>, u64)> {
         let idesc = br::ImageDesc::new(
             size,
             format as _,
@@ -55,8 +55,11 @@ impl Texture2D {
             (size.x() * size.y()) as u64 * bytes_per_pixel,
             bytes_per_pixel,
         ));
-        return idesc.create(g).map(|o| (o, pixels_stg));
+
+        idesc.create(g).map(|o| (o, pixels_stg))
     }
+}
+impl<Image: br::Image> Texture2D<br::ImageViewObject<Image>> {
     pub fn new(img: Image) -> br::Result<Self> {
         let (fmt, cmap) = match img.format() {
             PixelFormat::RGB24 => (
@@ -81,16 +84,17 @@ impl Texture2D {
         };
 
         img.create_view(fmt, None, &cmap, &br::ImageSubresourceRange::color(0, 0))
-            .map(|v| Texture2D(v, img))
+            .map(Texture2D)
     }
 
     pub fn image(&self) -> &Image {
         &self.1
     }
 }
-impl Deref for Texture2D {
-    type Target = br::ImageView;
-    fn deref(&self) -> &br::ImageView {
+impl<ImageView: br::ImageView> Deref for Texture2D<ImageView> {
+    type Target = ImageView;
+
+    fn deref(&self) -> &ImageView {
         &self.0
     }
 }
@@ -112,22 +116,30 @@ pub trait LDRImageAsset {
 }
 
 /// Stg1. Group what textures are being initialized
-pub struct TextureInitializationGroup<'g>(&'g br::Device, Vec<DecodedPixelData>);
+pub struct TextureInitializationGroup<Device: br::Device>(Device, Vec<DecodedPixelData>);
 /// Stg2. Describes where textures are being staged
-pub struct TexturePreallocatedGroup(Vec<(DecodedPixelData, u64)>, Vec<br::Image>);
+pub struct TexturePreallocatedGroup<Image: br::Image>(Vec<(DecodedPixelData, u64)>, Vec<Image>);
 /// Stg3. Describes where textures are being staged, allocated and bound their memory
-pub struct TextureInstantiatedGroup(Vec<(DecodedPixelData, u64)>, Vec<Texture2D>);
+pub struct TextureInstantiatedGroup<ImageView: br::ImageView>(
+    Vec<(DecodedPixelData, u64)>,
+    Vec<Texture2D<ImageView>>,
+);
 
-impl<'g> TextureInitializationGroup<'g> {
-    pub fn new(device: &'g br::Device) -> Self {
+impl<Device: br::Device> TextureInitializationGroup<Device> {
+    pub const fn new(device: Device) -> Self {
         TextureInitializationGroup(device, Vec::new())
     }
+
     pub fn add<A: LDRImageAsset>(&mut self, asset: A) -> usize {
         let index = self.1.len();
         self.1.push(asset.into_pixel_data_info());
         return index;
     }
-    pub fn prealloc(self, prealloc: &mut BufferPrealloc) -> br::Result<TexturePreallocatedGroup> {
+
+    pub fn prealloc(
+        self,
+        prealloc: &mut BufferPrealloc,
+    ) -> br::Result<TexturePreallocatedGroup<br::ImageObject<Device>>> {
         let (mut images, mut stage_info) = (
             Vec::with_capacity(self.1.len()),
             Vec::with_capacity(self.1.len()),
@@ -137,14 +149,18 @@ impl<'g> TextureInitializationGroup<'g> {
             images.push(o);
             stage_info.push((pd, offs));
         }
-        return Ok(TexturePreallocatedGroup(stage_info, images));
+
+        Ok(TexturePreallocatedGroup(stage_info, images))
     }
 }
-impl TexturePreallocatedGroup {
-    pub fn alloc_and_instantiate(
+impl<Image: br::Image> TexturePreallocatedGroup<Image> {
+    pub fn alloc_and_instantiate<Buffer: br::Buffer>(
         self,
-        mut badget: MemoryBadget,
-    ) -> br::Result<(TextureInstantiatedGroup, Vec<MemoryBoundResource>)> {
+        mut badget: MemoryBadget<Buffer, Image>,
+    ) -> br::Result<(
+        TextureInstantiatedGroup<br::ImageViewObject<Image>>,
+        Vec<MemoryBoundResource<Buffer, Image>>,
+    )> {
         let img_count = self.1.len();
         for isrc in self.1 {
             badget.add(isrc);
@@ -158,9 +174,9 @@ impl TexturePreallocatedGroup {
         return Ok((TextureInstantiatedGroup(self.0, textures), resources));
     }
 }
-impl TextureInstantiatedGroup {
+impl<ImageView: br::ImageView> TextureInstantiatedGroup<ImageView> {
     /// Copy texture pixels into a staging buffer.
-    pub fn stage_data(&self, mr: &br::MappedMemoryRange) {
+    pub fn stage_data(&self, mr: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>) {
         trace!("Staging Texture Data...");
         for &(ref pd, offs) in &self.0 {
             let s = unsafe {
@@ -172,10 +188,15 @@ impl TextureInstantiatedGroup {
             s.copy_from_slice(pd.u8_pixels());
         }
     }
+
     /// Push transferring operations into a batcher.
-    pub fn copy_from_stage_batches(&self, tb: &mut TransferBatch, stgbuf: &Buffer) {
+    pub fn copy_from_stage_batches(
+        &self,
+        tb: &mut TransferBatch<ImageView::ConcreteDevice>,
+        stgbuf: &Buffer<impl br::Buffer, impl br::DeviceMemory>,
+    ) {
         for (t, &(_, offs)) in self.1.iter().zip(self.0.iter()) {
-            tb.init_image_from(t.image(), stgbuf.with_dev_offset(offs));
+            tb.init_image_from(t.image(), stgbuf.with_dev_offset_ref(offs));
             tb.add_image_graphics_ready(
                 br::PipelineStageFlags::FRAGMENT_SHADER,
                 t.image(),
@@ -185,129 +206,138 @@ impl TextureInstantiatedGroup {
     }
 
     /// Returns a list of Texture2D.
-    pub fn into_textures(self) -> Vec<Texture2D> {
-        return self.1;
+    pub const fn into_textures(self) -> Vec<Texture2D<ImageView>> {
+        self.1
     }
 }
-impl Deref for TextureInstantiatedGroup {
-    type Target = [Texture2D];
-    fn deref(&self) -> &[Texture2D] {
+impl<ImageView: br::ImageView> Deref for TextureInstantiatedGroup<ImageView> {
+    type Target = [Texture2D<ImageView>];
+
+    fn deref(&self) -> &[Texture2D<ImageView>] {
         &self.1
     }
 }
 
 /// RenderTexture2D without Readback to CPU
-pub struct DeviceWorkingTexture2D {
+pub struct DeviceWorkingTexture2D<ImageView: br::ImageView> {
     size: math::Vector2<u32>,
     format: PixelFormat,
-    res: Image,
-    view: br::ImageView,
+    view: ImageView,
 }
-impl DeviceWorkingTexture2D {
+impl<ImageView: br::ImageView> DeviceWorkingTexture2D<ImageView> {
     /// Size of this texture
-    pub fn size(&self) -> &math::Vector2<u32> {
+    pub const fn size(&self) -> &math::Vector2<u32> {
         &self.size
     }
+
     /// Width of this texture
-    pub fn width(&self) -> u32 {
+    pub const fn width(&self) -> u32 {
         self.size.0
     }
+
     /// Height of this texture
-    pub fn height(&self) -> u32 {
+    pub const fn height(&self) -> u32 {
         self.size.1
     }
+
     /// Format of this texture
-    pub fn format(&self) -> PixelFormat {
+    pub const fn format(&self) -> PixelFormat {
         self.format
     }
 
     /// Gets underlying resource object
-    pub fn underlying(&self) -> &Image {
-        &self.res
+    pub const fn underlying(&self) -> &impl br::Image {
+        &**self.view
     }
 }
-impl Deref for DeviceWorkingTexture2D {
-    type Target = br::ImageView;
-    fn deref(&self) -> &br::ImageView {
+impl<ImageView: br::ImageView> Deref for DeviceWorkingTexture2D<ImageView> {
+    type Target = ImageView;
+
+    fn deref(&self) -> &ImageView {
         &self.view
     }
 }
 /// RenderTexture3D without Readback to CPU
-pub struct DeviceWorkingTexture3D {
+pub struct DeviceWorkingTexture3D<ImageView: br::ImageView> {
     size: math::Vector3<u32>,
     format: PixelFormat,
-    res: Image,
-    view: br::ImageView,
+    view: ImageView,
 }
-impl DeviceWorkingTexture3D {
+impl<ImageView: br::ImageView> DeviceWorkingTexture3D<ImageView> {
     /// Size of this texture
-    pub fn size(&self) -> &math::Vector3<u32> {
+    pub const fn size(&self) -> &math::Vector3<u32> {
         &self.size
     }
+
     /// Width of this texture
-    pub fn width(&self) -> u32 {
+    pub const fn width(&self) -> u32 {
         self.size.0
     }
+
     /// Height of this texture
-    pub fn height(&self) -> u32 {
+    pub const fn height(&self) -> u32 {
         self.size.1
     }
+
     /// Depth of this texture
-    pub fn depth(&self) -> u32 {
+    pub const fn depth(&self) -> u32 {
         self.size.2
     }
+
     /// Format of this texture
-    pub fn format(&self) -> PixelFormat {
+    pub const fn format(&self) -> PixelFormat {
         self.format
     }
 
     /// Gets underlying resource object
-    pub fn underlying(&self) -> &Image {
-        &self.res
+    pub const fn underlying(&self) -> &impl br::Image {
+        &**self.view
     }
 }
-impl Deref for DeviceWorkingTexture3D {
-    type Target = br::ImageView;
-    fn deref(&self) -> &br::ImageView {
+impl<ImageView: br::ImageView> Deref for DeviceWorkingTexture3D<ImageView> {
+    type Target = ImageView;
+
+    fn deref(&self) -> &ImageView {
         &self.view
     }
 }
 
 /// RenderCubeTexture without Readback to CPU
-pub struct DeviceWorkingCubeTexture {
+pub struct DeviceWorkingCubeTexture<ImageView: br::ImageView> {
     size: math::Vector2<u32>,
     format: PixelFormat,
-    res: Image,
-    view: br::ImageView,
+    view: ImageView,
 }
-impl DeviceWorkingCubeTexture {
+impl<ImageView: br::ImageView> DeviceWorkingCubeTexture<ImageView> {
     /// Size of a plane in this texture
-    pub fn size(&self) -> &math::Vector2<u32> {
+    pub const fn size(&self) -> &math::Vector2<u32> {
         &self.size
     }
 
     /// Width of a plane in this texture
-    pub fn width(&self) -> u32 {
+    pub const fn width(&self) -> u32 {
         self.size.0
     }
 
     /// Height of a plane in this texture
-    pub fn height(&self) -> u32 {
+    pub const fn height(&self) -> u32 {
         self.size.1
     }
 
     /// Format of a plane in this texture
-    pub fn format(&self) -> PixelFormat {
+    pub const fn format(&self) -> PixelFormat {
         self.format
     }
 
     /// Gets underlying resource object
-    pub fn underlying(&self) -> &Image {
-        &self.res
+    pub const fn underlying(&self) -> &impl br::Image {
+        &**self.view
     }
+}
+impl<ImageView: br::ImageView> Deref for DeviceWorkingCubeTexture<ImageView> {
+    type Target = ImageView;
 
-    /// Gets underlying resource view object
-    pub fn view(&self) -> &br::ImageView {
+    fn deref(&self) -> &ImageView {
         &self.view
     }
 }
@@ -401,7 +431,11 @@ impl DeviceWorkingTextureAllocator<'_> {
     }
 
     /// Allocates all of added textures
-    pub fn alloc(self, g: &Graphics) -> br::Result<DeviceWorkingTextureStore> {
+    pub fn alloc(
+        self,
+        g: &Graphics,
+    ) -> br::Result<DeviceWorkingTextureStore<br::ImageViewObject<br::ImageObject<DeviceObject>>>>
+    {
         let images2 = self.planes.iter().map(|d| d.create(g));
         let images_cube = self.cube.iter().map(|d| d.create(g));
         let images3 = self.volumes.iter().map(|d| d.create(g));
@@ -435,7 +469,6 @@ impl DeviceWorkingTextureAllocator<'_> {
                         size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
                         format: unsafe { std::mem::transmute(d.as_ref().format) },
                         view,
-                        res,
                     })
                 })
                 .collect::<Result<_, _>>()?,
@@ -456,7 +489,6 @@ impl DeviceWorkingTextureAllocator<'_> {
                         size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
                         format: unsafe { std::mem::transmute(d.as_ref().format) },
                         view,
-                        res,
                     })
                 })
                 .collect::<Result<_, _>>()?,
@@ -481,7 +513,6 @@ impl DeviceWorkingTextureAllocator<'_> {
                         ),
                         format: unsafe { std::mem::transmute(d.as_ref().format) },
                         view,
-                        res,
                     })
                 })
                 .collect::<Result<_, _>>()?,
@@ -489,45 +520,51 @@ impl DeviceWorkingTextureAllocator<'_> {
     }
 }
 /// Allocated DeviceWorkingTexture Arena
-pub struct DeviceWorkingTextureStore {
-    planes: Vec<DeviceWorkingTexture2D>,
-    cubes: Vec<DeviceWorkingCubeTexture>,
-    volumes: Vec<DeviceWorkingTexture3D>,
+pub struct DeviceWorkingTextureStore<ImageView: br::ImageView> {
+    planes: Vec<DeviceWorkingTexture2D<ImageView>>,
+    cubes: Vec<DeviceWorkingCubeTexture<ImageView>>,
+    volumes: Vec<DeviceWorkingTexture3D<ImageView>>,
 }
 /// DeviceWorkingTexture Reference
-pub trait DeviceWorkingTextureRef {
+pub trait DeviceWorkingTextureRef<ImageView: br::ImageView> {
     /// Type of the Texture that this reference referring to
     type TextureT;
     /// Gets texture object from the store
-    fn get(self, store: &DeviceWorkingTextureStore) -> &Self::TextureT;
+    fn get(self, store: &DeviceWorkingTextureStore<ImageView>) -> &Self::TextureT;
 }
-impl DeviceWorkingTextureStore {
+impl<ImageView: br::ImageView> DeviceWorkingTextureStore<ImageView> {
     /// Gets texture object by References
-    pub fn get<R: DeviceWorkingTextureRef>(
-        &self,
-        r: R,
-    ) -> &<R as DeviceWorkingTextureRef>::TextureT {
+    pub fn get<R: DeviceWorkingTextureRef<ImageView>>(&self, r: R) -> &R::TextureT {
         r.get(self)
     }
 }
-impl DeviceWorkingTextureRef for DeviceWorkingTexture2DRef {
-    type TextureT = DeviceWorkingTexture2D;
+impl<ImageView: br::ImageView> DeviceWorkingTextureRef<ImageView> for DeviceWorkingTexture2DRef {
+    type TextureT = DeviceWorkingTexture2D<ImageView>;
 
-    fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingTexture2D {
+    fn get(
+        self,
+        store: &DeviceWorkingTextureStore<ImageView>,
+    ) -> &DeviceWorkingTexture2D<ImageView> {
         &store.planes[self.0]
     }
 }
-impl DeviceWorkingTextureRef for DeviceWorkingCubeTextureRef {
-    type TextureT = DeviceWorkingCubeTexture;
+impl<ImageView: br::ImageView> DeviceWorkingTextureRef<ImageView> for DeviceWorkingCubeTextureRef {
+    type TextureT = DeviceWorkingCubeTexture<ImageView>;
 
-    fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingCubeTexture {
+    fn get(
+        self,
+        store: &DeviceWorkingTextureStore<ImageView>,
+    ) -> &DeviceWorkingCubeTexture<ImageView> {
         &store.cubes[self.0]
     }
 }
-impl DeviceWorkingTextureRef for DeviceWorkingTexture3DRef {
-    type TextureT = DeviceWorkingTexture3D;
+impl<ImageView: br::ImageView> DeviceWorkingTextureRef<ImageView> for DeviceWorkingTexture3DRef {
+    type TextureT = DeviceWorkingTexture3D<ImageView>;
 
-    fn get(self, store: &DeviceWorkingTextureStore) -> &DeviceWorkingTexture3D {
+    fn get(
+        self,
+        store: &DeviceWorkingTextureStore<ImageView>,
+    ) -> &DeviceWorkingTexture3D<ImageView> {
         &store.volumes[self.0]
     }
 }
@@ -535,11 +572,16 @@ impl DeviceWorkingTextureRef for DeviceWorkingTexture3DRef {
 /// Describing the type that can be used as initializer of `FixedBuffer`s
 pub trait FixedBufferInitializer {
     /// Setup memory data in staging buffer
-    fn stage_data(&mut self, m: &br::MappedMemoryRange);
-    fn buffer_graphics_ready(&self, tfb: &mut TransferBatch, buf: &Buffer, range: Range<u64>);
+    fn stage_data(&mut self, m: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>);
+    fn buffer_graphics_ready(
+        &self,
+        tfb: &mut TransferBatch<impl br::Device>,
+        buf: &Buffer<impl br::Buffer, impl br::DeviceMemory>,
+        range: Range<u64>,
+    );
 }
 /// The Fix-sized buffers and textures manager
-pub struct FixedMemory {
+pub struct FixedMemory<ImageView: br::ImageView, Buffer: br::Buffer> {
     /// Device accessible buffer object
     pub buffer: (Buffer, u64),
     /// Host buffer staging per-frame mutable data
@@ -547,17 +589,22 @@ pub struct FixedMemory {
     /// The placement offset of mut_buffer data in buffer
     pub mut_buffer_placement: u64,
     /// Textures
-    pub textures: Vec<Texture2D>,
+    pub textures: Vec<Texture2D<ImageView>>,
 }
-impl FixedMemory {
+impl
+    FixedMemory<
+        br::ImageViewObject<br::ImageObject<DeviceObject>>,
+        Buffer<br::BufferObject<DeviceObject>, br::DeviceMemoryObject<DeviceObject>>,
+    >
+{
     /// Initialize a FixedMemory using preallocation structures
     pub fn new<'g, I: FixedBufferInitializer + ?Sized>(
         g: &'g Graphics,
         mut prealloc: BufferPrealloc<'g>,
         prealloc_mut: BufferPrealloc<'g>,
-        textures: TextureInitializationGroup<'g>,
+        textures: TextureInitializationGroup<DeviceObject>,
         initializer: &mut I,
-        tfb: &mut TransferBatch,
+        tfb: &mut TransferBatch<DeviceObject>,
     ) -> br::Result<Self> {
         let mut_buffer = prealloc_mut.build_upload()?;
         let mut p_bufferdata_prealloc = prealloc.clone();
