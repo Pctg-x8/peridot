@@ -64,43 +64,37 @@ impl ModelData for Context {
     type RendererParams = RendererParams;
 
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> ContextPreallocOffsets {
-        let interior_positions_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_quad_vertex_positions.len())
-            .sum();
-        let interior_indices_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_quad_vertex_interior_indices.len())
-            .sum();
-        let curve_positions_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_vertex_positions.len())
-            .sum();
-        let curve_helper_coords_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_vertex_loop_blinn_data.len())
-            .sum();
-        let curve_indices_count = self
-            .meshes()
-            .iter()
-            .flat_map(|x| {
-                x.0.b_quads.iter().map(|xq| {
-                    (if xq.upper_control_point_vertex_index != 0xffff_ffff {
+        let (
+            mut interior_positions_count,
+            mut interior_indices_count,
+            mut curve_positions_count,
+            mut curve_helper_coords_count,
+            mut curve_indices_count,
+        ) = (0, 0, 0, 0, 0);
+        for (m, _, _) in &self.meshes {
+            interior_positions_count += m.b_quad_vertex_positions.len();
+            interior_indices_count += m.b_quad_vertex_interior_indices.len();
+            curve_positions_count += m.b_vertex_positions.len();
+            curve_helper_coords_count += m.b_vertex_loop_blinn_data.len();
+            curve_indices_count += m
+                .b_quads
+                .iter()
+                .map(|xq| {
+                    let upper = if xq.upper_control_point_vertex_index != 0xffff_ffff {
                         3
                     } else {
                         0
-                    }) + if xq.lower_control_point_vertex_index != 0xffff_ffff {
+                    };
+                    let lower = if xq.lower_control_point_vertex_index != 0xffff_ffff {
                         3
                     } else {
                         0
-                    }
+                    };
+
+                    upper + lower
                 })
-            })
-            .sum();
+                .sum::<usize>();
+        }
 
         let transforms = alloc.add(BufferContent::uniform_texel_dynarray::<GlyphTransform>(
             self.meshes().len(),
