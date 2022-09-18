@@ -308,7 +308,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                         $ErrorActionPreference = "Continue"
-                        pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                        pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -324,7 +324,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                             $ErrorActionPreference = "Continue"
-                            pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                            pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -336,8 +336,7 @@ let checkCradleWindows =
                         )
                     }
                   ]
-              , List/map
-                  GithubActions.Step.Type
+              , List/end_map
                   GithubActions.Step.Type
                   runStepOnFailure
                   ( slackNotify
@@ -380,7 +379,7 @@ let checkCradleMacos =
                   , GithubActions.Step::{
                     , name = "cargo check"
                     , run = Some
-                        "target/release/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                        "tools/target/release/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
                     , shell = Some GithubActions.Shell.bash
                     , env = Some
                         ( toMap
@@ -393,7 +392,7 @@ let checkCradleMacos =
                                   "format('{0}/builtin-assets', github.workspace)"
                             , PERIDOT_CLI_ARCHIVER_PATH =
                                 GithubActions.mkExpression
-                                  "format('{0}/target/release/peridot-archiver', github.workspace)"
+                                  "format('{0}/tools/target/release/peridot-archiver', github.workspace)"
                             }
                         )
                     }
