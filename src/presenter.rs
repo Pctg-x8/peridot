@@ -3,7 +3,7 @@
 use bedrock as br;
 #[cfg(feature = "debug")]
 use br::VkObject;
-use br::{Device, Image, Swapchain};
+use br::{Device, Image, PhysicalDevice, SubmissionBatch, Swapchain};
 
 use crate::{mthelper::SharedRef, DeviceObject};
 
@@ -25,14 +25,8 @@ pub trait PlatformPresenter {
         g: &mut crate::Graphics,
         last_render_fence: &mut impl br::Fence,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<
-            's,
-            impl br::Semaphore + Clone,
-            impl br::CommandBuffer + Clone,
-        >,
-        update_submission: Option<
-            br::SubmissionBatch<'s, impl br::Semaphore + Clone, impl br::CommandBuffer + Clone>,
-        >,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for backbuffer resources
     fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
@@ -55,7 +49,7 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
     ) -> Self {
         let si = g
             .adapter
-            .surface_capabilities(&surface_info.obj)
+            .surface_capabilities(&surface)
             .expect("Failed to query Surface Capabilities");
         let ew = if si.currentExtent.width == 0xffff_ffff {
             default_extent.0 as _
@@ -81,18 +75,19 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
         } else {
             br::SurfaceTransform::Inherit
         };
-        let chain = br::SwapchainBuilder::new(
+        let mut cb = br::SwapchainBuilder::new(
             surface,
             buffer_count,
             &surface_info.fmt,
             &ext,
             br::ImageUsage::COLOR_ATTACHMENT,
-        )
-        .present_mode(surface_info.pres_mode)
-        .composite_alpha(surface_info.available_composite_alpha)
-        .pre_transform(pre_transform)
-        .create(g.device.clone())
-        .expect("Failed to create Swapchain");
+        );
+        cb.present_mode(surface_info.pres_mode)
+            .composite_alpha(surface_info.available_composite_alpha)
+            .pre_transform(pre_transform);
+        let chain = cb
+            .create(g.device.clone())
+            .expect("Failed to create Swapchain");
         let chain = SharedRef::new(chain);
         #[cfg(feature = "debug")]
         chain
@@ -239,8 +234,8 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             .iter()
             .map(|v| {
                 br::ImageMemoryBarrier::new(
-                    v,
-                    &br::ImageSubresourceRange::color(0, 0),
+                    &***v,
+                    br::ImageSubresourceRange::color(0, 0),
                     br::ImageLayout::Undefined,
                     br::ImageLayout::PresentSrc,
                 )
@@ -259,10 +254,10 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
 
     #[inline]
     pub fn acquire_next_backbuffer_index(&mut self) -> br::Result<u32> {
-        self.swapchain
-            .get_mut_lw()
-            .swapchain
-            .acquire_next(None, br::CompletionHandler::from(&mut self.rendering_order))
+        self.swapchain.get_mut_lw().swapchain.acquire_next(
+            None,
+            br::CompletionHandler::<br::FenceObject<DeviceObject>, _>::Queue(&self.rendering_order),
+        )
     }
 
     #[inline]
@@ -278,19 +273,13 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         g: &mut crate::Graphics,
         last_render_fence: &mut impl br::Fence,
         bb_index: u32,
-        mut render_submission: br::SubmissionBatch<
-            's,
-            impl br::Semaphore + Clone,
-            impl br::CommandBuffer + Clone,
-        >,
-        update_submission: Option<
-            br::SubmissionBatch<'s, impl br::Semaphore + Clone, impl br::CommandBuffer + Clone>,
-        >,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
-        if let Some(mut cs) = update_submission {
+        if let Some(cs) = update_submission {
             // copy -> render
-            cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
-            render_submission.wait_semaphores.to_mut().extend(vec![
+            let update_signal = &[&self.buffer_ready_order];
+            let render_waits = &[
                 (
                     &self.rendering_order,
                     br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
@@ -299,41 +288,54 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
                     &self.buffer_ready_order,
                     br::PipelineStageFlags::VERTEX_INPUT,
                 ),
-            ]);
-            render_submission
-                .signal_semaphores
-                .to_mut()
-                .push(&self.present_order);
-            g.submit_buffered_commands(&[cs, render_submission], last_render_fence)?;
+            ];
+            let render_signal = &[&self.present_order];
+
+            let update_submission = cs.with_signal_semaphores(update_signal);
+            let render_submission = render_submission
+                .with_wait_semaphores(render_waits)
+                .with_signal_semaphores(render_signal);
+
+            g.submit_buffered_commands(
+                &[
+                    Box::new(update_submission) as Box<dyn br::SubmissionBatch>,
+                    Box::new(render_submission),
+                ],
+                last_render_fence,
+            )?;
         } else {
             // render only (old logic)
-            render_submission
-                .signal_semaphores
-                .to_mut()
-                .push(&self.present_order);
-            render_submission.wait_semaphores.to_mut().push((
+            let render_signal = &[&self.present_order];
+            let render_waits = &[(
                 &self.rendering_order,
                 br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            ));
+            )];
+
+            let render_submission = render_submission
+                .with_signal_semaphores(render_signal)
+                .with_wait_semaphores(render_waits);
+
             g.submit_buffered_commands(&[render_submission], last_render_fence)?;
         }
 
-        // TODO: なんとかunsafeしなくていいようにしたい（SubmissionBatchの寿命をもうちょっと縮められれば行ける気がするんだけど）
         self.swapchain.get_mut_lw().swapchain.queue_present(
             g.graphics_queue.q.get_mut(),
             bb_index,
-            &[unsafe { &mut *(&self.present_order as *const _ as *mut _) }],
+            &[&self.present_order],
         )
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {
-        let old = self.swapchain.take_lw();
-        let (_, s) = old.swapchain.deconstruct();
-        self.swapchain.set_lw(IntegratedSwapchainObject::new(
-            g,
-            s,
-            &self.surface_info,
-            new_size,
-        ));
+        if let Some(old) = self.swapchain.take_lw() {
+            let (_, s) = SharedRef::try_unwrap(old.swapchain)
+                .unwrap_or_else(|_| panic!("there are some references of swapchain left"))
+                .deconstruct();
+            self.swapchain.set_lw(IntegratedSwapchainObject::new(
+                g,
+                s,
+                &self.surface_info,
+                new_size,
+            ));
+        }
     }
 }

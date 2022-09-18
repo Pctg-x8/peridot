@@ -3,23 +3,35 @@
 use super::AutocloseMappedMemoryRange;
 
 use bedrock as br;
-use br::MemoryBound;
 use num::Integer;
 
 #[allow(unused_imports)]
 use crate::mthelper::DynamicMutabilityProvider;
-use crate::{mthelper::SharedRef, DeviceObject};
+use crate::{
+    mthelper::{DynamicMut, SharedRef},
+    DeviceObject,
+};
 
 /// A refcounted buffer object bound with a memory object.
 #[derive(Clone)]
-pub struct Buffer<Backend: br::Buffer, Memory: br::DeviceMemory>(SharedRef<Backend>, Memory, u64);
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
-    pub fn bound(mut b: Backend, mem: Memory, offset: u64) -> br::Result<Self> {
-        b.bind(&mem.borrow(), offset as _)
-            .map(move |_| Self(b.into(), mem, offset))
+pub struct Buffer<Backend: br::Buffer, Memory: br::DeviceMemory>(
+    Backend,
+    SharedRef<DynamicMut<Memory>>,
+    u64,
+);
+impl<Backend: br::Buffer + br::MemoryBound, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+    pub fn bound(
+        mut b: Backend,
+        mem: &SharedRef<DynamicMut<Memory>>,
+        offset: u64,
+    ) -> br::Result<Self> {
+        b.bind(&*mem.borrow(), offset as _)
+            .map(move |_| Self(b, mem.clone(), offset))
     }
+
     /// Reference to a memory object bound with this object.
-    pub fn memory(&self) -> &Memory {
+    #[inline]
+    pub const fn memory(&self) -> &SharedRef<DynamicMut<Memory>> {
         &self.1
     }
 
@@ -82,7 +94,7 @@ impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
     }
 }
 impl<Buffer: br::Buffer> BufferView<Buffer> {
-    pub const fn with_offset(self, offset: usize) -> Self {
+    pub fn with_offset(self, offset: usize) -> Self {
         Self {
             buffer: self.buffer,
             offset: self.offset + offset,
@@ -125,7 +137,7 @@ impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
     }
 }
 impl<Buffer: br::Buffer> DeviceBufferView<Buffer> {
-    pub const fn with_offset(self, offset: br::vk::VkDeviceSize) -> Self {
+    pub fn with_offset(self, offset: br::vk::VkDeviceSize) -> Self {
         Self {
             buffer: self.buffer,
             offset: self.offset + offset,
@@ -295,22 +307,24 @@ impl<'g> BufferPrealloc<'g> {
     }
 
     pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
+        br::BufferDesc::new(self.total as _, self.usage).create(self.g.device.clone())
     }
 
     pub fn build_transferred(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_dest()).create(&self.g.device)
+        br::BufferDesc::new(self.total as _, self.usage.transfer_dest())
+            .create(self.g.device.clone())
     }
 
     pub fn build_upload(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(&self.g.device)
+        br::BufferDesc::new(self.total as _, self.usage.transfer_src())
+            .create(self.g.device.clone())
     }
 
     pub fn build_custom_usage(
         &self,
         usage: br::BufferUsage,
     ) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage | usage).create(&self.g.device)
+        br::BufferDesc::new(self.total as _, self.usage | usage).create(self.g.device.clone())
     }
 
     pub fn add(&mut self, content: BufferContent) -> u64 {

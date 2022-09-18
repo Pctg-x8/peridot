@@ -1,26 +1,33 @@
 //! Image Resource Helper
 
 use bedrock as br;
-use br::MemoryBound;
 
 #[allow(unused_imports)]
 use crate::mthelper::DynamicMutabilityProvider;
-use crate::mthelper::SharedRef;
+use crate::mthelper::{DynamicMut, SharedRef};
 
 /// A refcounted image object bound with a memory object.
 #[derive(Clone)]
 pub struct Image<Backend: br::Image, DeviceMemory: br::DeviceMemory>(
-    SharedRef<Backend>,
-    DeviceMemory,
+    Backend,
+    SharedRef<DynamicMut<DeviceMemory>>,
     u64,
 );
-impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> Image<Backend, DeviceMemory> {
-    pub fn bound(mut r: Backend, mem: DeviceMemory, offset: u64) -> br::Result<Self> {
-        r.bind(&mem.borrow(), offset as _)
-            .map(move |_| Self(r.into(), mem, offset))
+impl<Backend: br::Image + br::MemoryBound, DeviceMemory: br::DeviceMemory>
+    Image<Backend, DeviceMemory>
+{
+    pub fn bound(
+        mut r: Backend,
+        mem: &SharedRef<DynamicMut<DeviceMemory>>,
+        offset: u64,
+    ) -> br::Result<Self> {
+        r.bind(&*mem.borrow(), offset as _)
+            .map(move |_| Self(r.into(), mem.clone(), offset))
     }
+
     /// Reference to a memory object bound with this object.
-    pub fn memory(&self) -> &DeviceMemory {
+    #[inline]
+    pub const fn memory(&self) -> &SharedRef<DynamicMut<DeviceMemory>> {
         &self.1
     }
 

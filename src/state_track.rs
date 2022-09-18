@@ -10,10 +10,11 @@ pub enum StateFence<Fence: br::Fence> {
 impl<Device: br::Device> StateFence<br::FenceObject<Device>> {
     /// Create a fence with Unsignaled state
     pub fn new(d: Device) -> br::Result<Self> {
-        unsafe { d.new_fence(false).map(Self::Unsignaled) }
+        d.new_fence(false).map(Self::Unsignaled)
     }
 }
 impl<Fence: br::Fence> StateFence<Fence> {
+    #[allow(dead_code)]
     /// Wrap a unsignaled fence
     pub const unsafe fn wrap_unsignaled(f: Fence) -> Self {
         Self::Unsignaled(f)

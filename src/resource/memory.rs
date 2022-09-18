@@ -1,11 +1,12 @@
 //! DeviceMemory Helper
 
 use bedrock as br;
+use br::{Device, PhysicalDevice};
 
-use crate::mthelper::{DynamicMut, SharedRef};
-
-/// A refcounted memory object.
-pub type Memory<Device> = SharedRef<DynamicMut<br::DeviceMemoryObject<Device>>>;
+use crate::{
+    mthelper::{DynamicMut, SharedRef},
+    DeviceObject,
+};
 
 pub struct MemoryBadget<'g, Buffer: br::Buffer, Image: br::Image> {
     g: &'g crate::Graphics,
@@ -18,9 +19,9 @@ pub enum MemoryBadgetEntry<Buffer: br::Buffer, Image: br::Image> {
     Buffer(Buffer),
     Image(Image),
 }
-pub enum MemoryBoundResource<Buffer: br::Buffer, Image: br::Image> {
-    Buffer(Buffer),
-    Image(Image),
+pub enum MemoryBoundResource<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory> {
+    Buffer(super::Buffer<Buffer, DeviceMemory>),
+    Image(super::Image<Image, DeviceMemory>),
 }
 impl<Buffer: br::Buffer, Image: br::Image> MemoryBadgetEntry<Buffer, Image> {
     #[inline]
@@ -44,9 +45,11 @@ impl<Buffer: br::Buffer, Image: br::Image> MemoryBadgetEntry<Buffer, Image> {
         }
     }
 }
-impl<Buffer: br::Buffer, Image: br::Image> MemoryBoundResource<Buffer, Image> {
+impl<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory>
+    MemoryBoundResource<Buffer, Image, DeviceMemory>
+{
     #[inline]
-    pub fn unwrap_buffer(self) -> Buffer {
+    pub fn unwrap_buffer(self) -> super::Buffer<Buffer, DeviceMemory> {
         match self {
             MemoryBoundResource::Buffer(b) => b,
             _ => panic!("Not a buffer"),
@@ -54,14 +57,18 @@ impl<Buffer: br::Buffer, Image: br::Image> MemoryBoundResource<Buffer, Image> {
     }
 
     #[inline]
-    pub fn unwrap_image(self) -> Image {
+    pub fn unwrap_image(self) -> super::Image<Image, DeviceMemory> {
         match self {
             MemoryBoundResource::Image(b) => b,
             _ => panic!("Not an image"),
         }
     }
 }
-impl<'g, Buffer: br::Buffer, Image: br::Image> MemoryBadget<'g, Buffer, Image> {
+impl<'g, Buffer, Image> MemoryBadget<'g, Buffer, Image>
+where
+    Buffer: br::Buffer<ConcreteDevice = DeviceObject> + br::MemoryBound,
+    Image: br::Image<ConcreteDevice = DeviceObject> + br::MemoryBound,
+{
     pub const fn new(g: &'g crate::Graphics) -> Self {
         Self {
             g,
@@ -97,7 +104,10 @@ impl<'g, Buffer: br::Buffer, Image: br::Image> MemoryBadget<'g, Buffer, Image> {
         return new_offset;
     }
 
-    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource<Buffer, Image>>> {
+    pub fn alloc(
+        self,
+    ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
+    {
         let mt = self
             .g
             .memory_type_manager
@@ -106,11 +116,12 @@ impl<'g, Buffer: br::Buffer, Image: br::Image> MemoryBadget<'g, Buffer, Image> {
             .index();
         log::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
-        let mem = SharedRef::new(DynamicMut::new(br::DeviceMemory::allocate(
-            &self.g.device,
-            self.total_size as _,
-            mt,
-        )?));
+        let mem = SharedRef::new(DynamicMut::new(
+            self.g
+                .device
+                .clone()
+                .allocate_memory(self.total_size as _, mt)?,
+        ));
 
         self.entries
             .into_iter()
@@ -125,7 +136,10 @@ impl<'g, Buffer: br::Buffer, Image: br::Image> MemoryBadget<'g, Buffer, Image> {
             .collect()
     }
 
-    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource<Buffer, Image>>> {
+    pub fn alloc_upload(
+        self,
+    ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
+    {
         let mt = self
             .g
             .memory_type_manager
@@ -139,11 +153,12 @@ impl<'g, Buffer: br::Buffer, Image: br::Image> MemoryBadget<'g, Buffer, Image> {
         }
         log::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt.index(), self.memory_type_bitmask);
-        let mem = SharedRef::new(DynamicMut::new(br::DeviceMemory::allocate(
-            &self.g.device,
-            self.total_size as _,
-            mt.index(),
-        )?));
+        let mem = SharedRef::new(DynamicMut::new(
+            self.g
+                .device
+                .clone()
+                .allocate_memory(self.total_size as _, mt.index())?,
+        ));
 
         self.entries
             .into_iter()

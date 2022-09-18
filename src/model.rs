@@ -78,7 +78,7 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
     }
 }
 impl<VT> Primitive<VT> {
-    pub const fn with_indices(self, indices: Vec<u16>) -> IndexedPrimitive<VT> {
+    pub fn with_indices(self, indices: Vec<u16>) -> IndexedPrimitive<VT> {
         IndexedPrimitive {
             vertices: self.vertices,
             indices,

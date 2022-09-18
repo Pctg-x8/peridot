@@ -3,7 +3,11 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
-use br::{CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Status};
+#[cfg(feature = "Multithreaded")]
+use br::Status;
+use br::{
+    CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch,
+};
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::ffi::CStr;
@@ -59,37 +63,16 @@ pub trait NativeLinker: Sized {
     }
 }
 
-pub trait Submission<'d> {
-    type ContainedSemaphore: br::Semaphore + Clone;
-    type ContainedCommandBuffer: br::CommandBuffer + Clone;
-
-    fn make_batch(
-        self,
-    ) -> br::SubmissionBatch<'d, Self::ContainedSemaphore, Self::ContainedCommandBuffer>;
-}
-impl<'d, Semaphore: br::Semaphore + Clone, CommandBuffer: br::CommandBuffer + Clone> Submission<'d>
-    for br::SubmissionBatch<'d, Semaphore, CommandBuffer>
-{
-    type ContainedSemaphore = Semaphore;
-    type ContainedCommandBuffer = CommandBuffer;
-
-    fn make_batch(
-        self,
-    ) -> br::SubmissionBatch<'d, Self::ContainedSemaphore, Self::ContainedCommandBuffer> {
-        self
-    }
-}
-
-pub trait EngineEvents<'d, PL: NativeLinker>: Sized {
-    type CopySubmission: Submission<'d>;
-    type RenderSubmission: Submission<'d>;
+pub trait EngineEvents<PL: NativeLinker>: Sized {
+    type CopySubmission: br::SubmissionBatch;
+    type RenderSubmission: br::SubmissionBatch;
 
     fn init(_e: &mut Engine<PL>) -> Self;
 
     /// Updates the game and passes copying(optional) and rendering command batches to the engine.
     fn update(
-        &'d mut self,
-        _e: &'d mut Engine<PL>,
+        &mut self,
+        _e: &mut Engine<PL>,
         _on_backbuffer_of: u32,
         _delta_time: Duration,
     ) -> (Option<Self::CopySubmission>, Self::RenderSubmission);
@@ -110,29 +93,21 @@ pub trait EngineEvents<'d, PL: NativeLinker>: Sized {
     fn recover_render_resources(&mut self, _e: &mut Engine<PL>) {}
 }
 
-impl<'d, PL: NativeLinker> EngineEvents<'d, PL> for () {
-    type CopySubmission = br::SubmissionBatch<
-        'd,
-        SharedRef<br::SemaphoreObject<DeviceObject>>,
-        SharedRef<br::CommandBufferObject<DeviceObject>>,
-    >;
-    type RenderSubmission = br::SubmissionBatch<
-        'd,
-        SharedRef<br::SemaphoreObject<DeviceObject>>,
-        SharedRef<br::CommandBufferObject<DeviceObject>>,
-    >;
+impl<PL: NativeLinker> EngineEvents<PL> for () {
+    type CopySubmission = br::EmptySubmissionBatch;
+    type RenderSubmission = br::EmptySubmissionBatch;
 
     fn init(_e: &mut Engine<PL>) -> Self {
         ()
     }
 
     fn update(
-        &'d mut self,
-        _e: &'d mut Engine<PL>,
+        &mut self,
+        _e: &mut Engine<PL>,
         _on_backbuffer_of: u32,
         _delta_time: Duration,
     ) -> (Option<Self::CopySubmission>, Self::RenderSubmission) {
-        (None, Default::default())
+        (None, br::EmptySubmissionBatch)
     }
 }
 
@@ -327,15 +302,13 @@ impl<NL: NativeLinker> Engine<NL> {
     }
     pub fn submit_buffered_commands(
         &mut self,
-        batches: &[br::SubmissionBatch<
-            impl br::Semaphore + Clone,
-            impl br::CommandBuffer + Clone,
-        >],
+        batches: &[impl br::SubmissionBatch],
         fence: &mut impl br::Fence,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
 
+    #[cfg(feature = "Multithreaded")]
     /// Submits any commands as transient commands.
     /// ## Note
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
@@ -364,7 +337,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 }
 impl<PL: NativeLinker> Engine<PL> {
-    pub fn do_update<'d, EH: EngineEvents<'d, PL>>(&'d mut self, userlib: &'d mut EH) {
+    pub fn do_update<EH: EngineEvents<PL>>(&mut self, userlib: &mut EH) {
         let dt = self.gametimer.delta_time();
 
         let bb_index = match self.presenter.next_backbuffer_index() {
@@ -386,8 +359,8 @@ impl<PL: NativeLinker> Engine<PL> {
             &mut self.g,
             self.last_rendering_completion.inner_mut(),
             bb_index,
-            fb_submission.make_batch(),
-            copy_submission.map(Submission::make_batch),
+            fb_submission,
+            copy_submission,
         );
         unsafe {
             self.last_rendering_completion.signal();
@@ -403,10 +376,10 @@ impl<PL: NativeLinker> Engine<PL> {
         }
     }
 
-    pub fn do_resize_backbuffer<'d, EH: EngineEvents<'d, PL>>(
-        &'d mut self,
+    pub fn do_resize_backbuffer<EH: EngineEvents<PL>>(
+        &mut self,
         new_size: math::Vector2<usize>,
-        userlib: &'d mut EH,
+        userlib: &mut EH,
     ) {
         self.last_rendering_completion
             .wait()
@@ -653,6 +626,7 @@ impl MemoryTypeManager {
     }
 }
 
+#[cfg(feature = "Multithreaded")]
 struct FenceReactorThread<Device: br::Device> {
     pending_fences: std::sync::Arc<
         parking_lot::Mutex<
@@ -666,7 +640,8 @@ struct FenceReactorThread<Device: br::Device> {
     thread_handle: Option<std::thread::JoinHandle<()>>,
     thread_waker: std::sync::Arc<parking_lot::Condvar>,
 }
-impl<Device: br::Device> FenceReactorThread<Device> {
+#[cfg(feature = "Multithreaded")]
+impl<Device: br::Device + 'static> FenceReactorThread<Device> {
     pub fn new() -> Self {
         let pending_fences = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -731,7 +706,7 @@ impl<Device: br::Device> FenceReactorThread<Device> {
 
     pub fn register(
         &self,
-        fence: &std::sync::Arc<impl br::Fence<ConcreteDevice = Device> + Send + Sync>,
+        fence: &std::sync::Arc<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
         waker: std::task::Waker,
     ) {
         self.pending_fences
@@ -740,6 +715,7 @@ impl<Device: br::Device> FenceReactorThread<Device> {
         self.thread_waker.notify_all();
     }
 }
+#[cfg(feature = "Multithreaded")]
 impl<Device: br::Device> Drop for FenceReactorThread<Device> {
     fn drop(&mut self) {
         if let Some(th) = self.thread_handle.take() {
@@ -751,12 +727,14 @@ impl<Device: br::Device> Drop for FenceReactorThread<Device> {
     }
 }
 
-struct FenceWaitFuture<'d, Fence: br::Fence + Send + Sync> {
-    reactor: &'d FenceReactorThread<Fence::ConcreteDevice>,
-    object: std::sync::Arc<Fence>,
+#[cfg(feature = "Multithreaded")]
+struct FenceWaitFuture<'d, Device: br::Device> {
+    reactor: &'d FenceReactorThread<Device>,
+    object: std::sync::Arc<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
     registered: bool,
 }
-impl<Fence: br::Fence + Send + Sync> std::future::Future for FenceWaitFuture<'_, Fence> {
+#[cfg(feature = "Multithreaded")]
+impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, Device> {
     type Output = br::Result<()>;
 
     fn poll(
@@ -791,6 +769,7 @@ pub struct Graphics {
     graphics_queue: Queue<DeviceObject>,
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
+    #[cfg(feature = "Multithreaded")]
     fence_reactor: FenceReactorThread<DeviceObject>,
 }
 impl Graphics {
@@ -851,7 +830,7 @@ impl Graphics {
             .expect("No graphics queue");
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
         let device = {
-            let mut db = br::DeviceBuilder::new(adapter);
+            let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extensions(device_extensions).add_queue(qci);
             if validation_layer_available {
                 db.add_layer("VK_LAYER_KHRONOS_validation");
@@ -869,6 +848,7 @@ impl Graphics {
             adapter: adapter.clone_parent(),
             device,
             memory_type_manager,
+            #[cfg(feature = "Multithreaded")]
             fence_reactor: FenceReactorThread::new(),
         })
     }
@@ -884,22 +864,14 @@ impl Graphics {
         );
         generator(unsafe { &mut cb[0].begin_once()? });
         self.graphics_queue.q.get_mut().submit(
-            &[
-                br::SubmissionBatch::<SharedRef<br::SemaphoreObject<DeviceObject>>, _> {
-                    command_buffers: Cow::from(&cb[..]),
-                    ..Default::default()
-                },
-            ],
+            &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             None::<&mut br::FenceObject<DeviceObject>>,
         )?;
         self.graphics_queue.q.get_mut().wait()
     }
     pub fn submit_buffered_commands(
         &mut self,
-        batches: &[br::SubmissionBatch<
-            impl br::Semaphore + Clone,
-            impl br::CommandBuffer + Clone,
-        >],
+        batches: &[impl br::SubmissionBatch],
         fence: &mut impl br::Fence,
     ) -> br::Result<()> {
         self.graphics_queue.q.get_mut().submit(batches, Some(fence))

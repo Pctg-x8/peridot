@@ -1,5 +1,6 @@
 //! Batched Operation Helpers
 
+use crate::mthelper::SharedRef;
 use bedrock as br;
 use br::{vk::VkBufferCopy, VkHandle};
 use log::*;
@@ -8,30 +9,45 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+use crate::PixelFormat;
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct ResourceKey<T: VkHandle>(T);
-impl<T: br::VkHandle> PartialEq for ResourceKey<T> {
+impl<T: br::VkHandle> PartialEq for ResourceKey<T>
+where
+    T::Handle: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
-        (self.0.native_ptr() as u64).eq(&(other.0.native_ptr() as u64))
+        self.0.native_ptr().eq(&other.0.native_ptr())
     }
 }
-impl<T: br::VkHandle> PartialOrd for ResourceKey<T> {
+impl<T: br::VkHandle> PartialOrd for ResourceKey<T>
+where
+    T::Handle: PartialOrd,
+{
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        (self.0.native_ptr() as u64).partial_cmp(&(other.0.native_ptr() as u64))
+        self.0.native_ptr().partial_cmp(&other.0.native_ptr())
     }
 }
-impl<T: br::VkHandle> Eq for ResourceKey<T> {}
-impl<T: br::VkHandle> Ord for ResourceKey<T> {
+impl<T: br::VkHandle> Eq for ResourceKey<T> where T::Handle: Eq {}
+impl<T: br::VkHandle> Ord for ResourceKey<T>
+where
+    T::Handle: Ord,
+{
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).expect("ord: unreachable")
     }
 }
-impl<T: br::VkHandle> Hash for ResourceKey<T> {
+impl<T: br::VkHandle> Hash for ResourceKey<T>
+where
+    T::Handle: Hash,
+{
     fn hash<H: Hasher>(&self, hasher: &mut H) {
         self.0.native_ptr().hash(hasher)
     }
 }
+
 pub struct ReadyResourceBarriers<Buffer: br::Buffer, Image: br::Image> {
     buffer: Vec<(Buffer, Range<u64>, br::vk::VkAccessFlags)>,
     image: Vec<(Image, br::ImageSubresourceRange, br::ImageLayout)>,
@@ -46,43 +62,43 @@ impl<Buffer: br::Buffer, Image: br::Image> ReadyResourceBarriers<Buffer, Image> 
 }
 
 /// Batching Manager for Transferring Operations.
-pub struct TransferBatch<'r, Device: br::Device> {
+pub struct TransferBatch<Device: br::Device> {
     barrier_range_src: BTreeMap<
-        ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+        ResourceKey<SharedRef<dyn br::Buffer<ConcreteDevice = Device>>>,
         Range<br::vk::VkDeviceSize>,
     >,
     barrier_range_dst: BTreeMap<
-        ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+        ResourceKey<SharedRef<dyn br::Buffer<ConcreteDevice = Device>>>,
         Range<br::vk::VkDeviceSize>,
     >,
     org_layout_src:
-        BTreeMap<ResourceKey<&'r dyn br::Image<ConcreteDevice = Device>>, br::ImageLayout>,
+        BTreeMap<ResourceKey<SharedRef<dyn br::Image<ConcreteDevice = Device>>>, br::ImageLayout>,
     org_layout_dst:
-        BTreeMap<ResourceKey<&'r dyn br::Image<ConcreteDevice = Device>>, br::ImageLayout>,
+        BTreeMap<ResourceKey<SharedRef<dyn br::Image<ConcreteDevice = Device>>>, br::ImageLayout>,
     copy_buffers: HashMap<
         (
-            ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
-            ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+            ResourceKey<SharedRef<dyn br::Buffer<ConcreteDevice = Device>>>,
+            ResourceKey<SharedRef<dyn br::Buffer<ConcreteDevice = Device>>>,
         ),
         Vec<VkBufferCopy>,
     >,
     init_images: BTreeMap<
-        ResourceKey<&'r dyn br::Image<ConcreteDevice = Device>>,
+        ResourceKey<SharedRef<dyn br::Image<ConcreteDevice = Device>>>,
         (
-            &'r dyn br::Buffer<ConcreteDevice = Device>,
+            SharedRef<dyn br::Buffer<ConcreteDevice = Device>>,
             br::vk::VkDeviceSize,
         ),
     >,
     ready_barriers: BTreeMap<
         br::PipelineStageFlags,
         ReadyResourceBarriers<
-            &'r dyn br::Buffer<ConcreteDevice = Device>,
-            &'r dyn br::Image<ConcreteDevice = Device>,
+            SharedRef<dyn br::Buffer<ConcreteDevice = Device>>,
+            SharedRef<dyn br::Image<ConcreteDevice = Device>>,
         >,
     >,
 }
-impl<'r, Device: br::Device> TransferBatch<'r, Device> {
-    pub const fn new() -> Self {
+impl<Device: br::Device> TransferBatch<Device> {
+    pub fn new() -> Self {
         Self {
             barrier_range_src: BTreeMap::new(),
             barrier_range_dst: BTreeMap::new(),
@@ -97,8 +113,8 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
     /// Add copying operation between buffers.
     pub fn add_copying_buffer(
         &mut self,
-        src: crate::DeviceBufferView<&'r impl br::Buffer>,
-        dst: crate::DeviceBufferView<&'r impl br::Buffer>,
+        src: crate::DeviceBufferView<SharedRef<impl br::Buffer<ConcreteDevice = Device> + 'static>>,
+        dst: crate::DeviceBufferView<SharedRef<impl br::Buffer<ConcreteDevice = Device> + 'static>>,
         bytes: br::vk::VkDeviceSize,
     ) {
         trace!(
@@ -107,9 +123,14 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
             dst.offset
         );
 
-        let (sk, dk) = (ResourceKey(src.buffer), ResourceKey(dst.buffer));
-        Self::update_barrier_range_for(&mut self.barrier_range_src, sk, src.range(bytes));
-        Self::update_barrier_range_for(&mut self.barrier_range_dst, dk, dst.range(bytes));
+        let sr = src.range(bytes);
+        let dr = dst.range(bytes);
+        let (sk, dk) = (
+            ResourceKey(src.buffer as SharedRef<dyn br::Buffer<ConcreteDevice = Device>>),
+            ResourceKey(dst.buffer as SharedRef<dyn br::Buffer<ConcreteDevice = Device>>),
+        );
+        Self::update_barrier_range_for(&mut self.barrier_range_src, sk.clone(), sr);
+        Self::update_barrier_range_for(&mut self.barrier_range_dst, dk.clone(), dr);
         self.copy_buffers
             .entry((sk, dk))
             .or_insert_with(Vec::new)
@@ -125,8 +146,8 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
     #[inline]
     pub fn add_mirroring_buffer(
         &mut self,
-        src: &'r impl br::Buffer,
-        dst: &'r impl br::Buffer,
+        src: SharedRef<impl br::Buffer<ConcreteDevice = Device> + 'static>,
+        dst: SharedRef<impl br::Buffer<ConcreteDevice = Device> + 'static>,
         offset: br::vk::VkDeviceSize,
         bytes: br::vk::VkDeviceSize,
     ) {
@@ -146,19 +167,17 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
     /// Add image content initializing operation, from the buffer.
     pub fn init_image_from(
         &mut self,
-        dest: &'r impl br::Image,
-        src: crate::DeviceBufferView<&'r impl br::Buffer>,
+        dest: SharedRef<impl br::Image<ConcreteDevice = Device> + 'static>,
+        src: crate::DeviceBufferView<SharedRef<impl br::Buffer<ConcreteDevice = Device> + 'static>>,
     ) {
-        let size =
-            (dest.size().width * dest.size().height) as u64 * (dest.format().bpp() >> 3) as u64;
-        let rk_dest = ResourceKey(dest);
+        let size = (dest.size().width * dest.size().height) as u64
+            * (PixelFormat::from(dest.format()).bpp() >> 3) as u64;
+        let rk_dest = ResourceKey(dest as SharedRef<dyn br::Image<ConcreteDevice = Device>>);
 
-        self.init_images.insert(rk_dest, (src.buffer, src.offset));
-        Self::update_barrier_range_for(
-            &mut self.barrier_range_src,
-            ResourceKey(src.buffer),
-            src.range(size),
-        );
+        self.init_images
+            .insert(rk_dest.clone(), (src.buffer.clone(), src.offset));
+        let sr = src.range(size);
+        Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.buffer), sr);
         self.org_layout_dst
             .insert(rk_dest, br::ImageLayout::Preinitialized);
     }
@@ -167,7 +186,7 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
     pub fn add_buffer_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: &'r impl br::Buffer,
+        res: SharedRef<impl br::Buffer<ConcreteDevice = Device> + 'static>,
         byterange: Range<br::vk::VkDeviceSize>,
         access_grants: br::vk::VkAccessFlags,
     ) {
@@ -182,7 +201,7 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
     pub fn add_image_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: &'r impl br::Image,
+        res: SharedRef<impl br::Image<ConcreteDevice = Device> + 'static>,
         layout: br::ImageLayout,
     ) {
         self.ready_barriers
@@ -198,17 +217,17 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
     }
 
     /// Have add_buffer_graphics_ready or add_image_graphics_ready been called?
-    pub const fn has_ready_barrier_ops(&self) -> bool {
+    pub fn has_ready_barrier_ops(&self) -> bool {
         !self.ready_barriers.is_empty()
     }
 
     #[inline]
     fn update_barrier_range_for(
         map: &mut BTreeMap<
-            ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+            ResourceKey<SharedRef<dyn br::Buffer<ConcreteDevice = Device> + 'static>>,
             Range<br::vk::VkDeviceSize>,
         >,
-        k: ResourceKey<&'r dyn br::Buffer<ConcreteDevice = Device>>,
+        k: ResourceKey<SharedRef<dyn br::Buffer<ConcreteDevice = Device> + 'static>>,
         new_range: Range<br::vk::VkDeviceSize>,
     ) {
         let r = map.entry(k).or_insert_with(|| new_range.clone());
@@ -217,7 +236,7 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
     }
 }
 /// Sinking Commands into CommandBuffers
-impl<'r, Device: br::Device> TransferBatch<'r, Device> {
+impl<Device: br::Device> TransferBatch<Device> {
     pub fn sink_transfer_commands(&self, r: &mut br::CmdRecord<impl br::CommandBuffer>) {
         let src_barriers = self.barrier_range_src.iter().map(|(b, r)| {
             br::BufferMemoryBarrier::new(
@@ -233,16 +252,16 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
         let barriers: Vec<_> = src_barriers.chain(dst_barriers).collect();
         let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
-                b.0,
-                &br::ImageSubresourceRange::color(0, 0),
+                &b.0,
+                br::ImageSubresourceRange::color(0, 0),
                 l0,
                 br::ImageLayout::TransferSrcOpt,
             )
         });
         let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
-                b.0,
-                &br::ImageSubresourceRange::color(0, 0),
+                &b.0,
+                br::ImageSubresourceRange::color(0, 0),
                 l0,
                 br::ImageLayout::TransferDestOpt,
             )
@@ -305,7 +324,12 @@ impl<'r, Device: br::Device> TransferBatch<'r, Device> {
             let img_barriers: Vec<_> = image
                 .iter()
                 .map(|(r, range, l)| {
-                    br::ImageMemoryBarrier::new_raw(&r, range, br::ImageLayout::TransferDestOpt, *l)
+                    br::ImageMemoryBarrier::new(
+                        r,
+                        range.clone(),
+                        br::ImageLayout::TransferDestOpt,
+                        *l,
+                    )
                 })
                 .collect();
             r.pipeline_barrier(
