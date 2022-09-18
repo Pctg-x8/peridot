@@ -4,9 +4,10 @@ use super::*;
 use bedrock as br;
 use pathfinder_partitioner::{BQuadVertexPositions, BVertexLoopBlinnData};
 use peridot::math::Vector2;
+use peridot::mthelper::SharedRef;
 use peridot::{
-    Buffer, BufferContent, BufferPrealloc, DefaultRenderCommands, Engine, LayoutedPipeline,
-    ModelData, NativeLinker,
+    BufferContent, BufferPrealloc, DefaultRenderCommands, Engine, LayoutedPipeline, ModelData,
+    NativeLinker,
 };
 use std::mem::size_of;
 use std::ops::Range;
@@ -45,9 +46,16 @@ impl RendererParams {
         self.buffer_offsets.transforms_byterange()
     }
 }
-pub struct RendererExternalInstances<'r> {
-    pub interior_pipeline: &'r LayoutedPipeline,
-    pub curve_pipeline: &'r LayoutedPipeline,
+pub struct RendererExternalInstances<'r, Device: br::Device> {
+    // TODO: SharedRef強制はなんとか剥がしたい
+    pub interior_pipeline: &'r LayoutedPipeline<
+        br::PipelineObject<Device>,
+        SharedRef<br::PipelineLayoutObject<Device>>,
+    >,
+    pub curve_pipeline: &'r LayoutedPipeline<
+        br::PipelineObject<Device>,
+        SharedRef<br::PipelineLayoutObject<Device>>,
+    >,
     pub transform_buffer_descriptor_set: br::DescriptorSet,
     pub target_pixels: Vector2<f32>,
 }
@@ -118,9 +126,10 @@ impl ModelData for Context {
             curve_indices,
         }
     }
+
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
         let transforms_stg = unsafe { mem.slice_mut(offsets.transforms, self.meshes().len()) };
@@ -190,23 +199,23 @@ impl ModelData for Context {
             curve_vindex_offset += v.b_vertex_positions.len() as u32;
         }
 
-        return RendererParams {
+        RendererParams {
             buffer_offsets: offsets,
             render_info: ContextRenderInfo {
                 interior_index_range_per_mesh,
                 curve_index_range_per_mesh,
             },
-        };
+        }
     }
 }
-impl<'e> DefaultRenderCommands<'e> for RendererParams {
-    type Extras = RendererExternalInstances<'e>;
+impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for RendererParams {
+    type Extras = RendererExternalInstances<'e, Device>;
 
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord,
-        buffer: &Buffer,
+        cmd: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     ) {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();

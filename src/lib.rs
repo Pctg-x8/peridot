@@ -1118,7 +1118,7 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self.1
     }
 
-    pub fn bind(&self, rec: &mut br::CmdRecord<impl br::CommandBuffer>) {
+    pub fn bind(&self, rec: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>) {
         rec.bind_graphics_pipeline_pair(&self.0, &self.1);
     }
 }

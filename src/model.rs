@@ -15,14 +15,14 @@ pub trait ModelData {
         offsets: Self::PreallocOffsetType,
     ) -> Self::RendererParams;
 }
-pub trait DefaultRenderCommands<'e> {
+pub trait DefaultRenderCommands<'e, Device: br::Device> {
     type Extras: 'e;
 
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
         cmd: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
-        buffer: &impl br::Buffer,
+        buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     );
 }
