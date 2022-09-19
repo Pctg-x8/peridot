@@ -3,7 +3,7 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
-#[cfg(feature = "Multithreaded")]
+#[cfg(feature = "mt")]
 use br::Status;
 use br::{
     CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch,
@@ -64,18 +64,10 @@ pub trait NativeLinker: Sized {
 }
 
 pub trait EngineEvents<PL: NativeLinker>: Sized {
-    type CopySubmission: br::SubmissionBatch;
-    type RenderSubmission: br::SubmissionBatch;
-
     fn init(_e: &mut Engine<PL>) -> Self;
 
-    /// Updates the game and passes copying(optional) and rendering command batches to the engine.
-    fn update(
-        &mut self,
-        _e: &mut Engine<PL>,
-        _on_backbuffer_of: u32,
-        _delta_time: Duration,
-    ) -> (Option<Self::CopySubmission>, Self::RenderSubmission);
+    /// Updates the game.
+    fn update(&mut self, _e: &mut Engine<PL>, _on_backbuffer_of: u32, _delta_time: Duration) {}
 
     /// Discards backbuffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
     fn discard_backbuffer_resources(&mut self) {}
@@ -94,20 +86,8 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
 }
 
 impl<PL: NativeLinker> EngineEvents<PL> for () {
-    type CopySubmission = br::EmptySubmissionBatch;
-    type RenderSubmission = br::EmptySubmissionBatch;
-
     fn init(_e: &mut Engine<PL>) -> Self {
         ()
-    }
-
-    fn update(
-        &mut self,
-        _e: &mut Engine<PL>,
-        _on_backbuffer_of: u32,
-        _delta_time: Duration,
-    ) -> (Option<Self::CopySubmission>, Self::RenderSubmission) {
-        (None, br::EmptySubmissionBatch)
     }
 }
 
@@ -308,7 +288,7 @@ impl<NL: NativeLinker> Engine<NL> {
         self.g.submit_buffered_commands(batches, fence)
     }
 
-    #[cfg(feature = "Multithreaded")]
+    #[cfg(feature = "mt")]
     /// Submits any commands as transient commands.
     /// ## Note
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
@@ -348,18 +328,26 @@ impl<PL: NativeLinker> Engine<PL> {
             }
             e => e.expect("Acquiring available backbuffer index"),
         };
-        self.last_rendering_completion
-            .wait()
+        StateFence::wait(&mut self.last_rendering_completion)
             .expect("Waiting Last command completion");
 
         self.ip.prepare_for_frame(dt);
 
-        let (copy_submission, fb_submission) = userlib.update(self, bb_index, dt);
+        userlib.update(self, bb_index, dt);
+    }
+
+    pub fn do_render<EH: EngineEvents<PL>>(
+        &mut self,
+        userlib: &mut EH,
+        bb_index: u32,
+        copy_submission: Option<impl br::SubmissionBatch>,
+        render_submission: impl br::SubmissionBatch,
+    ) -> br::Result<()> {
         let pr = self.presenter.render_and_present(
             &mut self.g,
             self.last_rendering_completion.inner_mut(),
             bb_index,
-            fb_submission,
+            render_submission,
             copy_submission,
         );
         unsafe {
@@ -370,19 +358,19 @@ impl<PL: NativeLinker> Engine<PL> {
             Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize
                 self.do_resize_backbuffer(self.presenter.current_geometry_extent(), userlib);
-                return;
+
+                Ok(())
             }
-            v => v.expect("Present Submission"),
+            v => v,
         }
     }
 
-    pub fn do_resize_backbuffer<EH: EngineEvents<PL>>(
+    pub fn do_resize_backbuffer(
         &mut self,
         new_size: math::Vector2<usize>,
-        userlib: &mut EH,
+        userlib: &mut (impl EngineEvents<PL> + ?Sized),
     ) {
-        self.last_rendering_completion
-            .wait()
+        StateFence::wait(&mut self.last_rendering_completion)
             .expect("Waiting Last command completion");
         userlib.discard_backbuffer_resources();
         let needs_reinit_backbuffers = self.presenter.resize(&self.g, new_size.clone());
@@ -626,7 +614,7 @@ impl MemoryTypeManager {
     }
 }
 
-#[cfg(feature = "Multithreaded")]
+#[cfg(feature = "mt")]
 struct FenceReactorThread<Device: br::Device> {
     pending_fences: std::sync::Arc<
         parking_lot::Mutex<
@@ -640,7 +628,7 @@ struct FenceReactorThread<Device: br::Device> {
     thread_handle: Option<std::thread::JoinHandle<()>>,
     thread_waker: std::sync::Arc<parking_lot::Condvar>,
 }
-#[cfg(feature = "Multithreaded")]
+#[cfg(feature = "mt")]
 impl<Device: br::Device + 'static> FenceReactorThread<Device> {
     pub fn new() -> Self {
         let pending_fences = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -715,7 +703,7 @@ impl<Device: br::Device + 'static> FenceReactorThread<Device> {
         self.thread_waker.notify_all();
     }
 }
-#[cfg(feature = "Multithreaded")]
+#[cfg(feature = "mt")]
 impl<Device: br::Device> Drop for FenceReactorThread<Device> {
     fn drop(&mut self) {
         if let Some(th) = self.thread_handle.take() {
@@ -727,13 +715,13 @@ impl<Device: br::Device> Drop for FenceReactorThread<Device> {
     }
 }
 
-#[cfg(feature = "Multithreaded")]
+#[cfg(feature = "mt")]
 struct FenceWaitFuture<'d, Device: br::Device> {
     reactor: &'d FenceReactorThread<Device>,
     object: std::sync::Arc<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
     registered: bool,
 }
-#[cfg(feature = "Multithreaded")]
+#[cfg(feature = "mt")]
 impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, Device> {
     type Output = br::Result<()>;
 
@@ -756,7 +744,7 @@ impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, D
     }
 }
 
-pub(crate) type DeviceObject = SharedRef<br::DeviceObject<SharedRef<br::InstanceObject>>>;
+pub type DeviceObject = SharedRef<br::DeviceObject<SharedRef<br::InstanceObject>>>;
 /// Queue object with family index
 pub struct Queue<Device: br::Device> {
     q: parking_lot::Mutex<br::Queue<Device>>,
@@ -769,7 +757,7 @@ pub struct Graphics {
     graphics_queue: Queue<DeviceObject>,
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
-    #[cfg(feature = "Multithreaded")]
+    #[cfg(feature = "mt")]
     fence_reactor: FenceReactorThread<DeviceObject>,
 }
 impl Graphics {
@@ -848,7 +836,7 @@ impl Graphics {
             adapter: adapter.clone_parent(),
             device,
             memory_type_manager,
-            #[cfg(feature = "Multithreaded")]
+            #[cfg(feature = "mt")]
             fence_reactor: FenceReactorThread::new(),
         })
     }
@@ -890,7 +878,7 @@ impl Graphics {
     /// Submits any commands as transient commands.
     /// ## Note
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
-    #[cfg(feature = "Multithreaded")]
+    #[cfg(feature = "mt")]
     pub fn submit_commands_async<'s>(
         &'s self,
         generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>),
@@ -905,12 +893,7 @@ impl Graphics {
         let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
         generator(&mut unsafe { cb[0].begin_once()? });
         self.graphics_queue.q.lock().submit(
-            &[
-                br::SubmissionBatch::<SharedRef<br::SemaphoreObject<DeviceObject>>, _> {
-                    command_buffers: Cow::from(&cb[..]),
-                    ..Default::default()
-                },
-            ],
+            &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
         )?;
 
@@ -925,10 +908,12 @@ impl Graphics {
     }
 
     /// Awaits fence on background thread
-    #[cfg(feature = "Multithreaded")]
+    #[cfg(feature = "mt")]
     pub fn await_fence<'s>(
         &'s self,
-        fence: std::sync::Arc<impl br::Fence<ConcreteDevice = DeviceObject> + Send + Sync + 's>,
+        fence: std::sync::Arc<
+            impl br::Fence<ConcreteDevice = DeviceObject> + Send + Sync + 'static,
+        >,
     ) -> impl std::future::Future<Output = br::Result<()>> + 's {
         FenceWaitFuture {
             reactor: &self.fence_reactor,
@@ -943,6 +928,10 @@ impl Graphics {
 
     pub fn adapter(&self) -> &impl br::PhysicalDevice {
         &self.adapter
+    }
+
+    pub fn device(&self) -> &DeviceObject {
+        &self.device
     }
 
     pub fn graphics_queue_family_index(&self) -> u32 {

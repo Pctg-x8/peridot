@@ -605,10 +605,15 @@ impl<Image: br::Image> DeviceWorkingTextureRef<Image> for DeviceWorkingTexture3D
 pub trait FixedBufferInitializer {
     /// Setup memory data in staging buffer
     fn stage_data(&mut self, m: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>);
-    fn buffer_graphics_ready(
+    fn buffer_graphics_ready<Device: br::Device + 'static>(
         &self,
-        tfb: &mut TransferBatch<impl br::Device>,
-        buf: &Buffer<impl br::Buffer, impl br::DeviceMemory>,
+        tfb: &mut TransferBatch<Device>,
+        buf: &SharedRef<
+            Buffer<
+                impl br::Buffer<ConcreteDevice = Device> + 'static,
+                impl br::DeviceMemory<ConcreteDevice = Device> + 'static,
+            >,
+        >,
         range: Range<u64>,
     );
 }
@@ -617,7 +622,7 @@ pub struct FixedMemory<Device: br::Device, Buffer: br::Buffer> {
     /// Device accessible buffer object
     pub buffer: (SharedRef<Buffer>, u64),
     /// Host buffer staging per-frame mutable data
-    pub mut_buffer: (Buffer, u64),
+    pub mut_buffer: (SharedRef<DynamicMut<Buffer>>, u64),
     /// The placement offset of mut_buffer data in buffer
     pub mut_buffer_placement: u64,
     /// Textures
@@ -682,7 +687,10 @@ impl
 
         Ok(FixedMemory {
             buffer: (buffer, imm_buffer_size),
-            mut_buffer: (mut_buffer, prealloc_mut.total_size()),
+            mut_buffer: (
+                SharedRef::new(DynamicMut::new(mut_buffer)),
+                prealloc_mut.total_size(),
+            ),
             mut_buffer_placement,
             textures: textures.into_textures(),
         })
