@@ -2,10 +2,9 @@ use bedrock as br;
 use br::{CommandBuffer, Device, Image, ImageChild, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
-use peridot::{Engine, EngineEvents, FeatureRequests, NativeLinker};
+use peridot::{Engine, EngineEvents, FeatureRequests};
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg::FlatPathBuilder;
-use std::rc::Rc;
 
 #[derive(peridot_derive::SpecConstantStorage)]
 #[repr(C)]
@@ -549,9 +548,11 @@ impl TwoPassStencilSDFRenderer {
 }
 
 pub struct Game<NL: peridot::NativeLinker> {
-    buffer: peridot::Buffer<
-        br::BufferObject<peridot::DeviceObject>,
-        br::DeviceMemoryObject<peridot::DeviceObject>,
+    buffer: SharedRef<
+        peridot::Buffer<
+            br::BufferObject<peridot::DeviceObject>,
+            br::DeviceMemoryObject<peridot::DeviceObject>,
+        >,
     >,
     stencil_buffer_view: SharedRef<
         br::ImageViewObject<
@@ -564,7 +565,7 @@ pub struct Game<NL: peridot::NativeLinker> {
     fb: Vec<
         br::FramebufferObject<
             peridot::DeviceObject,
-            SharedRef<<NL::Presenter as peridot::PlatformPresenter>::Backbuffer>,
+            SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
         >,
     >,
     sdf_renderer: TwoPassStencilSDFRenderer,
@@ -640,7 +641,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         .create(e.graphics().device().clone())
         .expect("Failed to create stencil buffer");
 
-        let mut mb = peridot::MemoryBadget::new(e.graphics());
+        let mut mb =
+            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
         let buffer = mb
             .alloc()
@@ -648,7 +650,9 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .pop()
             .expect("no objects?")
             .unwrap_buffer();
-        let mut mb_upload = peridot::MemoryBadget::new(e.graphics());
+        let buffer = SharedRef::new(buffer);
+        let mut mb_upload =
+            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb_upload.add(peridot::MemoryBadgetEntry::Buffer(buffer_init));
         let mut buffer_init = mb_upload
             .alloc_upload()
@@ -656,7 +660,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .pop()
             .expect("no objects?")
             .unwrap_buffer();
-        let mut mb_tex = peridot::MemoryBadget::new(e.graphics());
+        let mut mb_tex =
+            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
         mb_tex.add(peridot::MemoryBadgetEntry::Image(stencil_buffer));
         let stencil_buffer = mb_tex
             .alloc()
@@ -717,10 +722,15 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             })
             .expect("Failed to set init data");
         let mut tfb = peridot::TransferBatch::new();
-        tfb.add_mirroring_buffer(&buffer_init, &buffer, 0, bp.total_size());
+        tfb.add_mirroring_buffer(
+            SharedRef::new(buffer_init),
+            buffer.clone(),
+            0,
+            bp.total_size(),
+        );
         tfb.add_buffer_graphics_ready(
             br::PipelineStageFlags::VERTEX_INPUT,
-            &buffer,
+            buffer.clone(),
             0..bp.total_size(),
             br::AccessFlags::VERTEX_ATTRIBUTE_READ,
         );
@@ -735,7 +745,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 &[],
                 &[],
                 &[br::ImageMemoryBarrier::new(
-                    &stencil_buffer,
+                    stencil_buffer_view.image(),
                     br::ImageSubresourceRange::stencil(0, 0),
                     br::ImageLayout::Undefined,
                     br::ImageLayout::DepthStencilReadOnlyOpt,
@@ -758,7 +768,11 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &sdf_renderer.render_pass,
-                    vec![bb.clone(), stencil_buffer_view.clone()],
+                    vec![
+                        bb.clone()
+                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
+                        stencil_buffer_view.clone(),
+                    ],
                     &backbuffer_size,
                     1,
                 )
@@ -882,15 +896,18 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         >(outline_rects_count * 6));
         let buffer = bp.build_transferred().expect("Failed to allocate buffer");
         let buffer_init = bp.build_upload().expect("Failed to allocate init buffer");
-        let mut mb = peridot::MemoryBadget::new(e.graphics());
+        let mut mb =
+            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
-        self.buffer = mb
-            .alloc()
-            .expect("Failed to allocate memory")
-            .pop()
-            .expect("no objects?")
-            .unwrap_buffer();
-        let mut mb_upload = peridot::MemoryBadget::new(e.graphics());
+        self.buffer = SharedRef::new(
+            mb.alloc()
+                .expect("Failed to allocate memory")
+                .pop()
+                .expect("no objects?")
+                .unwrap_buffer(),
+        );
+        let mut mb_upload =
+            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb_upload.add(peridot::MemoryBadgetEntry::Buffer(buffer_init));
         let mut buffer_init = mb_upload
             .alloc_upload()
@@ -910,7 +927,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         )
         .create(e.graphics().device().clone())
         .expect("Failed to create stencil buffer");
-        let mut mb_tex = peridot::MemoryBadget::new(e.graphics());
+        let mut mb_tex =
+            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
         mb_tex.add(peridot::MemoryBadgetEntry::Image(stencil_buffer));
         let stencil_buffer = mb_tex
             .alloc()
@@ -933,8 +951,12 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &self.sdf_renderer.render_pass,
-                    vec![bb.clone(), self.stencil_buffer_view.clone()],
-                    bb.size().as_ref(),
+                    vec![
+                        bb.clone()
+                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
+                        self.stencil_buffer_view.clone(),
+                    ],
+                    bb.image().size().as_ref(),
                     1,
                 )
             })
@@ -982,10 +1004,15 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             })
             .expect("Failed to set init data");
         let mut tfb = peridot::TransferBatch::new();
-        tfb.add_mirroring_buffer(&buffer_init, &self.buffer, 0, bp.total_size());
+        tfb.add_mirroring_buffer(
+            SharedRef::new(buffer_init),
+            self.buffer.clone(),
+            0,
+            bp.total_size(),
+        );
         tfb.add_buffer_graphics_ready(
             br::PipelineStageFlags::VERTEX_INPUT,
-            &self.buffer,
+            self.buffer.clone(),
             0..bp.total_size(),
             br::AccessFlags::VERTEX_ATTRIBUTE_READ,
         );

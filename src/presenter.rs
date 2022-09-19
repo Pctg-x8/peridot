@@ -8,7 +8,10 @@ use br::{Device, Image, PhysicalDevice, SubmissionBatch, Swapchain};
 use crate::{mthelper::SharedRef, DeviceObject};
 
 pub trait PlatformPresenter {
-    type Backbuffer: br::ImageView + br::ImageChild;
+    type Backbuffer: br::ImageView
+        + br::ImageChild
+        + br::DeviceChild<ConcreteDevice = DeviceObject>
+        + 'static;
 
     fn format(&self) -> br::vk::VkFormat;
     fn backbuffer_count(&self) -> usize;
