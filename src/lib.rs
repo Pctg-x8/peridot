@@ -259,9 +259,9 @@ impl<NL: NativeLinker> Engine<NL> {
     ) -> Option<SharedRef<<NL::Presenter as PlatformPresenter>::Backbuffer>> {
         self.presenter.backbuffer(index)
     }
-    pub fn iter_backbuffers(
-        &self,
-    ) -> impl Iterator<Item = SharedRef<<NL::Presenter as PlatformPresenter>::Backbuffer>> + '_
+    pub fn iter_backbuffers<'s>(
+        &'s self,
+    ) -> impl Iterator<Item = SharedRef<<NL::Presenter as PlatformPresenter>::Backbuffer>> + 's
     {
         (0..self.backbuffer_count())
             .map(move |x| self.backbuffer(x).expect("unreachable while iteration"))
@@ -750,7 +750,8 @@ impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, D
     }
 }
 
-pub type DeviceObject = SharedRef<br::DeviceObject<SharedRef<br::InstanceObject>>>;
+pub type InstanceObject = SharedRef<br::InstanceObject>;
+pub type DeviceObject = SharedRef<br::DeviceObject<InstanceObject>>;
 /// Queue object with family index
 pub struct Queue<Device: br::Device> {
     q: parking_lot::Mutex<br::Queue<Device>>,
@@ -758,7 +759,7 @@ pub struct Queue<Device: br::Device> {
 }
 /// Graphics manager
 pub struct Graphics {
-    pub(self) adapter: br::PhysicalDeviceObject<SharedRef<br::InstanceObject>>,
+    pub(self) adapter: br::PhysicalDeviceObject<InstanceObject>,
     device: DeviceObject,
     graphics_queue: Queue<DeviceObject>,
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
@@ -928,11 +929,11 @@ impl Graphics {
         }
     }
 
-    pub fn instance(&self) -> &impl br::Instance {
+    pub fn instance(&self) -> &InstanceObject {
         self.device.instance()
     }
 
-    pub fn adapter(&self) -> &impl br::PhysicalDevice {
+    pub fn adapter(&self) -> &br::PhysicalDeviceObject<InstanceObject> {
         &self.adapter
     }
 
