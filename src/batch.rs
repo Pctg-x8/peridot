@@ -47,11 +47,18 @@ where
     }
 }
 
-pub struct ReadyResourceBarriers<Buffer: br::Buffer, Image: br::Image> {
+pub struct ReadyResourceBarriers<
+    Buffer: br::VkHandle<Handle = br::vk::VkBuffer>,
+    Image: br::VkHandle<Handle = br::vk::VkImage>,
+> {
     buffer: Vec<(Buffer, Range<u64>, br::vk::VkAccessFlags)>,
     image: Vec<(Image, br::ImageSubresourceRange, br::ImageLayout)>,
 }
-impl<Buffer: br::Buffer, Image: br::Image> ReadyResourceBarriers<Buffer, Image> {
+impl<
+        Buffer: br::VkHandle<Handle = br::vk::VkBuffer>,
+        Image: br::VkHandle<Handle = br::vk::VkImage>,
+    > ReadyResourceBarriers<Buffer, Image>
+{
     const fn new() -> Self {
         Self {
             buffer: Vec::new(),
@@ -61,42 +68,43 @@ impl<Buffer: br::Buffer, Image: br::Image> ReadyResourceBarriers<Buffer, Image> 
 }
 
 /// Batching Manager for Transferring Operations.
-pub struct TransferBatch<Device: br::Device> {
+pub struct TransferBatch {
     barrier_range_src: BTreeMap<
-        ResourceKey<Box<dyn br::Buffer<ConcreteDevice = Device>>>,
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
         Range<br::vk::VkDeviceSize>,
     >,
     barrier_range_dst: BTreeMap<
-        ResourceKey<Box<dyn br::Buffer<ConcreteDevice = Device>>>,
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
         Range<br::vk::VkDeviceSize>,
     >,
     org_layout_src:
-        BTreeMap<ResourceKey<Box<dyn br::Image<ConcreteDevice = Device>>>, br::ImageLayout>,
+        BTreeMap<ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage>>>, br::ImageLayout>,
     org_layout_dst:
-        BTreeMap<ResourceKey<Box<dyn br::Image<ConcreteDevice = Device>>>, br::ImageLayout>,
+        BTreeMap<ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage>>>, br::ImageLayout>,
     copy_buffers: HashMap<
         (
-            ResourceKey<Box<dyn br::Buffer<ConcreteDevice = Device>>>,
-            ResourceKey<Box<dyn br::Buffer<ConcreteDevice = Device>>>,
+            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
+            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
         ),
         Vec<VkBufferCopy>,
     >,
     init_images: BTreeMap<
-        ResourceKey<Box<dyn br::Image<ConcreteDevice = Device>>>,
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage>>>,
         (
-            Box<dyn br::Buffer<ConcreteDevice = Device>>,
+            br::vk::VkExtent3D,
+            Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
             br::vk::VkDeviceSize,
         ),
     >,
     ready_barriers: BTreeMap<
         br::PipelineStageFlags,
         ReadyResourceBarriers<
-            Box<dyn br::Buffer<ConcreteDevice = Device>>,
-            Box<dyn br::Image<ConcreteDevice = Device>>,
+            Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
+            Box<dyn br::VkHandle<Handle = br::vk::VkImage>>,
         >,
     >,
 }
-impl<Device: br::Device> TransferBatch<Device> {
+impl TransferBatch {
     pub fn new() -> Self {
         Self {
             barrier_range_src: BTreeMap::new(),
@@ -112,8 +120,12 @@ impl<Device: br::Device> TransferBatch<Device> {
     /// Add copying operation between buffers.
     pub fn add_copying_buffer(
         &mut self,
-        src: crate::DeviceBufferView<impl br::Buffer<ConcreteDevice = Device> + Clone + 'static>,
-        dst: crate::DeviceBufferView<impl br::Buffer<ConcreteDevice = Device> + Clone + 'static>,
+        src: crate::DeviceBufferView<
+            impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
+        >,
+        dst: crate::DeviceBufferView<
+            impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
+        >,
         bytes: br::vk::VkDeviceSize,
     ) {
         trace!(
@@ -150,8 +162,8 @@ impl<Device: br::Device> TransferBatch<Device> {
     #[inline]
     pub fn add_mirroring_buffer(
         &mut self,
-        src: impl br::Buffer<ConcreteDevice = Device> + Clone + 'static,
-        dst: impl br::Buffer<ConcreteDevice = Device> + Clone + 'static,
+        src: impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
+        dst: impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
         offset: br::vk::VkDeviceSize,
         bytes: br::vk::VkDeviceSize,
     ) {
@@ -171,15 +183,21 @@ impl<Device: br::Device> TransferBatch<Device> {
     /// Add image content initializing operation, from the buffer.
     pub fn init_image_from(
         &mut self,
-        dest: impl br::Image<ConcreteDevice = Device> + Clone + 'static,
-        src: crate::DeviceBufferView<impl br::Buffer<ConcreteDevice = Device> + Clone + 'static>,
+        dest: impl br::Image + Clone + 'static,
+        src: crate::DeviceBufferView<
+            impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
+        >,
     ) {
         let size = (dest.size().width * dest.size().height) as u64
             * (PixelFormat::from(dest.format()).bpp() >> 3) as u64;
 
         self.init_images.insert(
             ResourceKey(Box::new(dest.clone())),
-            (Box::new(src.buffer.clone()), src.offset),
+            (
+                dest.size().clone(),
+                Box::new(src.buffer.clone()),
+                src.offset,
+            ),
         );
         let sr = src.range(size);
         Self::update_barrier_range_for(
@@ -195,7 +213,7 @@ impl<Device: br::Device> TransferBatch<Device> {
     pub fn add_buffer_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: impl br::Buffer<ConcreteDevice = Device> + 'static,
+        res: impl br::VkHandle<Handle = br::vk::VkBuffer> + 'static,
         byterange: Range<br::vk::VkDeviceSize>,
         access_grants: br::vk::VkAccessFlags,
     ) {
@@ -210,7 +228,7 @@ impl<Device: br::Device> TransferBatch<Device> {
     pub fn add_image_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: impl br::Image<ConcreteDevice = Device> + 'static,
+        res: impl br::VkHandle<Handle = br::vk::VkImage> + 'static,
         layout: br::ImageLayout,
     ) {
         self.ready_barriers
@@ -237,10 +255,10 @@ impl<Device: br::Device> TransferBatch<Device> {
     #[inline]
     fn update_barrier_range_for(
         map: &mut BTreeMap<
-            ResourceKey<Box<dyn br::Buffer<ConcreteDevice = Device> + 'static>>,
+            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'static>>,
             Range<br::vk::VkDeviceSize>,
         >,
-        k: ResourceKey<Box<dyn br::Buffer<ConcreteDevice = Device> + 'static>>,
+        k: ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'static>>,
         new_range: Range<br::vk::VkDeviceSize>,
     ) {
         let r = map.entry(k).or_insert_with(|| new_range.clone());
@@ -249,7 +267,7 @@ impl<Device: br::Device> TransferBatch<Device> {
     }
 }
 /// Sinking Commands into CommandBuffers
-impl<Device: br::Device> TransferBatch<Device> {
+impl TransferBatch {
     pub fn sink_transfer_commands(&self, r: &mut br::CmdRecord<impl br::CommandBuffer>) {
         let src_barriers = self.barrier_range_src.iter().map(|(b, r)| {
             br::BufferMemoryBarrier::new(
@@ -292,22 +310,20 @@ impl<Device: br::Device> TransferBatch<Device> {
         for (&(ref s, ref d), ref rs) in &self.copy_buffers {
             r.copy_buffer(&s.0, &d.0, &rs);
         }
-        for (d, s) in &self.init_images {
-            trace!(
-                "Copying Image: extent={:?}",
-                br::vk::VkExtent3D::from(d.0.size().clone())
-            );
+        for (d, (dex, s, so)) in &self.init_images {
+            trace!("Copying Image: extent={dex:?}");
+
             r.copy_buffer_to_image(
-                &s.0,
+                s,
                 &d.0,
                 br::ImageLayout::TransferDestOpt,
                 &[br::vk::VkBufferImageCopy {
-                    bufferOffset: s.1,
+                    bufferOffset: *so,
                     bufferRowLength: 0,
                     bufferImageHeight: 0,
                     imageSubresource: br::vk::VkImageSubresourceLayers::default(),
                     imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-                    imageExtent: d.0.size().clone().into(),
+                    imageExtent: dex.clone(),
                 }],
             );
         }

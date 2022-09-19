@@ -114,7 +114,7 @@ impl<Buffer: br::Buffer> From<BufferView<Buffer>> for (Buffer, usize) {
 
 /// a view of the buffer in GPU Address.
 #[derive(Clone, Copy)]
-pub struct DeviceBufferView<Buffer: br::Buffer> {
+pub struct DeviceBufferView<Buffer> {
     pub buffer: Buffer,
     pub offset: br::vk::VkDeviceSize,
 }
@@ -136,7 +136,7 @@ impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
         }
     }
 }
-impl<Buffer: br::Buffer> DeviceBufferView<Buffer> {
+impl<Buffer> DeviceBufferView<Buffer> {
     pub fn with_offset(self, offset: br::vk::VkDeviceSize) -> Self {
         Self {
             buffer: self.buffer,

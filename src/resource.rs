@@ -209,7 +209,7 @@ impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
     /// Push transferring operations into a batcher.
     pub fn copy_from_stage_batches(
         &self,
-        tb: &mut TransferBatch<Device>,
+        tb: &mut TransferBatch,
         stgbuf: &SharedRef<
             Buffer<
                 impl br::Buffer<ConcreteDevice = Device> + 'static,
@@ -607,7 +607,7 @@ pub trait FixedBufferInitializer {
     fn stage_data(&mut self, m: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>);
     fn buffer_graphics_ready<Device: br::Device + 'static>(
         &self,
-        tfb: &mut TransferBatch<Device>,
+        tfb: &mut TransferBatch,
         buf: &SharedRef<
             Buffer<
                 impl br::Buffer<ConcreteDevice = Device> + 'static,
@@ -642,7 +642,7 @@ impl
         prealloc_mut: BufferPrealloc<'g>,
         textures: TextureInitializationGroup<DeviceObject>,
         initializer: &mut I,
-        tfb: &mut TransferBatch<DeviceObject>,
+        tfb: &mut TransferBatch,
     ) -> br::Result<Self> {
         let mut_buffer = prealloc_mut.build_upload()?;
         let mut p_bufferdata_prealloc = prealloc.clone();
