@@ -192,6 +192,7 @@ pub struct Engine<NL: NativeLinker> {
     gametimer: GameTimer,
     last_rendering_completion: StateFence<br::FenceObject<DeviceObject>>,
     amixer: Arc<RwLock<audio::Mixer>>,
+    request_resize: bool,
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
@@ -221,6 +222,7 @@ impl<PL: NativeLinker> Engine<PL> {
             nativelink,
             g,
             presenter,
+            request_resize: false,
         }
     }
 
@@ -334,11 +336,15 @@ impl<PL: NativeLinker> Engine<PL> {
         self.ip.prepare_for_frame(dt);
 
         userlib.update(self, bb_index, dt);
+
+        if self.request_resize {
+            self.request_resize = false;
+            self.do_resize_backbuffer(self.presenter.current_geometry_extent(), userlib);
+        }
     }
 
-    pub fn do_render<EH: EngineEvents<PL>>(
+    pub fn do_render(
         &mut self,
-        userlib: &mut EH,
         bb_index: u32,
         copy_submission: Option<impl br::SubmissionBatch>,
         render_submission: impl br::SubmissionBatch,
@@ -357,7 +363,7 @@ impl<PL: NativeLinker> Engine<PL> {
         match pr {
             Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize
-                self.do_resize_backbuffer(self.presenter.current_geometry_extent(), userlib);
+                self.request_resize = true;
 
                 Ok(())
             }

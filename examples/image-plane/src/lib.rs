@@ -14,7 +14,6 @@ use peridot::{
     SubpassDependencyTemplates, TextureInitializationGroup, TransferBatch,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
-use std::borrow::BorrowMut;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Range;
@@ -51,7 +50,7 @@ impl FixedBufferInitializer for IPFixedBufferInitializer {
 
     fn buffer_graphics_ready<Device: br::Device + 'static>(
         &self,
-        tfb: &mut TransferBatch<Device>,
+        tfb: &mut TransferBatch,
         buffer: &SharedRef<
             peridot::Buffer<
                 impl br::Buffer<ConcreteDevice = Device> + 'static,
@@ -141,7 +140,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut_uniform_offset = bp_mut.add(BufferContent::uniform::<Uniform>());
 
         let mut tfb = TransferBatch::new();
-        let mut buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
+        let buffers = FixedMemory::new(e.graphics(), bp, bp_mut, ti, &mut fm_init, &mut tfb)
             .expect("Alloc FixedBuffers");
 
         let mut cam = Camera {
@@ -154,10 +153,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             depth_range: 1.0..10.0,
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
-        buffers
-            .mut_buffer
-            .0
-            .borrow_mut()
+        DynamicMutabilityProvider::borrow_mut(&*buffers.mut_buffer.0)
             .guard_map(0..buffers.mut_buffer.1, |m| unsafe {
                 *m.get_mut(mut_uniform_offset as _) = Uniform {
                     camera: cam.view_projection_matrix(screen_aspect),
@@ -361,6 +357,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             e.backbuffer_count(),
         )
         .expect("Alloc RenderCB");
+        #[allow(unused_variables)]
         for (n, (cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
             #[cfg(feature = "debug")]
             br::DebugUtilsObjectNameInfo::new(
@@ -417,10 +414,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
         self.rot += dtsec * 15.0;
         let (mut_uniform_offset, rot) = (self.mut_uniform_offset, self.rot);
-        self.buffers
-            .mut_buffer
-            .0
-            .borrow_mut()
+        DynamicMutabilityProvider::borrow_mut(&*self.buffers.mut_buffer.0)
             .guard_map(
                 0..self.mut_uniform_offset + size_of::<Uniform>() as u64,
                 |m| unsafe {
@@ -431,7 +425,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Update DynamicStgBuffer");
 
         e.do_render(
-            self,
             on_backbuffer_of,
             Some(br::EmptySubmissionBatch.with_command_buffers(&self.update_cb)),
             br::EmptySubmissionBatch.with_command_buffers(

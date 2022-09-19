@@ -17,7 +17,7 @@ libc = "*"
 rayon = "1.0"
 num_cpus = "1.0"
 num = "*"
-parking_lot = "0.11"
+parking_lot = "0.12"
 
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
