@@ -1,0 +1,2 @@
+[workspace]
+members = ["archiver", "cli", "shaderbuild"]

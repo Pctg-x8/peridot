@@ -4,9 +4,10 @@ use super::*;
 use bedrock as br;
 use pathfinder_partitioner::{BQuadVertexPositions, BVertexLoopBlinnData};
 use peridot::math::Vector2;
+use peridot::mthelper::SharedRef;
 use peridot::{
-    Buffer, BufferContent, BufferPrealloc, DefaultRenderCommands, Engine, LayoutedPipeline,
-    ModelData, NativeLinker,
+    BufferContent, BufferPrealloc, DefaultRenderCommands, Engine, LayoutedPipeline, ModelData,
+    NativeLinker,
 };
 use std::mem::size_of;
 use std::ops::Range;
@@ -45,9 +46,16 @@ impl RendererParams {
         self.buffer_offsets.transforms_byterange()
     }
 }
-pub struct RendererExternalInstances<'r> {
-    pub interior_pipeline: &'r LayoutedPipeline,
-    pub curve_pipeline: &'r LayoutedPipeline,
+pub struct RendererExternalInstances<'r, Device: br::Device> {
+    // TODO: SharedRef強制はなんとか剥がしたい
+    pub interior_pipeline: &'r LayoutedPipeline<
+        br::PipelineObject<Device>,
+        SharedRef<br::PipelineLayoutObject<Device>>,
+    >,
+    pub curve_pipeline: &'r LayoutedPipeline<
+        br::PipelineObject<Device>,
+        SharedRef<br::PipelineLayoutObject<Device>>,
+    >,
     pub transform_buffer_descriptor_set: br::DescriptorSet,
     pub target_pixels: Vector2<f32>,
 }
@@ -56,43 +64,37 @@ impl ModelData for Context {
     type RendererParams = RendererParams;
 
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> ContextPreallocOffsets {
-        let interior_positions_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_quad_vertex_positions.len())
-            .sum();
-        let interior_indices_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_quad_vertex_interior_indices.len())
-            .sum();
-        let curve_positions_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_vertex_positions.len())
-            .sum();
-        let curve_helper_coords_count = self
-            .meshes()
-            .iter()
-            .map(|x| x.0.b_vertex_loop_blinn_data.len())
-            .sum();
-        let curve_indices_count = self
-            .meshes()
-            .iter()
-            .flat_map(|x| {
-                x.0.b_quads.iter().map(|xq| {
-                    (if xq.upper_control_point_vertex_index != 0xffff_ffff {
+        let (
+            mut interior_positions_count,
+            mut interior_indices_count,
+            mut curve_positions_count,
+            mut curve_helper_coords_count,
+            mut curve_indices_count,
+        ) = (0, 0, 0, 0, 0);
+        for (m, _, _) in &self.meshes {
+            interior_positions_count += m.b_quad_vertex_positions.len();
+            interior_indices_count += m.b_quad_vertex_interior_indices.len();
+            curve_positions_count += m.b_vertex_positions.len();
+            curve_helper_coords_count += m.b_vertex_loop_blinn_data.len();
+            curve_indices_count += m
+                .b_quads
+                .iter()
+                .map(|xq| {
+                    let upper = if xq.upper_control_point_vertex_index != 0xffff_ffff {
                         3
                     } else {
                         0
-                    }) + if xq.lower_control_point_vertex_index != 0xffff_ffff {
+                    };
+                    let lower = if xq.lower_control_point_vertex_index != 0xffff_ffff {
                         3
                     } else {
                         0
-                    }
+                    };
+
+                    upper + lower
                 })
-            })
-            .sum();
+                .sum::<usize>();
+        }
 
         let transforms = alloc.add(BufferContent::uniform_texel_dynarray::<GlyphTransform>(
             self.meshes().len(),
@@ -118,9 +120,10 @@ impl ModelData for Context {
             curve_indices,
         }
     }
+
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
         let transforms_stg = unsafe { mem.slice_mut(offsets.transforms, self.meshes().len()) };
@@ -190,23 +193,23 @@ impl ModelData for Context {
             curve_vindex_offset += v.b_vertex_positions.len() as u32;
         }
 
-        return RendererParams {
+        RendererParams {
             buffer_offsets: offsets,
             render_info: ContextRenderInfo {
                 interior_index_range_per_mesh,
                 curve_index_range_per_mesh,
             },
-        };
+        }
     }
 }
-impl<'e> DefaultRenderCommands<'e> for RendererParams {
-    type Extras = RendererExternalInstances<'e>;
+impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for RendererParams {
+    type Extras = RendererExternalInstances<'e, Device>;
 
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord,
-        buffer: &Buffer,
+        cmd: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     ) {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();

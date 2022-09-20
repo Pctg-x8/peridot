@@ -1,27 +1,28 @@
-use bedrock as br;
-
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
+use bedrock::{self as br, Device, ImageChild, SubmissionBatch};
+use br::Image;
+use peridot::mthelper::SharedRef;
 
 use crate::ThreadsafeWindowOps;
 
 #[cfg(not(feature = "transparent"))]
 pub struct Presenter {
-    _window: SharedPtr<ThreadsafeWindowOps>,
-    sc: peridot::IntegratedSwapchain,
+    _window: SharedRef<ThreadsafeWindowOps>,
+    sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: SharedPtr<ThreadsafeWindowOps>) -> Self {
+    pub fn new(g: &peridot::Graphics, window: SharedRef<ThreadsafeWindowOps>) -> Self {
+        use bedrock::PhysicalDevice;
+
         if !g
             .adapter()
             .win32_presentation_support(g.graphics_queue_family_index())
         {
             panic!("WindowSubsystem does not support Vulkan Rendering");
         }
-        let s = br::Surface::new_win32(g.instance(), super::module_handle(), window.0)
+        let s = g
+            .adapter()
+            .new_surface_win32(super::module_handle(), window.0)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
@@ -39,17 +40,31 @@ impl Presenter {
 }
 #[cfg(not(feature = "transparent"))]
 impl peridot::PlatformPresenter for Presenter {
+    type Backbuffer = br::ImageViewObject<
+        br::SwapchainImage<
+            SharedRef<
+                br::SwapchainObject<
+                    peridot::DeviceObject,
+                    br::SurfaceObject<peridot::InstanceObject>,
+                >,
+            >,
+        >,
+    >;
+
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>> {
         self.sc.backbuffer(index)
     }
 
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+    fn emit_initialize_backbuffer_commands(
+        &self,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+    ) {
         self.sc.emit_initialize_backbuffer_commands(recorder)
     }
     fn next_backbuffer_index(&mut self) -> br::Result<u32> {
@@ -61,10 +76,10 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut br::Fence,
+        last_render_fence: &mut impl br::Fence,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
         self.sc.render_and_present(
             g,
@@ -157,8 +172,14 @@ unsafe impl Send for ThreadsafeEvent {}
 #[cfg(feature = "transparent")]
 struct InteropBackbufferResource {
     _shared_handle: UnsafeThreadsafeHandle,
-    _image: peridot::Image,
-    image_view: SharedPtr<br::ImageView>,
+    image_view: SharedRef<
+        br::ImageViewObject<
+            peridot::Image<
+                br::ImageObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
+    >,
 }
 #[cfg(feature = "transparent")]
 impl InteropBackbufferResource {
@@ -191,7 +212,7 @@ impl InteropBackbufferResource {
             br::ImageLayout::Preinitialized,
         )
         .chain(&image_ext)
-        .create(&g)
+        .create(g.device().clone())
         .expect("Failed to create Interop Image");
         let image_mreq = image.requirements();
         let handle_import_props = g
@@ -200,22 +221,23 @@ impl InteropBackbufferResource {
                 shared_handle.handle(),
             )
             .expect("Failed to query Handle Memory Properties");
-        let memory = SharedPtr::new(
-            br::DeviceMemory::import_win32(
-                &g,
-                image_mreq.size as _,
-                g.memory_type_manager
-                    .device_local_index(
-                        image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits,
-                    )
-                    .expect("Failed to find matching memory type for importing")
-                    .index(),
-                br::ExternalMemoryHandleTypeWin32::D3D12Resource,
-                shared_handle.handle(),
-                &hname,
-            )
-            .expect("Failed to import External Memory from D3D12Resource")
-            .into(),
+        let memory = SharedRef::new(
+            g.device()
+                .clone()
+                .import_memory_win32(
+                    image_mreq.size as _,
+                    g.memory_type_manager
+                        .device_local_index(
+                            image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits,
+                        )
+                        .expect("Failed to find matching memory type for importing")
+                        .index(),
+                    br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                    shared_handle.handle(),
+                    &hname,
+                )
+                .expect("Failed to import External Memory from D3D12Resource")
+                .into(),
         );
         let image =
             peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
@@ -229,9 +251,8 @@ impl InteropBackbufferResource {
             .expect("Failed to create ImageView for Rendering")
             .into();
 
-        InteropBackbufferResource {
+        Self {
             _shared_handle: shared_handle,
-            _image: image,
             image_view,
         }
     }
@@ -274,14 +295,14 @@ impl Composition {
 
 #[cfg(feature = "transparent")]
 pub struct Presenter {
-    _window: SharedPtr<ThreadsafeWindowOps>,
+    _window: SharedRef<ThreadsafeWindowOps>,
     _comp: Composition,
     device12: comdrive::d3d12::Device,
     q: comdrive::d3d12::CommandQueue,
     sc: comdrive::dxgi::SwapChain,
     backbuffers: Vec<InteropBackbufferResource>,
-    buffer_ready_order: br::Semaphore,
-    present_order: br::Semaphore,
+    buffer_ready_order: br::SemaphoreObject<peridot::DeviceObject>,
+    present_order: br::SemaphoreObject<peridot::DeviceObject>,
     render_completion_fence: comdrive::d3d12::Fence,
     present_completion_fence: comdrive::d3d12::Fence,
     render_completion_counter: u64,
@@ -292,7 +313,7 @@ pub struct Presenter {
 }
 #[cfg(feature = "transparent")]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: SharedPtr<ThreadsafeWindowOps>) -> Self {
+    pub fn new(g: &peridot::Graphics, window: SharedRef<ThreadsafeWindowOps>) -> Self {
         let rc = window.get_client_rect();
 
         let factory = comdrive::dxgi::Factory::new(cfg!(debug_assertions))
@@ -340,10 +361,16 @@ impl Presenter {
             })
             .collect();
 
-        let buffer_ready_order =
-            br::Semaphore::new(g).expect("Failed to create Buffer Ready Semaphore");
-        let present_order =
-            br::Semaphore::new(g).expect("Failed to create Present Order Semaphore");
+        let buffer_ready_order = g
+            .device()
+            .clone()
+            .new_semaphore()
+            .expect("Failed to create Buffer Ready Semaphore");
+        let present_order = g
+            .device()
+            .clone()
+            .new_semaphore()
+            .expect("Failed to create Present Order Semaphore");
         let render_completion_fence = device12
             .new_fence(0, comdrive::d3d12::FENCE_FLAG_SHARED)
             .expect("Failed to create Render Completion Fence");
@@ -362,12 +389,13 @@ impl Presenter {
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence"),
         );
-        g.import_semaphore_win32_handle(
-            &present_order,
-            br::ExternalSemaphoreHandleWin32::D3DFence(render_completion_fence_handle.handle()),
-            &render_completion_fence_name,
-        )
-        .expect("Failed to import Render Completion Fence");
+        g.device()
+            .import_semaphore_win32_handle(
+                &present_order,
+                br::ExternalSemaphoreHandleWin32::D3DFence(render_completion_fence_handle.handle()),
+                &render_completion_fence_name,
+            )
+            .expect("Failed to import Render Completion Fence");
         let present_completion_event =
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
 
@@ -392,23 +420,34 @@ impl Presenter {
 }
 #[cfg(feature = "transparent")]
 impl peridot::PlatformPresenter for Presenter {
+    type Backbuffer = br::ImageViewObject<
+        peridot::Image<
+            br::ImageObject<peridot::DeviceObject>,
+            br::DeviceMemoryObject<peridot::DeviceObject>,
+        >,
+    >;
+
     fn format(&self) -> br::vk::VkFormat {
         br::vk::VK_FORMAT_R8G8B8A8_UNORM
     }
     fn backbuffer_count(&self) -> usize {
         2
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>> {
         self.backbuffers.get(index).map(|b| b.image_view.clone())
     }
 
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+    fn emit_initialize_backbuffer_commands(
+        &self,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+    ) {
         let barriers = self
             .backbuffers
             .iter()
             .map(|b| {
                 br::ImageMemoryBarrier::new(
-                    &br::ImageSubref::color(&b.image_view, 0..1, 0..1),
+                    b.image_view.image(),
+                    br::ImageSubresourceRange::color(0, 0),
                     br::ImageLayout::Preinitialized,
                     br::ImageLayout::General,
                 )
@@ -436,81 +475,35 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut br::Fence,
+        last_render_fence: &mut impl br::Fence,
         _backbuffer_index: u32,
-        mut render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
-        use br::VkHandle;
-
         let signal_counters = [self.render_completion_counter + 1];
         let signal_info = br::vk::VkD3D12FenceSubmitInfoKHR::from(br::D3D12FenceSubmitInfo::new(
             &[],
             &signal_counters,
         ));
-        if let Some(mut cs) = update_submission {
+        if let Some(cs) = update_submission {
             // copy -> render
-            cs.signal_semaphores.to_mut().push(&self.buffer_ready_order);
-            render_submission.wait_semaphores.to_mut().extend(vec![(
+            let update_signals = [&self.buffer_ready_order];
+            let render_waits = [(
                 &self.buffer_ready_order,
                 br::PipelineStageFlags::VERTEX_INPUT,
-            )]);
-            render_submission
-                .signal_semaphores
-                .to_mut()
-                .push(&self.present_order);
+            )];
+            let render_signals = [&self.present_order];
 
-            let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = render_submission
-                .wait_semaphores
-                .iter()
-                .map(|(s, st)| (s.native_ptr(), st.0))
-                .unzip();
-            let render_signal_semaphores = render_submission
-                .signal_semaphores
-                .iter()
-                .map(|s| s.native_ptr())
-                .collect::<Vec<_>>();
-            let render_buffers = render_submission
-                .command_buffers
-                .iter()
-                .map(|s| s.native_ptr())
-                .collect::<Vec<_>>();
-            let (update_wait_semaphores, update_wait_stages): (Vec<_>, Vec<_>) = cs
-                .wait_semaphores
-                .iter()
-                .map(|(s, st)| (s.native_ptr(), st.0))
-                .unzip();
-            let update_signal_semaphores = cs
-                .signal_semaphores
-                .iter()
-                .map(|s| s.native_ptr())
-                .collect::<Vec<_>>();
-            let update_buffers = cs
-                .command_buffers
-                .iter()
-                .map(|s| s.native_ptr())
-                .collect::<Vec<_>>();
+            let update_submission = cs.with_signal_semaphores(&update_signals);
+            let render_submission = render_submission
+                .with_wait_semaphores(&render_waits)
+                .with_signal_semaphores(&render_signals);
+
             let render_submission = br::vk::VkSubmitInfo {
                 pNext: &signal_info as *const _ as _,
-                waitSemaphoreCount: render_wait_semaphores.len() as _,
-                pWaitSemaphores: render_wait_semaphores.as_ptr(),
-                pWaitDstStageMask: render_wait_stages.as_ptr(),
-                signalSemaphoreCount: render_signal_semaphores.len() as _,
-                pSignalSemaphores: render_signal_semaphores.as_ptr(),
-                commandBufferCount: render_buffers.len() as _,
-                pCommandBuffers: render_buffers.as_ptr(),
-                ..Default::default()
+                ..render_submission.make_info_struct()
             };
-            let update_submission = br::vk::VkSubmitInfo {
-                waitSemaphoreCount: update_wait_semaphores.len() as _,
-                pWaitSemaphores: update_wait_semaphores.as_ptr(),
-                pWaitDstStageMask: update_wait_stages.as_ptr(),
-                signalSemaphoreCount: update_signal_semaphores.len() as _,
-                pSignalSemaphores: update_signal_semaphores.as_ptr(),
-                commandBufferCount: update_buffers.len() as _,
-                pCommandBuffers: update_buffers.as_ptr(),
-                ..Default::default()
-            };
+            let update_submission = update_submission.make_info_struct();
 
             g.submit_buffered_commands_raw(
                 &[update_submission, render_submission],
@@ -519,36 +512,13 @@ impl peridot::PlatformPresenter for Presenter {
             .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
-            render_submission
-                .signal_semaphores
-                .to_mut()
-                .push(&self.present_order);
+            let render_signals = [&self.present_order];
 
-            let (render_wait_semaphores, render_wait_stages): (Vec<_>, Vec<_>) = render_submission
-                .wait_semaphores
-                .iter()
-                .map(|(s, st)| (s.native_ptr(), st.0))
-                .unzip();
-            let render_signal_semaphores = render_submission
-                .signal_semaphores
-                .iter()
-                .map(|s| s.native_ptr())
-                .collect::<Vec<_>>();
-            let render_buffers = render_submission
-                .command_buffers
-                .iter()
-                .map(|s| s.native_ptr())
-                .collect::<Vec<_>>();
+            let render_submission = render_submission.with_signal_semaphores(&render_signals);
+
             let render_submission = br::vk::VkSubmitInfo {
                 pNext: &signal_info as *const _ as _,
-                waitSemaphoreCount: render_wait_semaphores.len() as _,
-                pWaitSemaphores: render_wait_semaphores.as_ptr(),
-                pWaitDstStageMask: render_wait_stages.as_ptr(),
-                signalSemaphoreCount: render_signal_semaphores.len() as _,
-                pSignalSemaphores: render_signal_semaphores.as_ptr(),
-                commandBufferCount: render_buffers.len() as _,
-                pCommandBuffers: render_buffers.as_ptr(),
-                ..Default::default()
+                ..render_submission.make_info_struct()
             };
 
             g.submit_buffered_commands_raw(&[render_submission], last_render_fence)

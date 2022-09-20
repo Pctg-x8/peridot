@@ -3,14 +3,21 @@
 use bedrock as br;
 
 /// State-tracked Fence
-pub enum StateFence {
-    Signaled(br::Fence),
-    Unsignaled(br::Fence),
+pub enum StateFence<Fence: br::Fence> {
+    Signaled(Fence),
+    Unsignaled(Fence),
 }
-impl StateFence {
+impl<Device: br::Device> StateFence<br::FenceObject<Device>> {
     /// Create a fence with Unsignaled state
-    pub fn new(d: &br::Device) -> br::Result<Self> {
-        br::Fence::new(d, false).map(StateFence::Unsignaled)
+    pub fn new(d: Device) -> br::Result<Self> {
+        d.new_fence(false).map(Self::Unsignaled)
+    }
+}
+impl<Fence: br::Fence> StateFence<Fence> {
+    #[allow(dead_code)]
+    /// Wrap a unsignaled fence
+    pub const unsafe fn wrap_unsignaled(f: Fence) -> Self {
+        Self::Unsignaled(f)
     }
 
     /// Set state to Signaled
@@ -23,6 +30,7 @@ impl StateFence {
         });
         std::mem::forget(std::mem::replace(self, StateFence::Signaled(obj)));
     }
+
     /// Set state to Unsignaled
     ///
     /// # Safety
@@ -49,7 +57,7 @@ impl StateFence {
     }
 
     /// Return internal fence object
-    pub fn object_mut(&mut self) -> &mut br::Fence {
+    pub fn inner_mut(&mut self) -> &mut Fence {
         match self {
             Self::Signaled(f) | Self::Unsignaled(f) => f,
         }
