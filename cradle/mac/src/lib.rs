@@ -214,7 +214,7 @@ impl peridot::PlatformPresenter for Presenter {
 
     fn emit_initialize_backbuffer_commands(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer>,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
     ) {
         self.sc.emit_initialize_backbuffer_commands(recorder);
     }
