@@ -19,7 +19,7 @@ pub trait PlatformPresenter {
 
     fn emit_initialize_backbuffer_commands(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer>,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
     );
     fn next_backbuffer_index(&mut self) -> br::Result<u32>;
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
@@ -228,7 +228,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
 
     pub fn emit_initialize_backbuffer_commands(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer>,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
     ) {
         let image_barriers = self
             .swapchain

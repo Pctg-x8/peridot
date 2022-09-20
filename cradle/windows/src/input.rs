@@ -15,10 +15,7 @@ use winapi::um::xinput::*;
 
 use crate::ThreadsafeWindowOps;
 
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
+use peridot::mthelper::SharedRef;
 
 pub struct RawInputHandler {}
 impl RawInputHandler {
@@ -192,11 +189,11 @@ impl RawInputHandler {
 }
 
 pub struct NativeInputHandler {
-    target_hw: SharedPtr<ThreadsafeWindowOps>,
+    target_hw: SharedRef<ThreadsafeWindowOps>,
     xi_handler: RwLock<XInputHandler>,
 }
 impl NativeInputHandler {
-    pub fn new(hw: SharedPtr<ThreadsafeWindowOps>) -> Self {
+    pub fn new(hw: SharedRef<ThreadsafeWindowOps>) -> Self {
         Self {
             target_hw: hw,
             xi_handler: RwLock::new(XInputHandler::new()),
