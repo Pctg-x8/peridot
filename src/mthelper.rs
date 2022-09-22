@@ -93,6 +93,6 @@ impl<'x, T, U: 'x> MappableMutGuardObject<T, U> for parking_lot::RwLockWriteGuar
 pub use parking_lot::RwLock as DynamicMut;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "mt")]
-pub use std::sync::Arc as SharedRef;
+pub use std::sync::{Arc as SharedRef, Weak as SharedWeakRef};
 #[cfg(not(feature = "mt"))]
-pub use std::{cell::RefCell as DynamicMut, rc::Rc as SharedRef};
+pub use std::{cell::RefCell as DynamicMut, rc::Rc as SharedRef, rc::Weak as SharedWeakRef};

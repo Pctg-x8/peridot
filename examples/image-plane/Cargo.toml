@@ -9,7 +9,7 @@ debug = ["bedrock/VK_EXT_debug_utils", "peridot/debug"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
-peridot = { path = "../.." }
+peridot = { path = "../..", features = ["mt"] }
 peridot-math = { path = "../../math" }
 peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
 peridot-image = { path = "../../image" }

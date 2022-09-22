@@ -21,6 +21,7 @@ libc = "0.2"
 
 [target.'cfg(target_os="macos")'.dependencies]
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
+objc-ext = { git = "https://github.com/Pctg-x8/objc-ext" }
 
 [target.'cfg(target_os="android")'.dependencies]
 android = { git = "https://github.com/Pctg-x8/android-defs-rs" }

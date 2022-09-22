@@ -4,16 +4,12 @@ use log::*;
 use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
-use parking_lot::RwLock;
+use br::PhysicalDevice;
+use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::sync::Arc;
-
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
 
 struct NSLogger;
 impl log::Log for NSLogger {
@@ -169,11 +165,13 @@ fn acquire_view_size(view: *mut c_void) -> peridot::math::Vector2<usize> {
 }
 pub struct Presenter {
     view_ptr: *mut c_void,
-    sc: peridot::IntegratedSwapchain,
+    sc: peridot::IntegratedSwapchain<br::SurfaceObject<SharedRef<br::InstanceObject>>>,
 }
 impl Presenter {
     fn new(view_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
-        let obj = br::Surface::new_macos(g.instance(), view_ptr as *const _)
+        let obj = g
+            .adapter()
+            .new_surface_macos(view_ptr as *const _)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
@@ -190,20 +188,34 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
+    type Backbuffer = br::ImageViewObject<
+        br::SwapchainImage<
+            SharedRef<
+                br::SwapchainObject<
+                    peridot::DeviceObject,
+                    br::SurfaceObject<peridot::InstanceObject>,
+                >,
+            >,
+        >,
+    >;
+
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>> {
         self.sc.backbuffer(index)
     }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_backbuffer_layout()
     }
 
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+    fn emit_initialize_backbuffer_commands(
+        &self,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+    ) {
         self.sc.emit_initialize_backbuffer_commands(recorder);
     }
     fn next_backbuffer_index(&mut self) -> br::Result<u32> {
@@ -212,10 +224,10 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut br::Fence,
+        last_render_fence: &mut impl br::Fence,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
         self.sc.render_and_present(
             g,
@@ -549,6 +561,8 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
 struct NativeInputHandler {
     rt_view: *mut libc::c_void,
 }
+unsafe impl Sync for NativeInputHandler {}
+unsafe impl Send for NativeInputHandler {}
 impl NativeInputHandler {
     fn new(rt_view: *mut libc::c_void) -> Self {
         NativeInputHandler { rt_view }

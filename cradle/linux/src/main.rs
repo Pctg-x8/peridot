@@ -2,6 +2,7 @@
 extern crate log;
 
 use bedrock as br;
+use br::PhysicalDevice;
 use peridot::{
     mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef},
     EngineEvents, FeatureRequests,
@@ -82,7 +83,7 @@ pub struct WindowHandler {
 
 pub struct Presenter {
     x11_ref: SharedRef<DynamicMut<X11>>,
-    sc: peridot::IntegratedSwapchain,
+    sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 impl Presenter {
     fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &WindowHandler) -> Self {
@@ -93,7 +94,9 @@ impl Presenter {
         ) {
             panic!("Vulkan Presentation is not supported!");
         }
-        let so = br::Surface::new_xcb(g.instance(), w.x11_ref.borrow().con.get_raw_conn(), w.wid)
+        let so = g
+            .adapter()
+            .new_surface_xcb(w.x11_ref.borrow().con.get_raw_conn(), w.wid)
             .expect("Failed to create Surface object");
         if !g
             .adapter()
@@ -111,20 +114,34 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
+    type Backbuffer = br::ImageViewObject<
+        br::SwapchainImage<
+            SharedRef<
+                br::SwapchainObject<
+                    peridot::DeviceObject,
+                    br::SurfaceObject<peridot::InstanceObject>,
+                >,
+            >,
+        >,
+    >;
+
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedRef<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>> {
         self.sc.backbuffer(index)
     }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_backbuffer_layout()
     }
 
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+    fn emit_initialize_backbuffer_commands(
+        &self,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+    ) {
         self.sc.emit_initialize_backbuffer_commands(recorder)
     }
     fn next_backbuffer_index(&mut self) -> br::Result<u32> {
@@ -133,10 +150,10 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut br::Fence,
+        last_render_fence: &mut impl br::Fence,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
         self.sc.render_and_present(
             g,
