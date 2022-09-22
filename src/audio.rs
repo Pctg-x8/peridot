@@ -31,9 +31,9 @@ impl<T> UniqueRawSliceMut<T> {
 unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
 unsafe impl<T> Send for UniqueRawSliceMut<T> {}
 
-struct BoxedInputStream(Box<dyn InputStream>);
+struct BoxedInputStream(Box<dyn InputStream + Sync + Send>);
 impl BoxedInputStream {
-    fn new<S: InputStream + 'static>(stream: S) -> Self {
+    fn new(stream: impl InputStream + Sync + Send + 'static) -> Self {
         BoxedInputStream(Box::new(stream))
     }
 }
@@ -47,8 +47,6 @@ impl Read for BoxedInputStream {
         self.0.read(buf)
     }
 }
-unsafe impl Sync for BoxedInputStream {}
-unsafe impl Send for BoxedInputStream {}
 
 pub struct Mixer {
     processes: Vec<Arc<RwLock<dyn Processor + Sync + Send>>>,
@@ -447,7 +445,9 @@ impl super::LogicalAssetData for StreamingPlayableWav {
 }
 impl super::FromStreamingAsset for StreamingPlayableWav {
     type Error = std::io::Error;
-    fn from_asset<Asset: super::InputStream + 'static>(asset: Asset) -> IOResult<Self> {
+    fn from_asset<Asset: super::InputStream + Sync + Send + 'static>(
+        asset: Asset,
+    ) -> IOResult<Self> {
         let mut loader = RIFFStreamingLoader::from(BoxedInputStream::new(asset));
         loader.file.skip(4 * 3)?;
         let fmt = loader.read_fmt()?;

@@ -18,7 +18,7 @@ use peridot_vertex_processing_pack::PvpShaderModules;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Range;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct IPFixedBufferInitializer {
