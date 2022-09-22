@@ -408,6 +408,55 @@ let checkCradleMacos =
               ]
         }
 
+let checkCradleLinux =
+      λ(notifyProvider : SlackNotifyProvider) →
+      λ(precondition : Text) →
+        GithubActions.Job::{
+        , name = Some "Cradle(linux)"
+        , runs-on = GithubActions.RunnerPlatform.macos-latest
+        , permissions = Some (toMap { id-token = "write" })
+        , steps =
+            List/concat
+              GithubActions.Step.Type
+              [ List/end_map
+                  GithubActions.Step.Type
+                  (withConditionStep precondition)
+                  [ checkoutHeadStep
+                  , checkoutStep
+                  , cacheStep
+                  , GithubActions.Step::{
+                    , name = "Build CLI"
+                    , run = Some "cargo build --release"
+                    , working-directory = Some "tools/cli"
+                    }
+                  , GithubActions.Step::{
+                    , name = "cargo check"
+                    , run = Some
+                        "tools/target/release/peridot check examples/basic -p linux 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                    , shell = Some GithubActions.Shell.bash
+                    , env = Some
+                        ( toMap
+                            { PERIDOT_CLI_CRADLE_BASE =
+                                GithubActions.mkExpression
+                                  "format('{0}/cradle', github.workspace)"
+                            , PERIDOT_CLI_BUILTIN_ASSETS_PATH =
+                                GithubActions.mkExpression
+                                  "format('{0}/builtin-assets', github.workspace)"
+                            }
+                        )
+                    }
+                  ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-linux")
+                  )
+              ]
+        }
+
 let reportSuccessJob =
       λ(notifyProvider : SlackNotifyProvider) →
         GithubActions.Job::{
@@ -446,6 +495,7 @@ in  { depends
     , checkExamples
     , checkCradleWindows
     , checkCradleMacos
+    , checkCradleLinux
     , reportSuccessJob
     , cacheStep
     }

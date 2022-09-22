@@ -42,6 +42,58 @@ jobs:
         mode: branch
         report_name: Weekly Check
         status: failure
+  "check-cradle-linux":
+    name: "Cradle(linux)"
+    needs:
+    - preconditions
+    - "check-modules"
+    permissions:
+      "id-token": write
+    "runs-on": "macos-latest"
+    steps:
+    - if: 'true'
+      name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v3"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
+    - if: 'true'
+      name: Checking out
+      uses: "actions/checkout@v3"
+    - if: 'true'
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: 'true'
+      name: Build CLI
+      run: "cargo build --release"
+      "working-directory": tools/cli
+    - env:
+        PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+      if: 'true'
+      name: cargo check
+      run: "tools/target/release/peridot check examples/basic -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      shell: bash
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
+      with:
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-cradle-linux"
+        mode: branch
+        report_name: Weekly Check
+        status: failure
   "check-cradle-macos":
     name: "Cradle(macOS)"
     needs:
@@ -365,6 +417,7 @@ jobs:
     - "check-formats"
     - "check-cradle-windows"
     - "check-cradle-macos"
+    - "check-cradle-linux"
     permissions:
       "id-token": write
     "runs-on": "ubuntu-latest"
