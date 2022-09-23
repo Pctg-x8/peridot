@@ -7,6 +7,9 @@ let actions/checkout =
 let aws-actions/configure-aws-credentials =
       https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/aws-actions/configure-aws-credentials.dhall
 
+let actions-rs/toolchain =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/actions-rs/toolchain.dhall
+
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
@@ -473,6 +476,11 @@ let checkCradleAndroid =
                   [ checkoutHeadStep
                   , checkoutStep
                   , cacheStep
+                  , actions-rs/toolchain.step
+                      actions-rs/toolchain.Params::{
+                      , toolchain = Some "stable"
+                      , target = Some "aarch64-linux-android"
+                      }
                   , GithubActions.Step::{
                     , name = "Setup Java"
                     , uses = Some "actions/setup-java@v3"
@@ -484,6 +492,10 @@ let checkCradleAndroid =
                                 GithubActions.WithParameterType.Text "17"
                             }
                         )
+                    }
+                  , GithubActions.Step::{
+                    , name = "Install cargo-ndk"
+                    , run = Some "cargo install cargo-ndk"
                     }
                   , GithubActions.Step::{
                     , name = "Build CLI"

@@ -69,11 +69,20 @@ jobs:
           ~/.cargo/git
           target
     - if: 'true'
+      name: Install Rust Toolchain
+      uses: "actions-rs/toolchain@v1"
+      with:
+        target: "aarch64-linux-android"
+        toolchain: stable
+    - if: 'true'
       name: Setup Java
       uses: "actions/setup-java@v3"
       with:
         distribution: adopt
         "java-version": '17'
+    - if: 'true'
+      name: "Install cargo-ndk"
+      run: "cargo install cargo-ndk"
     - if: 'true'
       name: Build CLI
       run: cargo build

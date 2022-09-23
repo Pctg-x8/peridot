@@ -74,11 +74,20 @@ jobs:
           ~/.cargo/git
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Install Rust Toolchain
+      uses: "actions-rs/toolchain@v1"
+      with:
+        target: "aarch64-linux-android"
+        toolchain: stable
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Setup Java
       uses: "actions/setup-java@v3"
       with:
         distribution: adopt
         "java-version": '17'
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Install cargo-ndk"
+      run: "cargo install cargo-ndk"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build CLI
       run: cargo build
