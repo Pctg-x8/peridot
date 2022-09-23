@@ -392,7 +392,7 @@ let checkCradleMacos =
                                   "format('{0}/builtin-assets', github.workspace)"
                             , PERIDOT_CLI_ARCHIVER_PATH =
                                 GithubActions.mkExpression
-                                  "format('{0}/tools/target/release/peridot-archiver', github.workspace)"
+                                  "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
                             }
                         )
                     }

@@ -132,7 +132,7 @@ jobs:
       name: install requirements
       run: brew install coreutils
     - env:
-        PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/release/peridot-archiver', github.workspace) }}"
+        PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
         PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VULKAN_SDK: /Users
