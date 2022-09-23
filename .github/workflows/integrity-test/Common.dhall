@@ -457,6 +457,67 @@ let checkCradleLinux =
               ]
         }
 
+let checkCradleAndroid =
+      λ(notifyProvider : SlackNotifyProvider) →
+      λ(precondition : Text) →
+        GithubActions.Job::{
+        , name = Some "Cradle(Android)"
+        , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
+        , steps =
+            List/concat
+              GithubActions.Step.Type
+              [ List/end_map
+                  GithubActions.Step.Type
+                  (withConditionStep precondition)
+                  [ checkoutHeadStep
+                  , checkoutStep
+                  , cacheStep
+                  , GithubActions.Step::{
+                    , name = "Setup Java"
+                    , uses = Some "actions/setup-java"
+                    , `with` = Some
+                        ( toMap
+                            { distribution =
+                                GithubActions.WithParameterType.Text "adopt"
+                            , java-version =
+                                GithubActions.WithParameterType.Text "17"
+                            }
+                        )
+                    }
+                  , GithubActions.Step::{
+                    , name = "Build CLI"
+                    , run = Some "cargo build"
+                    , working-directory = Some "tools/cli"
+                    }
+                  , GithubActions.Step::{
+                    , name = "cargo check"
+                    , run = Some
+                        "./tools/target/debug/peridot check examples/basic -p android 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                    , shell = Some GithubActions.Shell.bash
+                    , env = Some
+                        ( toMap
+                            { PERIDOT_CLI_CRADLE_BASE =
+                                GithubActions.mkExpression
+                                  "format('{0}/cradle', github.workspace)"
+                            , PERIDOT_CLI_BUILTIN_ASSETS_PATH =
+                                GithubActions.mkExpression
+                                  "format('{0}/builtin-assets', github.workspace)"
+                            }
+                        )
+                    }
+                  ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-android")
+                  )
+              ]
+        }
+
 let reportSuccessJob =
       λ(notifyProvider : SlackNotifyProvider) →
         GithubActions.Job::{
@@ -496,6 +557,7 @@ in  { depends
     , checkCradleWindows
     , checkCradleMacos
     , checkCradleLinux
+    , checkCradleAndroid
     , reportSuccessJob
     , cacheStep
     }

@@ -21,6 +21,7 @@ let successPrerequisites =
       , "check-cradle-windows"
       , "check-cradle-macos"
       , "check-cradle-linux"
+      , "check-cradle-android"
       ]
 
 let slackNotifyProvider
@@ -92,6 +93,10 @@ in  GithubActions.Workflow::{
             CommonDefs.depends
               [ "preconditions", "check-modules" ]
               (CommonDefs.checkCradleLinux slackNotifyProvider "true")
+        , check-cradle-android =
+            CommonDefs.depends
+              [ "preconditions", "check-modules" ]
+              (CommonDefs.checkCradleAndroid slackNotifyProvider "true")
         , report-success =
             CommonDefs.depends
               successPrerequisites
