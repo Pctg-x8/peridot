@@ -75,7 +75,7 @@ jobs:
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Setup Java
-      uses: "actions/setup-java"
+      uses: "actions/setup-java@v3"
       with:
         distribution: adopt
         "java-version": '17'

@@ -475,7 +475,7 @@ let checkCradleAndroid =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Setup Java"
-                    , uses = Some "actions/setup-java"
+                    , uses = Some "actions/setup-java@v3"
                     , `with` = Some
                         ( toMap
                             { distribution =
