@@ -7,6 +7,9 @@ let actions/checkout =
 let aws-actions/configure-aws-credentials =
       https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/aws-actions/configure-aws-credentials.dhall
 
+let actions-rs/toolchain =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/actions-rs/toolchain.dhall
+
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
@@ -300,7 +303,7 @@ let checkCradleWindows =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Build CLI"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/cli"
                     }
                   , GithubActions.Step::{
@@ -308,7 +311,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                         $ErrorActionPreference = "Continue"
-                        pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                        pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -324,7 +327,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                             $ErrorActionPreference = "Continue"
-                            pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                            pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -364,12 +367,12 @@ let checkCradleMacos =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Build CLI"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/cli"
                     }
                   , GithubActions.Step::{
                     , name = "Build archiver"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/archiver"
                     }
                   , GithubActions.Step::{
@@ -379,7 +382,7 @@ let checkCradleMacos =
                   , GithubActions.Step::{
                     , name = "cargo check"
                     , run = Some
-                        "tools/target/release/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                        "./tools/target/debug/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
                     , shell = Some GithubActions.Shell.bash
                     , env = Some
                         ( toMap
@@ -392,7 +395,7 @@ let checkCradleMacos =
                                   "format('{0}/builtin-assets', github.workspace)"
                             , PERIDOT_CLI_ARCHIVER_PATH =
                                 GithubActions.mkExpression
-                                  "format('{0}/tools/target/release/peridot-archiver', github.workspace)"
+                                  "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
                             }
                         )
                     }
@@ -404,6 +407,126 @@ let checkCradleMacos =
                   ( slackNotify
                       notifyProvider
                       (SlackNotification.Failure "check-cradle-macos")
+                  )
+              ]
+        }
+
+let checkCradleLinux =
+      λ(notifyProvider : SlackNotifyProvider) →
+      λ(precondition : Text) →
+        GithubActions.Job::{
+        , name = Some "Cradle(Linux)"
+        , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
+        , steps =
+            List/concat
+              GithubActions.Step.Type
+              [ List/end_map
+                  GithubActions.Step.Type
+                  (withConditionStep precondition)
+                  [ checkoutHeadStep
+                  , checkoutStep
+                  , cacheStep
+                  , GithubActions.Step::{
+                    , name = "Build CLI"
+                    , run = Some "cargo build"
+                    , working-directory = Some "tools/cli"
+                    }
+                  , GithubActions.Step::{
+                    , name = "cargo check"
+                    , run = Some
+                        "./tools/target/debug/peridot check examples/basic -p linux 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                    , shell = Some GithubActions.Shell.bash
+                    , env = Some
+                        ( toMap
+                            { PERIDOT_CLI_CRADLE_BASE =
+                                GithubActions.mkExpression
+                                  "format('{0}/cradle', github.workspace)"
+                            , PERIDOT_CLI_BUILTIN_ASSETS_PATH =
+                                GithubActions.mkExpression
+                                  "format('{0}/builtin-assets', github.workspace)"
+                            }
+                        )
+                    }
+                  ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-linux")
+                  )
+              ]
+        }
+
+let checkCradleAndroid =
+      λ(notifyProvider : SlackNotifyProvider) →
+      λ(precondition : Text) →
+        GithubActions.Job::{
+        , name = Some "Cradle(Android)"
+        , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
+        , steps =
+            List/concat
+              GithubActions.Step.Type
+              [ List/end_map
+                  GithubActions.Step.Type
+                  (withConditionStep precondition)
+                  [ checkoutHeadStep
+                  , checkoutStep
+                  , cacheStep
+                  , actions-rs/toolchain.step
+                      actions-rs/toolchain.Params::{
+                      , toolchain = Some "stable"
+                      , target = Some "aarch64-linux-android"
+                      }
+                  , GithubActions.Step::{
+                    , name = "Setup Java"
+                    , uses = Some "actions/setup-java@v3"
+                    , `with` = Some
+                        ( toMap
+                            { distribution =
+                                GithubActions.WithParameterType.Text "adopt"
+                            , java-version =
+                                GithubActions.WithParameterType.Text "17"
+                            }
+                        )
+                    }
+                  , GithubActions.Step::{
+                    , name = "Install cargo-ndk"
+                    , run = Some "cargo install cargo-ndk"
+                    }
+                  , GithubActions.Step::{
+                    , name = "Build CLI"
+                    , run = Some "cargo build"
+                    , working-directory = Some "tools/cli"
+                    }
+                  , GithubActions.Step::{
+                    , name = "cargo check"
+                    , run = Some
+                        "./tools/target/debug/peridot check examples/basic -p android 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                    , shell = Some GithubActions.Shell.bash
+                    , env = Some
+                        ( toMap
+                            { PERIDOT_CLI_CRADLE_BASE =
+                                GithubActions.mkExpression
+                                  "format('{0}/cradle', github.workspace)"
+                            , PERIDOT_CLI_BUILTIN_ASSETS_PATH =
+                                GithubActions.mkExpression
+                                  "format('{0}/builtin-assets', github.workspace)"
+                            , NDK_PLATFORM_TARGET = "28"
+                            }
+                        )
+                    }
+                  ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-android")
                   )
               ]
         }
@@ -446,6 +569,8 @@ in  { depends
     , checkExamples
     , checkCradleWindows
     , checkCradleMacos
+    , checkCradleLinux
+    , checkCradleAndroid
     , reportSuccessJob
     , cacheStep
     }

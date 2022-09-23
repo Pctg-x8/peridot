@@ -193,6 +193,8 @@ let successPrerequisites =
       , "check-sync-workflow"
       , "check-cradle-windows"
       , "check-cradle-macos"
+      , "check-cradle-linux"
+      , "check-cradle-android"
       ]
 
 in  GithubActions.Workflow::{
@@ -257,6 +259,20 @@ in  GithubActions.Workflow::{
             CommonDefs.depends
               [ "preconditions", "check-tools", "check-modules" ]
               ( CommonDefs.checkCradleMacos
+                  slackNotifyProvider
+                  preconditionOutputHasChanges
+              )
+        , check-cradle-linux =
+            CommonDefs.depends
+              [ "preconditions", "check-tools", "check-modules" ]
+              ( CommonDefs.checkCradleLinux
+                  slackNotifyProvider
+                  preconditionOutputHasChanges
+              )
+        , check-cradle-android =
+            CommonDefs.depends
+              [ "preconditions", "check-tools", "check-modules" ]
+              ( CommonDefs.checkCradleAndroid
                   slackNotifyProvider
                   preconditionOutputHasChanges
               )

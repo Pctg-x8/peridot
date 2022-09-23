@@ -1,7 +1,7 @@
 //! Bezier to SDF Generator: https://astiopin.github.io/2019/01/06/sdf-on-gpu.html
 
+use euclid::{Angle, Point2D};
 use lyon_path::builder::{FlatPathBuilder, PathBuilder};
-use euclid::{Point2D, Angle};
 
 pub use euclid::{Transform2D, Vector2D};
 
@@ -11,7 +11,7 @@ pub struct ParabolaRectVertex {
     pub pos: peridot::math::Vector2<f32>,
     pub pcoord: peridot::math::Vector2<f32>,
     pub x_limits: [f32; 2],
-    pub scale: [f32; 2]
+    pub scale: [f32; 2],
 }
 
 /// ref: https://astiopin.github.io/2019/01/04/qbez-parabola.html
@@ -23,12 +23,14 @@ pub struct ParabolaRect {
     pub yaxis: peridot::math::Vector2<f32>,
     pub x0_lim: f32,
     pub x1_lim: f32,
-    pub scale: f32
+    pub scale: f32,
 }
 impl ParabolaRect {
     pub fn from_quadratic_bezier(
-        from: peridot::math::Vector2<f32>, ctrl: peridot::math::Vector2<f32>, to: peridot::math::Vector2<f32>,
-        sdf_extra: f32
+        from: peridot::math::Vector2<f32>,
+        ctrl: peridot::math::Vector2<f32>,
+        to: peridot::math::Vector2<f32>,
+        sdf_extra: f32,
     ) -> Self {
         // calc parabola parameters
         let yaxis = ((from + to) * 0.5 - ctrl).normalize();
@@ -47,14 +49,25 @@ impl ParabolaRect {
         let rect_max = from.max(m0).max(m1).max(to) + peridot::math::Vector2(sdf_extra, sdf_extra);
 
         ParabolaRect {
-            rect_min, rect_max, vertex, xaxis, yaxis, x0_lim: x0.min(x1), x1_lim: x1.max(x0), scale
+            rect_min,
+            rect_max,
+            vertex,
+            xaxis,
+            yaxis,
+            x0_lim: x0.min(x1),
+            x1_lim: x1.max(x0),
+            scale,
         }
     }
-    pub fn from_line(from: peridot::math::Vector2<f32>, to: peridot::math::Vector2<f32>, sdf_extra: f32) -> Self {
+    pub fn from_line(
+        from: peridot::math::Vector2<f32>,
+        to: peridot::math::Vector2<f32>,
+        sdf_extra: f32,
+    ) -> Self {
         // 直線をxaxisとする
         let xaxis = (to - from).normalize();
         let yaxis = peridot::math::Vector2(-xaxis.1, xaxis.0);
-        
+
         // 目立たないくらいに少しだけ膨らませるらしい 本当に直線にするとy方向のParabola座標を計算できなくなるので
         let c = (from + to) * 0.5;
         let ll = (from - to).len();
@@ -66,12 +79,22 @@ impl ParabolaRect {
         let rect_max = from.max(to.clone()) + peridot::math::Vector2(sdf_extra, sdf_extra);
 
         ParabolaRect {
-            rect_min, rect_max, vertex, xaxis, yaxis, x0_lim: -xlen, x1_lim: xlen, scale
+            rect_min,
+            rect_max,
+            vertex,
+            xaxis,
+            yaxis,
+            x0_lim: -xlen,
+            x1_lim: xlen,
+            scale,
         }
     }
 
     /// ワールド座標からParabola Local座標を計算する
-    pub fn world_to_par_coord(&self, p: peridot::math::Vector2<f32>) -> peridot::math::Vector2<f32> {
+    pub fn world_to_par_coord(
+        &self,
+        p: peridot::math::Vector2<f32>,
+    ) -> peridot::math::Vector2<f32> {
         let relative_vertex = p - self.vertex;
         // project to axis
         let xlen = relative_vertex.dot(self.xaxis);
@@ -83,27 +106,31 @@ impl ParabolaRect {
     pub fn make_vertices(&self) -> [ParabolaRectVertex; 6] {
         let v00 = ParabolaRectVertex {
             pos: peridot::math::Vector2(self.rect_min.0, self.rect_min.1),
-            pcoord: self.world_to_par_coord(peridot::math::Vector2(self.rect_min.0, self.rect_min.1)),
+            pcoord: self
+                .world_to_par_coord(peridot::math::Vector2(self.rect_min.0, self.rect_min.1)),
             x_limits: [self.x0_lim, self.x1_lim],
-            scale: [self.scale, 0.0]
+            scale: [self.scale, 0.0],
         };
         let v10 = ParabolaRectVertex {
             pos: peridot::math::Vector2(self.rect_max.0, self.rect_min.1),
-            pcoord: self.world_to_par_coord(peridot::math::Vector2(self.rect_max.0, self.rect_min.1)),
+            pcoord: self
+                .world_to_par_coord(peridot::math::Vector2(self.rect_max.0, self.rect_min.1)),
             x_limits: [self.x0_lim, self.x1_lim],
-            scale: [self.scale, 0.0]
+            scale: [self.scale, 0.0],
         };
         let v01 = ParabolaRectVertex {
             pos: peridot::math::Vector2(self.rect_min.0, self.rect_max.1),
-            pcoord: self.world_to_par_coord(peridot::math::Vector2(self.rect_min.0, self.rect_max.1)),
+            pcoord: self
+                .world_to_par_coord(peridot::math::Vector2(self.rect_min.0, self.rect_max.1)),
             x_limits: [self.x0_lim, self.x1_lim],
-            scale: [self.scale, 0.0]
+            scale: [self.scale, 0.0],
         };
         let v11 = ParabolaRectVertex {
             pos: peridot::math::Vector2(self.rect_max.0, self.rect_max.1),
-            pcoord: self.world_to_par_coord(peridot::math::Vector2(self.rect_max.0, self.rect_max.1)),
+            pcoord: self
+                .world_to_par_coord(peridot::math::Vector2(self.rect_max.0, self.rect_max.1)),
             x_limits: [self.x0_lim, self.x1_lim],
-            scale: [self.scale, 0.0]
+            scale: [self.scale, 0.0],
         };
 
         [v00, v01.clone(), v10.clone(), v01, v10, v11]
@@ -115,7 +142,7 @@ pub struct FigureVertices {
     pub fill_triangle_points: Vec<peridot::math::Vector2<f32>>,
     pub fill_triangle_indices: Vec<u16>,
     pub curve_triangles: Vec<peridot::VertexUV2D>,
-    pub parabola_rects: Vec<ParabolaRect>
+    pub parabola_rects: Vec<ParabolaRect>,
 }
 pub struct SDFGenerator {
     figure_start: Point2D<f32>,
@@ -123,7 +150,7 @@ pub struct SDFGenerator {
     transform: Transform2D<f32>,
     approval_tolerance: f32,
     max_distance: f32,
-    figure_vertices: Vec<FigureVertices>
+    figure_vertices: Vec<FigureVertices>,
 }
 impl SDFGenerator {
     pub fn new(approval_tolerance: f32, max_distance: f32) -> Self {
@@ -133,7 +160,7 @@ impl SDFGenerator {
             transform: Transform2D::identity(),
             approval_tolerance,
             max_distance,
-            figure_vertices: Vec::new()
+            figure_vertices: Vec::new(),
         }
     }
 
@@ -153,7 +180,7 @@ impl FlatPathBuilder for SDFGenerator {
             fill_triangle_points: vec![peridot::math::Vector2(p.x, p.y)],
             fill_triangle_indices: vec![],
             curve_triangles: Vec::new(),
-            parabola_rects: Vec::new()
+            parabola_rects: Vec::new(),
         });
     }
     fn line_to(&mut self, to: Point2D<f32>) {
@@ -181,11 +208,15 @@ impl SDFGenerator {
         let tov = peridot::math::Vector2(to.x, to.y);
 
         let current_figure = self.figure_vertices.last_mut().expect("no figure started?");
-        current_figure.parabola_rects.push(ParabolaRect::from_line(from, tov, self.max_distance));
+        current_figure
+            .parabola_rects
+            .push(ParabolaRect::from_line(from, tov, self.max_distance));
         let from_point_index = current_figure.fill_triangle_points.len() as u16 - 1;
         current_figure.fill_triangle_points.push(tov);
         current_figure.fill_triangle_indices.extend(vec![
-            0, from_point_index, current_figure.fill_triangle_points.len() as u16 - 1
+            0,
+            from_point_index,
+            current_figure.fill_triangle_points.len() as u16 - 1,
         ]);
 
         self.current = to;
@@ -196,16 +227,34 @@ impl SDFGenerator {
         let tov = peridot::math::Vector2(to.x, to.y);
 
         let current_figure = self.figure_vertices.last_mut().expect("no figure started?");
-        current_figure.parabola_rects.push(ParabolaRect::from_quadratic_bezier(from, ctrl, tov, self.max_distance));
+        current_figure
+            .parabola_rects
+            .push(ParabolaRect::from_quadratic_bezier(
+                from,
+                ctrl,
+                tov,
+                self.max_distance,
+            ));
         let from_point_index = current_figure.fill_triangle_points.len() as u16 - 1;
         current_figure.fill_triangle_points.push(tov);
         current_figure.fill_triangle_indices.extend(vec![
-            0, from_point_index, current_figure.fill_triangle_points.len() as u16 - 1
+            0,
+            from_point_index,
+            current_figure.fill_triangle_points.len() as u16 - 1,
         ]);
         current_figure.curve_triangles.extend(vec![
-            peridot::VertexUV2D { pos: from, uv: peridot::math::Vector2(0.0, 0.0) },
-            peridot::VertexUV2D { pos: ctrl, uv: peridot::math::Vector2(0.5, 0.0) },
-            peridot::VertexUV2D { pos: tov, uv: peridot::math::Vector2(1.0, 1.0) }
+            peridot::VertexUV2D {
+                pos: from,
+                uv: peridot::math::Vector2(0.0, 0.0),
+            },
+            peridot::VertexUV2D {
+                pos: ctrl,
+                uv: peridot::math::Vector2(0.5, 0.0),
+            },
+            peridot::VertexUV2D {
+                pos: tov,
+                uv: peridot::math::Vector2(1.0, 1.0),
+            },
         ]);
 
         self.current = to;
@@ -213,7 +262,10 @@ impl SDFGenerator {
 }
 impl PathBuilder for SDFGenerator {
     fn quadratic_bezier_to(&mut self, c: Point2D<f32>, to: Point2D<f32>) {
-        let (c, to) = (self.transform.transform_point(&c), self.transform.transform_point(&to));
+        let (c, to) = (
+            self.transform.transform_point(&c),
+            self.transform.transform_point(&to),
+        );
         self.pretransformed_quadratic_bezier_to(c, to);
     }
     fn cubic_bezier_to(&mut self, ctrl1: Point2D<f32>, ctrl2: Point2D<f32>, to: Point2D<f32>) {
@@ -221,18 +273,26 @@ impl PathBuilder for SDFGenerator {
             from: self.current,
             ctrl1: self.transform.transform_point(&ctrl1),
             ctrl2: self.transform.transform_point(&ctrl2),
-            to: self.transform.transform_point(&to)
-        }.for_each_quadratic_bezier(
-            self.approval_tolerance, &mut |q| self.pretransformed_quadratic_bezier_to(q.ctrl, q.to)
-        );
+            to: self.transform.transform_point(&to),
+        }
+        .for_each_quadratic_bezier(self.approval_tolerance, &mut |q| {
+            self.pretransformed_quadratic_bezier_to(q.ctrl, q.to)
+        });
     }
-    fn arc(&mut self, center: Point2D<f32>, rad: Vector2D<f32>, sweeping_angle: Angle<f32>, x_rot: Angle<f32>) {
+    fn arc(
+        &mut self,
+        center: Point2D<f32>,
+        rad: Vector2D<f32>,
+        sweeping_angle: Angle<f32>,
+        x_rot: Angle<f32>,
+    ) {
         lyon_geom::Arc {
             center: self.transform.transform_point(&center),
             radii: self.transform.transform_vector(&rad),
             sweep_angle: sweeping_angle,
             x_rotation: x_rot,
-            start_angle: Angle::degrees(0.0)
-        }.for_each_quadratic_bezier(&mut |q| self.pretransformed_quadratic_bezier_to(q.ctrl, q.to));
+            start_angle: Angle::degrees(0.0),
+        }
+        .for_each_quadratic_bezier(&mut |q| self.pretransformed_quadratic_bezier_to(q.ctrl, q.to));
     }
 }
