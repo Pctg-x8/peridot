@@ -79,6 +79,7 @@ jobs:
       run: cargo build
       "working-directory": tools/cli
     - env:
+        NDK_PLATFORM_TARGET: '28'
         PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
       if: 'true'

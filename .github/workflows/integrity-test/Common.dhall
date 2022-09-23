@@ -503,6 +503,7 @@ let checkCradleAndroid =
                             , PERIDOT_CLI_BUILTIN_ASSETS_PATH =
                                 GithubActions.mkExpression
                                   "format('{0}/builtin-assets', github.workspace)"
+                            , NDK_PLATFORM_TARGET = "28"
                             }
                         )
                     }
