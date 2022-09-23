@@ -300,7 +300,7 @@ let checkCradleWindows =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Build CLI"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/cli"
                     }
                   , GithubActions.Step::{
@@ -364,12 +364,12 @@ let checkCradleMacos =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Build CLI"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/cli"
                     }
                   , GithubActions.Step::{
                     , name = "Build archiver"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/archiver"
                     }
                   , GithubActions.Step::{
@@ -412,8 +412,8 @@ let checkCradleLinux =
       λ(notifyProvider : SlackNotifyProvider) →
       λ(precondition : Text) →
         GithubActions.Job::{
-        , name = Some "Cradle(linux)"
-        , runs-on = GithubActions.RunnerPlatform.macos-latest
+        , name = Some "Cradle(Linux)"
+        , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
         , permissions = Some (toMap { id-token = "write" })
         , steps =
             List/concat
@@ -426,7 +426,7 @@ let checkCradleLinux =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Build CLI"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/cli"
                     }
                   , GithubActions.Step::{

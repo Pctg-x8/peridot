@@ -43,13 +43,13 @@ jobs:
         report_name: Weekly Check
         status: failure
   "check-cradle-linux":
-    name: "Cradle(linux)"
+    name: "Cradle(Linux)"
     needs:
     - preconditions
     - "check-modules"
     permissions:
       "id-token": write
-    "runs-on": "macos-latest"
+    "runs-on": "ubuntu-latest"
     steps:
     - if: 'true'
       name: "Checking out (HEAD commit)"
@@ -70,7 +70,7 @@ jobs:
           target
     - if: 'true'
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/cli
     - env:
         PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
@@ -122,11 +122,11 @@ jobs:
           target
     - if: 'true'
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/cli
     - if: 'true'
       name: Build archiver
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/archiver
     - if: 'true'
       name: install requirements
@@ -183,7 +183,7 @@ jobs:
           target
     - if: 'true'
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/cli
     - env:
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"

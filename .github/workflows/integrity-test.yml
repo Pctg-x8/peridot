@@ -47,14 +47,14 @@ jobs:
         report_name: PR Integrity Check
         status: failure
   "check-cradle-linux":
-    name: "Cradle(linux)"
+    name: "Cradle(Linux)"
     needs:
     - preconditions
     - "check-tools"
     - "check-modules"
     permissions:
       "id-token": write
-    "runs-on": "macos-latest"
+    "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
@@ -75,7 +75,7 @@ jobs:
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/cli
     - env:
         PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
@@ -132,11 +132,11 @@ jobs:
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/cli
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build archiver
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/archiver
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: install requirements
@@ -198,7 +198,7 @@ jobs:
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/cli
     - env:
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
