@@ -82,7 +82,7 @@ jobs:
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
-      run: "tools/target/release/peridot check examples/basic -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      run: "./tools/target/debug/peridot check examples/basic -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
       shell: bash
     - if: "failure()"
       name: Configure for Slack Notification
@@ -148,7 +148,7 @@ jobs:
         VULKAN_SDK: /Users
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
-      run: "tools/target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      run: "./tools/target/debug/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
       shell: bash
     - if: "failure()"
       name: Configure for Slack Notification
@@ -207,7 +207,7 @@ jobs:
       name: cargo check
       run: |
         $ErrorActionPreference = "Continue"
-        pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VK_SDK_PATH: ''
@@ -215,7 +215,7 @@ jobs:
       name: "cargo check for transparent-back"
       run: |
             $ErrorActionPreference = "Continue"
-            pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+            pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - if: "failure()"
       name: Configure for Slack Notification
       uses: "aws-actions/configure-aws-credentials@v1"

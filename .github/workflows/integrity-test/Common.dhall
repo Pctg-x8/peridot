@@ -308,7 +308,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                         $ErrorActionPreference = "Continue"
-                        pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                        pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -324,7 +324,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                             $ErrorActionPreference = "Continue"
-                            pwsh -c 'tools/target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                            pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -379,7 +379,7 @@ let checkCradleMacos =
                   , GithubActions.Step::{
                     , name = "cargo check"
                     , run = Some
-                        "tools/target/release/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                        "./tools/target/debug/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
                     , shell = Some GithubActions.Shell.bash
                     , env = Some
                         ( toMap
@@ -432,7 +432,7 @@ let checkCradleLinux =
                   , GithubActions.Step::{
                     , name = "cargo check"
                     , run = Some
-                        "tools/target/release/peridot check examples/basic -p linux 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                        "./tools/target/debug/peridot check examples/basic -p linux 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
                     , shell = Some GithubActions.Shell.bash
                     , env = Some
                         ( toMap
