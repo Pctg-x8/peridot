@@ -329,7 +329,8 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {
-        if let Some(old) = self.swapchain.take_lw() {
+        if let Some(mut old) = self.swapchain.take_lw() {
+            old.backbuffer_images.clear();
             let (_, s) = SharedRef::try_unwrap(old.swapchain)
                 .unwrap_or_else(|_| panic!("there are some references of swapchain left"))
                 .deconstruct();
