@@ -1,5 +1,5 @@
 let GithubActions = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
-let ProvidedSteps = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
+let actions/checkout = https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/actions/checkout.dhall
 
 let DeploymentAction = ../actions/deployment-dev/schema.dhall
 
@@ -16,7 +16,7 @@ in GithubActions.Workflow::{
             , name = Some "Doc Generate and Deploy"
             , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
             , steps = [
-                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{ ref = Some "dev" }
+                , actions/checkout.stepv3 actions/checkout.Params::{ ref = Some "dev" }
                 , GithubActions.Step::{
                     , name = "Build docs"
                     , uses = Some "./.github/actions/build-doc"

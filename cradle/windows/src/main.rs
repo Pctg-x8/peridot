@@ -25,15 +25,11 @@ use audio::NativeAudioEngine;
 use log::*;
 mod input;
 mod userlib;
+use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
 
 mod presenter;
 use self::presenter::Presenter;
-
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
 
 const LPSZCLASSNAME: &'static str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
 
@@ -89,7 +85,7 @@ pub struct GameDriver {
 }
 impl GameDriver {
     fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
-        let window = SharedPtr::new(ThreadsafeWindowOps(window));
+        let window = SharedRef::new(ThreadsafeWindowOps(window));
 
         let nl = NativeLink {
             al: AssetProvider::new(),
@@ -342,7 +338,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
 
 struct NativeLink {
     al: AssetProvider,
-    window: SharedPtr<ThreadsafeWindowOps>,
+    window: SharedRef<ThreadsafeWindowOps>,
 }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;

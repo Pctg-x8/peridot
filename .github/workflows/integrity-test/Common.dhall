@@ -1,15 +1,18 @@
 let GithubActions =
       https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 
-let ProvidedSteps =
-      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
+let actions/checkout =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/actions/checkout.dhall
+
+let aws-actions/configure-aws-credentials =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/aws-actions/configure-aws-credentials.dhall
+
+let actions-rs/toolchain =
+      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps/actions-rs/toolchain.dhall
 
 let CodeformCheckerAction = ../../actions/codeform-checker/schema.dhall
 
 let CheckBuildSubdirAction = ../../actions/checkbuild-subdir/schema.dhall
-
-let SlackNotifierAction =
-      https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
 
 let List/concat = https://prelude.dhall-lang.org/List/concat
 
@@ -35,11 +38,6 @@ let ePullRequestBaseHash =
 
 let eSecretGithubToken = GithubActions.mkExpression "secrets.GITHUB_TOKEN"
 
-let eSecretAWSAccessKey = GithubActions.mkExpression "secrets.AWS_ACCESS_KEY_ID"
-
-let eSecretAWSAccessSecret =
-      GithubActions.mkExpression "secrets.AWS_ACCESS_SECRET"
-
 let depends =
       λ(deps : List Text) →
       λ(job : GithubActions.Job.Type) →
@@ -58,26 +56,13 @@ let withConditionStep =
 let runStepOnFailure = withConditionStep "failure()"
 
 let configureSlackNotification =
-      GithubActions.Step::{
-      , name = "Configure for Slack Notification"
-      , id = Some "cfgNotification"
-      , run = Some
-          ''
-          # re-export configs for further step
-          echo AWS_ROLE_ARN=$AWS_ROLE_ARN >> $GITHUB_ENV
-          echo AWS_WEB_IDENTITY_TOKEN_FILE=$AWS_WEB_IDENTITY_TOKEN_FILE >> $GITHUB_ENV
-          echo AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION >> $GITHUB_ENV
-
-          curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://github.com/Pctg-x8/peridot" | jq -r ".value" > $AWS_WEB_IDENTITY_TOKEN_FILE
-          ''
-      , env = Some
-          ( toMap
-              { AWS_ROLE_ARN = "arn:aws:iam::208140986057:role/GHALambdaInvoker"
-              , AWS_WEB_IDENTITY_TOKEN_FILE = "/tmp/awstoken"
-              , AWS_DEFAULT_REGION = "ap-northeast-1"
-              }
-          )
-      }
+        aws-actions/configure-aws-credentials.step
+          aws-actions/configure-aws-credentials.Params::{
+          , awsRegion = "ap-northeast-1"
+          , roleToAssume = Some
+              "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+          }
+      ⫽ { name = "Configure for Slack Notification" }
 
 let preconditionRecordBeginTimeStep =
       GithubActions.Step::{
@@ -89,14 +74,14 @@ let preconditionRecordBeginTimeStep =
 let preconditionBeginTimestampOutputDef =
       toMap
         { begintime =
-            GithubActions.mkExpression "steps.begintime.outputs.begintime"
+            GithubActions.mkRefStepOutputExpression "begintime" "begintime"
         }
 
-let checkoutStep = ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
+let checkoutStep = actions/checkout.stepv3 actions/checkout.Params::{=}
 
 let checkoutHeadStep =
-        ProvidedSteps.checkoutStep
-          ProvidedSteps.CheckoutParams::{ ref = Some ePullRequestHeadHash }
+        actions/checkout.stepv3
+          actions/checkout.Params::{ ref = Some ePullRequestHeadHash }
       ⫽ { name = "Checking out (HEAD commit)" }
 
 let cacheStep =
@@ -106,90 +91,28 @@ let cacheStep =
       , `with` = Some
           ( toMap
               { path =
-                  ''
-                  ~/.cargo/registry
-                  ~/.cargo/git
-                  target
-                  ''
+                  GithubActions.WithParameterType.Text
+                    ''
+                    ~/.cargo/registry
+                    ~/.cargo/git
+                    target
+                    ''
               , key =
-                  "${GithubActions.mkExpression
-                       "runner.os"}-cargo-${GithubActions.mkExpression
-                                              "hashFiles('**/Cargo.lock')"}"
+                  let os = GithubActions.mkExpression "runner.os"
+
+                  let hash =
+                        GithubActions.mkExpression "hashFiles('**/Cargo.lock')"
+
+                  in  GithubActions.WithParameterType.Text "${os}-cargo-${hash}"
               }
           )
       }
-
-let slackNotifyIfFailureStep =
-      λ(stepName : Text) →
-        SlackNotifierAction.step
-          { status = SlackNotifierAction.Status.Failure stepName
-          , begintime =
-              GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-          , report_name = "PR Integrity Check"
-          , mode =
-              SlackNotifierAction.Mode.Diff
-                { head_sha = ePullRequestHeadHash
-                , base_sha = ePullRequestBaseHash
-                , pr_number = ePullRequestNumber
-                , pr_title = ePullRequestTitle
-                }
-          }
-
-let slackNotifySuccessStep =
-      SlackNotifierAction.step
-        { status = SlackNotifierAction.Status.Success
-        , begintime =
-            GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , report_name = "PR Integrity Check"
-        , mode =
-            SlackNotifierAction.Mode.Diff
-              { head_sha = ePullRequestHeadHash
-              , base_sha = ePullRequestBaseHash
-              , pr_number = ePullRequestNumber
-              , pr_title = ePullRequestTitle
-              }
-        }
-
-let weeklySlackNotifyAsFailureStep =
-      λ(stepName : Text) →
-        SlackNotifierAction.step
-          { status = SlackNotifierAction.Status.Failure stepName
-          , begintime =
-              GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-          , report_name = "Weekly Check"
-          , mode = SlackNotifierAction.Mode.Branch
-          }
-
-let weeklySlackNotifyAsSuccessStep =
-      SlackNotifierAction.step
-        { status = SlackNotifierAction.Status.Success
-        , begintime =
-            GithubActions.mkExpression "needs.preconditions.outputs.begintime"
-        , report_name = "Weekly Check"
-        , mode = SlackNotifierAction.Mode.Branch
-        }
 
 let SlackNotification = < Success | Failure : Text >
 
 let SlackNotifyProvider =
       { Success : GithubActions.Step.Type
       , Failure : Text → GithubActions.Step.Type
-      }
-
-let prSlackNotifyProvider =
-      { Success = slackNotifySuccessStep ⫽ { name = "Notify as Success" }
-      , Failure =
-          λ(phase : Text) →
-            slackNotifyIfFailureStep phase ⫽ { name = "Notify as Failure" }
-      }
-
-let weeklySlackNotifyProvider =
-      { Success =
-          weeklySlackNotifyAsSuccessStep ⫽ { name = "Notify as Success" }
-      , Failure =
-          λ(phase : Text) →
-              weeklySlackNotifyAsFailureStep phase
-            ⫽ { name = "Notify as Failure" }
       }
 
 let slackNotify =
@@ -380,7 +303,7 @@ let checkCradleWindows =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Build CLI"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/cli"
                     }
                   , GithubActions.Step::{
@@ -388,7 +311,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                         $ErrorActionPreference = "Continue"
-                        pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                        pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -404,7 +327,7 @@ let checkCradleWindows =
                     , run = Some
                         ''
                             $ErrorActionPreference = "Continue"
-                            pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+                            pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
                         ''
                     , env = Some
                         ( toMap
@@ -416,8 +339,7 @@ let checkCradleWindows =
                         )
                     }
                   ]
-              , List/map
-                  GithubActions.Step.Type
+              , List/end_map
                   GithubActions.Step.Type
                   runStepOnFailure
                   ( slackNotify
@@ -445,12 +367,12 @@ let checkCradleMacos =
                   , cacheStep
                   , GithubActions.Step::{
                     , name = "Build CLI"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/cli"
                     }
                   , GithubActions.Step::{
                     , name = "Build archiver"
-                    , run = Some "cargo build --release"
+                    , run = Some "cargo build"
                     , working-directory = Some "tools/archiver"
                     }
                   , GithubActions.Step::{
@@ -460,7 +382,7 @@ let checkCradleMacos =
                   , GithubActions.Step::{
                     , name = "cargo check"
                     , run = Some
-                        "target/release/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                        "./tools/target/debug/peridot check examples/basic -p mac 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
                     , shell = Some GithubActions.Shell.bash
                     , env = Some
                         ( toMap
@@ -473,7 +395,7 @@ let checkCradleMacos =
                                   "format('{0}/builtin-assets', github.workspace)"
                             , PERIDOT_CLI_ARCHIVER_PATH =
                                 GithubActions.mkExpression
-                                  "format('{0}/target/release/peridot-archiver', github.workspace)"
+                                  "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
                             }
                         )
                     }
@@ -485,6 +407,126 @@ let checkCradleMacos =
                   ( slackNotify
                       notifyProvider
                       (SlackNotification.Failure "check-cradle-macos")
+                  )
+              ]
+        }
+
+let checkCradleLinux =
+      λ(notifyProvider : SlackNotifyProvider) →
+      λ(precondition : Text) →
+        GithubActions.Job::{
+        , name = Some "Cradle(Linux)"
+        , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
+        , steps =
+            List/concat
+              GithubActions.Step.Type
+              [ List/end_map
+                  GithubActions.Step.Type
+                  (withConditionStep precondition)
+                  [ checkoutHeadStep
+                  , checkoutStep
+                  , cacheStep
+                  , GithubActions.Step::{
+                    , name = "Build CLI"
+                    , run = Some "cargo build"
+                    , working-directory = Some "tools/cli"
+                    }
+                  , GithubActions.Step::{
+                    , name = "cargo check"
+                    , run = Some
+                        "./tools/target/debug/peridot check examples/basic -p linux 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                    , shell = Some GithubActions.Shell.bash
+                    , env = Some
+                        ( toMap
+                            { PERIDOT_CLI_CRADLE_BASE =
+                                GithubActions.mkExpression
+                                  "format('{0}/cradle', github.workspace)"
+                            , PERIDOT_CLI_BUILTIN_ASSETS_PATH =
+                                GithubActions.mkExpression
+                                  "format('{0}/builtin-assets', github.workspace)"
+                            }
+                        )
+                    }
+                  ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-linux")
+                  )
+              ]
+        }
+
+let checkCradleAndroid =
+      λ(notifyProvider : SlackNotifyProvider) →
+      λ(precondition : Text) →
+        GithubActions.Job::{
+        , name = Some "Cradle(Android)"
+        , runs-on = GithubActions.RunnerPlatform.ubuntu-latest
+        , permissions = Some (toMap { id-token = "write" })
+        , steps =
+            List/concat
+              GithubActions.Step.Type
+              [ List/end_map
+                  GithubActions.Step.Type
+                  (withConditionStep precondition)
+                  [ checkoutHeadStep
+                  , checkoutStep
+                  , cacheStep
+                  , actions-rs/toolchain.step
+                      actions-rs/toolchain.Params::{
+                      , toolchain = Some "stable"
+                      , target = Some "aarch64-linux-android"
+                      }
+                  , GithubActions.Step::{
+                    , name = "Setup Java"
+                    , uses = Some "actions/setup-java@v3"
+                    , `with` = Some
+                        ( toMap
+                            { distribution =
+                                GithubActions.WithParameterType.Text "adopt"
+                            , java-version =
+                                GithubActions.WithParameterType.Text "17"
+                            }
+                        )
+                    }
+                  , GithubActions.Step::{
+                    , name = "Install cargo-ndk"
+                    , run = Some "cargo install cargo-ndk"
+                    }
+                  , GithubActions.Step::{
+                    , name = "Build CLI"
+                    , run = Some "cargo build"
+                    , working-directory = Some "tools/cli"
+                    }
+                  , GithubActions.Step::{
+                    , name = "cargo check"
+                    , run = Some
+                        "./tools/target/debug/peridot check examples/basic -p android 2>&1 | tee \$GITHUB_WORKSPACE/.buildlog"
+                    , shell = Some GithubActions.Shell.bash
+                    , env = Some
+                        ( toMap
+                            { PERIDOT_CLI_CRADLE_BASE =
+                                GithubActions.mkExpression
+                                  "format('{0}/cradle', github.workspace)"
+                            , PERIDOT_CLI_BUILTIN_ASSETS_PATH =
+                                GithubActions.mkExpression
+                                  "format('{0}/builtin-assets', github.workspace)"
+                            , NDK_PLATFORM_TARGET = "28"
+                            }
+                        )
+                    }
+                  ]
+              , List/map
+                  GithubActions.Step.Type
+                  GithubActions.Step.Type
+                  runStepOnFailure
+                  ( slackNotify
+                      notifyProvider
+                      (SlackNotification.Failure "check-cradle-android")
                   )
               ]
         }
@@ -512,13 +554,14 @@ in  { depends
     , eRepositoryOwnerLogin
     , eRepositoryName
     , ePullRequestNumber
+    , ePullRequestTitle
+    , ePullRequestHeadHash
+    , ePullRequestBaseHash
     , eSecretGithubToken
     , configureSlackNotification
-    , slackNotifyIfFailureStep
-    , slackNotifySuccessStep
-    , prSlackNotifyProvider
-    , weeklySlackNotifyProvider
+    , SlackNotifyProvider
     , checkoutHeadStep
+    , checkoutStep
     , checkFormats
     , checkBaseLayer
     , checkTools
@@ -526,6 +569,8 @@ in  { depends
     , checkExamples
     , checkCradleWindows
     , checkCradleMacos
+    , checkCradleLinux
+    , checkCradleAndroid
     , reportSuccessJob
     , cacheStep
     }

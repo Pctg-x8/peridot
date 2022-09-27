@@ -1,63 +1,76 @@
 //! DeviceMemory Helper
 
 use bedrock as br;
+use br::{Device, PhysicalDevice};
 
-use crate::mthelper::{DynamicMut, SharedRef};
+use crate::{
+    mthelper::{DynamicMut, SharedRef},
+    DeviceObject,
+};
 
-/// A refcounted memory object.
-pub type Memory = SharedRef<DynamicMut<br::DeviceMemory>>;
-
-pub struct MemoryBadget<'g> {
+pub struct MemoryBadget<'g, Buffer: br::Buffer, Image: br::Image> {
     g: &'g crate::Graphics,
-    entries: Vec<(MemoryBadgetEntry, u64)>,
+    entries: Vec<(MemoryBadgetEntry<Buffer, Image>, u64)>,
     total_size: u64,
     memory_type_bitmask: u32,
     last_resource_tiling: Option<ResourceTiling>,
 }
-pub enum MemoryBadgetEntry {
-    Buffer(br::Buffer),
-    Image(br::Image),
+pub enum MemoryBadgetEntry<Buffer: br::Buffer, Image: br::Image> {
+    Buffer(Buffer),
+    Image(Image),
 }
-pub enum MemoryBoundResource {
-    Buffer(super::Buffer),
-    Image(super::Image),
+pub enum MemoryBoundResource<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory> {
+    Buffer(super::Buffer<Buffer, DeviceMemory>),
+    Image(super::Image<Image, DeviceMemory>),
 }
-impl From<br::Buffer> for MemoryBadgetEntry {
-    fn from(v: br::Buffer) -> Self {
-        MemoryBadgetEntry::Buffer(v)
-    }
-}
-impl From<br::Image> for MemoryBadgetEntry {
-    fn from(v: br::Image) -> Self {
-        MemoryBadgetEntry::Image(v)
-    }
-}
-impl MemoryBadgetEntry {
-    fn tiling(&self) -> ResourceTiling {
+impl<Buffer: br::Buffer, Image: br::Image> MemoryBadgetEntry<Buffer, Image> {
+    #[inline]
+    const fn tiling(&self) -> ResourceTiling {
         match self {
-            MemoryBadgetEntry::Buffer(_) => ResourceTiling::Linear,
+            Self::Buffer(_) => ResourceTiling::Linear,
             // Note: Peridotが扱うImageは全てNonLinearTiling
-            MemoryBadgetEntry::Image(_) => ResourceTiling::NonLinear,
+            Self::Image(_) => ResourceTiling::NonLinear,
+        }
+    }
+
+    #[inline]
+    fn requirements(&self) -> br::vk::VkMemoryRequirements
+    where
+        Buffer: br::MemoryBound,
+        Image: br::MemoryBound,
+    {
+        match self {
+            Self::Buffer(b) => b.requirements(),
+            Self::Image(r) => r.requirements(),
         }
     }
 }
-impl MemoryBoundResource {
-    pub fn unwrap_buffer(self) -> super::Buffer {
+impl<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory>
+    MemoryBoundResource<Buffer, Image, DeviceMemory>
+{
+    #[inline]
+    pub fn unwrap_buffer(self) -> super::Buffer<Buffer, DeviceMemory> {
         match self {
             MemoryBoundResource::Buffer(b) => b,
             _ => panic!("Not a buffer"),
         }
     }
-    pub fn unwrap_image(self) -> super::Image {
+
+    #[inline]
+    pub fn unwrap_image(self) -> super::Image<Image, DeviceMemory> {
         match self {
             MemoryBoundResource::Image(b) => b,
             _ => panic!("Not an image"),
         }
     }
 }
-impl<'g> MemoryBadget<'g> {
-    pub fn new(g: &'g crate::Graphics) -> Self {
-        MemoryBadget {
+impl<'g, Buffer, Image> MemoryBadget<'g, Buffer, Image>
+where
+    Buffer: br::Buffer<ConcreteDevice = DeviceObject> + br::MemoryBound,
+    Image: br::Image<ConcreteDevice = DeviceObject> + br::MemoryBound,
+{
+    pub const fn new(g: &'g crate::Graphics) -> Self {
+        Self {
             g,
             entries: Vec::new(),
             total_size: 0,
@@ -65,13 +78,17 @@ impl<'g> MemoryBadget<'g> {
             last_resource_tiling: None,
         }
     }
-    pub fn add<V: Into<MemoryBadgetEntry> + br::MemoryBound>(&mut self, v: V) -> u64 {
+
+    pub fn add(&mut self, v: MemoryBadgetEntry<Buffer, Image>) -> u64
+    where
+        Buffer: br::MemoryBound,
+        Image: br::MemoryBound,
+    {
         let req = v.requirements();
         let new_offset = super::align2!(self.total_size, req.alignment);
-        let entry = v.into();
-        let align_required = self.last_resource_tiling.map_or(false, |t| {
-            t.is_additional_alignment_required(entry.tiling())
-        });
+        let align_required = self
+            .last_resource_tiling
+            .map_or(false, |t| t.is_additional_alignment_required(v.tiling()));
         let new_offset = if align_required {
             super::align2!(
                 new_offset,
@@ -80,13 +97,17 @@ impl<'g> MemoryBadget<'g> {
         } else {
             new_offset
         };
-        self.last_resource_tiling = Some(entry.tiling());
-        self.entries.push((entry, new_offset));
+        self.last_resource_tiling = Some(v.tiling());
+        self.entries.push((v, new_offset));
         self.total_size = new_offset + req.size;
         self.memory_type_bitmask |= req.memoryTypeBits;
         return new_offset;
     }
-    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>> {
+
+    pub fn alloc(
+        self,
+    ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
+    {
         let mt = self
             .g
             .memory_type_manager
@@ -95,11 +116,12 @@ impl<'g> MemoryBadget<'g> {
             .index();
         log::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
-        let mem = SharedRef::new(DynamicMut::new(br::DeviceMemory::allocate(
-            &self.g.device,
-            self.total_size as _,
-            mt,
-        )?));
+        let mem = SharedRef::new(DynamicMut::new(
+            self.g
+                .device
+                .clone()
+                .allocate_memory(self.total_size as _, mt)?,
+        ));
 
         self.entries
             .into_iter()
@@ -113,7 +135,11 @@ impl<'g> MemoryBadget<'g> {
             })
             .collect()
     }
-    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>> {
+
+    pub fn alloc_upload(
+        self,
+    ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
+    {
         let mt = self
             .g
             .memory_type_manager
@@ -127,11 +153,12 @@ impl<'g> MemoryBadget<'g> {
         }
         log::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt.index(), self.memory_type_bitmask);
-        let mem = SharedRef::new(DynamicMut::new(br::DeviceMemory::allocate(
-            &self.g.device,
-            self.total_size as _,
-            mt.index(),
-        )?));
+        let mem = SharedRef::new(DynamicMut::new(
+            self.g
+                .device
+                .clone()
+                .allocate_memory(self.total_size as _, mt.index())?,
+        ));
 
         self.entries
             .into_iter()
@@ -148,14 +175,21 @@ impl<'g> MemoryBadget<'g> {
 }
 
 #[repr(transparent)]
-pub struct AutocloseMappedMemoryRange<'m>(pub(super) Option<br::MappedMemoryRange<'m>>);
-impl<'m> std::ops::Deref for AutocloseMappedMemoryRange<'m> {
-    type Target = br::MappedMemoryRange<'m>;
+pub struct AutocloseMappedMemoryRange<'m, DeviceMemory: br::DeviceMemory + ?Sized + 'm>(
+    pub(super) Option<br::MappedMemoryRange<'m, DeviceMemory>>,
+);
+impl<'m, DeviceMemory: br::DeviceMemory + ?Sized + 'm> std::ops::Deref
+    for AutocloseMappedMemoryRange<'m, DeviceMemory>
+{
+    type Target = br::MappedMemoryRange<'m, DeviceMemory>;
+
     fn deref(&self) -> &Self::Target {
         self.0.as_ref().expect("object has been dropped")
     }
 }
-impl<'m> Drop for AutocloseMappedMemoryRange<'m> {
+impl<'m, DeviceMemory: br::DeviceMemory + ?Sized + 'm> Drop
+    for AutocloseMappedMemoryRange<'m, DeviceMemory>
+{
     fn drop(&mut self) {
         self.0.take().expect("object has been dropped").end();
     }
