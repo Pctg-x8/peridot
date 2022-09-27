@@ -831,7 +831,7 @@ impl Graphics {
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
         let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
-            db.add_extensions(device_extensions).add_queue(qci);
+            db.add_queue(qci);
             if validation_layer_available {
                 db.add_layer("VK_LAYER_KHRONOS_validation");
             }
