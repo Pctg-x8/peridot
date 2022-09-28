@@ -1,21 +1,25 @@
 use peridot::FeatureRequests;
 use std::io::{Error as IOError, Result as IOResult};
-use winapi::shared::minwindef::{DWORD, HINSTANCE, HIWORD, LOWORD, LPARAM, LRESULT, UINT, WPARAM};
-use winapi::shared::minwindef::{HINSTANCE, HIWORD, LOWORD, LPARAM, LRESULT, UINT, WPARAM};
-use winapi::shared::windef::{HWND, POINT, RECT};
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::minwindef::{
+    ATOM, DWORD, HINSTANCE, HIWORD, LOWORD, LPARAM, LRESULT, UINT, WPARAM,
+};
+use winapi::shared::windef::{HDC, HWND, POINT, RECT};
 use winapi::shared::winerror::{HRESULT, SUCCEEDED};
 use winapi::um::combaseapi::{CoInitializeEx, CoUninitialize};
 use winapi::um::libloaderapi::GetModuleHandleA;
-use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::um::objbase::COINIT_MULTITHREADED;
 use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
+use winapi::um::wingdi::{
+    CreateDCA, DeleteDC, GetDeviceCaps, DISPLAY_DEVICEA, DISPLAY_DEVICE_ACTIVE,
+    DISPLAY_DEVICE_MIRRORING_DRIVER, DISPLAY_DEVICE_MODESPRUNED, DISPLAY_DEVICE_PRIMARY_DEVICE,
+    DISPLAY_DEVICE_REMOVABLE, DISPLAY_DEVICE_VGA_COMPATIBLE, HORZRES, HORZSIZE, VERTRES, VERTSIZE,
+};
 use winapi::um::winuser::{
-    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
-    GetWindowLongPtrA, LoadCursorA, MapWindowPoints, PeekMessageA, PostQuitMessage,
+    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, EnumDisplayDevicesA,
+    GetClientRect, GetWindowLongPtrA, LoadCursorA, MapWindowPoints, PeekMessageA, PostQuitMessage,
     RegisterClassExA, SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT,
-    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WM_INPUT, WM_SIZE, WNDCLASSEXA,
-    WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
+    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WM_INPUT, WM_SIZE, WNDCLASSEXA, WS_BORDER,
+    WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
 };
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 
@@ -26,12 +30,13 @@ use log::*;
 mod input;
 mod userlib;
 use peridot::mthelper::SharedRef;
-use peridot::{EngineEvents, FeatureRequests};
+use peridot::EngineEvents;
+use userlib::Game;
 
 mod presenter;
 use self::presenter::Presenter;
 
-const LPSZCLASSNAME: &'static str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
+const LPSZCLASSNAME: &'static str = concat!("mainWindow\0");
 
 fn module_handle() -> HINSTANCE {
     unsafe { GetModuleHandleA(std::ptr::null()) }
@@ -95,9 +100,9 @@ impl GameDriver {
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
             nl,
-            userlib::Game::<NativeLink>::requested_features(),
+            Game::<NativeLink>::requested_features(),
         );
-        let usercode = userlib::Game::init(&mut base);
+        let usercode = Game::init(&mut base);
         let ri_handler = self::input::RawInputHandler::init();
         base.input_mut()
             .set_nativelink(Box::new(self::input::NativeInputHandler::new(
@@ -131,6 +136,172 @@ impl GameDriver {
     }
 }
 
+#[repr(transparent)]
+struct WindowClass(WNDCLASSEXA);
+impl WindowClass {
+    fn register(&self) -> std::io::Result<ATOM> {
+        let r = unsafe { RegisterClassExA(&self.0) };
+        if r == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(r)
+        }
+    }
+}
+
+struct DisplayDeviceIterator<'s> {
+    device: Option<&'s std::ffi::CStr>,
+    next_device_number: DWORD,
+    flags: DWORD,
+}
+impl<'s> DisplayDeviceIterator<'s> {
+    pub const fn new(device: Option<&'s std::ffi::CStr>, flags: DWORD) -> Self {
+        Self {
+            device,
+            next_device_number: 0,
+            flags,
+        }
+    }
+}
+impl Iterator for DisplayDeviceIterator<'_> {
+    type Item = DISPLAY_DEVICEA;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut dd = std::mem::MaybeUninit::<DISPLAY_DEVICEA>::uninit();
+        unsafe { (*dd.as_mut_ptr()).cb = std::mem::size_of::<DISPLAY_DEVICEA>() as _ };
+        let r = unsafe {
+            EnumDisplayDevicesA(
+                self.device
+                    .map_or_else(std::ptr::null, std::ffi::CStr::as_ptr),
+                self.next_device_number,
+                dd.as_mut_ptr(),
+                self.flags,
+            )
+        };
+        if r == 0 {
+            None
+        } else {
+            self.next_device_number += 1;
+            Some(unsafe { dd.assume_init() })
+        }
+    }
+}
+
+/// helper function until stabilization of std::ffi::CStr::from_bytes_until_nul
+fn cstr_from_bytes_until_nul(bytes: &[u8]) -> std::borrow::Cow<std::ffi::CStr> {
+    let len = bytes.iter().take_while(|&&c| c != 0).count();
+
+    unsafe {
+        if len == bytes.len() {
+            // filled
+            std::borrow::Cow::Owned(std::ffi::CString::from_vec_with_nul_unchecked(
+                bytes.iter().copied().chain(std::iter::once(0)).collect(),
+            ))
+        } else {
+            std::borrow::Cow::Borrowed(std::ffi::CStr::from_bytes_with_nul_unchecked(
+                &bytes[..len + 1],
+            ))
+        }
+    }
+}
+
+trait DisplayDeviceProvider {
+    fn display_device(&self) -> &DISPLAY_DEVICEA;
+
+    fn flags(&self) -> Vec<&'static str> {
+        let mut flags = Vec::new();
+        if (self.display_device().StateFlags & DISPLAY_DEVICE_ACTIVE) != 0 {
+            flags.push("Active");
+        }
+        if (self.display_device().StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0 {
+            flags.push("Mirroring");
+        }
+        if (self.display_device().StateFlags & DISPLAY_DEVICE_MODESPRUNED) != 0 {
+            flags.push("ModesPruned");
+        }
+        if (self.display_device().StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0 {
+            flags.push("Primary");
+        }
+        if (self.display_device().StateFlags & DISPLAY_DEVICE_REMOVABLE) != 0 {
+            flags.push("Removable");
+        }
+        if (self.display_device().StateFlags & DISPLAY_DEVICE_VGA_COMPATIBLE) != 0 {
+            flags.push("VGAComp");
+        }
+
+        flags
+    }
+
+    fn device_string(&self) -> std::borrow::Cow<std::ffi::CStr> {
+        cstr_from_bytes_until_nul(unsafe {
+            std::mem::transmute(&self.display_device().DeviceString[..])
+        })
+    }
+}
+
+#[repr(transparent)]
+struct DisplayDevice(DISPLAY_DEVICEA);
+impl DisplayDevice {
+    fn all() -> impl Iterator<Item = Self> {
+        DisplayDeviceIterator::new(None, 0).map(Self)
+    }
+
+    fn monitors<'s>(&'s self) -> impl Iterator<Item = MonitorDevice<'s>> + 's {
+        DisplayDeviceIterator::new(
+            Some(unsafe {
+                std::ffi::CStr::from_bytes_with_nul_unchecked(std::mem::transmute(
+                    &self.0.DeviceName[..],
+                ))
+            }),
+            0,
+        )
+        .map(move |dd| MonitorDevice(self, dd))
+    }
+}
+impl DisplayDeviceProvider for DisplayDevice {
+    fn display_device(&self) -> &DISPLAY_DEVICEA {
+        &self.0
+    }
+}
+
+struct MonitorDevice<'d>(&'d DisplayDevice, DISPLAY_DEVICEA);
+impl MonitorDevice<'_> {
+    fn create_dc(&self) -> Option<DeviceContextHandle> {
+        let dc = unsafe {
+            CreateDCA(
+                self.0 .0.DeviceName.as_ptr(),
+                self.1.DeviceString.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+
+        if dc.is_null() {
+            None
+        } else {
+            Some(DeviceContextHandle(dc))
+        }
+    }
+}
+impl DisplayDeviceProvider for MonitorDevice<'_> {
+    fn display_device(&self) -> &DISPLAY_DEVICEA {
+        &self.1
+    }
+}
+
+#[repr(transparent)]
+struct DeviceContextHandle(HDC);
+impl Drop for DeviceContextHandle {
+    fn drop(&mut self) {
+        unsafe { DeleteDC(self.0) };
+    }
+}
+impl DeviceContextHandle {
+    fn device_caps(&self, cap: i32) -> i32 {
+        unsafe { GetDeviceCaps(self.0, cap) }
+    }
+}
+
 fn main() {
     env_logger::init();
     let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
@@ -139,18 +310,16 @@ fn main() {
         SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE);
     }
 
-    let wca = WNDCLASSEXA {
+    let wcatom = WindowClass(WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _,
         hInstance: module_handle(),
         lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
         lpfnWndProc: Some(window_callback),
         hCursor: unsafe { LoadCursorA(std::ptr::null_mut(), IDC_ARROW as _) },
         ..unsafe { MaybeUninit::zeroed().assume_init() }
-    };
-    let wcatom = unsafe { RegisterClassExA(&wca) };
-    if wcatom <= 0 {
-        panic!("Register Class Failed!");
-    }
+    })
+    .register()
+    .expect("Failed to register window class");
 
     let wname_c =
         std::ffi::CString::new(userlib::APP_TITLE).expect("Unable to generate a c-style string");
@@ -159,7 +328,7 @@ fn main() {
     } else {
         WS_EX_APPWINDOW
     };
-    let (w, h, style) = match GameW::WINDOW_EXTENTS {
+    let (w, h, style) = match userlib::APP_DEFAULT_EXTENTS {
         peridot::WindowExtents::Fixed(w, h) => (
             w,
             h,
@@ -168,6 +337,27 @@ fn main() {
         peridot::WindowExtents::Resizable(w, h) => (w, h, WS_OVERLAPPEDWINDOW),
         // TODO: for fullscreen window generation
         peridot::WindowExtents::Fullscreen => {
+            for (nd, d) in DisplayDevice::all().enumerate() {
+                println!(
+                    "Device #{nd}: {} {}",
+                    d.device_string().to_str().expect("invalid str sequence"),
+                    d.flags().join(",")
+                );
+
+                for (n, m) in d.monitors().enumerate() {
+                    let dc = m.create_dc().expect("Failed to create DC for monitor");
+                    let wres = dc.device_caps(HORZRES);
+                    let hres = dc.device_caps(VERTRES);
+                    let wmm = dc.device_caps(HORZSIZE);
+                    let hmm = dc.device_caps(VERTSIZE);
+
+                    println!(
+                        "Monitor #{n}: {} ({wres}x{hres}, {wmm}mmx{hmm}mm) {}",
+                        m.device_string().to_str().expect("invalid str sequence"),
+                        m.flags().join(",")
+                    );
+                }
+            }
             unimplemented!("todo for full-screen window generation")
         }
     };
@@ -192,7 +382,7 @@ fn main() {
             wrect.bottom - wrect.top,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            wca.hInstance,
+            module_handle(),
             std::ptr::null_mut(),
         )
     };
@@ -345,23 +535,28 @@ impl peridot::NativeLinker for NativeLink {
     type Presenter = Presenter;
 
     #[cfg(not(feature = "transparent"))]
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", "VK_KHR_win32_surface"]
+    fn intercept_instance_builder(&self, builder: &mut bedrock::InstanceBuilder) {
+        builder.add_extensions(vec!["VK_KHR_surface", "VK_KHR_win32_surface"]);
     }
     #[cfg(feature = "transparent")]
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec![]
-    }
+    fn intercept_instance_builder(&self, builder: &mut bedrock::InstanceBuilder) {}
+
     #[cfg(not(feature = "transparent"))]
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn intercept_device_builder(
+        &self,
+        builder: &mut bedrock::DeviceBuilder<impl bedrock::PhysicalDevice>,
+    ) {
+        builder.add_extensions(vec!["VK_KHR_swapchain"]);
     }
     #[cfg(feature = "transparent")]
-    fn device_extensions(&self) -> Vec<&str> {
-        vec![
+    fn intercept_device_builder(
+        &self,
+        builder: &mut bedrock::DeviceBuilder<impl bedrock::PhysicalDevice>,
+    ) {
+        builder.add_extensions(vec![
             "VK_KHR_external_memory_win32",
             "VK_KHR_external_semaphore_win32",
-        ]
+        ]);
     }
 
     fn asset_loader(&self) -> &AssetProvider {
