@@ -19,6 +19,7 @@ xcb = { version = "0.8", features = ["thread"] }
 pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 libc = "0.2"
 regex = "1.4"
+x11 = "2.20.0"
 
 [dependencies.async-std]
 version = "1.0"
