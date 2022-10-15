@@ -1,37 +1,27 @@
 //! Input Handlers
 
-use crate::{epoll::Epoll, kernel_input, udev};
+use crate::{
+    epoll::Epoll,
+    kernel_input, udev,
+    ws::{InputSystemBackend, WindowSystemBackend},
+};
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef, SharedWeakRef};
 
-pub struct InputNativeLink {
-    ws_ref: SharedWeakRef<DynamicMut<super::X11>>,
+pub struct InputNativeLink<WindowSystem: InputSystemBackend> {
+    ws_ref: SharedWeakRef<DynamicMut<WindowSystem>>,
 }
-impl InputNativeLink {
-    pub fn new(ws: &SharedRef<DynamicMut<super::X11>>) -> Self {
-        InputNativeLink {
+impl<WindowSystem: InputSystemBackend> InputNativeLink<WindowSystem> {
+    pub fn new(ws: &SharedRef<DynamicMut<WindowSystem>>) -> Self {
+        Self {
             ws_ref: SharedRef::downgrade(ws),
         }
     }
 }
-impl peridot::NativeInput for InputNativeLink {
+impl<WindowSystem: InputSystemBackend> peridot::NativeInput for InputNativeLink<WindowSystem> {
     fn get_pointer_position(&self, _index: u32) -> Option<(f32, f32)> {
-        if let Some(ws) = self.ws_ref.upgrade() {
-            let ptrinfo = {
-                let wslock = ws.borrow();
-                let ck = xcb::query_pointer(&wslock.con, wslock.mainwnd_id);
-                wslock.flush();
-                ck.get_reply().expect("Failed to query pointer to xcb")
-            };
-            if ptrinfo.same_screen() {
-                // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
-                Some((ptrinfo.win_x() as _, ptrinfo.win_y() as f32 - 5.0))
-            } else {
-                debug!("Fixme: Handle same_screen = false");
-                None
-            }
-        } else {
-            None
-        }
+        self.ws_ref
+            .upgrade()
+            .and_then(|ws| ws.borrow().get_pointer_position())
     }
 }
 
@@ -322,11 +312,12 @@ impl InputSystem {
             a => debug!("Unknown device action: {:?}", a),
         }
     }
+
     pub fn process_device_event(
         &mut self,
         input: &mut peridot::NativeEventReceiver,
         ep_value: u64,
-        x11: &crate::X11,
+        backend: &(impl InputSystemBackend + WindowSystemBackend),
     ) {
         let (ev, is_mouse) = match self
             .devmgr
@@ -359,53 +350,41 @@ impl InputSystem {
                 _ => return,
             };
 
-            let focus_ck = xcb::get_input_focus(&x11.con);
-            let qp_cookie = xcb::query_pointer(&x11.con, x11.mainwnd_id);
-            x11.flush();
-            let ptr = qp_cookie.get_reply().expect("Failed to query pointer");
-            let geometry = x11.mainwnd_geometry();
-            let focus = focus_ck
-                .get_reply()
-                .expect("Failed to query focus info")
-                .focus();
+            let (is_focused, (px, py)) = backend.query_states_batched();
+            let geometry = backend.mainwnd_geometry();
 
             if let Some(b) = map_key_button(ev.code) {
                 if matches!(b, peridot::NativeButtonInput::Mouse(_)) {
-                    if !(0..=geometry.0 as i16).contains(&ptr.win_x())
-                        || !(0..=geometry.1 as i16).contains(&ptr.win_y())
+                    if !((0..=geometry.0 as i16).contains(&px)
+                        && (0..=geometry.1 as i16).contains(&py))
                     {
                         // out of window
                         return;
                     }
-                } else if focus != x11.mainwnd_id {
+                } else if !is_focused {
                     // Ignore if window doesn't have the input focus.
                     return;
                 }
                 input.dispatch_button_event(b, is_press);
             } else if let Some(a) = map_analog_key_emulation(ev.code) {
-                if focus != x11.mainwnd_id {
+                if !is_focused {
                     // Ignore if window doesn't have the input focus.
                     return;
                 }
                 input.dispatch_analog_event(a, if is_press { 1.0 } else { 0.0 }, true);
             } else {
-                if focus != x11.mainwnd_id {
+                if !is_focused {
                     // Ignore if window doesn't have the input focus.
                     return;
                 }
                 debug!("key event: code={}", ev.code);
             }
         } else if ev.type_ == kernel_input::EventType::Relative as u16 {
-            let focus_ck = xcb::get_input_focus(&x11.con);
-            x11.flush();
-            let focus = focus_ck
-                .get_reply()
-                .expect("Failed to query focus info")
-                .focus();
-            if focus != x11.mainwnd_id {
+            if !backend.is_focused() {
                 // Ignore if window doesn't have the input focus.
                 return;
             }
+
             if let Some(b) = if is_mouse {
                 map_mouse_input_rel(ev.code)
             } else {
@@ -421,13 +400,7 @@ impl InputSystem {
                 return;
             }
 
-            let focus_ck = xcb::get_input_focus(&x11.con);
-            x11.flush();
-            let focus = focus_ck
-                .get_reply()
-                .expect("Failed to query focus info")
-                .focus();
-            if focus != x11.mainwnd_id {
+            if !backend.is_focused() {
                 // Ignore if window doesn't have the input focus.
                 return;
             }
@@ -443,13 +416,7 @@ impl InputSystem {
                 debug!("absolute event: code={}, value={}", ev.code, ev.value);
             }
         } else {
-            let focus_ck = xcb::get_input_focus(&x11.con);
-            x11.flush();
-            let focus = focus_ck
-                .get_reply()
-                .expect("Failed to query focus info")
-                .focus();
-            if focus != x11.mainwnd_id {
+            if !backend.is_focused() {
                 // Ignore if window doesn't have the input focus.
                 return;
             }

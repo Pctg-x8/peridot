@@ -9,16 +9,19 @@ use peridot::{
 };
 use std::fs::File;
 use std::io::Result as IOResult;
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
+use ws::{InputSystemBackend, VulkanPresentable};
 
 mod sound_backend;
 use sound_backend::NativeAudioEngine;
+
+use crate::ws::WindowSystemBackend;
 mod epoll;
 mod input;
 mod kernel_input;
 mod udev;
 mod userlib;
+mod ws;
 
 pub struct PlatformAssetLoader {
     basedir: PathBuf,
@@ -75,28 +78,25 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     }
 }
 
-pub struct WindowHandler {
-    vis: xcb::Visualid,
-    wid: xcb::Window,
-    x11_ref: SharedRef<DynamicMut<X11>>,
-}
-
-pub struct Presenter {
-    x11_ref: SharedRef<DynamicMut<X11>>,
+pub struct Presenter<WindowSystem: WindowSystemBackend> {
+    x11_ref: SharedRef<DynamicMut<WindowSystem>>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
-impl Presenter {
-    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &WindowHandler) -> Self {
-        if !g.adapter().xcb_presentation_support(
-            renderer_queue_family,
-            w.x11_ref.borrow().con.get_raw_conn(),
-            w.vis,
-        ) {
+impl<WindowSystem: WindowSystemBackend + VulkanPresentable> Presenter<WindowSystem> {
+    fn new(
+        g: &peridot::Graphics,
+        renderer_queue_family: u32,
+        w: &SharedRef<DynamicMut<WindowSystem>>,
+    ) -> Self {
+        if !w
+            .borrow()
+            .presentation_support(g.adapter(), renderer_queue_family)
+        {
             panic!("Vulkan Presentation is not supported!");
         }
-        let so = g
-            .adapter()
-            .new_surface_xcb(w.x11_ref.borrow().con.get_raw_conn(), w.wid)
+        let so = w
+            .borrow()
+            .create_surface(g.adapter())
             .expect("Failed to create Surface object");
         if !g
             .adapter()
@@ -109,11 +109,11 @@ impl Presenter {
 
         Presenter {
             sc,
-            x11_ref: w.x11_ref.clone(),
+            x11_ref: w.clone(),
         }
     }
 }
-impl peridot::PlatformPresenter for Presenter {
+impl<WindowBackend: WindowSystemBackend> peridot::PlatformPresenter for Presenter<WindowBackend> {
     type Backbuffer = br::ImageViewObject<
         br::SwapchainImage<
             SharedRef<
@@ -174,16 +174,21 @@ impl peridot::PlatformPresenter for Presenter {
     }
 }
 
-pub struct NativeLink {
+pub struct NativeLink<WindowSystem: WindowSystemBackend + VulkanPresentable> {
     al: PlatformAssetLoader,
-    wh: WindowHandler,
+    ws: SharedRef<DynamicMut<WindowSystem>>,
 }
-impl peridot::NativeLinker for NativeLink {
+impl<WindowSystem: WindowSystemBackend + VulkanPresentable> peridot::NativeLinker
+    for NativeLink<WindowSystem>
+{
     type AssetLoader = PlatformAssetLoader;
-    type Presenter = Presenter;
+    type Presenter = Presenter<WindowSystem>;
 
     fn intercept_instance_builder(&self, builder: &mut br::InstanceBuilder) {
-        builder.add_extensions(vec!["VK_KHR_surface", "VK_KHR_xcb_surface"]);
+        builder.add_extensions(vec![
+            "VK_KHR_surface",
+            WindowSystem::REQUIRED_INSTANCE_EXTENSION,
+        ]);
     }
     fn intercept_device_builder(&self, builder: &mut br::DeviceBuilder<impl br::PhysicalDevice>) {
         builder.add_extensions(vec!["VK_KHR_swapchain"]);
@@ -192,144 +197,41 @@ impl peridot::NativeLinker for NativeLink {
     fn asset_loader(&self) -> &PlatformAssetLoader {
         &self.al
     }
-    fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
-        Presenter::new(g, g.graphics_queue_family_index(), &self.wh)
+    fn new_presenter(&self, g: &peridot::Graphics) -> Self::Presenter {
+        Presenter::new(g, g.graphics_queue_family_index(), &self.ws)
     }
 }
 
-#[allow(dead_code)]
-pub struct X11 {
-    con: xcb::Connection,
-    wm_protocols: xcb::Atom,
-    wm_delete_window: xcb::Atom,
-    vis: xcb::Visualid,
-    mainwnd_id: xcb::Window,
-    cached_window_size: peridot::math::Vector2<usize>,
-}
-impl X11 {
-    fn init() -> Self {
-        let (con, screen_index) = xcb::Connection::connect(None).expect("Connecting with xcb");
-        let s0 = con
-            .get_setup()
-            .roots()
-            .nth(screen_index as _)
-            .expect("No screen");
-        let vis = s0.root_visual();
-
-        let wm_protocols = xcb::intern_atom_unchecked(&con, false, "WM_PROTOCOLS");
-        let wm_delete_window = xcb::intern_atom_unchecked(&con, false, "WM_DELETE_WINDOW");
-        con.flush();
-        let wm_protocols = wm_protocols.get_reply().expect("No WM_PROTOCOLS").atom();
-        let wm_delete_window = wm_delete_window
-            .get_reply()
-            .expect("No WM_DELETE_WINDOW")
-            .atom();
-
-        let mainwnd_id = con.generate_id();
-        xcb::create_window(
-            &con,
-            s0.root_depth(),
-            mainwnd_id,
-            s0.root(),
-            0,
-            0,
-            640,
-            480,
-            0,
-            xcb::WINDOW_CLASS_INPUT_OUTPUT as _,
-            vis,
-            &[(xcb::CW_EVENT_MASK, xcb::EVENT_MASK_RESIZE_REDIRECT)],
-        );
-        xcb::change_property(
-            &con,
-            xcb::PROP_MODE_REPLACE as _,
-            mainwnd_id,
-            xcb::ATOM_WM_NAME,
-            xcb::ATOM_STRING,
-            8,
-            userlib::APP_TITLE.as_bytes(),
-        );
-        xcb::change_property(
-            &con,
-            xcb::PROP_MODE_APPEND as _,
-            mainwnd_id,
-            wm_protocols,
-            xcb::ATOM_ATOM,
-            32,
-            &[wm_delete_window],
-        );
-        con.flush();
-
-        X11 {
-            con,
-            wm_protocols,
-            wm_delete_window,
-            vis,
-            mainwnd_id,
-            cached_window_size: peridot::math::Vector2(640, 480),
-        }
-    }
-    fn fd(&self) -> RawFd {
-        self.con.as_raw_fd()
-    }
-    fn flush(&self) {
-        if !self.con.flush() {
-            panic!("Failed to flush");
-        }
-    }
-    fn show(&self) {
-        xcb::map_window(&self.con, self.mainwnd_id);
-        self.con.flush();
-    }
-    /// Returns false if application has beed exited
-    fn process_all_events(&mut self) -> bool {
-        while let Some(ev) = self.con.poll_for_event() {
-            let event_type = ev.response_type() & 0x7f;
-            if event_type == xcb::CLIENT_MESSAGE {
-                let e: &xcb::ClientMessageEvent = unsafe { xcb::cast_event(&ev) };
-                if e.data().data32()[0] == self.wm_delete_window {
-                    return false;
-                }
-            } else if event_type == xcb::RESIZE_REQUEST {
-                let e: &xcb::ResizeRequestEvent = unsafe { xcb::cast_event(&ev) };
-                self.cached_window_size = peridot::math::Vector2(e.width() as _, e.height() as _);
-            } else {
-                debug!("Generic Event: {:?}", ev.response_type());
-            }
-        }
-        return true;
-    }
-
-    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<usize> {
-        &self.cached_window_size
-    }
-}
-
-pub struct GameDriver {
-    engine: peridot::Engine<NativeLink>,
-    usercode: userlib::Game<NativeLink>,
+pub struct GameDriver<
+    WindowSystem: WindowSystemBackend + VulkanPresentable + InputSystemBackend + Send + Sync + 'static,
+> {
+    engine: peridot::Engine<NativeLink<WindowSystem>>,
+    usercode: userlib::Game<NativeLink<WindowSystem>>,
     _snd: NativeAudioEngine,
 }
-impl GameDriver {
-    fn new(wh: WindowHandler, x11: &SharedRef<DynamicMut<X11>>) -> Self {
+impl<
+        WindowSystem: WindowSystemBackend + VulkanPresentable + InputSystemBackend + Send + Sync + 'static,
+    > GameDriver<WindowSystem>
+{
+    fn new(ws: &SharedRef<DynamicMut<WindowSystem>>) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
-            wh,
+            ws: ws.clone(),
         };
         let mut engine = peridot::Engine::new(
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
             nl,
-            userlib::Game::<NativeLink>::requested_features(),
+            userlib::Game::<NativeLink<WindowSystem>>::requested_features(),
         );
         let usercode = userlib::Game::init(&mut engine);
         engine
             .input_mut()
-            .set_nativelink(Box::new(input::InputNativeLink::new(x11)));
+            .set_nativelink(Box::new(input::InputNativeLink::new(ws)));
         engine.postinit();
         let _snd = NativeAudioEngine::new(engine.audio_mixer());
 
-        GameDriver {
+        Self {
             engine,
             usercode,
             _snd,
@@ -343,16 +245,9 @@ impl GameDriver {
 
 fn main() {
     env_logger::init();
-    let x11 = SharedRef::new(DynamicMut::new(X11::init()));
+    let x11 = SharedRef::new(DynamicMut::new(ws::xcb::X11::init()));
 
-    let mut gd = GameDriver::new(
-        WindowHandler {
-            vis: x11.borrow().vis,
-            wid: x11.borrow().mainwnd_id,
-            x11_ref: x11.clone(),
-        },
-        &x11,
-    );
+    let mut gd = GameDriver::new(&x11);
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
     ep.add_fd(x11.borrow().fd(), libc::EPOLLIN as _, 0)
@@ -396,7 +291,7 @@ fn main() {
                 input.process_device_event(
                     &mut gd.engine.input_mut().make_event_receiver(),
                     e.u64,
-                    &x11.borrow(),
+                    &*x11.borrow(),
                 );
             }
         }
