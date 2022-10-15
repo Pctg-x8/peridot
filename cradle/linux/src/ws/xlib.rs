@@ -9,12 +9,17 @@ use x11::xlib::{
     XQueryPointer, XRootWindow, XSetErrorHandler, XSetWindowAttributes, XVisualInfo,
 };
 
+#[link(name = "X11")]
+extern "C" {}
+
 const fn id<T>(x: T) -> T {
     x
 }
 
 #[repr(transparent)]
 struct Display(std::ptr::NonNull<x11::xlib::Display>);
+unsafe impl Sync for Display {}
+unsafe impl Send for Display {}
 impl Display {
     pub fn open(dpy: Option<*const i8>) -> Option<Self> {
         std::ptr::NonNull::new(unsafe { XOpenDisplay(dpy.map_or_else(std::ptr::null, id)) })

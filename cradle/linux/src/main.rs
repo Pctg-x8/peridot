@@ -245,7 +245,7 @@ impl<
 
 fn main() {
     env_logger::init();
-    let x11 = SharedRef::new(DynamicMut::new(ws::xcb::X11::init()));
+    let x11 = SharedRef::new(DynamicMut::new(ws::xlib::WindowSystem::init()));
 
     let mut gd = GameDriver::new(&x11);
 
