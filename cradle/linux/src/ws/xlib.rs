@@ -187,17 +187,18 @@ impl super::VulkanPresentable for WindowSystem {
 impl super::InputSystemBackend for WindowSystem {
     fn get_pointer_position(&self) -> Option<(f32, f32)> {
         let (mut x, mut y) = (0, 0);
+        let (mut _root, mut _child, mut _rx, mut _ry, mut _mask) = (0, 0, 0, 0, 0);
         let r = unsafe {
             XQueryPointer(
                 self.display.0.as_ptr(),
                 self.w,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &mut _root,
+                &mut _child,
+                &mut _rx,
+                &mut _ry,
                 &mut x,
                 &mut y,
-                std::ptr::null_mut(),
+                &mut _mask,
             )
         };
         let in_same_screen = r != 0;
@@ -212,29 +213,25 @@ impl super::InputSystemBackend for WindowSystem {
 
     fn is_focused(&self) -> bool {
         let mut focus_wid = 0;
-        unsafe {
-            XGetInputFocus(
-                self.display.0.as_ptr(),
-                &mut focus_wid,
-                std::ptr::null_mut(),
-            )
-        };
+        let mut _rev = 0;
+        unsafe { XGetInputFocus(self.display.0.as_ptr(), &mut focus_wid, &mut _rev) };
         focus_wid == self.w
     }
 
     fn query_states_batched(&self) -> (bool, (i16, i16)) {
         let (mut x, mut y) = (0, 0);
+        let (mut _root, mut _child, mut _rx, mut _ry, mut _mask) = (0, 0, 0, 0, 0);
         unsafe {
             XQueryPointer(
                 self.display.0.as_ptr(),
                 self.w,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &mut _root,
+                &mut _child,
+                &mut _rx,
+                &mut _ry,
                 &mut x,
                 &mut y,
-                std::ptr::null_mut(),
+                &mut _mask,
             )
         };
 
