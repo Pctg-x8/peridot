@@ -3,10 +3,11 @@ use std::os::fd::RawFd;
 use bedrock as br;
 use x11::xlib::{
     AllocNone, CWBackPixel, CWColormap, CWEventMask, CWOverrideRedirect, DirectColor, ExposureMask,
-    InputOutput, ResizeRedirectMask, ResizeRequest, XBlackPixel, XCloseDisplay, XConnectionNumber,
-    XCreateColormap, XCreateWindow, XDefaultScreen, XErrorEvent, XFlush, XGetErrorText,
-    XGetInputFocus, XMapWindow, XMatchVisualInfo, XNextEvent, XOpenDisplay, XPending,
-    XQueryPointer, XRootWindow, XSetErrorHandler, XSetWindowAttributes, XVisualInfo,
+    InputOutput, ResizeRedirectMask, ResizeRequest, TrueColor, XBlackPixel, XChangeProperty,
+    XCloseDisplay, XConnectionNumber, XCreateColormap, XCreateSimpleWindow, XCreateWindow,
+    XDefaultRootWindow, XDefaultScreen, XErrorEvent, XFlush, XGetErrorText, XGetInputFocus,
+    XMapWindow, XMatchVisualInfo, XNextEvent, XOpenDisplay, XPending, XQueryPointer, XRootWindow,
+    XSetErrorHandler, XSetWindowAttributes, XStoreName, XVisualInfo,
 };
 
 #[link(name = "X11")]
@@ -92,28 +93,27 @@ impl super::WindowSystemBackend for WindowSystem {
         let screen = display.default_screen();
         let root_window = display.root_window(screen);
         let vi = display
-            .match_visual_info(screen, 24, DirectColor)
-            .expect("no matching visual for 24bit direct-color");
+            .match_visual_info(screen, 24, TrueColor)
+            .or_else(|| display.match_visual_info(screen, 24, DirectColor))
+            .expect("no matching visual for 24bit color");
         let cmap =
             unsafe { XCreateColormap(display.0.as_ptr(), root_window, vi.visual, AllocNone) };
 
         let mut xattr = XSetWindowAttributes {
             colormap: cmap,
             event_mask: ExposureMask | ResizeRedirectMask,
-            background_pixel: display.black_pixel(screen),
-            override_redirect: true as _,
             ..unsafe { std::mem::MaybeUninit::zeroed().assume_init() }
         };
-        let attr_mask = CWColormap | CWEventMask | CWBackPixel | CWOverrideRedirect;
+        let attr_mask = CWColormap | CWEventMask;
         let w = unsafe {
             XCreateWindow(
                 display.0.as_ptr(),
-                root_window,
+                XDefaultRootWindow(display.0.as_ptr()),
                 0,
                 0,
                 640,
                 480,
-                1,
+                0,
                 24,
                 InputOutput as _,
                 vi.visual,
@@ -121,6 +121,9 @@ impl super::WindowSystemBackend for WindowSystem {
                 &mut xattr,
             )
         };
+        let title_cstr = std::ffi::CString::new(crate::userlib::APP_TITLE)
+            .expect("invalid sequence in app title");
+        unsafe { XStoreName(display.0.as_ptr(), w, title_cstr.as_ptr() as _) };
         display.flush();
 
         Self {
