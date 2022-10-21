@@ -1,9 +1,9 @@
 use bedrock as br;
 
 pub struct SurfaceInfo {
-    pub(crate) fmt: br::vk::VkSurfaceFormatKHR,
-    pub(crate) pres_mode: br::PresentMode,
-    pub(crate) available_composite_alpha: br::CompositeAlpha,
+    pub fmt: br::vk::VkSurfaceFormatKHR,
+    pub pres_mode: br::PresentMode,
+    pub available_composite_alpha: br::CompositeAlpha,
 }
 impl SurfaceInfo {
     pub fn gather_info(pd: &impl br::PhysicalDevice, obj: &impl br::Surface) -> br::Result<Self> {

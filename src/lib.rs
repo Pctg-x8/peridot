@@ -55,7 +55,9 @@ pub trait NativeLinker: Sized {
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn new_presenter(&self, g: &Graphics) -> Self::Presenter;
 
+    #[allow(unused_variables)]
     fn intercept_instance_builder(&self, builder: &mut br::InstanceBuilder) {}
+    #[allow(unused_variables)]
     fn intercept_device_builder(&self, builder: &mut br::DeviceBuilder<impl br::PhysicalDevice>) {}
 
     fn rendering_precision(&self) -> f32 {
@@ -810,11 +812,6 @@ impl Graphics {
             debug!("Debug reporting activated");
         }
         native_ext.intercept_instance_builder(&mut ib);
-        // TODO: あとでこれをどこかにうつす
-        // if requires_fullscreen {
-        //     ib.add_extension("VK_EXT_full_screen_exclusive")
-        //         .add_extension("VK_KHR_get_surface_capabilities2");
-        // }
         let instance = SharedRef::new(ib.create()?);
 
         let adapter = instance
@@ -950,6 +947,16 @@ impl Graphics {
     pub fn graphics_queue_family_index(&self) -> u32 {
         self.graphics_queue.family
     }
+
+    #[inline]
+    pub fn graphics_queue(&self) -> &parking_lot::Mutex<br::Queue<DeviceObject>> {
+        &self.graphics_queue.q
+    }
+
+    #[inline]
+    pub fn graphics_queue_mut(&mut self) -> &mut parking_lot::Mutex<br::Queue<DeviceObject>> {
+        &mut self.graphics_queue.q
+    }
 }
 impl Deref for Graphics {
     type Target = DeviceObject;
@@ -1069,7 +1076,7 @@ impl SubpassDependencyTemplates {
                 0
             },
             srcStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
-            ..Default::default()
+            srcAccessMask: 0
         }
     }
 }

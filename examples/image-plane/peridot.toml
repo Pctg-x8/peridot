@@ -3,6 +3,4 @@ title = "Peridot Examples - ImagePlane"
 asset_dir = "./assets"
 
 [default_extent]
-type = "Fixed"
-width = 320
-height = 240
+type = "Fullscreen"

@@ -321,7 +321,13 @@ impl TransferBatch {
                     bufferOffset: *so,
                     bufferRowLength: 0,
                     bufferImageHeight: 0,
-                    imageSubresource: br::vk::VkImageSubresourceLayers::default(),
+                    // TOOD: ここもいじれるようにしたほうがいいか？
+                    imageSubresource: br::vk::VkImageSubresourceLayers {
+                        aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
+                        mipLevel: 0,
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    },
                     imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
                     imageExtent: dex.clone(),
                 }],

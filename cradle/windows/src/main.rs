@@ -1,9 +1,10 @@
 use peridot::FeatureRequests;
 use std::io::{Error as IOError, Result as IOResult};
+use winapi::shared::basetsd::INT_PTR;
 use winapi::shared::minwindef::{
-    ATOM, DWORD, HINSTANCE, HIWORD, LOWORD, LPARAM, LRESULT, UINT, WPARAM,
+    ATOM, BOOL, DWORD, FALSE, HINSTANCE, HIWORD, LOWORD, LPARAM, LRESULT, TRUE, UINT, WPARAM,
 };
-use winapi::shared::windef::{HDC, HWND, POINT, RECT};
+use winapi::shared::windef::{HDC, HMONITOR, HWND, LPRECT, POINT, RECT};
 use winapi::shared::winerror::{HRESULT, SUCCEEDED};
 use winapi::um::combaseapi::{CoInitializeEx, CoUninitialize};
 use winapi::um::libloaderapi::GetModuleHandleA;
@@ -15,11 +16,14 @@ use winapi::um::wingdi::{
     DISPLAY_DEVICE_REMOVABLE, DISPLAY_DEVICE_VGA_COMPATIBLE, HORZRES, HORZSIZE, VERTRES, VERTSIZE,
 };
 use winapi::um::winuser::{
-    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, EnumDisplayDevicesA,
-    GetClientRect, GetWindowLongPtrA, LoadCursorA, MapWindowPoints, PeekMessageA, PostQuitMessage,
-    RegisterClassExA, SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT,
-    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WM_INPUT, WM_SIZE, WNDCLASSEXA, WS_BORDER,
-    WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
+    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DialogBoxParamA, DispatchMessageA,
+    EndDialog, EnumDisplayDevicesA, EnumDisplayMonitors, GetClientRect, GetDlgItem,
+    GetMonitorInfoA, GetWindowLongPtrA, LoadCursorA, MapWindowPoints, PeekMessageA,
+    PostQuitMessage, RegisterClassExA, SendMessageA, SetWindowLongPtrA, ShowWindow,
+    TranslateMessage, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CB_SETEXTENDEDUI, CW_USEDEFAULT,
+    GWLP_USERDATA, IDC_ARROW, MONITORINFOEXA, PM_REMOVE, SW_SHOWNORMAL, WM_COMMAND, WM_INITDIALOG,
+    WM_INPUT, WM_SIZE, WNDCLASSEXA, WS_BORDER, WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
+    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
 };
 use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
 
@@ -89,12 +93,17 @@ pub struct GameDriver {
     ri_handler: self::input::RawInputHandler,
 }
 impl GameDriver {
-    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
+    fn new(
+        window: HWND,
+        init_size: peridot::math::Vector2<usize>,
+        fullscreen_target_monitor: Option<HMONITOR>,
+    ) -> Self {
         let window = SharedRef::new(ThreadsafeWindowOps(window));
 
         let nl = NativeLink {
             al: AssetProvider::new(),
             window: window.clone(),
+            fullscreen_target_monitor,
         };
         let mut base = peridot::Engine::new(
             userlib::APP_IDENTIFIER,
@@ -237,6 +246,12 @@ trait DisplayDeviceProvider {
             std::mem::transmute(&self.display_device().DeviceString[..])
         })
     }
+
+    fn device_name(&self) -> std::borrow::Cow<std::ffi::CStr> {
+        cstr_from_bytes_until_nul(unsafe {
+            std::mem::transmute(&self.display_device().DeviceName[..])
+        })
+    }
 }
 
 #[repr(transparent)]
@@ -302,6 +317,40 @@ impl DeviceContextHandle {
     }
 }
 
+fn enum_display_monitors<F: FnMut(HMONITOR, HDC, &mut RECT) -> bool>(
+    hdc: Option<HDC>,
+    clip_rect: Option<&RECT>,
+    mut callback: F,
+) -> std::io::Result<()> {
+    extern "system" fn wrapper<F: FnMut(HMONITOR, HDC, &mut RECT) -> bool>(
+        monitor: HMONITOR,
+        dc: HDC,
+        rect: LPRECT,
+        userdata: LPARAM,
+    ) -> BOOL {
+        let callback = unsafe { &mut *(userdata as *mut F) };
+        if callback(monitor, dc, unsafe { &mut *rect }) {
+            TRUE
+        } else {
+            FALSE
+        }
+    }
+
+    let r = unsafe {
+        EnumDisplayMonitors(
+            hdc.unwrap_or_else(std::ptr::null_mut),
+            clip_rect.map_or_else(std::ptr::null, |x| x as *const _),
+            Some(wrapper::<F>),
+            &mut callback as *mut _ as _,
+        )
+    };
+    if r == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 fn main() {
     env_logger::init();
     let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
@@ -328,15 +377,17 @@ fn main() {
     } else {
         WS_EX_APPWINDOW
     };
-    let (w, h, style) = match userlib::APP_DEFAULT_EXTENTS {
+    let (w, h, style, fs_monitor) = match userlib::APP_DEFAULT_EXTENTS {
         peridot::WindowExtents::Fixed(w, h) => (
             w,
             h,
             WS_OVERLAPPED | WS_CAPTION | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX,
+            None,
         ),
-        peridot::WindowExtents::Resizable(w, h) => (w, h, WS_OVERLAPPEDWINDOW),
-        // TODO: for fullscreen window generation
+        peridot::WindowExtents::Resizable(w, h) => (w, h, WS_OVERLAPPEDWINDOW, None),
         peridot::WindowExtents::Fullscreen => {
+            let mut candidates = Vec::new();
+            let mut device_names = Vec::new();
             for (nd, d) in DisplayDevice::all().enumerate() {
                 println!(
                     "Device #{nd}: {} {}",
@@ -356,9 +407,94 @@ fn main() {
                         m.device_string().to_str().expect("invalid str sequence"),
                         m.flags().join(",")
                     );
+
+                    candidates.push(
+                        std::ffi::CString::new(format!(
+                            "{} {wres}x{hres} ({})",
+                            m.device_string().to_str().expect("invalid str sequence"),
+                            d.device_string().to_str().expect("invalid str sequence")
+                        ))
+                        .expect("invalid sequence"),
+                    );
+                    device_names.push(d.device_name().into_owned());
                 }
             }
-            unimplemented!("todo for full-screen window generation")
+
+            struct SelectMonitorDialogInitData {
+                candidates: Vec<std::ffi::CString>,
+            }
+            extern "system" fn dlgfunc(dlg: HWND, msg: UINT, wp: WPARAM, lp: LPARAM) -> INT_PTR {
+                if msg == WM_INITDIALOG {
+                    unsafe {
+                        let init_data = &*(lp as *const SelectMonitorDialogInitData);
+                        let choices = GetDlgItem(dlg, 10);
+                        SendMessageA(choices, CB_SETEXTENDEDUI, TRUE as _, 0);
+                        for c in &init_data.candidates {
+                            SendMessageA(choices, CB_ADDSTRING, 0, c.as_ptr() as _);
+                        }
+                        SendMessageA(choices, CB_SETCURSEL, 0, 0);
+                    }
+                }
+                if msg == WM_COMMAND {
+                    if wp == 1 {
+                        // ok
+                        unsafe {
+                            EndDialog(dlg, SendMessageA(GetDlgItem(dlg, 10), CB_GETCURSEL, 0, 0))
+                        };
+                        return TRUE as _;
+                    }
+                    if wp == 2 {
+                        // cancel
+                        unsafe { EndDialog(dlg, -1) };
+                        return TRUE as _;
+                    }
+                }
+                FALSE as _
+            }
+            let init_data = SelectMonitorDialogInitData { candidates };
+            let monitor_index = unsafe {
+                DialogBoxParamA(
+                    module_handle(),
+                    1001 as _,
+                    std::ptr::null_mut(),
+                    Some(dlgfunc),
+                    &init_data as *const _ as _,
+                )
+            };
+
+            if monitor_index < 0 {
+                return;
+            }
+            let monitor_index = monitor_index as usize;
+            let mut hmonitor = None;
+            let _ = enum_display_monitors(None, None, |mon, _, _| {
+                let mut mi = std::mem::MaybeUninit::<MONITORINFOEXA>::uninit();
+                let r = unsafe {
+                    (*mi.as_mut_ptr()).cbSize = std::mem::size_of::<MONITORINFOEXA>() as _;
+                    GetMonitorInfoA(mon, mi.as_mut_ptr() as _)
+                };
+                if r == 0 {
+                    panic!(
+                        "Failed to get monitor info: {:?}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+                let mi = unsafe { mi.assume_init() };
+                let device_name =
+                    cstr_from_bytes_until_nul(unsafe { std::mem::transmute(&mi.szDevice[..]) });
+                if &device_name as &std::ffi::CStr
+                    == &device_names[monitor_index] as &std::ffi::CStr
+                {
+                    hmonitor = Some(mon);
+                    false
+                } else {
+                    // continue finding
+                    true
+                }
+            });
+            let hmonitor = hmonitor.expect("No matching monitor found");
+
+            (1280, 720, WS_POPUP | WS_SYSMENU, Some(hmonitor))
         }
     };
     let mut wrect = RECT {
@@ -390,7 +526,7 @@ fn main() {
         panic!("Create Window Failed!");
     }
 
-    let mut driver = GameDriver::new(w, peridot::math::Vector2(640, 480));
+    let mut driver = GameDriver::new(w, peridot::math::Vector2(640, 480), fs_monitor);
     unsafe {
         SetWindowLongPtrA(w, GWLP_USERDATA, &mut driver as *mut GameDriver as _);
     }
@@ -529,6 +665,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
 struct NativeLink {
     al: AssetProvider,
     window: SharedRef<ThreadsafeWindowOps>,
+    fullscreen_target_monitor: Option<HMONITOR>,
 }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;
@@ -536,7 +673,11 @@ impl peridot::NativeLinker for NativeLink {
 
     #[cfg(not(feature = "transparent"))]
     fn intercept_instance_builder(&self, builder: &mut bedrock::InstanceBuilder) {
-        builder.add_extensions(vec!["VK_KHR_surface", "VK_KHR_win32_surface"]);
+        builder.add_extension("VK_KHR_surface");
+        builder.add_extension("VK_KHR_display");
+        builder.add_extension("VK_KHR_win32_surface");
+        builder.add_extension("VK_KHR_get_physical_device_properties2");
+        builder.add_extension("VK_KHR_get_surface_capabilities2");
     }
     #[cfg(feature = "transparent")]
     fn intercept_instance_builder(&self, builder: &mut bedrock::InstanceBuilder) {}
@@ -547,6 +688,7 @@ impl peridot::NativeLinker for NativeLink {
         builder: &mut bedrock::DeviceBuilder<impl bedrock::PhysicalDevice>,
     ) {
         builder.add_extensions(vec!["VK_KHR_swapchain"]);
+        builder.add_extension("VK_EXT_full_screen_exclusive");
     }
     #[cfg(feature = "transparent")]
     fn intercept_device_builder(
@@ -563,6 +705,6 @@ impl peridot::NativeLinker for NativeLink {
         &self.al
     }
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
-        Presenter::new(g, self.window.clone())
+        Presenter::new(g, self.window.clone(), self.fullscreen_target_monitor)
     }
 }
