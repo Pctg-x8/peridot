@@ -12,13 +12,14 @@ mt = ["peridot/mt"]
 
 [dependencies]
 peridot = { path = "../.." }
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_xcb_surface"] }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_xcb_surface", "VK_KHR_xlib_surface"] }
 log = "0.4"
 env_logger = "0.5"
 xcb = { version = "0.8", features = ["thread"] }
 pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 libc = "0.2"
 regex = "1.4"
+x11 = "2.20.0"
 
 [dependencies.async-std]
 version = "1.0"

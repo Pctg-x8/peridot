@@ -1,3 +1,6 @@
 app_package_id = "io.ct2.peridot.examples.image-plane"
 title = "Peridot Examples - ImagePlane"
 asset_dir = "./assets"
+
+[default_extent]
+type = "Fullscreen"

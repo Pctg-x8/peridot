@@ -88,8 +88,10 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
         cb.present_mode(surface_info.pres_mode)
             .composite_alpha(surface_info.available_composite_alpha)
             .pre_transform(pre_transform);
-        let chain = cb
-            .create(g.device.clone())
+        let chain = g
+            .device()
+            .clone()
+            .new_swapchain(cb)
             .expect("Failed to create Swapchain");
         let chain = SharedRef::new(chain);
         #[cfg(feature = "debug")]

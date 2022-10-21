@@ -44,6 +44,7 @@ pub fn build(
         project_config.title.unwrap_or(project_name),
         &project_version,
         options.entry_ty_name,
+        &project_config.default_extent,
     );
     steps::package_assets(
         &ctx,

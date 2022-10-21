@@ -310,7 +310,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             maxDepth: 1.0,
         }];
         let sc = [br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D::default(),
+            offset: br::vk::VkOffset2D { x: 0, y: 0 },
             extent: br::vk::VkExtent2D {
                 width: screen_size.width,
                 height: screen_size.height,

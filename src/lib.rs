@@ -52,11 +52,13 @@ pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
     type Presenter: PlatformPresenter;
 
-    fn instance_extensions(&self) -> Vec<&str>;
-    fn device_extensions(&self) -> Vec<&str>;
-
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn new_presenter(&self, g: &Graphics) -> Self::Presenter;
+
+    #[allow(unused_variables)]
+    fn intercept_instance_builder(&self, builder: &mut br::InstanceBuilder) {}
+    #[allow(unused_variables)]
+    fn intercept_device_builder(&self, builder: &mut br::DeviceBuilder<impl br::PhysicalDevice>) {}
 
     fn rendering_precision(&self) -> f32 {
         1.0
@@ -89,6 +91,13 @@ impl<PL: NativeLinker> EngineEvents<PL> for () {
     fn init(_e: &mut Engine<PL>) -> Self {
         ()
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum WindowExtents {
+    Fixed(u16, u16),
+    Resizable(u16, u16),
+    Fullscreen,
 }
 
 /// Specifies which type of resource is supports sparse residency?
@@ -201,19 +210,13 @@ impl<PL: NativeLinker> Engine<PL> {
         nativelink: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
-        let mut g = Graphics::new(
-            name,
-            version,
-            nativelink.instance_extensions(),
-            nativelink.device_extensions(),
-            requested_features,
-        )
-        .expect("Failed to initialize Graphics Base Driver");
+        let mut g = Graphics::new(name, version, requested_features, &nativelink)
+            .expect("Failed to initialize Graphics Base Driver");
         let presenter = nativelink.new_presenter(&g);
         g.submit_commands(|r| presenter.emit_initialize_backbuffer_commands(r))
             .expect("Initializing Backbuffers");
 
-        Engine {
+        Self {
             ip: InputProcess::new().into(),
             gametimer: GameTimer::new(),
             last_rendering_completion: StateFence::new(g.device.clone())
@@ -771,9 +774,8 @@ impl Graphics {
     fn new(
         appname: &str,
         appversion: (u32, u32, u32),
-        instance_extensions: Vec<&str>,
-        device_extensions: Vec<&str>,
         features: br::vk::VkPhysicalDeviceFeatures,
+        native_ext: &impl NativeLinker,
     ) -> br::Result<Self> {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
@@ -793,7 +795,6 @@ impl Graphics {
         }
 
         let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(instance_extensions);
         #[cfg(debug_assertions)]
         ib.add_extension("VK_EXT_debug_report");
         if validation_layer_available {
@@ -810,6 +811,7 @@ impl Graphics {
             );
             debug!("Debug reporting activated");
         }
+        native_ext.intercept_instance_builder(&mut ib);
         let instance = SharedRef::new(ib.create()?);
 
         let adapter = instance
@@ -826,11 +828,12 @@ impl Graphics {
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
         let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
-            db.add_extensions(device_extensions).add_queue(qci);
+            db.add_queue(qci);
             if validation_layer_available {
                 db.add_layer("VK_LAYER_KHRONOS_validation");
             }
             *db.mod_features() = features;
+            native_ext.intercept_device_builder(&mut db);
             SharedRef::new(db.create()?.clone_parent())
         };
 
@@ -943,6 +946,16 @@ impl Graphics {
 
     pub fn graphics_queue_family_index(&self) -> u32 {
         self.graphics_queue.family
+    }
+
+    #[inline]
+    pub fn graphics_queue(&self) -> &parking_lot::Mutex<br::Queue<DeviceObject>> {
+        &self.graphics_queue.q
+    }
+
+    #[inline]
+    pub fn graphics_queue_mut(&mut self) -> &mut parking_lot::Mutex<br::Queue<DeviceObject>> {
+        &mut self.graphics_queue.q
     }
 }
 impl Deref for Graphics {
@@ -1063,7 +1076,7 @@ impl SubpassDependencyTemplates {
                 0
             },
             srcStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
-            ..Default::default()
+            srcAccessMask: 0
         }
     }
 }

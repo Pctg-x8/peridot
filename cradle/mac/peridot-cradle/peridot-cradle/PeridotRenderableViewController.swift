@@ -73,8 +73,17 @@ final class PeridotRenderableViewController : NSViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
+        if let w = self.view.window {
+            w.title = NativeGameEngine.captionbarText! as String
+            if !NativeGameEngine.isResizable {
+                w.styleMask = w.styleMask.subtracting(NSWindow.StyleMask.resizable)
+            }
+            
+            if let ext = NativeGameEngine.defaultWindowExtent {
+                w.setContentSize(ext)
+            }
+        }
         self.enginePointer = NativeGameEngine(forView: &self.view)
-        self.view.window?.title = NativeGameEngine.captionbarText()! as String
         initDispatchers()
         
         if let p = self.view.window?.mouseLocationOutsideOfEventStream {

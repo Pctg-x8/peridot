@@ -43,9 +43,29 @@ final class NativeGameEngine {
     func handleMouseButtonUp(index: UInt8) { handle_mouse_button_up(self.p, index) }
     func reportMouseMove(x: Float, y: Float) { report_mouse_move_abs(self.p, x, y) }
     
-    static func captionbarText() -> NSString? {
-        let p = captionbar_text()
-        return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
+    static var captionbarText: NSString? {
+        get {
+            let p = captionbar_text()
+            return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
+        }
+    }
+    
+    static var isResizable: Bool {
+        get {
+            return is_resizable() != 0
+        }
+    }
+    
+    static var defaultWindowExtent: NSSize? {
+        get {
+            var w = uint16(), h = uint16()
+            let retrieved = default_window_extent(&w, &h) != 0
+            if retrieved {
+                return NSSize(width: Int(w), height: Int(h))
+            } else {
+                return nil
+            }
+        }
     }
 }
 
