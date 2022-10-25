@@ -56,7 +56,7 @@ impl SpirvShaderBlob {
         &self,
         dev: Device,
     ) -> br::Result<br::ShaderModuleObject<Device>> {
-        dev.new_shader_module_from_memory(&self.0)
+        dev.new_shader_module(&self.0)
     }
 }
 impl LogicalAssetData for SpirvShaderBlob {

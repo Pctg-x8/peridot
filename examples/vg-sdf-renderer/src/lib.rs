@@ -246,7 +246,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
                 alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let invert_pipeline = pipebuild
             .create(
@@ -273,7 +276,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
                 alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let outline_distance_pipeline = pipebuild
             .create(
@@ -418,7 +424,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
                 alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let invert_pipeline = pipebuild
             .create(
@@ -446,7 +455,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
                 alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let outline_distance_pipeline = pipebuild
             .create(

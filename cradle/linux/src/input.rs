@@ -18,9 +18,14 @@ impl peridot::NativeInput for InputNativeLink {
         if let Some(ws) = self.ws_ref.upgrade() {
             let ptrinfo = {
                 let wslock = ws.borrow();
-                let ck = xcb::query_pointer(&wslock.con, wslock.mainwnd_id);
+                let ck = wslock.con.send_request(&xcb::x::QueryPointer {
+                    window: wslock.mainwnd_id,
+                });
                 wslock.flush();
-                ck.get_reply().expect("Failed to query pointer to xcb")
+                wslock
+                    .con
+                    .wait_for_reply(ck)
+                    .expect("Failed to query pointer to xcb")
             };
             if ptrinfo.same_screen() {
                 // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
@@ -359,13 +364,19 @@ impl InputSystem {
                 _ => return,
             };
 
-            let focus_ck = xcb::get_input_focus(&x11.con);
-            let qp_cookie = xcb::query_pointer(&x11.con, x11.mainwnd_id);
+            let focus_ck = x11.con.send_request(&xcb::x::GetInputFocus {});
+            let qp_cookie = x11.con.send_request(&xcb::x::QueryPointer {
+                window: x11.mainwnd_id,
+            });
             x11.flush();
-            let ptr = qp_cookie.get_reply().expect("Failed to query pointer");
+            let ptr = x11
+                .con
+                .wait_for_reply(qp_cookie)
+                .expect("Failed to query pointer");
             let geometry = x11.mainwnd_geometry();
-            let focus = focus_ck
-                .get_reply()
+            let focus = x11
+                .con
+                .wait_for_reply(focus_ck)
                 .expect("Failed to query focus info")
                 .focus();
 
@@ -396,10 +407,11 @@ impl InputSystem {
                 debug!("key event: code={}", ev.code);
             }
         } else if ev.type_ == kernel_input::EventType::Relative as u16 {
-            let focus_ck = xcb::get_input_focus(&x11.con);
+            let focus_ck = x11.con.send_request(&xcb::x::GetInputFocus {});
             x11.flush();
-            let focus = focus_ck
-                .get_reply()
+            let focus = x11
+                .con
+                .wait_for_reply(focus_ck)
                 .expect("Failed to query focus info")
                 .focus();
             if focus != x11.mainwnd_id {
@@ -421,10 +433,11 @@ impl InputSystem {
                 return;
             }
 
-            let focus_ck = xcb::get_input_focus(&x11.con);
+            let focus_ck = x11.con.send_request(&xcb::x::GetInputFocus {});
             x11.flush();
-            let focus = focus_ck
-                .get_reply()
+            let focus = x11
+                .con
+                .wait_for_reply(focus_ck)
                 .expect("Failed to query focus info")
                 .focus();
             if focus != x11.mainwnd_id {
@@ -443,10 +456,11 @@ impl InputSystem {
                 debug!("absolute event: code={}, value={}", ev.code, ev.value);
             }
         } else {
-            let focus_ck = xcb::get_input_focus(&x11.con);
+            let focus_ck = x11.con.send_request(&xcb::x::GetInputFocus {});
             x11.flush();
-            let focus = focus_ck
-                .get_reply()
+            let focus = x11
+                .con
+                .wait_for_reply(focus_ck)
                 .expect("Failed to query focus info")
                 .focus();
             if focus != x11.mainwnd_id {

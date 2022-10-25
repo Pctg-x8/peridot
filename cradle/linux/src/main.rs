@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io::Result as IOResult;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
+use xcb::XidNew;
 
 mod sound_backend;
 use sound_backend::NativeAudioEngine;
@@ -76,8 +77,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
 }
 
 pub struct WindowHandler {
-    vis: xcb::Visualid,
-    wid: xcb::Window,
+    vis: xcb::x::Visualid,
+    wid: xcb::x::Window,
     x11_ref: SharedRef<DynamicMut<X11>>,
 }
 
@@ -200,10 +201,10 @@ impl peridot::NativeLinker for NativeLink {
 #[allow(dead_code)]
 pub struct X11 {
     con: xcb::Connection,
-    wm_protocols: xcb::Atom,
-    wm_delete_window: xcb::Atom,
-    vis: xcb::Visualid,
-    mainwnd_id: xcb::Window,
+    wm_protocols: xcb::x::Atom,
+    wm_delete_window: xcb::x::Atom,
+    vis: xcb::x::Visualid,
+    mainwnd_id: xcb::x::Window,
     cached_window_size: peridot::math::Vector2<usize>,
 }
 impl X11 {
@@ -216,49 +217,53 @@ impl X11 {
             .expect("No screen");
         let vis = s0.root_visual();
 
-        let wm_protocols = xcb::intern_atom_unchecked(&con, false, "WM_PROTOCOLS");
-        let wm_delete_window = xcb::intern_atom_unchecked(&con, false, "WM_DELETE_WINDOW");
-        con.flush();
-        let wm_protocols = wm_protocols.get_reply().expect("No WM_PROTOCOLS").atom();
-        let wm_delete_window = wm_delete_window
-            .get_reply()
+        let wm_protocols = con.send_request(&xcb::x::InternAtom {
+            only_if_exists: false,
+            name: b"WM_PROTOCOLS\0",
+        });
+        let wm_delete_window = con.send_request(&xcb::x::InternAtom {
+            only_if_exists: false,
+            name: b"WM_DELETE_WINDOW\0",
+        });
+        con.flush().expect("Failed to flush");
+        let wm_protocols = con
+            .wait_for_reply(wm_protocols)
+            .expect("No WM_PROTOCOLS")
+            .atom();
+        let wm_delete_window = con
+            .wait_for_reply(wm_delete_window)
             .expect("No WM_DELETE_WINDOW")
             .atom();
 
         let mainwnd_id = con.generate_id();
-        xcb::create_window(
-            &con,
-            s0.root_depth(),
-            mainwnd_id,
-            s0.root(),
-            0,
-            0,
-            640,
-            480,
-            0,
-            xcb::WINDOW_CLASS_INPUT_OUTPUT as _,
-            vis,
-            &[(xcb::CW_EVENT_MASK, xcb::EVENT_MASK_RESIZE_REDIRECT)],
-        );
-        xcb::change_property(
-            &con,
-            xcb::PROP_MODE_REPLACE as _,
-            mainwnd_id,
-            xcb::ATOM_WM_NAME,
-            xcb::ATOM_STRING,
-            8,
-            userlib::APP_TITLE.as_bytes(),
-        );
-        xcb::change_property(
-            &con,
-            xcb::PROP_MODE_APPEND as _,
-            mainwnd_id,
-            wm_protocols,
-            xcb::ATOM_ATOM,
-            32,
-            &[wm_delete_window],
-        );
-        con.flush();
+        con.send_request(&xcb::x::CreateWindow {
+            wid: mainwnd_id,
+            parent: s0.root(),
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 480,
+            border_width: 0,
+            class: xcb::x::WindowClass::InputOutput,
+            depth: s0.root_depth(),
+            visual: vis,
+            value_list: &[xcb::x::Cw::EventMask(xcb::x::EventMask::RESIZE_REDIRECT)],
+        });
+        con.send_request(&xcb::x::ChangeProperty {
+            mode: xcb::x::PropMode::Replace,
+            window: mainwnd_id,
+            property: xcb::x::ATOM_WM_NAME,
+            r#type: xcb::x::ATOM_STRING,
+            data: userlib::APP_TITLE.as_bytes(),
+        });
+        con.send_request(&xcb::x::ChangeProperty {
+            mode: xcb::x::PropMode::Append,
+            window: mainwnd_id,
+            property: wm_protocols,
+            r#type: xcb::x::ATOM_ATOM,
+            data: &[wm_delete_window],
+        });
+        con.flush().expect("Failed to flush");
 
         X11 {
             con,
@@ -273,28 +278,37 @@ impl X11 {
         self.con.as_raw_fd()
     }
     fn flush(&self) {
-        if !self.con.flush() {
-            panic!("Failed to flush");
-        }
+        self.con.flush().expect("Failed to flush");
     }
     fn show(&self) {
-        xcb::map_window(&self.con, self.mainwnd_id);
-        self.con.flush();
+        self.con.send_request(&xcb::x::MapWindow {
+            window: self.mainwnd_id,
+        });
+        self.con.flush().expect("Failed to flush");
     }
     /// Returns false if application has beed exited
     fn process_all_events(&mut self) -> bool {
-        while let Some(ev) = self.con.poll_for_event() {
-            let event_type = ev.response_type() & 0x7f;
-            if event_type == xcb::CLIENT_MESSAGE {
-                let e: &xcb::ClientMessageEvent = unsafe { xcb::cast_event(&ev) };
-                if e.data().data32()[0] == self.wm_delete_window {
-                    return false;
+        while let Some(ev) = self
+            .con
+            .poll_for_event()
+            .expect("Failed to poll window system events")
+        {
+            match ev {
+                xcb::Event::X(xcb::x::Event::ClientMessage(e)) => match e.data() {
+                    xcb::x::ClientMessageData::Data32(d)
+                        if unsafe { xcb::x::Atom::new(d[0]) } == self.wm_delete_window =>
+                    {
+                        return false;
+                    }
+                    _ => {}
+                },
+                xcb::Event::X(xcb::x::Event::ResizeRequest(e)) => {
+                    self.cached_window_size =
+                        peridot::math::Vector2(e.width() as _, e.height() as _);
                 }
-            } else if event_type == xcb::RESIZE_REQUEST {
-                let e: &xcb::ResizeRequestEvent = unsafe { xcb::cast_event(&ev) };
-                self.cached_window_size = peridot::math::Vector2(e.width() as _, e.height() as _);
-            } else {
-                debug!("Generic Event: {:?}", ev.response_type());
+                _ => {
+                    debug!("Unhandled Event: {ev:?}");
+                }
             }
         }
         return true;

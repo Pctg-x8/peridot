@@ -1063,7 +1063,7 @@ impl SubpassDependencyTemplates {
                 0
             },
             srcStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
-            ..Default::default()
+            srcAccessMask: 0,
         }
     }
 }

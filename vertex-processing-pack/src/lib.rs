@@ -89,13 +89,11 @@ impl<'d, Device: br::Device + Clone> PvpShaderModules<'d, Device> {
     pub fn new(device: &Device, container: PvpContainer) -> br::Result<Self> {
         let fragment = container
             .fragment_shader
-            .map(|b| device.clone().new_shader_module_from_memory(&b))
+            .map(|b| device.clone().new_shader_module(&b))
             .transpose()?;
 
         Ok(Self {
-            vertex: device
-                .clone()
-                .new_shader_module_from_memory(&container.vertex_shader)?,
+            vertex: device.clone().new_shader_module(&container.vertex_shader)?,
             fragment,
             bindings: container.vertex_bindings,
             attributes: container.vertex_attributes,
