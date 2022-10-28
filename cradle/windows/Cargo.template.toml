@@ -7,7 +7,7 @@ build = "build.rs"
 
 [features]
 UseExternalAssetPath = []
-transparent = ["winapi/handleapi", "winapi/synchapi", "winapi/winbase", "comdrive", "metrics", "widestring", "bedrock/VK_KHR_external_memory_win32", "bedrock/VK_KHR_external_semaphore_win32"]
+transparent = ["comdrive", "metrics", "widestring", "bedrock/VK_KHR_external_memory_win32", "bedrock/VK_KHR_external_semaphore_win32"]
 IterationBuild = []
 debug = ["peridot/debug"]
 mt = ["peridot/mt"]
@@ -24,24 +24,22 @@ metrics = { git = "https://github.com/Pctg-x8/metrics", optional = true }
 widestring = { version = "0.4", optional = true }
 parking_lot = "0.11"
 
-[dependencies.winapi]
-version = "0.3"
+[dependencies.windows]
+version = "0.43"
 features = [
-    "winuser",
-    "libloaderapi",
-    "mmdeviceapi",
-    "combaseapi",
-    "propsys",
-    "coml2api",
-    "devpkey",
-    "objbase",
-    "audioclient",
-    "ksmedia",
-    "shellscalingapi",
-    "xinput",
-    "mmreg",
-    "wtypes",
-    "propidl",
-    "strmif",
-    "audiosessiontypes"
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Com",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_Media_Audio",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_XboxController"
 ]
