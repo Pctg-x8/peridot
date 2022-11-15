@@ -364,7 +364,7 @@ impl Presenter {
                 interface
                     .assume_init_ref()
                     .as_ref()
-                    .unwrap()
+                    .expect("no debug interface?")
                     .EnableDebugLayer();
             }
         }
@@ -373,7 +373,7 @@ impl Presenter {
             D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, device12.as_mut_ptr())
                 .expect("Failed to create Direct3D12 Device")
         };
-        let device12 = unsafe { device12.assume_init().unwrap() };
+        let device12 = unsafe { device12.assume_init().expect("no device created?") };
         let q = unsafe {
             device12
                 .CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {

@@ -8,6 +8,7 @@ use objc_ext::ObjcObject;
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, DWRITE_FACTORY_TYPE_SHARED,
 };
+#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_SIMULATIONS_NONE, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
@@ -336,7 +337,7 @@ impl FontProvider {
             self.factory
                 .GetSystemFontCollection(&mut collection, false)?
         };
-        let collection = collection.unwrap();
+        let collection = collection.expect("no system font collection");
         let mut family_index = 0;
         let mut exists = Default::default();
         let family_name = widestring::WideCString::from_str(family_name).expect("invalid sequence");
