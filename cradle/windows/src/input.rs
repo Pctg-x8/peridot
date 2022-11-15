@@ -16,7 +16,8 @@ use windows::Win32::UI::Input::XboxController::{
 };
 use windows::Win32::UI::Input::{
     GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
-    RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RIDEV_NOLEGACY, RID_INPUT,
+    RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RIDEV_NOLEGACY, RID_INPUT, RIM_TYPEKEYBOARD,
+    RIM_TYPEMOUSE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, MAPVK_VK_TO_CHAR, RI_KEY_BREAK};
 
@@ -73,7 +74,7 @@ impl RawInputHandler {
             GetRawInputData(
                 std::mem::transmute::<_, HRAWINPUT>(lp),
                 RID_INPUT,
-                None,
+                Some(buffer.as_mut_ptr() as *mut _),
                 &mut buffer_size,
                 std::mem::size_of::<RAWINPUTHEADER>() as _,
             )
@@ -81,8 +82,8 @@ impl RawInputHandler {
         let rinput = unsafe { &*(buffer.as_ptr() as *const RAWINPUT) };
 
         match rinput.header.dwType {
-            RIM_TYPEKEYBOARD => {
-                let kd = &rinput.data.keyboard;
+            t if t == RIM_TYPEKEYBOARD.0 => {
+                let kd = unsafe { &rinput.data.keyboard };
                 /*debug!(
                     "Keyboard Message! make={} flags={} reserved={} extinfo={} message={} vkey={}",
                     kd.MakeCode,
@@ -155,8 +156,8 @@ impl RawInputHandler {
                 };
                 p.dispatch_button_event(ty, is_press);
             }
-            RIM_TYPEMOUSE => {
-                let md = &rinput.data.mouse;
+            t if t == RIM_TYPEMOUSE.0 => {
+                let md = unsafe { &rinput.data.mouse };
                 /*debug!(
                     "Mouse Message! flags={} btnFlags={} btnData={} rawButtons={} lastX={} lastY={} extinfo={}",
                     md.usFlags,
@@ -168,11 +169,11 @@ impl RawInputHandler {
                     md.ulExtraInformation
                 );*/
                 for x in 0..8 {
-                    if (md.Anonymous.Anonymous.usButtonFlags & (1 << (x * 2 + 0))) != 0 {
+                    if (unsafe { md.Anonymous.Anonymous.usButtonFlags } & (1 << (x * 2 + 0))) != 0 {
                         // Mouse Button Down
                         p.dispatch_button_event(NativeButtonInput::Mouse(x), true);
                     }
-                    if (md.Anonymous.Anonymous.usButtonFlags & (1 << (x * 2 + 1))) != 0 {
+                    if (unsafe { md.Anonymous.Anonymous.usButtonFlags } & (1 << (x * 2 + 1))) != 0 {
                         // Mouse Button Up
                         p.dispatch_button_event(NativeButtonInput::Mouse(x), false);
                     }
@@ -185,7 +186,7 @@ impl RawInputHandler {
                 }
             }
             ut => {
-                debug!("Unknown input: {}", ut);
+                debug!("Unknown input: {ut}");
             }
         }
     }
@@ -345,7 +346,7 @@ impl XInputHandler {
 }
 
 #[inline]
-const fn normalize_short(x: i16) -> f32 {
+fn normalize_short(x: i16) -> f32 {
     if x > 0 {
         x as f32 / 32767.0
     } else {

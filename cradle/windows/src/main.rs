@@ -131,7 +131,7 @@ fn main() {
     let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
 
     unsafe {
-        SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE);
+        SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).expect("Failed to set dpi awareness");
     }
 
     let wca = WNDCLASSEXA {
