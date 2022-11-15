@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 mod presenter;
 use self::presenter::Presenter;
 
-const LPSZCLASSNAME: &'static str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
+const LPSZCLASSNAME: &'static str = "mainWindow\0";
 
 #[inline]
 const fn loword(dw: usize) -> u16 {
@@ -167,7 +167,7 @@ fn main() {
     let w = unsafe {
         CreateWindowExA(
             wsex,
-            windows::core::PCSTR(unsafe { std::mem::transmute(wcatom as usize) }),
+            windows::core::PCSTR(std::mem::transmute(wcatom as usize)),
             windows::core::PCSTR(wname_c.as_ptr() as _),
             style,
             CW_USEDEFAULT,
