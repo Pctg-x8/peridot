@@ -1,6 +1,33 @@
 use bedrock::{self as br, Device, ImageChild, SubmissionBatch};
 use br::Image;
 use peridot::mthelper::SharedRef;
+#[cfg(feature = "transparent")]
+use windows::core::Interface;
+#[cfg(feature = "transparent")]
+use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
+#[cfg(feature = "transparent")]
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12CreateDevice, D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug, ID3D12Device,
+    ID3D12Fence, ID3D12Resource, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+    D3D12_FENCE_FLAG_NONE,
+};
+#[cfg(feature = "transparent")]
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice3, IDCompositionDesktopDevice, IDCompositionTarget,
+    IDCompositionVisual2,
+};
+#[cfg(feature = "transparent")]
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+};
+#[cfg(feature = "transparent")]
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory2, IDXGIFactory2, IDXGISwapChain3, DXGI_CREATE_FACTORY_DEBUG,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_DISCARD,
+    DXGI_USAGE_RENDER_TARGET_OUTPUT,
+};
+#[cfg(feature = "transparent")]
+use windows::Win32::System::SystemServices::GENERIC_ALL;
 
 use crate::ThreadsafeWindowOps;
 
@@ -103,24 +130,25 @@ impl peridot::PlatformPresenter for Presenter {
 
 #[cfg(feature = "transparent")]
 #[repr(transparent)]
-struct UnsafeThreadsafeHandle(winapi::shared::ntdef::HANDLE);
+struct UnsafeThreadsafeHandle(windows::Win32::Foundation::HANDLE);
 #[cfg(feature = "transparent")]
 impl Drop for UnsafeThreadsafeHandle {
     fn drop(&mut self) {
         unsafe {
-            winapi::um::handleapi::CloseHandle(self.0);
+            windows::Win32::Foundation::CloseHandle(self.0);
         }
     }
 }
 #[cfg(feature = "transparent")]
-impl From<winapi::shared::ntdef::HANDLE> for UnsafeThreadsafeHandle {
-    fn from(h: winapi::shared::ntdef::HANDLE) -> Self {
+impl From<windows::Win32::Foundation::HANDLE> for UnsafeThreadsafeHandle {
+    fn from(h: windows::Win32::Foundation::HANDLE) -> Self {
         Self(h)
     }
 }
 #[cfg(feature = "transparent")]
 impl UnsafeThreadsafeHandle {
-    pub fn handle(&self) -> winapi::shared::ntdef::HANDLE {
+    #[inline]
+    pub const fn handle(&self) -> windows::Win32::Foundation::HANDLE {
         self.0
     }
 }
@@ -131,36 +159,29 @@ unsafe impl Send for UnsafeThreadsafeHandle {}
 
 #[cfg(feature = "transparent")]
 #[repr(transparent)]
-struct ThreadsafeEvent(winapi::shared::ntdef::HANDLE);
+struct ThreadsafeEvent(windows::Win32::Foundation::HANDLE);
 #[cfg(feature = "transparent")]
 impl Drop for ThreadsafeEvent {
     fn drop(&mut self) {
         unsafe {
-            winapi::um::handleapi::CloseHandle(self.0);
+            windows::Win32::Foundation::CloseHandle(self.0);
         }
     }
 }
 #[cfg(feature = "transparent")]
 impl ThreadsafeEvent {
-    pub fn new(manual_reset: bool, init_signaled: bool) -> std::io::Result<Self> {
-        let e = unsafe {
-            winapi::um::synchapi::CreateEventA(
-                std::ptr::null_mut(),
-                manual_reset as _,
-                init_signaled as _,
-                std::ptr::null(),
-            )
-        };
-        if e.is_null() {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(Self(e))
+    #[inline]
+    pub fn new(manual_reset: bool, init_signaled: bool) -> windows::core::Result<Self> {
+        unsafe {
+            windows::Win32::System::Threading::CreateEventA(None, manual_reset, init_signaled, None)
+                .map(Self)
         }
     }
 
-    pub fn wait(&mut self, timeout: winapi::shared::minwindef::DWORD) {
+    #[inline]
+    pub fn wait(&mut self, timeout: u32) {
         unsafe {
-            winapi::um::synchapi::WaitForSingleObject(self.0, timeout);
+            windows::Win32::System::Threading::WaitForSingleObject(self.0, timeout);
         }
     }
 }
@@ -185,8 +206,8 @@ struct InteropBackbufferResource {
 impl InteropBackbufferResource {
     pub fn new(
         g: &peridot::Graphics,
-        device: &comdrive::d3d12::Device,
-        resource: &comdrive::d3d12::Resource,
+        device: &ID3D12Device,
+        resource: &ID3D12Resource,
         name_suffix: u32,
         size: &br::vk::VkExtent2D,
         format: br::vk::VkFormat,
@@ -194,15 +215,19 @@ impl InteropBackbufferResource {
         use br::{Chainable, MemoryBound};
 
         let hname = widestring::WideCString::from_str(format!(
-            "LocalPeridotApiInteropHandleCradle{}",
-            name_suffix
+            "LocalPeridotApiInteropHandleCradle{name_suffix}"
         ))
         .expect("Failed to encode to WideString");
-        let shared_handle = UnsafeThreadsafeHandle(
+        let shared_handle = UnsafeThreadsafeHandle(unsafe {
             device
-                .create_shared_handle(resource, None, &hname)
-                .expect("Failed to create SharedHandle from D3D12"),
-        );
+                .CreateSharedHandle(
+                    resource,
+                    None,
+                    GENERIC_ALL,
+                    windows::core::PCWSTR(hname.as_ptr()),
+                )
+                .expect("Failed to create SharedHandle from D3D12")
+        });
         let image_ext =
             br::ExternalMemoryImageCreateInfo::new(br::ExternalMemoryHandleTypes::D3D12_RESOURCE);
         let image = br::ImageDesc::new(
@@ -260,35 +285,43 @@ impl InteropBackbufferResource {
 
 #[cfg(feature = "transparent")]
 struct Composition {
-    _device: comdrive::dcomp::Device,
-    _target: comdrive::dcomp::Target,
-    _root: comdrive::dcomp::Visual,
+    device: IDCompositionDesktopDevice,
+    target: IDCompositionTarget,
+    root: IDCompositionVisual2,
 }
 #[cfg(feature = "transparent")]
 impl Composition {
-    fn new(w: &ThreadsafeWindowOps, swapchain: &comdrive::dxgi::SwapChain) -> Self {
-        use comdrive::dcomp::TargetProvider;
+    fn new(w: &ThreadsafeWindowOps, swapchain: &IDXGISwapChain3) -> Self {
+        let mut dh = std::ptr::null_mut();
+        unsafe {
+            DCompositionCreateDevice3(None, &IDCompositionDesktopDevice::IID, &mut dh)
+                .expect("Failed to create DirectComposition Device")
+        };
+        let device = unsafe { std::mem::transmute::<_, IDCompositionDesktopDevice>(dh) };
+        let target = unsafe {
+            device
+                .CreateTargetForHwnd(w.0, true)
+                .expect("Failed to create DirectComposition Target")
+        };
+        let root = unsafe {
+            device
+                .CreateVisual()
+                .expect("Failed to create DirectComposition Visual")
+        };
 
-        let mut device =
-            comdrive::dcomp::Device::new(None).expect("Failed to create DirectComposition Device");
-        let mut target = device
-            .new_target_for(&w.0)
-            .expect("Failed to create DirectComposition Target");
-        let mut root = device
-            .new_visual()
-            .expect("Failed to create DirectComposition Visual");
-
-        root.set_content(Some(swapchain))
-            .expect("Failed to set Swapchain for Composition");
-        target
-            .set_root(&root)
-            .expect("Failed to set Composition Root Visual");
-        device.commit().expect("Failed to commit composition");
+        unsafe {
+            root.SetContent(swapchain)
+                .expect("Failed to set Swapchain for Composition");
+            target
+                .SetRoot(&root)
+                .expect("Failed to set Composition Root Visual");
+            device.Commit().expect("Failed to commit composition");
+        }
 
         Composition {
-            _device: device,
-            _target: target,
-            _root: root,
+            device,
+            target,
+            root,
         }
     }
 }
@@ -297,14 +330,14 @@ impl Composition {
 pub struct Presenter {
     _window: SharedRef<ThreadsafeWindowOps>,
     _comp: Composition,
-    device12: comdrive::d3d12::Device,
-    q: comdrive::d3d12::CommandQueue,
-    sc: comdrive::dxgi::SwapChain,
+    device12: ID3D12Device,
+    q: ID3D12CommandQueue,
+    sc: IDXGISwapChain3,
     backbuffers: Vec<InteropBackbufferResource>,
     buffer_ready_order: br::SemaphoreObject<peridot::DeviceObject>,
     present_order: br::SemaphoreObject<peridot::DeviceObject>,
-    render_completion_fence: comdrive::d3d12::Fence,
-    present_completion_fence: comdrive::d3d12::Fence,
+    render_completion_fence: ID3D12Fence,
+    present_completion_fence: ID3D12Fence,
     render_completion_counter: u64,
     present_completion_counter: u64,
     _render_completion_fence_handle: UnsafeThreadsafeHandle,
@@ -316,29 +349,76 @@ impl Presenter {
     pub fn new(g: &peridot::Graphics, window: SharedRef<ThreadsafeWindowOps>) -> Self {
         let rc = window.get_client_rect();
 
-        let factory = comdrive::dxgi::Factory::new(cfg!(debug_assertions))
-            .expect("Failed to create DXGI Factory");
-        let adapter = factory.adapter(0).expect("Failed to query primary adapter");
+        let factory: IDXGIFactory2 = unsafe {
+            CreateDXGIFactory2(if cfg!(debug_assertions) {
+                DXGI_CREATE_FACTORY_DEBUG
+            } else {
+                0
+            })
+            .expect("Failed to create DXGI Factory")
+        };
+        let adapter = unsafe {
+            factory
+                .EnumAdapters(0)
+                .expect("Failed to query primary adapter")
+        };
 
         if cfg!(debug_assertions) {
-            comdrive::d3d12::Device::enable_debug_layer()
-                .expect("Failed to enable D3D12 Debug Layer");
+            let mut interface = std::mem::MaybeUninit::<Option<ID3D12Debug>>::uninit();
+            unsafe {
+                D3D12GetDebugInterface(interface.as_mut_ptr())
+                    .expect("Failed to get D3D12 Debug Layer");
+                interface
+                    .assume_init_ref()
+                    .as_ref()
+                    .expect("no debug interface?")
+                    .EnableDebugLayer();
+            }
         }
-        let device12 = comdrive::d3d12::Device::new(&adapter, comdrive::d3d::FeatureLevel::v11)
-            .expect("Failed to create Direct3D12 Device");
-        let q = device12
-            .new_command_queue(comdrive::d3d12::CommandType::Direct, 0)
-            .expect("Failed to create Primary CommandQueue");
-        let sc = factory
-            .new_swapchain(
-                &q,
-                metrics::Size2U((rc.right - rc.left) as _, (rc.bottom - rc.top) as _),
-                comdrive::dxgi::DXGI_FORMAT_R8G8B8A8_UNORM,
-                comdrive::dxgi::AlphaMode::Premultiplied,
-                2,
-                false,
-            )
-            .expect("Failed to create SwapChain");
+        let mut device12 = std::mem::MaybeUninit::<Option<ID3D12Device>>::uninit();
+        unsafe {
+            D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, device12.as_mut_ptr())
+                .expect("Failed to create Direct3D12 Device")
+        };
+        let device12 = unsafe { device12.assume_init().expect("no device created?") };
+        let q = unsafe {
+            device12
+                .CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+                    Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+                    Priority: 0,
+                    NodeMask: 0,
+                    Flags: Default::default(),
+                })
+                .expect("Failed to create Primary CommandQueue")
+        };
+        let sc = unsafe {
+            factory
+                .CreateSwapChainForComposition(
+                    &q,
+                    &DXGI_SWAP_CHAIN_DESC1 {
+                        BufferCount: 2,
+                        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                        AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+                        Width: (rc.right - rc.left) as _,
+                        Height: (rc.bottom - rc.top) as _,
+                        Stereo: false.into(),
+                        SampleDesc: DXGI_SAMPLE_DESC {
+                            Count: 1,
+                            Quality: 0,
+                        },
+                        SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
+                        Scaling: DXGI_SCALING_STRETCH,
+                        Flags: Default::default(),
+                    },
+                    None,
+                )
+                .expect("Failed to create SwapChain")
+        };
+        let sc = unsafe {
+            sc.cast::<IDXGISwapChain3>()
+                .expect("Failed to get swapchain 3 interface")
+        };
         let comp = Composition::new(&window, &sc);
         let bb_size = br::vk::VkExtent2D {
             width: (rc.right - rc.left) as _,
@@ -346,9 +426,10 @@ impl Presenter {
         };
         let backbuffers = (0..2)
             .map(|bb_index| {
-                let backbuffer = sc
-                    .back_buffer(bb_index)
-                    .expect("Failed to get Backbuffer from Swapchain");
+                let backbuffer = unsafe {
+                    sc.GetBuffer(bb_index)
+                        .expect("Failed to get Backbuffer from Swapchain")
+                };
 
                 InteropBackbufferResource::new(
                     g,
@@ -371,24 +452,29 @@ impl Presenter {
             .clone()
             .new_semaphore()
             .expect("Failed to create Present Order Semaphore");
-        let render_completion_fence = device12
-            .new_fence(0, comdrive::d3d12::FENCE_FLAG_SHARED)
-            .expect("Failed to create Render Completion Fence");
-        let present_completion_fence = device12
-            .new_fence(0, comdrive::d3d12::FENCE_FLAG_NONE)
-            .expect("Failed to create Present Completion Fence");
+        let render_completion_fence = unsafe {
+            device12
+                .CreateFence(0, D3D12_FENCE_FLAG_NONE)
+                .expect("Failed to create Render Completion Fence")
+        };
+        let present_completion_fence = unsafe {
+            device12
+                .CreateFence(0, D3D12_FENCE_FLAG_NONE)
+                .expect("Failed to create Present Completion Fence")
+        };
         let render_completion_fence_name =
             widestring::WideCString::from_str("LocalRenderCompletionFenceShared")
                 .expect("Failed to encode widestring");
-        let render_completion_fence_handle = UnsafeThreadsafeHandle(
+        let render_completion_fence_handle = UnsafeThreadsafeHandle(unsafe {
             device12
-                .create_shared_handle(
+                .CreateSharedHandle(
                     &render_completion_fence,
                     None,
-                    &render_completion_fence_name,
+                    GENERIC_ALL,
+                    windows::core::PCWSTR(render_completion_fence_name.as_ptr()),
                 )
-                .expect("Failed to create Shared Handle for Render Completion Fence"),
-        );
+                .expect("Failed to create Shared Handle for Render Completion Fence")
+        });
         g.device()
             .import_semaphore_win32_handle(
                 &present_order,
@@ -464,7 +550,7 @@ impl peridot::PlatformPresenter for Presenter {
         );
     }
     fn next_backbuffer_index(&mut self) -> br::Result<u32> {
-        Ok(self.sc.current_back_buffer_index())
+        Ok(unsafe { self.sc.GetCurrentBackBufferIndex() })
     }
     fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         (
@@ -527,31 +613,33 @@ impl peridot::PlatformPresenter for Presenter {
 
         if self.present_inflight {
             self.present_completion_event
-                .wait(winapi::um::winbase::INFINITE);
+                .wait(windows::Win32::System::WindowsProgramming::INFINITE);
             self.present_inflight = false;
         }
 
         self.render_completion_counter += 1;
-        self.q
-            .wait(
-                &self.render_completion_fence,
-                self.render_completion_counter,
-            )
-            .expect("Failed to wait Render Completion Fence");
-        self.sc.present().expect("Failed to present");
-        self.q
-            .signal(
-                &self.present_completion_fence,
-                self.present_completion_counter + 1,
-            )
-            .expect("Failed to signal Render Completion Fence");
-        self.present_completion_counter += 1;
-        self.present_completion_fence
-            .set_event_notification(
-                self.present_completion_counter,
-                self.present_completion_event.0,
-            )
-            .expect("Failed to set Completion Event");
+        unsafe {
+            self.q
+                .Wait(
+                    &self.render_completion_fence,
+                    self.render_completion_counter,
+                )
+                .expect("Failed to wait Render Completion Fence");
+            self.sc.Present(0, 0).ok().expect("Failed to present");
+            self.q
+                .Signal(
+                    &self.present_completion_fence,
+                    self.present_completion_counter + 1,
+                )
+                .expect("Failed to signal Render Completion Fence");
+            self.present_completion_counter += 1;
+            self.present_completion_fence
+                .SetEventOnCompletion(
+                    self.present_completion_counter,
+                    self.present_completion_event.0,
+                )
+                .expect("Failed to set Completion Event");
+        }
         self.present_inflight = true;
 
         Ok(())
@@ -560,19 +648,28 @@ impl peridot::PlatformPresenter for Presenter {
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
         if self.present_inflight {
             self.present_completion_event
-                .wait(winapi::um::winbase::INFINITE);
+                .wait(windows::Win32::System::WindowsProgramming::INFINITE);
             self.present_inflight = false;
         }
 
         self.backbuffers.clear();
-        self.sc
-            .resize(metrics::Size2U(new_size.0 as _, new_size.1 as _))
-            .expect("Failed to resize backbuffers");
+        unsafe {
+            self.sc
+                .ResizeBuffers(
+                    2,
+                    new_size.0 as _,
+                    new_size.1 as _,
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    0,
+                )
+                .expect("Failed to resize backbuffers");
+        }
         for bb_index in 0..2 {
-            let backbuffer = self
-                .sc
-                .back_buffer(bb_index)
-                .expect("Failed to get Backbuffer from Swapchain");
+            let backbuffer = unsafe {
+                self.sc
+                    .GetBuffer(bb_index)
+                    .expect("Failed to get Backbuffer from Swapchain")
+            };
 
             self.backbuffers.push(InteropBackbufferResource::new(
                 g,
@@ -597,6 +694,6 @@ impl peridot::PlatformPresenter for Presenter {
 impl Drop for Presenter {
     fn drop(&mut self) {
         self.present_completion_event
-            .wait(winapi::um::winbase::INFINITE);
+            .wait(windows::Win32::System::WindowsProgramming::INFINITE);
     }
 }
