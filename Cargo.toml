@@ -39,7 +39,9 @@ members = [
     "vg",
     "derive",
     "transition",
+    "abstract-renderer",
     "tools/shaderbuild",
     "tools/archiver",
     "tools/cli",
+    "tools/render-pipeline-script"
 ]

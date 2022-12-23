@@ -1,0 +1,33 @@
+Parameter camera_mvp: mat4;
+Parameter col: vec4;
+Parameter tex: Sampler2D | null = null;
+Parameter enableBackculling: bool = true;
+
+Switch[FragmentShader] TEX_AVAILABLE = tex != null;
+
+RenderMode {
+    Cull = if enableBackculling then Back else None;
+    Front = CounterClockwise;
+}
+
+VertexInput {
+    Binding 0 = PerVertex {
+        pos: vec4;
+        uv: vec4;
+    }
+}
+
+VertexShader {
+    RasterPosition = pos * camera_mvp;
+    uv_v = uv.xy;
+}
+Varyings VertexShader -> FragmentShader {
+    uv_v: vec2;
+}
+FragmentShader {
+#if TEX_AVAILABLE
+    Target[0] = texture2D(tex, uv_v);
+#else
+    Target[0] = col;
+#endif
+}
