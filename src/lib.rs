@@ -767,7 +767,7 @@ pub struct Graphics {
     #[cfg(feature = "mt")]
     fence_reactor: FenceReactorThread<DeviceObject>,
     #[cfg(feature = "debug")]
-    _debug_instance: br::DebugUtilsMessenger,
+    _debug_instance: br::DebugUtilsMessengerObject<InstanceObject>,
 }
 impl Graphics {
     fn new(
@@ -813,7 +813,7 @@ impl Graphics {
         #[cfg(feature = "debug")]
         let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
             .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
-            .create(&instance)?;
+            .create(instance.clone())?;
 
         let adapter = instance
             .iter_physical_devices()?
