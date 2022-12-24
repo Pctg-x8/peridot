@@ -765,9 +765,9 @@ pub struct Graphics {
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
     #[cfg(feature = "mt")]
-    fence_reactor: FenceReactorThread,
+    fence_reactor: FenceReactorThread<DeviceObject>,
     #[cfg(feature = "debug")]
-    _debug_instance: br::DebugUtilsMessenger
+    _debug_instance: br::DebugUtilsMessenger,
 }
 impl Graphics {
     fn new(
@@ -849,7 +849,7 @@ impl Graphics {
             #[cfg(feature = "mt")]
             fence_reactor: FenceReactorThread::new(),
             #[cfg(feature = "debug")]
-            _debug_instance
+            _debug_instance,
         })
     }
 
