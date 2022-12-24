@@ -1,25 +1,22 @@
 //! peridot-cradle for android platform
 
+use br::PhysicalDevice;
 use log::*;
 
 mod userlib;
 
 use bedrock as br;
+use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use peridot::{EngineEvents, FeatureRequests};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
-
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
 
 struct Game {
     engine: peridot::Engine<NativeLink>,
     userlib: userlib::Game<NativeLink>,
     snd: NativeAudioEngine,
     stopping_render: bool,
-    pos_cache: SharedPtr<std::cell::RefCell<TouchPositionCache>>,
+    pos_cache: SharedRef<DynamicMut<TouchPositionCache>>,
 }
 impl Game {
     fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
@@ -34,13 +31,13 @@ impl Game {
             userlib::Game::<NativeLink>::requested_features(),
         );
         let snd = NativeAudioEngine::new(engine.audio_mixer());
-        let pos_cache = std::rc::Rc::new(std::cell::RefCell::new(TouchPositionCache::new()));
+        let pos_cache = SharedRef::new(DynamicMut::new(TouchPositionCache::new()));
         engine.input_mut().set_nativelink(Box::new(InputNativeLink {
             pos_cache: pos_cache.clone(),
         }));
         engine.postinit();
 
-        Game {
+        Self {
             userlib: userlib::Game::init(&mut engine),
             engine,
             snd,
@@ -56,7 +53,7 @@ impl Game {
 
 struct Presenter {
     window: *mut android::ANativeWindow,
-    sc: peridot::IntegratedSwapchain,
+    sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 impl Presenter {
     pub fn new(
@@ -64,7 +61,10 @@ impl Presenter {
         render_queue_family_index: u32,
         window: *mut android::ANativeWindow,
     ) -> Self {
-        let obj = br::Surface::new_android(g.instance(), window).expect("Failed to create Surface");
+        let obj = g
+            .adapter()
+            .new_surface_android(window)
+            .expect("Failed to create Surface");
         let supported = g
             .adapter()
             .surface_support(render_queue_family_index, &obj)
@@ -73,7 +73,7 @@ impl Presenter {
             panic!("Vulkan Surface is not supported by this adapter");
         }
 
-        Presenter {
+        Self {
             window,
             sc: peridot::IntegratedSwapchain::new(g, obj, unsafe {
                 peridot::math::Vector2((*window).width() as _, (*window).height() as _)
@@ -82,17 +82,31 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
+    type Backbuffer = br::ImageViewObject<
+        br::SwapchainImage<
+            SharedRef<
+                br::SwapchainObject<
+                    peridot::DeviceObject,
+                    br::SurfaceObject<peridot::InstanceObject>,
+                >,
+            >,
+        >,
+    >;
+
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
     fn backbuffer_count(&self) -> usize {
         self.sc.backbuffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
+    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>> {
         self.sc.backbuffer(index)
     }
 
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
+    fn emit_initialize_backbuffer_commands(
+        &self,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+    ) {
         self.sc.emit_initialize_backbuffer_commands(recorder)
     }
     fn next_backbuffer_index(&mut self) -> br::Result<u32> {
@@ -104,10 +118,10 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut br::Fence,
+        last_render_fence: &mut impl br::Fence,
         backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
         self.sc.render_and_present(
             g,
@@ -203,7 +217,7 @@ impl TouchPositionCache {
 }
 
 struct InputNativeLink {
-    pos_cache: SharedPtr<std::cell::RefCell<TouchPositionCache>>,
+    pos_cache: SharedRef<DynamicMut<TouchPositionCache>>,
 }
 impl peridot::NativeInput for InputNativeLink {
     fn get_pointer_position(&self, index: u32) -> Option<(f32, f32)> {
@@ -359,7 +373,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
     let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
     gd.engine
-        .input()
+        .input_mut()
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
 }
 #[no_mangle]
@@ -375,7 +389,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
     let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
     gd.engine
-        .input()
+        .input_mut()
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
 }
 #[no_mangle]
@@ -393,12 +407,12 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolut
     let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
     gd.pos_cache.borrow_mut().set(id as _, x, y);
-    gd.engine.input().dispatch_analog_event(
+    gd.engine.input_mut().dispatch_analog_event(
         peridot::NativeAnalogInput::TouchMoveX(id as _),
         x,
         true,
     );
-    gd.engine.input().dispatch_analog_event(
+    gd.engine.input_mut().dispatch_analog_event(
         peridot::NativeAnalogInput::TouchMoveY(id as _),
         y,
         true,

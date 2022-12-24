@@ -80,19 +80,23 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
             BuildMode::Check => cargo_step.check(),
         }
 
-        if !jnilibs_path.exists() {
-            std::fs::create_dir_all(&jnilibs_path)
-                .expect("Failed to create jniLibs directory for arm64-v8a");
+        if build_mode == BuildMode::Normal || build_mode == BuildMode::Run {
+            if !jnilibs_path.exists() {
+                std::fs::create_dir_all(&jnilibs_path)
+                    .expect("Failed to create jniLibs directory for arm64-v8a");
+            }
+            std::fs::rename(&result_file_path, jnilibs_path.join("libpegamelib.so"))
+                .expect("Failed to rename lib");
         }
-        std::fs::rename(&result_file_path, jnilibs_path.join("libpegamelib.so"))
-            .expect("Failed to rename lib");
     });
 
-    std::env::set_current_dir(ctx.cradle_directory.join("apkbuild"))
-        .expect("Failed to change working directory for apkbuild");
-    build_apk(&ctx);
-    if build_mode == BuildMode::Run {
-        run_apk(&ctx, options.appid);
+    if build_mode == BuildMode::Normal || build_mode == BuildMode::Run {
+        std::env::set_current_dir(ctx.cradle_directory.join("apkbuild"))
+            .expect("Failed to change working directory for apkbuild");
+        build_apk(&ctx);
+        if build_mode == BuildMode::Run {
+            run_apk(&ctx, options.appid);
+        }
     }
 }
 
