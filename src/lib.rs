@@ -1,5 +1,3 @@
-#![feature(backtrace)]
-
 use log::*;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
