@@ -263,11 +263,12 @@ impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = Presenter;
 
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", "VK_MVK_macos_surface"]
+    fn intercept_instance_builder(&self, builder: &mut br::InstanceBuilder) {
+        builder.add_extensions(vec!["VK_KHR_surface", "VK_MVK_macos_surface"]);
     }
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+
+    fn intercept_device_builder(&self, builder: &mut br::DeviceBuilder<impl br::PhysicalDevice>) {
+        builder.add_extension("VK_KHR_swapchain");
     }
 
     fn asset_loader(&self) -> &PlatformAssetLoader {
