@@ -766,6 +766,8 @@ pub struct Graphics {
     pub memory_type_manager: MemoryTypeManager,
     #[cfg(feature = "mt")]
     fence_reactor: FenceReactorThread<DeviceObject>,
+    #[cfg(feature = "debug")]
+    _debug_instance: br::DebugUtilsMessengerObject<InstanceObject>,
 }
 impl Graphics {
     fn new(
@@ -804,13 +806,14 @@ impl Graphics {
         #[cfg(feature = "debug")]
         {
             ib.add_extension("VK_EXT_debug_utils");
-            ib.add_ext_structure(
-                br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
-                    .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning()),
-            );
             debug!("Debug reporting activated");
         }
         let instance = SharedRef::new(ib.create()?);
+
+        #[cfg(feature = "debug")]
+        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
+            .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
+            .create(instance.clone())?;
 
         let adapter = instance
             .iter_physical_devices()?
@@ -845,6 +848,8 @@ impl Graphics {
             memory_type_manager,
             #[cfg(feature = "mt")]
             fence_reactor: FenceReactorThread::new(),
+            #[cfg(feature = "debug")]
+            _debug_instance,
         })
     }
 
