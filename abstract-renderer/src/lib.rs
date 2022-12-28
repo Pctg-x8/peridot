@@ -35,15 +35,22 @@ pub trait Renderable<Device: br::Device> {
     fn material(&self) -> &dyn Material<Device>;
 }
 
-pub struct RenderGroup<Device: br::Device> {
-    renderables: Vec<Box<dyn Renderable<Device>>>,
-    mesh_buffer: br::BufferObject<Device>,
-    commands: br::CommandBufferObject<Device>,
+pub struct RenderGroup {
+    renderables: Vec<Box<dyn Renderable<peridot::DeviceObject>>>,
+    mesh_buffer: peridot::Buffer<
+        br::BufferObject<peridot::DeviceObject>,
+        br::DeviceMemoryObject<peridot::DeviceObject>,
+    >,
+    commands: br::CommandBufferObject<peridot::DeviceObject>,
 }
-impl<Device: br::Device> RenderGroup<Device> {
-    pub fn new(g: &peridot::Graphics, init_renderables: Vec<Box<dyn Renderable<Device>>>) -> Self {
+impl RenderGroup {
+    pub fn new(
+        g: &mut peridot::Graphics,
+        init_renderables: Vec<Box<dyn Renderable<peridot::DeviceObject>>>,
+    ) -> Self {
         let mut tfb = peridot::TransferBatch::new();
         let mesh_buffer = Self::build_mesh_buffer(g, &init_renderables, &mut tfb);
+        tfb.submit(g).expect("Failed to submit initialization");
 
         Self {
             mesh_buffer,
@@ -51,19 +58,22 @@ impl<Device: br::Device> RenderGroup<Device> {
         }
     }
 
-    pub fn commit(&mut self, new_renderables: Vec<Box<dyn Renderable<Device>>>) {
+    pub fn commit(&mut self, new_renderables: Vec<Box<dyn Renderable<peridot::DeviceObject>>>) {
         self.renderables = new_renderables;
     }
 
-    pub fn command_buffer(&self) -> &br::CommandBufferObject<Device> {
+    pub fn command_buffer(&self) -> &br::CommandBufferObject<peridot::DeviceObject> {
         &self.commands
     }
 
     fn build_mesh_buffer(
         g: &peridot::Graphics,
-        renderables: &[Box<dyn Renderable<Device>>],
+        renderables: &[Box<dyn Renderable<peridot::DeviceObject>>],
         tfb: &mut peridot::TransferBatch,
-    ) -> br::BufferObject<Device> {
+    ) -> peridot::Buffer<
+        br::BufferObject<peridot::DeviceObject>,
+        br::DeviceMemoryObject<peridot::DeviceObject>,
+    > {
         let mut bp = peridot::BufferPrealloc::new(g);
         let mut buffer_placement_offsets_for_renderable = Vec::new();
         for r in renderables {
@@ -76,40 +86,42 @@ impl<Device: br::Device> RenderGroup<Device> {
             let io = m.index.map(|x| bp.add(x.make_buffer_content()));
             buffer_placement_offsets_for_renderable.push((vo, io));
         }
-        let (mut mb, _) = peridot::MemoryBadget::with_entries(
-            g,
-            vec![bp
-                .build_transferred()
-                .expect("Failed to build buffer object")
-                .into()],
-        );
+        let (mut mb, _) =
+            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::with_entries(
+                g,
+                vec![peridot::MemoryBadgetEntry::Buffer(
+                    bp.build_transferred()
+                        .expect("Failed to build buffer object"),
+                )],
+            );
         let mut resources = mb.alloc().expect("Failed to allocate memory");
         let mut buffer = resources.pop().expect("no resources?").unwrap_buffer();
-        let (mut stg_mb, _) = peridot::MemoryBadget::with_entries(
-            g,
-            vec![bp
-                .build_upload()
-                .expect("Failed to build stg buffer object")
-                .into()],
-        );
+        let (mut stg_mb, _) =
+            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::with_entries(
+                g,
+                vec![peridot::MemoryBadgetEntry::Buffer(
+                    bp.build_upload()
+                        .expect("Failed to build stg buffer object"),
+                )],
+            );
         let mut stg_resources = stg_mb
             .alloc_upload()
             .expect("Failed to allocate stg memory");
         let mut stg_buffer = resources.pop().expect("no resources?").unwrap_buffer();
         stg_buffer
             .guard_map(0..bp.total_size(), |range| {
-                for (r, (vo, io)) in renderables
+                for (r, &(vo, io)) in renderables
                     .iter()
                     .zip(buffer_placement_offsets_for_renderable.iter())
                 {
                     let m = r.mesh();
 
                     unsafe {
-                        range.clone_from_slice_at(vo, &m.vertex.data);
+                        range.clone_from_slice_at(vo as _, &m.vertex.data);
                         if let Some(io) = io {
                             match m.index {
-                                Some(Indices::Short(xs)) => range.clone_from_slice_at(io, &xs),
-                                Some(Indices::Long(xs)) => range.clone_from_slice_at(io, &xs),
+                                Some(Indices::Short(xs)) => range.clone_from_slice_at(io as _, &xs),
+                                Some(Indices::Long(xs)) => range.clone_from_slice_at(io as _, &xs),
                                 None => unreachable!(),
                             }
                         }

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
-use crate::PixelFormat;
+use crate::{Graphics, PixelFormat};
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -376,6 +376,22 @@ impl TransferBatch {
                 &img_barriers,
             );
         }
+    }
+
+    pub fn submit(&self, g: &mut Graphics) -> br::Result<()> {
+        g.submit_commands(|r| {
+            self.sink_transfer_commands(r);
+            self.sink_graphics_ready_commands(r);
+        })
+    }
+
+    #[cfg(feature = "mt")]
+    pub async fn submit_async(&self, g: &mut Graphics) -> br::Result<()> {
+        g.submit_commands_async(|r| {
+            self.sink_transfer_commands(r);
+            self.sink_graphics_ready_commands(r);
+        })?
+        .await
     }
 }
 
