@@ -1,10 +1,10 @@
 let GithubActions =
       https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/schema.dhall
 
-let ProvidedSteps =
-      https://raw.githubusercontent.com/Pctg-x8/gha-schemas/master/ProvidedSteps.dhall
-
 let CommonDefs = ./integrity-test/Common.dhall
+
+let SlackNotifierAction =
+      https://raw.githubusercontent.com/Pctg-x8/ci-notifications-post-invoker/master/schema.dhall
 
 let List/map = https://prelude.dhall-lang.org/List/map
 
@@ -21,6 +21,45 @@ let preconditionOutputHasWorkflowChanges =
       GithubActions.mkExpression
         (needsOutputPath "preconditions" "has_workflow_changes" ++ " == 1")
 
+let slackNotifyProvider
+    : CommonDefs.SlackNotifyProvider
+    = let fail =
+            λ(stepName : Text) →
+                SlackNotifierAction.step
+                  { status = SlackNotifierAction.Status.Failure stepName
+                  , begintime =
+                      GithubActions.mkExpression
+                        "needs.preconditions.outputs.begintime"
+                  , report_name = "PR Integrity Check"
+                  , mode =
+                      SlackNotifierAction.Mode.Diff
+                        { head_sha = CommonDefs.ePullRequestHeadHash
+                        , base_sha = CommonDefs.ePullRequestBaseHash
+                        , pr_number = CommonDefs.ePullRequestNumber
+                        , pr_title = CommonDefs.ePullRequestTitle
+                        }
+                  }
+              ⫽ { name = "Notify as Failure" }
+
+      let succ =
+              SlackNotifierAction.step
+                { status = SlackNotifierAction.Status.Success
+                , begintime =
+                    GithubActions.mkExpression
+                      "needs.preconditions.outputs.begintime"
+                , report_name = "PR Integrity Check"
+                , mode =
+                    SlackNotifierAction.Mode.Diff
+                      { head_sha = CommonDefs.ePullRequestHeadHash
+                      , base_sha = CommonDefs.ePullRequestBaseHash
+                      , pr_number = CommonDefs.ePullRequestNumber
+                      , pr_title = CommonDefs.ePullRequestTitle
+                      }
+                }
+            ⫽ { name = "Notify as Success" }
+
+      in  { Success = succ, Failure = fail }
+
 let preconditions =
       GithubActions.Job::{
       , name = Some "Preconditions"
@@ -29,11 +68,13 @@ let preconditions =
           (   CommonDefs.preconditionBeginTimestampOutputDef
             # toMap
                 { has_code_changes =
-                    GithubActions.mkExpression
-                      "steps.fileck.outputs.has_code_changes"
+                    GithubActions.mkRefStepOutputExpression
+                      "fileck"
+                      "has_code_changes"
                 , has_workflow_changes =
-                    GithubActions.mkExpression
-                      "steps.fileck.outputs.has_workflow_changes"
+                    GithubActions.mkRefStepOutputExpression
+                      "fileck"
+                      "has_workflow_changes"
                 }
           )
       , steps =
@@ -95,7 +136,7 @@ let installDhallScript =
           while :; do
             POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR } }"
             API_RESPONSE=$(curl -s -H "Authorization: Bearer ${CommonDefs.eSecretGithubToken}" -X POST -d "$POSTDATA" https://api.github.com/graphql)
-            TARGET_FILE=$(echo $API_RESPONSE | jq -r '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-linux")).downloadUrl')
+            TARGET_FILE=$(echo $API_RESPONSE | jq -r '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-Linux")).downloadUrl')
             if [[ $TARGET_FILE != "" ]]; then break; fi
             HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.hasNextPage")
             if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
@@ -127,7 +168,7 @@ let checkWorkflowSync =
                     preconditionOutputHasWorkflowChanges
                 )
                 [ CommonDefs.checkoutHeadStep
-                , ProvidedSteps.checkoutStep ProvidedSteps.CheckoutParams::{=}
+                , CommonDefs.checkoutStep
                 , GithubActions.Step::{
                   , name = "Setup Dhall"
                   , run = Some installDhallScript
@@ -138,7 +179,7 @@ let checkWorkflowSync =
                   }
                 ]
             , [ CommonDefs.runStepOnFailure
-                  (   CommonDefs.slackNotifyIfFailureStep "check-sync-workflow"
+                  (   slackNotifyProvider.Failure "check-sync-workflow"
                     ⫽ { name = "Notify as Failure" }
                   )
               ]
@@ -152,6 +193,8 @@ let successPrerequisites =
       , "check-sync-workflow"
       , "check-cradle-windows"
       , "check-cradle-macos"
+      , "check-cradle-linux"
+      , "check-cradle-android"
       ]
 
 in  GithubActions.Workflow::{
@@ -172,35 +215,35 @@ in  GithubActions.Workflow::{
             CommonDefs.depends
               [ "preconditions" ]
               ( CommonDefs.checkFormats
-                  CommonDefs.prSlackNotifyProvider
+                  slackNotifyProvider
                   preconditionOutputHasChanges
               )
         , check-baselayer =
             CommonDefs.depends
               [ "preconditions" ]
               ( CommonDefs.checkBaseLayer
-                  CommonDefs.prSlackNotifyProvider
+                  slackNotifyProvider
                   preconditionOutputHasChanges
               )
         , check-tools =
             CommonDefs.depends
               [ "preconditions", "check-baselayer" ]
               ( CommonDefs.checkTools
-                  CommonDefs.prSlackNotifyProvider
+                  slackNotifyProvider
                   preconditionOutputHasChanges
               )
         , check-modules =
             CommonDefs.depends
               [ "preconditions", "check-baselayer" ]
               ( CommonDefs.checkModules
-                  CommonDefs.prSlackNotifyProvider
+                  slackNotifyProvider
                   preconditionOutputHasChanges
               )
         , check-examples =
             CommonDefs.depends
               [ "preconditions", "check-modules" ]
               ( CommonDefs.checkExamples
-                  CommonDefs.prSlackNotifyProvider
+                  slackNotifyProvider
                   preconditionOutputHasChanges
               )
         , check-sync-workflow =
@@ -209,19 +252,33 @@ in  GithubActions.Workflow::{
             CommonDefs.depends
               [ "preconditions", "check-tools", "check-modules" ]
               ( CommonDefs.checkCradleWindows
-                  CommonDefs.prSlackNotifyProvider
+                  slackNotifyProvider
                   preconditionOutputHasChanges
               )
         , check-cradle-macos =
             CommonDefs.depends
               [ "preconditions", "check-tools", "check-modules" ]
               ( CommonDefs.checkCradleMacos
-                  CommonDefs.prSlackNotifyProvider
+                  slackNotifyProvider
+                  preconditionOutputHasChanges
+              )
+        , check-cradle-linux =
+            CommonDefs.depends
+              [ "preconditions", "check-tools", "check-modules" ]
+              ( CommonDefs.checkCradleLinux
+                  slackNotifyProvider
+                  preconditionOutputHasChanges
+              )
+        , check-cradle-android =
+            CommonDefs.depends
+              [ "preconditions", "check-tools", "check-modules" ]
+              ( CommonDefs.checkCradleAndroid
+                  slackNotifyProvider
                   preconditionOutputHasChanges
               )
         , report-success =
             CommonDefs.depends
               successPrerequisites
-              (CommonDefs.reportSuccessJob CommonDefs.prSlackNotifyProvider)
+              (CommonDefs.reportSuccessJob slackNotifyProvider)
         }
     }

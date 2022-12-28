@@ -2,32 +2,43 @@
 
 use super::AutocloseMappedMemoryRange;
 
-use super::Memory;
 use bedrock as br;
-use br::MemoryBound;
 use num::Integer;
 
 #[allow(unused_imports)]
 use crate::mthelper::DynamicMutabilityProvider;
-use crate::mthelper::SharedRef;
+use crate::{
+    mthelper::{DynamicMut, SharedRef},
+    DeviceObject,
+};
 
 /// A refcounted buffer object bound with a memory object.
 #[derive(Clone)]
-pub struct Buffer(SharedRef<br::Buffer>, Memory, u64);
-impl Buffer {
-    pub fn bound(mut b: br::Buffer, mem: &Memory, offset: u64) -> br::Result<Self> {
-        b.bind(&mem.borrow(), offset as _)
-            .map(|_| Buffer(b.into(), mem.clone(), offset))
+pub struct Buffer<Backend: br::Buffer, Memory: br::DeviceMemory>(
+    Backend,
+    SharedRef<DynamicMut<Memory>>,
+    u64,
+);
+impl<Backend: br::Buffer + br::MemoryBound, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+    pub fn bound(
+        mut b: Backend,
+        mem: &SharedRef<DynamicMut<Memory>>,
+        offset: u64,
+    ) -> br::Result<Self> {
+        b.bind(&*mem.borrow(), offset as _)
+            .map(move |_| Self(b, mem.clone(), offset))
     }
+
     /// Reference to a memory object bound with this object.
-    pub fn memory(&self) -> &Memory {
+    #[inline]
+    pub const fn memory(&self) -> &SharedRef<DynamicMut<Memory>> {
         &self.1
     }
 
     pub fn guard_map<R>(
         &mut self,
         range: std::ops::Range<u64>,
-        f: impl FnOnce(&br::MappedMemoryRange) -> R,
+        f: impl FnOnce(&br::MappedMemoryRange<Memory>) -> R,
     ) -> br::Result<R> {
         let mut mem = self.1.borrow_mut();
         let mapped_range = AutocloseMappedMemoryRange(
@@ -38,75 +49,105 @@ impl Buffer {
         Ok(f(&mapped_range))
     }
 }
-impl std::ops::Deref for Buffer {
-    type Target = br::Buffer;
-    fn deref(&self) -> &br::Buffer {
+impl<Backend: br::Buffer, Memory: br::DeviceMemory> std::ops::Deref for Buffer<Backend, Memory> {
+    type Target = Backend;
+
+    fn deref(&self) -> &Backend {
         &self.0
     }
 }
-impl br::VkHandle for Buffer {
-    type Handle = <br::Buffer as br::VkHandle>::Handle;
-    const TYPE: br::vk::VkObjectType = <br::Buffer as br::VkHandle>::TYPE;
+impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::VkHandle for Buffer<Backend, Memory> {
+    type Handle = <Backend as br::VkHandle>::Handle;
 
     fn native_ptr(&self) -> Self::Handle {
         self.0.native_ptr()
     }
 }
+impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::DeviceChild for Buffer<Backend, Memory> {
+    type ConcreteDevice = Backend::ConcreteDevice;
+
+    fn device(&self) -> &Self::ConcreteDevice {
+        self.0.device()
+    }
+}
+impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::Buffer for Buffer<Backend, Memory> {}
 
 /// A view of the buffer.
 #[derive(Clone, Copy)]
-pub struct BufferView<'b> {
-    pub buffer: &'b Buffer,
+pub struct BufferView<Buffer: br::Buffer> {
+    pub buffer: Buffer,
     pub offset: usize,
 }
-impl Buffer {
-    pub fn with_offset(&self, offset: usize) -> BufferView {
+impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+    pub const fn with_offset(self, offset: usize) -> BufferView<Self> {
+        BufferView {
+            buffer: self,
+            offset,
+        }
+    }
+
+    pub const fn with_offset_ref(&self, offset: usize) -> BufferView<&Self> {
         BufferView {
             buffer: self,
             offset,
         }
     }
 }
-impl BufferView<'_> {
+impl<Buffer: br::Buffer> BufferView<Buffer> {
     pub fn with_offset(self, offset: usize) -> Self {
-        BufferView {
+        Self {
             buffer: self.buffer,
             offset: self.offset + offset,
         }
     }
-    pub fn range(&self, bytes: usize) -> std::ops::Range<usize> {
+
+    pub const fn range(&self, bytes: usize) -> std::ops::Range<usize> {
         self.offset..self.offset + bytes
     }
 }
 /// Conversion for Bedrock bind_vertex_buffers form
-impl<'b> From<BufferView<'b>> for (&'b Buffer, usize) {
-    fn from(v: BufferView<'b>) -> Self {
+impl<Buffer: br::Buffer> From<BufferView<Buffer>> for (Buffer, usize) {
+    fn from(v: BufferView<Buffer>) -> Self {
         (v.buffer, v.offset)
     }
 }
 
 /// a view of the buffer in GPU Address.
 #[derive(Clone, Copy)]
-pub struct DeviceBufferView<'b> {
-    pub buffer: &'b Buffer,
+pub struct DeviceBufferView<Buffer> {
+    pub buffer: Buffer,
     pub offset: br::vk::VkDeviceSize,
 }
-impl Buffer {
-    pub fn with_dev_offset(&self, offset: br::vk::VkDeviceSize) -> DeviceBufferView {
+impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+    pub const fn with_dev_offset(self, offset: br::vk::VkDeviceSize) -> DeviceBufferView<Self> {
+        DeviceBufferView {
+            buffer: self,
+            offset,
+        }
+    }
+
+    pub const fn with_dev_offset_ref(
+        &self,
+        offset: br::vk::VkDeviceSize,
+    ) -> DeviceBufferView<&Self> {
         DeviceBufferView {
             buffer: self,
             offset,
         }
     }
 }
-impl DeviceBufferView<'_> {
-    pub fn with_offset(&self, offset: br::vk::VkDeviceSize) -> Self {
-        DeviceBufferView {
+impl<Buffer> DeviceBufferView<Buffer> {
+    pub fn with_offset(self, offset: br::vk::VkDeviceSize) -> Self {
+        Self {
             buffer: self.buffer,
             offset: self.offset + offset,
         }
     }
-    pub fn range(&self, bytes: br::vk::VkDeviceSize) -> std::ops::Range<br::vk::VkDeviceSize> {
+
+    pub const fn range(
+        &self,
+        bytes: br::vk::VkDeviceSize,
+    ) -> std::ops::Range<br::vk::VkDeviceSize> {
         self.offset..self.offset + bytes
     }
 }
@@ -136,7 +177,8 @@ impl BufferContent {
             StorageTexel(_, _) => src.storage_texel_buffer(),
         }
     }
-    fn alignment(&self, pd: &br::PhysicalDevice) -> u64 {
+
+    fn alignment(&self, pd: &impl br::PhysicalDevice) -> u64 {
         use self::BufferContent::*;
 
         match *self {
@@ -151,7 +193,8 @@ impl BufferContent {
             ),
         }
     }
-    fn size(&self) -> u64 {
+
+    const fn size(&self) -> u64 {
         use self::BufferContent::*;
 
         match *self {
@@ -166,78 +209,78 @@ impl BufferContent {
     }
 
     /// Generic Shorthands
-    pub fn vertex<T>() -> Self {
+    pub const fn vertex<T>() -> Self {
         BufferContent::Vertex(
             std::mem::size_of::<T>() as _,
             std::mem::align_of::<T>() as _,
         )
     }
-    pub fn vertices<T>(count: usize) -> Self {
+    pub const fn vertices<T>(count: usize) -> Self {
         BufferContent::Vertex(
             std::mem::size_of::<T>() as u64 * count as u64,
             std::mem::align_of::<T>() as _,
         )
     }
 
-    pub fn index<T>() -> Self {
+    pub const fn index<T>() -> Self {
         BufferContent::Index(
             std::mem::size_of::<T>() as _,
             std::mem::align_of::<T>() as _,
         )
     }
-    pub fn indices<T>(count: usize) -> Self {
+    pub const fn indices<T>(count: usize) -> Self {
         BufferContent::Index(
             std::mem::size_of::<T>() as u64 * count as u64,
             std::mem::align_of::<T>() as _,
         )
     }
 
-    pub fn uniform<T>() -> Self {
+    pub const fn uniform<T>() -> Self {
         BufferContent::Uniform(
             std::mem::size_of::<T>() as _,
             std::mem::align_of::<T>() as _,
         )
     }
-    pub fn uniform_dynarray<T>(count: usize) -> Self {
+    pub const fn uniform_dynarray<T>(count: usize) -> Self {
         BufferContent::Uniform(
             std::mem::size_of::<T>() as u64 * count as u64,
             std::mem::align_of::<T>() as _,
         )
     }
 
-    pub fn uniform_texel<T>() -> Self {
+    pub const fn uniform_texel<T>() -> Self {
         BufferContent::UniformTexel(
             std::mem::size_of::<T>() as _,
             std::mem::align_of::<T>() as _,
         )
     }
-    pub fn uniform_texel_dynarray<T>(count: usize) -> Self {
+    pub const fn uniform_texel_dynarray<T>(count: usize) -> Self {
         BufferContent::UniformTexel(
             std::mem::size_of::<T>() as u64 * count as u64,
             std::mem::align_of::<T>() as _,
         )
     }
 
-    pub fn storage<T>() -> Self {
+    pub const fn storage<T>() -> Self {
         BufferContent::Storage(
             std::mem::size_of::<T>() as _,
             std::mem::align_of::<T>() as _,
         )
     }
-    pub fn storage_dynarray<T>(count: usize) -> Self {
+    pub const fn storage_dynarray<T>(count: usize) -> Self {
         BufferContent::Storage(
             std::mem::size_of::<T>() as u64 * count as u64,
             std::mem::align_of::<T>() as _,
         )
     }
 
-    pub fn storage_texel<T>() -> Self {
+    pub const fn storage_texel<T>() -> Self {
         BufferContent::StorageTexel(
             std::mem::size_of::<T>() as _,
             std::mem::align_of::<T>() as _,
         )
     }
-    pub fn storage_texel_dynarray<T>(count: usize) -> Self {
+    pub const fn storage_texel_dynarray<T>(count: usize) -> Self {
         BufferContent::StorageTexel(
             std::mem::size_of::<T>() as u64 * count as u64,
             std::mem::align_of::<T>() as _,
@@ -253,8 +296,8 @@ pub struct BufferPrealloc<'g> {
     common_align: u64,
 }
 impl<'g> BufferPrealloc<'g> {
-    pub fn new(g: &'g crate::Graphics) -> Self {
-        BufferPrealloc {
+    pub const fn new(g: &'g crate::Graphics) -> Self {
+        Self {
             g,
             usage: br::BufferUsage(0),
             offsets: Vec::new(),
@@ -262,17 +305,26 @@ impl<'g> BufferPrealloc<'g> {
             common_align: 1,
         }
     }
-    pub fn build(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total as _, self.usage).create(&self.g.device)
+
+    pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {
+        br::BufferDesc::new(self.total as _, self.usage).create(self.g.device.clone())
     }
-    pub fn build_transferred(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_dest()).create(&self.g.device)
+
+    pub fn build_transferred(&self) -> br::Result<br::BufferObject<DeviceObject>> {
+        br::BufferDesc::new(self.total as _, self.usage.transfer_dest())
+            .create(self.g.device.clone())
     }
-    pub fn build_upload(&self) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(&self.g.device)
+
+    pub fn build_upload(&self) -> br::Result<br::BufferObject<DeviceObject>> {
+        br::BufferDesc::new(self.total as _, self.usage.transfer_src())
+            .create(self.g.device.clone())
     }
-    pub fn build_custom_usage(&self, usage: br::BufferUsage) -> br::Result<br::Buffer> {
-        br::BufferDesc::new(self.total as _, self.usage | usage).create(&self.g.device)
+
+    pub fn build_custom_usage(
+        &self,
+        usage: br::BufferUsage,
+    ) -> br::Result<br::BufferObject<DeviceObject>> {
+        br::BufferDesc::new(self.total as _, self.usage | usage).create(self.g.device.clone())
     }
 
     pub fn add(&mut self, content: BufferContent) -> u64 {
@@ -282,9 +334,10 @@ impl<'g> BufferPrealloc<'g> {
         let offs = super::align2!(self.total, content_align);
         self.total = offs + content.size() as u64;
         self.offsets.push(offs);
-        return offs;
+
+        offs
     }
-    pub fn total_size(&self) -> u64 {
+    pub const fn total_size(&self) -> u64 {
         self.total
     }
 
@@ -295,6 +348,7 @@ impl<'g> BufferPrealloc<'g> {
         self.usage |= other.usage;
         self.total = offs + other.total;
         self.offsets.extend(other.offsets.iter().map(|&o| o + offs));
-        return offs;
+
+        offs
     }
 }

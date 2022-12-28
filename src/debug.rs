@@ -9,6 +9,8 @@ pub extern "system" fn debug_utils_out(
     callback_data: *const VkDebugUtilsMessengerCallbackDataEXT,
     _user_data: *mut c_void
 ) -> VkBool32 {
+    let bt = std::backtrace::Backtrace::capture();
+
     let callback_data = unsafe { callback_data.as_ref().expect("null callback data received at debug_utils_out") };
     let msg = unsafe { CStr::from_ptr(callback_data.pMessage).to_str().unwrap_or("message has illegal character") };
 
@@ -26,7 +28,7 @@ pub extern "system" fn debug_utils_out(
 
     match severity {
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT => {
-            error!("vkerr[{}]: {}", tystr, msg);
+            error!("vkerr[{tystr}]: {msg}");
             error!("  id: {}", callback_data.messageIdNumber);
             error!(
                 "  object-counts: q={} c={} o={}",
@@ -34,9 +36,10 @@ pub extern "system" fn debug_utils_out(
                 callback_data.cmdBufLabelCount,
                 callback_data.objectCount
             );
+            error!("  *backtrace*\n{bt}");
         },
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT => {
-            warn!("vkwarn[{}]: {}", tystr, msg);
+            warn!("vkwarn[{tystr}]: {msg}");
             warn!("  id: {}", callback_data.messageIdNumber);
             warn!(
                 "  object-counts: q={} c={} o={}",
@@ -44,9 +47,10 @@ pub extern "system" fn debug_utils_out(
                 callback_data.cmdBufLabelCount,
                 callback_data.objectCount
             );
+            warn!("  *backtrace*\n{bt}");
         },
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT => {
-            info!("vkinfo[{}]: {}", tystr, msg);
+            info!("vkinfo[{tystr}]: {msg}");
             info!("  id: {}", callback_data.messageIdNumber);
             info!(
                 "  object-counts: q={} c={} o={}",
@@ -54,9 +58,10 @@ pub extern "system" fn debug_utils_out(
                 callback_data.cmdBufLabelCount,
                 callback_data.objectCount
             );
+            info!("  *backtrace*\n{bt}");
         },
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT => {
-            trace!("vk[{}]: {}", tystr, msg);
+            trace!("vk[{tystr}]: {msg}");
             trace!("  id: {}", callback_data.messageIdNumber);
             trace!(
                 "  object-counts: q={} c={} o={}",
@@ -64,6 +69,7 @@ pub extern "system" fn debug_utils_out(
                 callback_data.cmdBufLabelCount,
                 callback_data.objectCount
             );
+            trace!("  *backtrace*\n{bt}");
         },
         _ => unreachable!("unknown severity flag")
     }
