@@ -1,10 +1,17 @@
 use bedrock as br;
 use br::MemoryBound;
+use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 
 pub struct Game<NL> {
     ui: UIContext,
     ui_main: UIPlane,
-    res_storage: peridot::ResourceStorage,
+    res_storage: peridot::ResourceStorage<
+        peridot::Buffer<
+            br::BufferObject<peridot::DeviceObject>,
+            br::DeviceMemoryObject<peridot::DeviceObject>,
+        >,
+        peridot::StdImage,
+    >,
     marker: std::marker::PhantomData<*const NL>,
 }
 impl<NL> Game<NL> {
@@ -44,14 +51,9 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
 use std::collections::HashMap;
 
 pub struct DynamicUpdateBufferWriteRange<'a, T> {
-    mem: &'a br::DeviceMemory,
-    mapped_owner: br::MappedMemoryRange<'a>,
+    mapped_owner:
+        peridot::AutocloseMappedMemoryRange<'a, br::DeviceMemoryObject<peridot::DeviceObject>>,
     _back_data: std::marker::PhantomData<*mut T>,
-}
-impl<T> Drop for DynamicUpdateBufferWriteRange<'_, T> {
-    fn drop(&mut self) {
-        unsafe { self.mem.unmap() }
-    }
 }
 impl<T> std::ops::Deref for DynamicUpdateBufferWriteRange<'_, T> {
     type Target = T;
@@ -67,15 +69,10 @@ impl<T> std::ops::DerefMut for DynamicUpdateBufferWriteRange<'_, T> {
 }
 
 pub struct DynamicUpdateBufferWriteSliceRange<'a, T> {
-    mem: &'a br::DeviceMemory,
-    mapped_owner: br::MappedMemoryRange<'a>,
+    mapped_owner:
+        peridot::AutocloseMappedMemoryRange<'a, br::DeviceMemoryObject<peridot::DeviceObject>>,
     slice_length: usize,
     _back_data: std::marker::PhantomData<*mut T>,
-}
-impl<T> Drop for DynamicUpdateBufferWriteSliceRange<'_, T> {
-    fn drop(&mut self) {
-        unsafe { self.mem.unmap() }
-    }
 }
 impl<T> std::ops::Deref for DynamicUpdateBufferWriteSliceRange<'_, T> {
     type Target = [T];
@@ -91,9 +88,9 @@ impl<T> std::ops::DerefMut for DynamicUpdateBufferWriteSliceRange<'_, T> {
 }
 
 pub trait StatedBufferRegion {
-    const fn byte_length(&self) -> usize;
-    const fn byte_range_dev(&self) -> std::ops::Range<u64>;
-    const fn byte_range(&self) -> std::ops::Range<usize>;
+    fn byte_length(&self) -> usize;
+    fn byte_range_dev(&self) -> std::ops::Range<u64>;
+    fn byte_range(&self) -> std::ops::Range<usize>;
 }
 
 pub struct StatedBufferSliceRegion<T> {
@@ -120,13 +117,13 @@ impl<T> StatedBufferSliceRegion<T> {
     }
 }
 impl<T> StatedBufferRegion for StatedBufferSliceRegion<T> {
-    const fn byte_length(&self) -> usize {
+    fn byte_length(&self) -> usize {
         std::mem::size_of::<T>() * self.slice_length
     }
-    const fn byte_range_dev(&self) -> std::ops::Range<u64> {
+    fn byte_range_dev(&self) -> std::ops::Range<u64> {
         self.offset..(self.offset + self.byte_length() as u64)
     }
-    const fn byte_range(&self) -> std::ops::Range<usize> {
+    fn byte_range(&self) -> std::ops::Range<usize> {
         self.offset as _..(self.offset as usize + self.byte_length())
     }
 }
@@ -153,171 +150,197 @@ impl<T> StatedBufferRegionSingleElement<T> {
     }
 }
 impl<T> StatedBufferRegion for StatedBufferRegionSingleElement<T> {
-    const fn byte_length(&self) -> usize {
+    fn byte_length(&self) -> usize {
         std::mem::size_of::<T>()
     }
-    const fn byte_range_dev(&self) -> std::ops::Range<u64> {
+    fn byte_range_dev(&self) -> std::ops::Range<u64> {
         self.offset..(self.offset + self.byte_length() as u64)
     }
-    const fn byte_range(&self) -> std::ops::Range<usize> {
+    fn byte_range(&self) -> std::ops::Range<usize> {
         self.offset as _..self.offset as usize + self.byte_length()
     }
 }
 
-pub struct DynamicUpdateBuffer {
-    data: peridot::Buffer,
-    ops: peridot::TransferBatch,
-    copy_regions: Vec<(
-        br::vk::VkDeviceSize,
-        peridot::Buffer,
-        br::vk::VkDeviceSize,
-        usize,
-    )>,
-    cap: usize,
-    top: usize,
+pub trait BufferUpdateRequestData<Device: br::Device> {
+    fn data_bytes(&self) -> &[u8];
+    fn dest_buffer(&self) -> &dyn br::Buffer<ConcreteDevice = Device>;
+    fn dest_offset(&self) -> br::vk::VkDeviceSize;
+    fn dest_barrier(&self) -> (br::PipelineStageFlags, br::vk::VkAccessFlags);
 }
-impl DynamicUpdateBuffer {
+
+pub struct BufferUpdateRequest<'d, T: Clone, Buffer: br::Buffer> {
+    pub data: std::borrow::Cow<'d, T>,
+    pub dest: peridot::DeviceBufferView<Buffer>,
+    pub dest_barriers: (br::PipelineStageFlags, br::vk::VkAccessFlags),
+}
+impl<'d, T: Clone, Buffer: br::Buffer> BufferUpdateRequestData<Buffer::ConcreteDevice>
+    for BufferUpdateRequest<'d, T, Buffer>
+{
+    fn data_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.data.as_ref() as *const T as _,
+                std::mem::size_of::<T>(),
+            )
+        }
+    }
+
+    fn dest_buffer(&self) -> &dyn br::Buffer<ConcreteDevice = Buffer::ConcreteDevice> {
+        &self.dest.buffer
+    }
+
+    fn dest_offset(&self) -> br::vk::VkDeviceSize {
+        self.dest.offset
+    }
+
+    fn dest_barrier(&self) -> (br::PipelineStageFlags, br::vk::VkAccessFlags) {
+        self.dest_barriers
+    }
+}
+
+pub struct BufferArrayUpdateRequest<'d, T: Clone, Buffer: br::Buffer> {
+    pub data: std::borrow::Cow<'d, [T]>,
+    pub dest: peridot::DeviceBufferView<Buffer>,
+    pub dest_barriers: (br::PipelineStageFlags, br::vk::VkAccessFlags),
+}
+impl<'d, T: Clone, Buffer: br::Buffer> BufferUpdateRequestData<Buffer::ConcreteDevice>
+    for BufferArrayUpdateRequest<'d, T, Buffer>
+{
+    fn data_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.data.as_ref().as_ptr() as *const _,
+                self.data.len() * std::mem::size_of::<T>(),
+            )
+        }
+    }
+
+    fn dest_buffer(&self) -> &dyn br::Buffer<ConcreteDevice = Buffer::ConcreteDevice> {
+        &self.dest.buffer
+    }
+
+    fn dest_offset(&self) -> br::vk::VkDeviceSize {
+        self.dest.offset
+    }
+
+    fn dest_barrier(&self) -> (br::PipelineStageFlags, br::vk::VkAccessFlags) {
+        self.dest_barriers
+    }
+}
+
+pub struct BufferUpdateManager {
+    stg_data: SharedRef<DynamicMut<peridot::StdBuffer>>,
+    cap: usize,
+}
+impl BufferUpdateManager {
     const DEFAULT_CAPACITY: usize = 256;
 
     pub fn new(
         e: &peridot::Graphics,
         init_cp_batch: &mut peridot::TransferBatch,
     ) -> br::Result<Self> {
-        let mut bp = peridot::BufferPrealloc::new(e);
-        bp.add(peridot::BufferContent::Raw(Self::DEFAULT_CAPACITY as _, 1));
-        let mut mb = peridot::MemoryBadget::new(e);
-        mb.add(bp.build_upload()?);
-        let data = mb
-            .alloc_upload()?
-            .pop()
-            .expect("no object?")
-            .unwrap_buffer();
+        let bp = peridot::BufferPrealloc::with_entries(
+            e,
+            std::iter::once(peridot::BufferContent::Raw(Self::DEFAULT_CAPACITY as _, 1)),
+        );
+        let mut alloc =
+            peridot::BulkedResourceStorageAllocator::<_, peridot::StdImageBackend>::new();
+        alloc.add_buffer(bp.build_upload()?);
+        let peridot::ResourceStorage { mut buffers, .. } = alloc.alloc_upload(e)?;
+        let stg_data = SharedRef::new(DynamicMut::new(buffers.pop().expect("no objects?")));
 
         init_cp_batch.add_buffer_graphics_ready(
             br::PipelineStageFlags::HOST,
-            &data,
+            stg_data.clone(),
             0..Self::DEFAULT_CAPACITY as _,
             br::AccessFlags::HOST.write,
         );
 
         Ok(Self {
-            data,
-            ops: peridot::TransferBatch::new(),
-            copy_regions: Vec::new(),
+            stg_data,
             cap: Self::DEFAULT_CAPACITY,
-            top: 0,
         })
     }
 
-    pub fn reset(&mut self) {
-        self.top = 0;
-        self.ops.clear();
-        self.copy_regions.clear();
-    }
+    fn reserve_enough(
+        &mut self,
+        e: &peridot::Graphics,
+        request_size: usize,
+        tfb: &mut peridot::TransferBatch,
+    ) -> br::Result<()> {
+        if self.cap >= request_size {
+            return Ok(());
+        }
 
-    pub fn push_update<'s, T>(
-        &'s mut self,
-        g: &peridot::Graphics,
-        dst_buffer: &peridot::Buffer,
-        stated_region: &StatedBufferRegionSingleElement<T>,
-    ) -> DynamicUpdateBufferWriteRange<'s, T> {
-        let place_offset = self.push_update_ext_copy::<T>(g);
+        let bp = peridot::BufferPrealloc::with_entries(
+            e,
+            std::iter::once(peridot::BufferContent::Raw(request_size as _, 1)),
+        );
+        let mut alloc =
+            peridot::BulkedResourceStorageAllocator::<_, peridot::StdImageBackend>::new();
+        alloc.add_buffer(bp.build_upload()?);
+        let peridot::ResourceStorage { mut buffers, .. } = alloc.alloc_upload(e)?;
 
-        self.copy_regions.push((
-            place_offset as _,
-            dst_buffer.clone(),
-            stated_region.offset,
-            std::mem::size_of::<T>(),
-        ));
-        self.ops.add_buffer_graphics_ready(
-            stated_region.first_usage_stage,
-            &dst_buffer,
-            stated_region.byte_range_dev(),
-            stated_region.access_mask,
+        self.cap = request_size;
+        self.stg_data = SharedRef::new(DynamicMut::new(buffers.pop().expect("no objects?")));
+
+        tfb.add_buffer_graphics_ready(
+            br::PipelineStageFlags::HOST,
+            self.stg_data.clone(),
+            0..Self::DEFAULT_CAPACITY as _,
+            br::AccessFlags::HOST.write,
         );
 
-        DynamicUpdateBufferWriteRange {
-            mem: self.data.memory(),
-            mapped_owner: self
-                .data
-                .memory()
-                .map(place_offset..self.top)
-                .expect("Failed to mapping memory"),
-            _back_data: std::marker::PhantomData,
-        }
+        Ok(())
     }
 
-    pub fn push_update_dyn_array<'s, T>(
-        &'s mut self,
-        g: &peridot::Graphics,
-        dst_buffer: &peridot::Buffer,
-        stated_region: &StatedBufferSlicedRegion<T>,
-    ) -> DynamicUpdateBufferWriteSliceRange<'s, T> {
-        let place_offset = self.push_update_dyn_array_ext_copy::<T>(g, stated_region.slice_length);
-
-        self.copy_regions.push((
-            place_offset as _,
-            dst_buffer.clone(),
-            stated_region.offset,
-            std::mem::size_of::<T>(),
-        ));
-        self.ops.add_buffer_graphics_ready(
-            stated_region.first_usage_stage,
-            &dst_buffer,
-            stated_region.byte_range_dev(),
-            stated_region.access_mask,
-        );
-
-        DynamicUpdateBufferWriteSliceRange {
-            mem: self.data.memory(),
-            mapped_owner: self
-                .data
-                .memory()
-                .map(place_offset..self.top)
-                .expect("Failed to mapping memory"),
-            slice_length: stated_region.slice_length,
-            _back_data: std::marker::PhantomData,
+    pub fn run(
+        &mut self,
+        e: &mut peridot::Graphics,
+        requests: &[Box<dyn BufferUpdateRequestData<peridot::DeviceObject>>],
+    ) -> br::Result<()> {
+        let mut pre_tfb = peridot::TransferBatch::new();
+        let mut total_size = 0;
+        let mut placement_offsets = Vec::with_capacity(requests.len());
+        for r in requests {
+            placement_offsets.push(total_size);
+            total_size += r.data_bytes().len();
         }
-    }
+        self.reserve_enough(e, total_size, &mut pre_tfb)?;
+        pre_tfb.submit(e)?;
 
-    fn push_update_ext_copy<'s, T>(&'s mut self, g: &peridot::Graphics) -> usize {
-        let place_offset = std::mem::align_of::<T>()
-            * ((self.top + std::mem::align_of::<T>() - 1) / std::mem::align_of::<T>());
-        if place_offset + std::mem::size_of::<T>() > self.cap {
-            unimplemented!("realloc needed");
-        }
-        self.top = place_offset + std::mem::size_of::<T>();
+        self.stg_data
+            .borrow_mut()
+            .guard_map(0..total_size as _, |range| {
+                for (r, &o) in requests.iter().zip(&placement_offsets) {
+                    unsafe {
+                        range
+                            .slice_mut(o, r.data_bytes().len())
+                            .copy_from_slice(r.data_bytes());
+                    }
+                }
+            })?;
 
-        place_offset
-    }
-
-    fn push_update_dyn_array_ext_copy<'s, T>(
-        &'s mut self,
-        g: &peridot::Graphics,
-        array_size: usize,
-    ) -> usize {
-        let place_size = std::mem::size_of::<T>() * array_size;
-        let place_offset = std::mem::align_of::<T>()
-            * ((self.top + std::mem::align_of::<T>() - 1) / std::mem::align_of::<T>());
-        if place_offset + place_size > self.cap {
-            unimplemented!("realloc needed");
-        }
-        self.top = place_offset + place_size;
-
-        place_offset
-    }
-
-    pub fn populate_commands(&mut self, cmd: &mut br::CmdRecord) {
-        for (src_offset, dst_buf, dst_offset, size) in self.copy_regions.drain(..) {
-            self.ops.add_copying_buffer(
-                self.data.with_dev_offset(src_offset),
-                dst_buf.with_dev_offset(dst_offset),
-                size as _,
+        let stg_data = self.stg_data.borrow();
+        let mut tfb = peridot::TransferBatch::new();
+        for (r, &o) in requests.iter().zip(&placement_offsets) {
+            tfb.add_copying_buffer(
+                stg_data.with_dev_offset_ref(o as _),
+                peridot::DeviceBufferView {
+                    buffer: r.dest_buffer(),
+                    offset: r.dest_offset(),
+                },
+                r.data_bytes().len() as _,
+            );
+            tfb.add_buffer_graphics_ready(
+                r.dest_barrier().0,
+                r.dest_buffer(),
+                o as _..(o + r.data_bytes().len()) as _,
+                r.dest_barrier().1,
             );
         }
 
-        self.ops.sink_transfer_commands(cmd);
-        self.ops.sink_graphics_ready_commands(cmd);
+        tfb.submit(e)
     }
 }
 
@@ -329,12 +352,15 @@ pub struct UIContext {
     font_provider: peridot_vg::FontProvider,
     fonts: Vec<peridot_vg::Font>,
     baked_characters: HashMap<(FontId, char), peridot::TextureSlice>,
-    update_buffer: DynamicUpdateBuffer,
+    update_buffer: BufferUpdateManager,
 }
 impl UIContext {
     pub fn new(
         g: &peridot::Graphics,
-        res_storage_alloc: &mut peridot::BulkedResourceStorageAllocator,
+        res_storage_alloc: &mut peridot::BulkedResourceStorageAllocator<
+            br::BufferObject<peridot::DeviceObject>,
+            peridot::StdImageBackend,
+        >,
         character_atlas_size: u32,
         init_cp_batch: &mut peridot::TransferBatch,
     ) -> Self {
@@ -350,7 +376,7 @@ impl UIContext {
                 .expect("Failed to initialize font provider"),
             fonts: Vec::new(),
             baked_characters: HashMap::new(),
-            update_buffer: DynamicUpdateBuffer::new(g, init_cp_batch)
+            update_buffer: BufferUpdateManager::new(g, init_cp_batch)
                 .expect("Failed to create update buffer object"),
         }
     }
@@ -451,7 +477,14 @@ pub struct StaticLabelRenderer {
     font: FontId,
     text: String,
     size: f32,
-    merged_vertices_view: Option<peridot::DeviceBufferViewHold>,
+    merged_vertices_view: Option<
+        peridot::DeviceBufferView<
+            peridot::Buffer<
+                br::BufferObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
+    >,
 }
 pub struct StaticLabel {
     transform: Transform,
@@ -474,18 +507,17 @@ impl UIElement for StaticLabel {
             bp.add(peridot::BufferContent::vertices::<peridot::VertexUV2D>(
                 slices.len() * 6,
             ));
-            let mut mb = peridot::MemoryBadget::new(engine);
-            mb.add(
+            let mut alloc =
+                peridot::BulkedResourceStorageAllocator::<_, peridot::StdImageBackend>::new();
+            alloc.add_buffer(
                 bp.build_transferred()
                     .expect("Failed to build label vertices buffer"),
             );
-            let buffer = mb
-                .alloc()
-                .expect("Failed to allocate label vertices memory")
-                .pop()
-                .expect("no objects?")
-                .unwrap_buffer();
-            self.renderer.merged_vertices_view = Some(buffer.hold_with_dev_offset(0));
+            let peridot::ResourceStorage { mut buffers, .. } = alloc
+                .alloc(engine)
+                .expect("Failed to allocate label vertices memory");
+            let buffer = buffers.pop().expect("no object?");
+            self.renderer.merged_vertices_view = Some(buffer.with_dev_offset(0));
             unimplemented!("character layouting");
 
             /*let wref = ctx

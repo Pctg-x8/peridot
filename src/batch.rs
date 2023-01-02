@@ -68,43 +68,47 @@ impl<
 }
 
 /// Batching Manager for Transferring Operations.
-pub struct TransferBatch {
+pub struct TransferBatch<'d> {
     barrier_range_src: BTreeMap<
-        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>>,
         Range<br::vk::VkDeviceSize>,
     >,
     barrier_range_dst: BTreeMap<
-        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>>,
         Range<br::vk::VkDeviceSize>,
     >,
-    org_layout_src:
-        BTreeMap<ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage>>>, br::ImageLayout>,
-    org_layout_dst:
-        BTreeMap<ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage>>>, br::ImageLayout>,
+    org_layout_src: BTreeMap<
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage> + 'd>>,
+        br::ImageLayout,
+    >,
+    org_layout_dst: BTreeMap<
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage> + 'd>>,
+        br::ImageLayout,
+    >,
     copy_buffers: HashMap<
         (
-            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
-            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
+            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>>,
+            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>>,
         ),
         Vec<VkBufferCopy>,
     >,
     init_images: BTreeMap<
-        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage>>>,
+        ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkImage> + 'd>>,
         (
             br::vk::VkExtent3D,
-            Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
+            Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>,
             br::vk::VkDeviceSize,
         ),
     >,
     ready_barriers: BTreeMap<
         br::PipelineStageFlags,
         ReadyResourceBarriers<
-            Box<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
-            Box<dyn br::VkHandle<Handle = br::vk::VkImage>>,
+            Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>,
+            Box<dyn br::VkHandle<Handle = br::vk::VkImage> + 'd>,
         >,
     >,
 }
-impl TransferBatch {
+impl<'d> TransferBatch<'d> {
     pub fn new() -> Self {
         Self {
             barrier_range_src: BTreeMap::new(),
@@ -130,12 +134,8 @@ impl TransferBatch {
     /// Add copying operation between buffers.
     pub fn add_copying_buffer(
         &mut self,
-        src: crate::DeviceBufferView<
-            impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
-        >,
-        dst: crate::DeviceBufferView<
-            impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
-        >,
+        src: crate::DeviceBufferView<impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'd>,
+        dst: crate::DeviceBufferView<impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'd>,
         bytes: br::vk::VkDeviceSize,
     ) {
         trace!(
@@ -172,8 +172,8 @@ impl TransferBatch {
     #[inline]
     pub fn add_mirroring_buffer(
         &mut self,
-        src: impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
-        dst: impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
+        src: impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'd,
+        dst: impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'd,
         offset: br::vk::VkDeviceSize,
         bytes: br::vk::VkDeviceSize,
     ) {
@@ -194,9 +194,7 @@ impl TransferBatch {
     pub fn init_image_from(
         &mut self,
         dest: impl br::Image + Clone + 'static,
-        src: crate::DeviceBufferView<
-            impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'static,
-        >,
+        src: crate::DeviceBufferView<impl br::VkHandle<Handle = br::vk::VkBuffer> + Clone + 'd>,
     ) {
         let size = (dest.size().width * dest.size().height) as u64
             * (PixelFormat::from(dest.format()).bpp() >> 3) as u64;
@@ -223,7 +221,7 @@ impl TransferBatch {
     pub fn add_buffer_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: impl br::VkHandle<Handle = br::vk::VkBuffer> + 'static,
+        res: impl br::VkHandle<Handle = br::vk::VkBuffer> + 'd,
         byterange: Range<br::vk::VkDeviceSize>,
         access_grants: br::vk::VkAccessFlags,
     ) {
@@ -238,7 +236,7 @@ impl TransferBatch {
     pub fn add_image_graphics_ready(
         &mut self,
         dest_stage: br::PipelineStageFlags,
-        res: impl br::VkHandle<Handle = br::vk::VkImage> + 'static,
+        res: impl br::VkHandle<Handle = br::vk::VkImage> + 'd,
         layout: br::ImageLayout,
     ) {
         self.ready_barriers
@@ -265,10 +263,10 @@ impl TransferBatch {
     #[inline]
     fn update_barrier_range_for(
         map: &mut BTreeMap<
-            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'static>>,
+            ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>>,
             Range<br::vk::VkDeviceSize>,
         >,
-        k: ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'static>>,
+        k: ResourceKey<Box<dyn br::VkHandle<Handle = br::vk::VkBuffer> + 'd>>,
         new_range: Range<br::vk::VkDeviceSize>,
     ) {
         let r = map.entry(k).or_insert_with(|| new_range.clone());
@@ -277,7 +275,7 @@ impl TransferBatch {
     }
 }
 /// Sinking Commands into CommandBuffers
-impl TransferBatch {
+impl<'d> TransferBatch<'d> {
     pub fn sink_transfer_commands(&self, r: &mut br::CmdRecord<impl br::CommandBuffer>) {
         let src_barriers = self.barrier_range_src.iter().map(|(b, r)| {
             br::BufferMemoryBarrier::new(
@@ -386,6 +384,22 @@ impl TransferBatch {
                 &img_barriers,
             );
         }
+    }
+
+    pub fn submit(&self, e: &mut crate::Graphics) -> br::Result<()> {
+        e.submit_commands(|r| {
+            self.sink_transfer_commands(r);
+            self.sink_graphics_ready_commands(r);
+        })
+    }
+
+    #[cfg(feature = "mt")]
+    pub async fn submit_async(&self, e: &mut crate::Graphics) -> br::Result<()> {
+        e.submit_commands_async(|r| {
+            self.sink_transfer_commands(r);
+            self.sink_graphics_ready_commands(r);
+        })?
+        .await
     }
 }
 

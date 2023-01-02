@@ -12,6 +12,9 @@ use crate::{
     DeviceObject,
 };
 
+pub type StdBufferBackend = br::BufferObject<crate::DeviceObject>;
+pub type StdBuffer = Buffer<StdBufferBackend, br::DeviceMemoryObject<crate::DeviceObject>>;
+
 /// A refcounted buffer object bound with a memory object.
 #[derive(Clone)]
 pub struct Buffer<Backend: br::Buffer, Memory: br::DeviceMemory>(
@@ -41,11 +44,9 @@ impl<Backend: br::Buffer + br::MemoryBound, Memory: br::DeviceMemory> Buffer<Bac
         f: impl FnOnce(&br::MappedMemoryRange<Memory>) -> R,
     ) -> br::Result<R> {
         let mut mem = self.1.borrow_mut();
-        let mapped_range = AutocloseMappedMemoryRange(
-            &self.0,
-            mem.map((self.2 + range.start) as _..(self.2 + range.end) as _)?
-                .into(),
-        );
+        let mapped_range = AutocloseMappedMemoryRange(Some(
+            mem.map((self.2 + range.start) as _..(self.2 + range.end) as _)?,
+        ));
 
         Ok(f(&mapped_range))
     }
@@ -305,6 +306,16 @@ impl<'g> BufferPrealloc<'g> {
             total: 0,
             common_align: 1,
         }
+    }
+    pub fn with_entries(
+        g: &'g crate::Graphics,
+        entries: impl Iterator<Item = BufferContent>,
+    ) -> Self {
+        let mut this = Self::new(g);
+        for e in entries {
+            this.add(e);
+        }
+        this
     }
 
     pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {
