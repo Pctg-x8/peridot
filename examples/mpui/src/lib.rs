@@ -90,14 +90,55 @@ impl<T> std::ops::DerefMut for DynamicUpdateBufferWriteSliceRange<'_, T> {
     }
 }
 
+pub trait StatedBufferRegion {
+    const fn byte_length(&self) -> usize;
+    const fn byte_range_dev(&self) -> std::ops::Range<u64>;
+    const fn byte_range(&self) -> std::ops::Range<usize>;
+}
+
+pub struct StatedBufferSliceRegion<T> {
+    pub offset: u64,
+    pub first_usage_stage: br::PipelineStageFlags,
+    pub access_mask: br::vk::VkAccessFlags,
+    pub slice_length: usize,
+    _element: std::marker::PhantomData<T>,
+}
+impl<T> StatedBufferSliceRegion<T> {
+    pub const fn new(
+        offset: u64,
+        first_usage_stage: br::PipelineStageFlags,
+        access_mask: br::vk::VkAccessFlags,
+        slice_length: usize,
+    ) -> Self {
+        Self {
+            offset,
+            first_usage_stage,
+            access_mask,
+            slice_length,
+            _element: std::marker::PhantomData,
+        }
+    }
+}
+impl<T> StatedBufferRegion for StatedBufferSliceRegion<T> {
+    const fn byte_length(&self) -> usize {
+        std::mem::size_of::<T>() * self.slice_length
+    }
+    const fn byte_range_dev(&self) -> std::ops::Range<u64> {
+        self.offset..(self.offset + self.byte_length() as u64)
+    }
+    const fn byte_range(&self) -> std::ops::Range<usize> {
+        self.offset as _..(self.offset as usize + self.byte_length())
+    }
+}
+
 /// Buffer region with execution time states
-pub struct StatedBufferRegion<T> {
+pub struct StatedBufferRegionSingleElement<T> {
     pub offset: u64,
     pub first_usage_stage: br::PipelineStageFlags,
     pub access_mask: br::vk::VkAccessFlags,
     _buffer_content: std::marker::PhantomData<T>,
 }
-impl<T> StatedBufferRegion<T> {
+impl<T> StatedBufferRegionSingleElement<T> {
     pub const fn new(
         offset: u64,
         first_usage_stage: br::PipelineStageFlags,
@@ -110,14 +151,15 @@ impl<T> StatedBufferRegion<T> {
             _buffer_content: std::marker::PhantomData,
         }
     }
-
-    pub const fn byte_length(&self) -> usize {
+}
+impl<T> StatedBufferRegion for StatedBufferRegionSingleElement<T> {
+    const fn byte_length(&self) -> usize {
         std::mem::size_of::<T>()
     }
-    pub const fn byte_range_dev(&self) -> std::ops::Range<u64> {
+    const fn byte_range_dev(&self) -> std::ops::Range<u64> {
         self.offset..(self.offset + self.byte_length() as u64)
     }
-    pub const fn byte_range(&self) -> std::ops::Range<usize> {
+    const fn byte_range(&self) -> std::ops::Range<usize> {
         self.offset as _..self.offset as usize + self.byte_length()
     }
 }
@@ -177,7 +219,7 @@ impl DynamicUpdateBuffer {
         &'s mut self,
         g: &peridot::Graphics,
         dst_buffer: &peridot::Buffer,
-        stated_region: &StatedBufferRegion<T>,
+        stated_region: &StatedBufferRegionSingleElement<T>,
     ) -> DynamicUpdateBufferWriteRange<'s, T> {
         let place_offset = self.push_update_ext_copy::<T>(g);
 
@@ -209,10 +251,9 @@ impl DynamicUpdateBuffer {
         &'s mut self,
         g: &peridot::Graphics,
         dst_buffer: &peridot::Buffer,
-        stated_region: &StatedBufferRegion<T>,
-        array_size: usize,
+        stated_region: &StatedBufferSlicedRegion<T>,
     ) -> DynamicUpdateBufferWriteSliceRange<'s, T> {
-        let place_offset = self.push_update_dyn_array_ext_copy::<T>(g, array_size);
+        let place_offset = self.push_update_dyn_array_ext_copy::<T>(g, stated_region.slice_length);
 
         self.copy_regions.push((
             place_offset as _,
@@ -234,7 +275,7 @@ impl DynamicUpdateBuffer {
                 .memory()
                 .map(place_offset..self.top)
                 .expect("Failed to mapping memory"),
-            slice_length: array_size,
+            slice_length: stated_region.slice_length,
             _back_data: std::marker::PhantomData,
         }
     }
