@@ -5,23 +5,31 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
+[features]
+debug = ["bedrock/VK_EXT_debug_utils"]
+derive = ["peridot-derive"]
+mt = []
+
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 log = "*"
 libc = "*"
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements"] }
+rayon = "1.0"
+num_cpus = "1.0"
 num = "*"
+parking_lot = "0.12"
 
 peridot-archive = { path = "archive" }
 peridot-math = { path = "math" }
+peridot-derive = { path = "derive", optional = true }
 
-[target.'cfg(debug_assertions)'.dependencies.bedrock]
+[dependencies.bedrock]
 git = "https://github.com/Pctg-x8/bedrock"
 branch = "peridot"
-features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "VK_EXT_debug_report"]
+features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "Multithreaded"]
 
 [workspace]
-exclude = ["extras/", "cradle/", "examples/"]
+exclude = ["extras/", "cradle/", "examples/", "tools"]
 members = [
     "archive",
     "serialization-utils",
@@ -30,7 +38,5 @@ members = [
     "image",
     "vg",
     "derive",
-    "tools/shaderbuild",
-    "tools/archiver",
-    "tools/cli",
+    "transition"
 ]

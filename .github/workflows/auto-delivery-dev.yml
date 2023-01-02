@@ -4,13 +4,13 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
     - name: Fetching all branches
       run: "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
-    - name: Create PullRequest
+    - env:
+        GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+      name: Create PullRequest
       uses: "./.github/actions/create-dev-delivery-prs"
-      with:
-        token: "${{ secrets.GITHUB_TOKEN }}"
 name: "SubProject-dev Auto Deliveries"
 'on':
   push:

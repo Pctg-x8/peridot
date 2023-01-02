@@ -1,12 +1,9 @@
 //! Peridot Vector Graphics Dept. powered by Pathfinder 2(lyon)
 
-use log::*;
-
 mod font;
 pub use font::*;
 pub mod sdf_generator;
 pub use self::sdf_generator::SDFGenerator;
-pub mod text_rendering;
 
 use pathfinder_partitioner::{builder::Builder, mesh::Mesh, partitioner::Partitioner};
 // use lyon_path::PathEvent;
@@ -86,7 +83,6 @@ impl Context {
         let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or_default());
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
         for g in glyphs {
-            println!("Rendering Glyph: {:?}", g);
             let (adv, size) = (font.advance_h(g)?, font.bounds(g)?);
             let mut g0 = Partitioner::new();
             let tf = self.current_transform.post_translate(Vector2D::new(
@@ -101,7 +97,6 @@ impl Context {
             }
             left_offs += adv;
             max_height = max_height.max(size.size.height);
-            info!("Advance: {}", adv);
         }
         return Ok(self);
     }

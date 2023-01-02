@@ -1,116 +1,187 @@
-
-use libc::c_void;
-use winapi::Interface;
-use winapi::shared::minwindef::{ULONG};
-use winapi::shared::winerror::{S_OK, E_NOINTERFACE, HRESULT};
-use winapi::shared::guiddef::REFIID;
-use winapi::um::unknwnbase::{IUnknown, IUnknownVtbl};
-use winapi::um::d2d1::{
-    ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySinkVtbl, D2D1_FIGURE_BEGIN, D2D1_FIGURE_END,
-    D2D1_FILL_MODE, D2D1_PATH_SEGMENT,
-    D2D1_FIGURE_END_CLOSED
-};
-use std::ptr::null_mut;
-use lyon_path::PathEvent;
 use euclid::point2;
-use comdrive::d2;
 use log::*;
-
-#[repr(C)] pub struct ComBase<VTable: 'static> { vtbl: &'static VTable, refcount: ULONG }
-impl<VTable: 'static> ComBase<VTable>
-{
-    pub fn new(vt: &'static VTable) -> Self { ComBase { vtbl: vt, refcount: 1 } }
-
-    // Default Impls for IUnknown //
-    unsafe extern "system" fn add_ref(this: *mut IUnknown) -> ULONG
-    {
-        let this = &mut *(this as *mut Self);
-        this.refcount += 1;
-        return this.refcount;
-    }
-    unsafe extern "system" fn release(this: *mut IUnknown) -> ULONG
-    {
-        let thisref = &mut *(this as *mut Self);
-        thisref.refcount -= 1; let last_refcount = thisref.refcount;
-        if thisref.refcount == 0 { drop(Box::from_raw(this as *mut Self)); }
-        return last_refcount;
-    }
-}
-#[repr(C)] pub struct PathEventReceiver { base: ComBase<ID2D1SimplifiedGeometrySinkVtbl>, paths: Vec<PathEvent> }
-impl PathEventReceiver
-{
-    const VTABLE: &'static ID2D1SimplifiedGeometrySinkVtbl = &ID2D1SimplifiedGeometrySinkVtbl
-    {
-        SetFillMode: Self::set_fill_mode, SetSegmentFlags: Self::set_segment_flags,
-        BeginFigure: Self::begin_figure, EndFigure: Self::end_figure,
-        AddLines: Self::add_lines, AddBeziers: Self::add_beziers, Close: Self::close,
-        parent: IUnknownVtbl
-        {
-            QueryInterface: Self::query_interface,
-            AddRef: ComBase::<ID2D1SimplifiedGeometrySinkVtbl>::add_ref,
-            Release: ComBase::<ID2D1SimplifiedGeometrySinkVtbl>::release
-        }
-    };
-    pub fn new() -> *mut Self
-    {
-        Box::into_raw(Box::new(PathEventReceiver { base: ComBase::new(Self::VTABLE), paths: Vec::new() }))
-    }
-
-    unsafe extern "system" fn query_interface(this: *mut IUnknown, iid: REFIID, objret: *mut *mut c_void) -> HRESULT
-    {
-        *objret = null_mut();
-        if iid == &ID2D1SimplifiedGeometrySink::uuidof() ||
-            iid == &IUnknown::uuidof() { *objret = this as *mut _; S_OK }
-        else { E_NOINTERFACE }
-    }
-
-    pub fn drain_all_paths(&mut self) -> std::vec::Drain<PathEvent> { self.paths.drain(..) }
-}
+use lyon_path::PathEvent;
 use std::slice::from_raw_parts;
-/// SimplifiedGeometrySink
-impl PathEventReceiver
-{
-    unsafe extern "system" fn add_lines(this: *mut ID2D1SimplifiedGeometrySink, p: *const d2::Point2F, count: u32)
-    {
-        for p in from_raw_parts(p, count as _)
-        {
-            (*(this as *mut Self)).paths.push(PathEvent::LineTo(point2(p.x, -p.y)));
+use std::{cell::RefCell, ptr::null_mut};
+use windows::Win32::Graphics::{
+    Direct2D::Common::{
+        ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl, D2D1_FIGURE_END_CLOSED,
+        D2D_POINT_2F,
+    },
+    DirectWrite::{
+        IDWriteFactory, IDWriteFontFileLoader, IDWriteFontFileLoader_Impl, IDWriteFontFileStream,
+        IDWriteFontFileStream_Impl,
+    },
+};
+
+#[windows::core::implement(ID2D1SimplifiedGeometrySink)]
+pub struct PathEventReceiver {
+    paths: RefCell<Vec<PathEvent>>,
+}
+impl PathEventReceiver {
+    pub fn new() -> Self {
+        PathEventReceiver {
+            paths: RefCell::new(Vec::new()),
         }
     }
-    unsafe extern "system"
-    fn add_beziers(this: *mut ID2D1SimplifiedGeometrySink, p: *const d2::BezierSegment, count: u32)
-    {
-        for p in from_raw_parts(p, count as _)
-        {
-            let (p1, p2) = (point2(p.point1.x, -p.point1.y), point2(p.point2.x, -p.point2.y));
-            let p3 = point2(p.point3.x, -p.point3.y);
-            (*(this as *mut Self)).paths.push(PathEvent::CubicTo(p1, p2, p3));
-        }
-    }
-    unsafe extern "system"
-    fn begin_figure(this: *mut ID2D1SimplifiedGeometrySink, p: d2::Point2F, _begin: D2D1_FIGURE_BEGIN)
-    {
-        let p = point2(p.x, -p.y);
-        (*(this as *mut Self)).paths.push(PathEvent::MoveTo(p));
-    }
-    unsafe extern "system" fn end_figure(this: *mut ID2D1SimplifiedGeometrySink, end: D2D1_FIGURE_END)
-    {
-        if end == D2D1_FIGURE_END_CLOSED
-        {
-            (*(this as *mut Self)).paths.push(PathEvent::Close);
-        }
-    }
-    unsafe extern "system" fn close(_this: *mut ID2D1SimplifiedGeometrySink) -> HRESULT { S_OK }
-    unsafe extern "system" fn set_fill_mode(_this: *mut ID2D1SimplifiedGeometrySink, _mode: D2D1_FILL_MODE)
-    {
-        trace!("*UNIMPLEMENTED* SetFillMode with {}", _mode);
-    }
-    unsafe extern "system" fn set_segment_flags(_this: *mut ID2D1SimplifiedGeometrySink, _segment: D2D1_PATH_SEGMENT)
-    {
-        trace!("*UNIMPLEMENTED* SetSegmentFlags with {}", _segment);
+
+    pub fn drain_all_paths(&mut self) -> std::vec::Drain<PathEvent> {
+        self.paths.get_mut().drain(..)
     }
 }
-unsafe impl comdrive::AsRawHandle<ID2D1SimplifiedGeometrySink> for PathEventReceiver
-{
-    fn as_raw_handle(&self) -> *mut ID2D1SimplifiedGeometrySink { self as *const _ as _ }
+impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
+    fn AddLines(&self, p: *const D2D_POINT_2F, count: u32) {
+        for p in unsafe { from_raw_parts(p, count as _) } {
+            self.paths
+                .borrow_mut()
+                .push(PathEvent::LineTo(point2(p.x, -p.y)));
+        }
+    }
+
+    fn AddBeziers(
+        &self,
+        beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
+        bezierscount: u32,
+    ) {
+        for p in unsafe { from_raw_parts(beziers, bezierscount as _) } {
+            let (p1, p2) = (
+                point2(p.point1.x, -p.point1.y),
+                point2(p.point2.x, -p.point2.y),
+            );
+            let p3 = point2(p.point3.x, -p.point3.y);
+            self.paths.borrow_mut().push(PathEvent::CubicTo(p1, p2, p3));
+        }
+    }
+
+    fn BeginFigure(
+        &self,
+        startpoint: &D2D_POINT_2F,
+        _figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
+    ) {
+        let p = point2(startpoint.x, -startpoint.y);
+        self.paths.borrow_mut().push(PathEvent::MoveTo(p));
+    }
+
+    fn EndFigure(&self, figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END) {
+        if figureend == D2D1_FIGURE_END_CLOSED {
+            self.paths.borrow_mut().push(PathEvent::Close);
+        }
+    }
+
+    fn Close(&self) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn SetFillMode(&self, fillmode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE) {
+        trace!("*UNIMPLEMENTED* SetFillMode with {fillmode:?}");
+    }
+
+    fn SetSegmentFlags(
+        &self,
+        vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
+    ) {
+        trace!("*UNIMPLEMENTED* SetSegmentFlags with {vertexflags:?}");
+    }
+}
+impl From<&'_ PathEventReceiver> for &'_ ID2D1SimplifiedGeometrySink {
+    fn from(value: &'_ PathEventReceiver) -> Self {
+        unsafe { std::mem::transmute(value) }
+    }
+}
+
+pub struct ATFRegisterScope<'a>(&'a IDWriteFactory, AssetToFontConverter);
+impl<'a> ATFRegisterScope<'a> {
+    pub fn register(
+        factory: &'a IDWriteFactory,
+        atf: AssetToFontConverter,
+    ) -> windows::core::Result<Self> {
+        unsafe {
+            factory
+                .RegisterFontFileLoader(&atf)
+                .map(|_| Self(factory, atf))
+        }
+    }
+
+    pub fn object(&self) -> &AssetToFontConverter {
+        &self.1
+    }
+}
+impl Drop for ATFRegisterScope<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.0
+                .UnregisterFontFileLoader(&self.1)
+                .expect("Failed to unregister FontFileLoader")
+        };
+    }
+}
+
+#[windows::core::implement(IDWriteFontFileLoader)]
+pub struct AssetToFontConverter {
+    asset: RefCell<Option<super::TTFBlob>>,
+}
+impl AssetToFontConverter {
+    pub fn new(asset: super::TTFBlob) -> Self {
+        Self {
+            asset: RefCell::new(Some(asset)),
+        }
+    }
+}
+impl IDWriteFontFileLoader_Impl for AssetToFontConverter {
+    fn CreateStreamFromKey(
+        &self,
+        _fontfilereferencekey: *const core::ffi::c_void,
+        _fontfilereferencekeysize: u32,
+    ) -> windows::core::Result<windows::Win32::Graphics::DirectWrite::IDWriteFontFileStream> {
+        unsafe {
+            AssetStreamBridge::new(
+                self.asset
+                    .borrow_mut()
+                    .take()
+                    .expect("ATF create stream called twice?"),
+            )
+            .cast()
+        }
+    }
+}
+impl From<&'_ AssetToFontConverter> for &'_ IDWriteFontFileLoader {
+    fn from(value: &'_ AssetToFontConverter) -> Self {
+        unsafe { std::mem::transmute(value) }
+    }
+}
+
+#[windows::core::implement(IDWriteFontFileStream)]
+pub struct AssetStreamBridge {
+    asset: super::TTFBlob,
+}
+impl AssetStreamBridge {
+    fn new(asset: super::TTFBlob) -> Self {
+        Self { asset }
+    }
+}
+impl IDWriteFontFileStream_Impl for AssetStreamBridge {
+    fn GetFileSize(&self) -> windows::core::Result<u64> {
+        Ok(self.asset.0.len() as _)
+    }
+
+    fn GetLastWriteTime(&self) -> windows::core::Result<u64> {
+        Ok(0)
+    }
+
+    fn ReadFileFragment(
+        &self,
+        fragmentstart: *mut *mut core::ffi::c_void,
+        fileoffset: u64,
+        _fragmentsize: u64,
+        fragmentcontext: *mut *mut core::ffi::c_void,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            *fragmentcontext = null_mut();
+            *fragmentstart = self.asset.0.as_ptr().add(fileoffset as _) as *mut _;
+        }
+
+        Ok(())
+    }
+
+    fn ReleaseFileFragment(&self, _fragmentcontext: *mut core::ffi::c_void) {}
 }

@@ -7,12 +7,18 @@ edition = "2018"
 [features]
 UseExternalAssetPath = []
 IterationBuild = []
+debug = ["peridot/debug"]
+mt = ["peridot/mt"]
 
 [dependencies]
 peridot = { path = "../.." }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_xcb_surface"] }
 log = "0.4"
 env_logger = "0.5"
-xcb = "0.8"
+xcb = "1.1"
+pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 libc = "0.2"
 regex = "1.4"
+
+[dependencies.async-std]
+version = "1.0"

@@ -87,9 +87,9 @@ final class PeridotRenderableViewController : NSViewController {
         let eventTypes: NSEvent.EventTypeMask = [
             .keyDown, .keyUp, .flagsChanged,
             .mouseMoved,
-            .leftMouseDown, .leftMouseUp,
-            .rightMouseDown, .rightMouseUp,
-            .otherMouseDown, .otherMouseUp,
+            .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+            .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+            .otherMouseDown, .otherMouseUp, .otherMouseDragged,
             .scrollWheel, .magnify, .smartMagnify
         ]
         NSEvent.addLocalMonitorForEvents(matching: eventTypes) { event in
@@ -151,9 +151,12 @@ final class PeridotRenderableViewController : NSViewController {
                     self.enginePointer?.handleKeymodUp(code: KEYMOD_CAPSLOCK)
                 }
                 oldFlags = event.modifierFlags
-            case .mouseMoved:
+            case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
                 self.clientMousePoint = event.locationInWindow
-                NSLog("MouseMove event with \(event)")
+                self.enginePointer?.reportMouseMove(
+                    x: Float(event.locationInWindow.x),
+                    y: -Float(event.locationInWindow.y)
+                )
             case .leftMouseDown:
                 self.enginePointer?.handleMouseButtonDown(index: 0)
             case .leftMouseUp:

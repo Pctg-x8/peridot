@@ -3,16 +3,18 @@ jobs:
     name: Base Layer
     needs:
     - preconditions
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Initialize Cache
       uses: "actions/cache@v2"
@@ -25,22 +27,116 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-baselayer"
-  "check-cradle-macos":
-    name: "Cradle(macOS)"
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
+      with:
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        base_sha: "${{ github.event.pull_request.base.sha }}"
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-baselayer"
+        head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
+        pr_number: "${{ github.event.number }}"
+        pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
+        status: failure
+  "check-cradle-android":
+    name: "Cradle(Android)"
     needs:
     - preconditions
     - "check-tools"
     - "check-modules"
-    "runs-on": "macos-latest"
+    permissions:
+      "id-token": write
+    "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Install Rust Toolchain
+      uses: "actions-rs/toolchain@v1"
+      with:
+        target: "aarch64-linux-android"
+        toolchain: stable
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Setup Java
+      uses: "actions/setup-java@v3"
+      with:
+        distribution: adopt
+        "java-version": '17'
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Install cargo-ndk"
+      run: "cargo install cargo-ndk"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Build CLI
+      run: cargo build
+      "working-directory": tools/cli
+    - env:
+        NDK_PLATFORM_TARGET: '28'
+        PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: cargo check
+      run: "./tools/target/debug/peridot check examples/basic -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      shell: bash
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
+      with:
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        base_sha: "${{ github.event.pull_request.base.sha }}"
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-cradle-android"
+        head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
+        pr_number: "${{ github.event.number }}"
+        pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
+        status: failure
+  "check-cradle-linux":
+    name: "Cradle(Linux)"
+    needs:
+    - preconditions
+    - "check-tools"
+    - "check-modules"
+    permissions:
+      "id-token": write
+    "runs-on": "ubuntu-latest"
+    steps:
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v3"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
+      uses: "actions/checkout@v3"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Initialize Cache
       uses: "actions/cache@v2"
@@ -52,29 +148,88 @@ jobs:
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
+      "working-directory": tools/cli
+    - env:
+        PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+        PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: cargo check
+      run: "./tools/target/debug/peridot check examples/basic -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      shell: bash
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
+      with:
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
+      name: Notify as Failure
+      uses: "Pctg-x8/ci-notifications-post-invoker@master"
+      with:
+        base_sha: "${{ github.event.pull_request.base.sha }}"
+        begintime: "${{ needs.preconditions.outputs.begintime }}"
+        failure_step: "check-cradle-linux"
+        head_sha: "${{ github.event.pull_request.head.sha }}"
+        mode: diff
+        pr_number: "${{ github.event.number }}"
+        pr_title: "${{ github.event.pull_request.title }}"
+        report_name: PR Integrity Check
+        status: failure
+  "check-cradle-macos":
+    name: "Cradle(macOS)"
+    needs:
+    - preconditions
+    - "check-tools"
+    - "check-modules"
+    permissions:
+      "id-token": write
+    "runs-on": "macos-latest"
+    steps:
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: "Checking out (HEAD commit)"
+      uses: "actions/checkout@v3"
+      with:
+        ref: "${{ github.event.pull_request.head.sha }}"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Checking out
+      uses: "actions/checkout@v3"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Initialize Cache
+      uses: "actions/cache@v2"
+      with:
+        key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: Build CLI
+      run: cargo build
       "working-directory": tools/cli
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build archiver
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/archiver
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: install requirements
       run: brew install coreutils
     - env:
-        PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/target/release/peridot-archiver', github.workspace) }}"
+        PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
         PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VULKAN_SDK: /Users
       if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: cargo check
-      run: "target/release/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+      run: "./tools/target/debug/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
       shell: bash
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
+      with:
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -93,16 +248,18 @@ jobs:
     - preconditions
     - "check-tools"
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "windows-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Initialize Cache
       uses: "actions/cache@v2"
@@ -114,7 +271,7 @@ jobs:
           target
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Build CLI
-      run: "cargo build --release"
+      run: cargo build
       "working-directory": tools/cli
     - env:
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
@@ -123,7 +280,7 @@ jobs:
       name: cargo check
       run: |
         $ErrorActionPreference = "Continue"
-        pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
     - env:
         PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         VK_SDK_PATH: ''
@@ -131,12 +288,14 @@ jobs:
       name: "cargo check for transparent-back"
       run: |
             $ErrorActionPreference = "Continue"
-            pwsh -c 'target/release/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
+            pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
+      with:
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -154,16 +313,18 @@ jobs:
     needs:
     - preconditions
     - "check-modules"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Initialize Cache
       uses: "actions/cache@v2"
@@ -173,16 +334,18 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        TARGET_PATH: examples
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
       with:
-        path: examples
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -199,36 +362,40 @@ jobs:
     name: Code Formats
     needs:
     - preconditions
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      uses: "actions/checkout@v3"
+    - env:
+        RUN_SCRIPT: codeform_check
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Running Check: Line Width"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: codeform_check
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        RUN_SCRIPT: vulnerabilities_elliminator
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Running Check: Debugging Weaks"
       uses: "./.github/actions/codeform-checker"
-      with:
-        script: vulnerabilities_elliminator
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        RUN_SCRIPT: trailing_newline_checker
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Running Check: Trailing Newline for Source Code Files"
       uses: "./.github/actions/codeform-checker"
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
       with:
-        script: trailing_newline_checker
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -246,16 +413,18 @@ jobs:
     needs:
     - preconditions
     - "check-baselayer"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Initialize Cache
       uses: "actions/cache@v2"
@@ -265,16 +434,18 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        TARGET_PATH: '.'
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
       with:
-        path: '.'
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -295,12 +466,12 @@ jobs:
     steps:
     - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
     - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
       name: Setup Dhall
       run: |
@@ -310,7 +481,7 @@ jobs:
         while :; do
           POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR } }"
           API_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -X POST -d "$POSTDATA" https://api.github.com/graphql)
-          TARGET_FILE=$(echo $API_RESPONSE | jq -r '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-linux")).downloadUrl')
+          TARGET_FILE=$(echo $API_RESPONSE | jq -r '.data.repository.releases.nodes[0].releaseAssets.nodes[] | select(.name | startswith("dhall-yaml") and contains("-Linux")).downloadUrl')
           if [[ $TARGET_FILE != "" ]]; then break; fi
           HAS_NEXT_PAGE=$(echo $API_RESPONSE | jq ".data.repository.releases.nodes[0].releaseAssets.pageInfo.hasNextPage")
           if [[ "$HAS_NEXT_PAGE" == "true" ]]; then
@@ -329,11 +500,7 @@ jobs:
     - if: "${{ needs.preconditions.outputs.has_workflow_changes == 1 }}"
       name: "test-sync"
       run: "make -C ./.github/workflows test-sync"
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -351,16 +518,18 @@ jobs:
     needs:
     - preconditions
     - "check-baselayer"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Checking out
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Initialize Cache
       uses: "actions/cache@v2"
@@ -370,16 +539,18 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+    - env:
+        TARGET_PATH: tools
+      if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: Building as Checking
       uses: "./.github/actions/checkbuild-subdir"
+    - if: "failure()"
+      name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
       with:
-        path: tools
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      if: "failure()"
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - if: "failure()"
       name: Notify as Failure
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
@@ -442,19 +613,24 @@ jobs:
     - "check-sync-workflow"
     - "check-cradle-windows"
     - "check-cradle-macos"
+    - "check-cradle-linux"
+    - "check-cradle-android"
+    permissions:
+      "id-token": write
     "runs-on": "ubuntu-latest"
     steps:
     - name: "Checking out (HEAD commit)"
-      uses: "actions/checkout@v2"
+      uses: "actions/checkout@v3"
       with:
         ref: "${{ github.event.pull_request.head.sha }}"
     - name: Checking out
-      uses: "actions/checkout@v2"
-    - env:
-        AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-        AWS_DEFAULT_REGION: "ap-northeast-1"
-        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_ACCESS_SECRET }}"
-      name: Notify as Success
+      uses: "actions/checkout@v3"
+    - name: Configure for Slack Notification
+      uses: "aws-actions/configure-aws-credentials@v1"
+      with:
+        "aws-region": "ap-northeast-1"
+        "role-to-assume": "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    - name: Notify as Success
       uses: "Pctg-x8/ci-notifications-post-invoker@master"
       with:
         base_sha: "${{ github.event.pull_request.base.sha }}"
