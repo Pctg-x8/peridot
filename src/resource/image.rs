@@ -6,6 +6,9 @@ use bedrock as br;
 use crate::mthelper::DynamicMutabilityProvider;
 use crate::mthelper::{DynamicMut, SharedRef};
 
+pub type StdImageBackend = br::ImageObject<crate::DeviceObject>;
+pub type StdImage = crate::Image<StdImageBackend, br::DeviceMemoryObject<crate::DeviceObject>>;
+
 /// A refcounted image object bound with a memory object.
 #[derive(Clone)]
 pub struct Image<Backend: br::Image, DeviceMemory: br::DeviceMemory>(

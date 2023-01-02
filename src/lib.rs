@@ -27,6 +27,8 @@ mod debug;
 use self::debug::*;
 pub mod utils;
 pub use self::utils::*;
+pub mod atlas;
+pub use self::atlas::*;
 
 mod asset;
 pub use self::asset::*;

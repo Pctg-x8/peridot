@@ -5,6 +5,7 @@ target/
 android-build/
 **/*.pvp
 **/*.spv
+**/local/
 
 ## other artifacts
 peridot-sdk/

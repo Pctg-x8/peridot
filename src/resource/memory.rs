@@ -1,4 +1,5 @@
 //! DeviceMemory Helper
+#![allow(deprecated)]
 
 use bedrock as br;
 use br::{Device, PhysicalDevice};
@@ -8,6 +9,7 @@ use crate::{
     DeviceObject,
 };
 
+#[deprecated = "use BulkedResourceStorageAllocator and ResourceStorage for more efficient memory allocation"]
 pub struct MemoryBadget<'g, Buffer: br::Buffer, Image: br::Image> {
     g: &'g crate::Graphics,
     entries: Vec<(MemoryBadgetEntry<Buffer, Image>, u64)>,

@@ -8,12 +8,180 @@ mod buffer;
 pub use self::buffer::*;
 mod image;
 pub use self::image::*;
+use num::Integer;
 
 #[macro_export]
 macro_rules! align2 {
     ($v: expr, $a: expr) => {
         ($v + ($a - 1)) & !($a - 1)
     };
+}
+
+pub struct BulkedResourceStorageAllocator<Buffer: br::Buffer, Image: br::Image> {
+    buffers: Vec<(Buffer, u64)>,
+    images: Vec<(Image, u64)>,
+    buffers_top: u64,
+    images_top: u64,
+    images_align_requirement: u64,
+    memory_type_bitmask: u32,
+}
+impl<Buffer: br::Buffer + br::MemoryBound, Image: br::Image + br::MemoryBound>
+    BulkedResourceStorageAllocator<Buffer, Image>
+{
+    pub const fn new() -> Self {
+        Self {
+            buffers: Vec::new(),
+            images: Vec::new(),
+            buffers_top: 0,
+            images_top: 0,
+            images_align_requirement: 0,
+            memory_type_bitmask: std::u32::MAX,
+        }
+    }
+
+    pub fn add_buffer(&mut self, buffer: Buffer) -> usize {
+        let req = buffer.requirements();
+        let new_offset = align2!(self.buffers_top, req.alignment);
+        self.buffers.push((buffer, new_offset));
+        self.memory_type_bitmask &= req.memoryTypeBits;
+        self.buffers_top = new_offset + req.size;
+
+        self.buffers.len() - 1
+    }
+    pub fn add_image(&mut self, image: Image) -> usize {
+        let req = image.requirements();
+        let new_offset = align2!(self.images_top, req.alignment);
+        self.images.push((image, new_offset));
+        self.memory_type_bitmask &= req.memoryTypeBits;
+        self.images_top = new_offset + req.size;
+        self.images_align_requirement = self.images_align_requirement.lcm(&req.alignment);
+
+        self.images.len() - 1
+    }
+    pub fn add_images(&mut self, images: impl IntoIterator<Item = Image>) -> usize {
+        let iter = images.into_iter();
+        let (min, _) = iter.size_hint();
+        if self.images.capacity() < self.images.len() + min {
+            self.images.reserve(min);
+        }
+        let first_id = self.images.len();
+        for x in iter {
+            self.add_image(x);
+        }
+
+        first_id
+    }
+
+    pub fn alloc(
+        self,
+        g: &Graphics,
+    ) -> br::Result<
+        ResourceStorage<
+            crate::Buffer<Buffer, br::DeviceMemoryObject<crate::DeviceObject>>,
+            crate::Image<Image, br::DeviceMemoryObject<crate::DeviceObject>>,
+        >,
+    > {
+        let mt = g
+            .memory_type_manager
+            .device_local_index(self.memory_type_bitmask)
+            .expect("No device-local memory")
+            .index();
+        let images_base = align2!(self.buffers_top, self.images_align_requirement);
+        let total_size = images_base + self.images_top;
+        info!(
+            target: "peridot",
+            "Allocating Device Memory: {total_size} bytes in {mt}(?0x{:x})",
+            self.memory_type_bitmask
+        );
+        let mem = SharedRef::new(DynamicMut::new(
+            g.device.clone().allocate_memory(total_size as _, mt)?,
+        ));
+
+        Ok(ResourceStorage {
+            buffers: self
+                .buffers
+                .into_iter()
+                .map(|(b, o)| crate::Buffer::bound(b, &mem, o))
+                .collect::<Result<_, _>>()?,
+            images: self
+                .images
+                .into_iter()
+                .map(|(i, o)| crate::Image::bound(i, &mem, o + images_base))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+    pub fn alloc_upload(
+        self,
+        g: &Graphics,
+    ) -> br::Result<
+        ResourceStorage<
+            crate::Buffer<Buffer, br::DeviceMemoryObject<crate::DeviceObject>>,
+            crate::Image<Image, br::DeviceMemoryObject<crate::DeviceObject>>,
+        >,
+    > {
+        let mt = g
+            .memory_type_manager
+            .exact_host_visible_index(
+                self.memory_type_bitmask,
+                br::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .expect("No host-visible memory")
+            .index();
+        let images_base = align2!(self.buffers_top, self.images_align_requirement.max(1));
+        let total_size = images_base + self.images_top;
+        info!(
+            target: "peridot",
+            "Allocating Upload Memory: {} bytes in 0x{:x}(?0x{:x})",
+            total_size, mt, self.memory_type_bitmask
+        );
+        let mem = SharedRef::new(DynamicMut::new(
+            g.device.clone().allocate_memory(total_size as _, mt)?,
+        ));
+
+        Ok(ResourceStorage {
+            buffers: self
+                .buffers
+                .into_iter()
+                .map(|(b, o)| crate::Buffer::bound(b, &mem, o))
+                .collect::<Result<_, _>>()?,
+            images: self
+                .images
+                .into_iter()
+                .map(|(i, o)| crate::Image::bound(i, &mem, o + images_base))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+pub struct ResourceStorage<Buffer: br::Buffer, Image: br::Image> {
+    pub buffers: Vec<Buffer>,
+    pub images: Vec<Image>,
+}
+impl<Buffer: br::Buffer, Image: br::Image> ResourceStorage<Buffer, Image> {
+    pub fn get_buffer(&self, index: usize) -> Option<&Buffer> {
+        self.buffers.get(index)
+    }
+
+    pub fn get_image(&self, index: usize) -> Option<&Image> {
+        self.images.get(index)
+    }
+}
+
+pub struct AutocloseMappedMemoryRange<'m, Memory: br::DeviceMemory>(
+    Option<br::MappedMemoryRange<'m, Memory>>,
+);
+impl<'m, Memory: br::DeviceMemory> Deref for AutocloseMappedMemoryRange<'m, Memory> {
+    type Target = br::MappedMemoryRange<'m, Memory>;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref().unwrap_unchecked() }
+    }
+}
+impl<'m, Memory: br::DeviceMemory> Drop for AutocloseMappedMemoryRange<'m, Memory> {
+    fn drop(&mut self) {
+        unsafe {
+            self.0.take().unwrap_unchecked().end();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -478,11 +646,13 @@ impl DeviceWorkingTextureAllocator<'_> {
             .chain(images_cube)
             .chain(images3)
             .collect::<Result<_, _>>()?;
-        let mut mb = MemoryBadget::<br::BufferObject<DeviceObject>, _>::new(g);
-        for img in images {
-            mb.add(MemoryBadgetEntry::Image(img));
-        }
-        let mut bound_images = mb.alloc()?;
+        let mut storage_alloc =
+            BulkedResourceStorageAllocator::<br::BufferObject<crate::DeviceObject>, _>::new();
+        storage_alloc.add_images(images);
+        let ResourceStorage {
+            images: mut bound_images,
+            ..
+        } = storage_alloc.alloc(g)?;
 
         let mut cs_v3s = bound_images.split_off(self.planes.len());
         let v3s = cs_v3s.split_off(self.cube.len());
@@ -494,7 +664,6 @@ impl DeviceWorkingTextureAllocator<'_> {
                 .map(|(d, res)| {
                     use br::Image;
 
-                    let res = res.unwrap_image();
                     let view = res.create_view(
                         None,
                         None,
@@ -516,7 +685,6 @@ impl DeviceWorkingTextureAllocator<'_> {
                 .map(|(d, res)| {
                     use br::Image;
 
-                    let res = res.unwrap_image();
                     let view = res.create_view(
                         None,
                         Some(br::vk::VK_IMAGE_VIEW_TYPE_CUBE),
@@ -538,7 +706,6 @@ impl DeviceWorkingTextureAllocator<'_> {
                 .map(|(d, res)| {
                     use br::Image;
 
-                    let res = res.unwrap_image();
                     let view = res.create_view(
                         None,
                         None,

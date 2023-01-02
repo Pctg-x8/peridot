@@ -157,7 +157,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let mut bp = BufferPrealloc::new(&e.graphics());
         let vg_offs = ctx.prealloc(&mut bp);
-        let vg_offs2 = ctx.prealloc(&mut bp);
+        let vg_offs2 = ctx2.prealloc(&mut bp);
 
         let buffer = bp.build_transferred().expect("Buffer Allocation");
         let stg_buffer = bp.build_upload().expect("StgBuffer Allocation");
