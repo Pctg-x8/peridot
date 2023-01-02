@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use bedrock as br;
 
 pub struct RawVertexBuffer {
@@ -24,10 +26,22 @@ pub struct Mesh {
     pub index: Option<Indices>,
 }
 
+pub trait TextureSource {}
+
+pub enum ShaderResource {
+    UniformBuffer { content: Vec<u8>, alignment: usize },
+    StorageBuffer { content: Vec<u8>, alignment: usize },
+    Texture2D(Box<dyn TextureSource>),
+}
+
 pub trait Material<Device: br::Device> {
     fn vertex_shader(&self) -> &br::ShaderModuleObject<Device>;
     fn geometry_shader(&self) -> Option<&br::ShaderModuleObject<Device>>;
     fn fragment_shader(&self) -> Option<&br::ShaderModuleObject<Device>>;
+
+    fn vertex_resource_binds(&self) -> &BTreeMap<u64, ShaderResource>;
+    fn geometry_resource_binds(&self) -> &BTreeMap<u64, ShaderResource>;
+    fn fragment_resource_binds(&self) -> &BTreeMap<u64, ShaderResource>;
 }
 
 pub trait Renderable<Device: br::Device> {
@@ -138,5 +152,11 @@ impl RenderGroup {
         );
 
         buffer
+    }
+
+    fn build_descriptor_sets<'m>(
+        g: &peridot::Graphics,
+        materials: impl Iterator<Item = &'m dyn Material<peridot::DeviceObject>>,
+    ) {
     }
 }
