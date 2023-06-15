@@ -19,7 +19,11 @@ pub struct Buffer<Backend: br::Buffer, Memory: br::DeviceMemory>(
     SharedRef<DynamicMut<Memory>>,
     u64,
 );
-impl<Backend: br::Buffer + br::MemoryBound, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+impl<
+        Backend: br::Buffer + br::MemoryBound + br::VkHandleMut,
+        Memory: br::DeviceMemory + br::VkHandleMut,
+    > Buffer<Backend, Memory>
+{
     pub fn bound(
         mut b: Backend,
         mem: &SharedRef<DynamicMut<Memory>>,
@@ -27,12 +31,6 @@ impl<Backend: br::Buffer + br::MemoryBound, Memory: br::DeviceMemory> Buffer<Bac
     ) -> br::Result<Self> {
         b.bind(&*mem.borrow(), offset as _)
             .map(move |_| Self(b, mem.clone(), offset))
-    }
-
-    /// Reference to a memory object bound with this object.
-    #[inline]
-    pub const fn memory(&self) -> &SharedRef<DynamicMut<Memory>> {
-        &self.1
     }
 
     pub fn guard_map<R>(
@@ -47,6 +45,13 @@ impl<Backend: br::Buffer + br::MemoryBound, Memory: br::DeviceMemory> Buffer<Bac
         );
 
         Ok(f(&mapped_range))
+    }
+}
+impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+    /// Reference to a memory object bound with this object.
+    #[inline]
+    pub const fn memory(&self) -> &SharedRef<DynamicMut<Memory>> {
+        &self.1
     }
 }
 impl<Backend: br::Buffer, Memory: br::DeviceMemory> std::ops::Deref for Buffer<Backend, Memory> {

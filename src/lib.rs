@@ -6,7 +6,8 @@ use bedrock as br;
 #[cfg(feature = "mt")]
 use br::Status;
 use br::{
-    CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch,
+    CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Queue,
+    SubmissionBatch,
 };
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
@@ -285,7 +286,7 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn submit_buffered_commands(
         &mut self,
         batches: &[impl br::SubmissionBatch],
-        fence: &mut impl br::Fence,
+        fence: &mut (impl br::Fence + br::VkHandleMut),
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
@@ -753,15 +754,15 @@ impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, D
 pub type InstanceObject = SharedRef<br::InstanceObject>;
 pub type DeviceObject = SharedRef<br::DeviceObject<InstanceObject>>;
 /// Queue object with family index
-pub struct Queue<Device: br::Device> {
-    q: parking_lot::Mutex<br::Queue<Device>>,
+pub struct QueueSet<Device: br::Device> {
+    q: parking_lot::Mutex<br::QueueObject<Device>>,
     family: u32,
 }
 /// Graphics manager
 pub struct Graphics {
     pub(self) adapter: br::PhysicalDeviceObject<InstanceObject>,
     device: DeviceObject,
-    graphics_queue: Queue<DeviceObject>,
+    graphics_queue: QueueSet<DeviceObject>,
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
     #[cfg(feature = "mt")]
@@ -839,7 +840,7 @@ impl Graphics {
 
         Ok(Self {
             cp_onetime_submit: device.clone().new_command_pool(gqf_index, true, false)?,
-            graphics_queue: Queue {
+            graphics_queue: QueueSet {
                 q: parking_lot::Mutex::new(device.clone().queue(gqf_index, 0)),
                 family: gqf_index,
             },
@@ -872,14 +873,14 @@ impl Graphics {
     pub fn submit_buffered_commands(
         &mut self,
         batches: &[impl br::SubmissionBatch],
-        fence: &mut impl br::Fence,
+        fence: &mut (impl br::Fence + br::VkHandleMut),
     ) -> br::Result<()> {
         self.graphics_queue.q.get_mut().submit(batches, Some(fence))
     }
     pub fn submit_buffered_commands_raw(
         &mut self,
         batches: &[br::vk::VkSubmitInfo],
-        fence: &mut impl br::Fence,
+        fence: &mut (impl br::Fence + br::VkHandleMut),
     ) -> br::Result<()> {
         self.graphics_queue
             .q
@@ -974,12 +975,13 @@ impl GameTimer {
     }
 }
 
-struct LocalCommandBundle<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p>(
-    Vec<CommandBuffer>,
-    &'p mut CommandPool,
-);
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p> Deref
-    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+struct LocalCommandBundle<
+    'p,
+    CommandBuffer: br::CommandBuffer,
+    CommandPool: br::CommandPool + br::VkHandleMut + 'p,
+>(Vec<CommandBuffer>, &'p mut CommandPool);
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p>
+    Deref for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     type Target = [CommandBuffer];
 
@@ -987,14 +989,14 @@ impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p> De
         &self.0
     }
 }
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p> DerefMut
-    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p>
+    DerefMut for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     fn deref_mut(&mut self) -> &mut [CommandBuffer] {
         &mut self.0
     }
 }
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + 'p> Drop
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p> Drop
     for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     fn drop(&mut self) {
@@ -1119,7 +1121,7 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self.1
     }
 
-    pub fn bind(&self, rec: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>) {
+    pub fn bind(&self, rec: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>) {
         rec.bind_graphics_pipeline_pair(&self.0, &self.1);
     }
 }

@@ -268,7 +268,10 @@ impl TransferBatch {
 }
 /// Sinking Commands into CommandBuffers
 impl TransferBatch {
-    pub fn sink_transfer_commands(&self, r: &mut br::CmdRecord<impl br::CommandBuffer>) {
+    pub fn sink_transfer_commands(
+        &self,
+        r: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut>,
+    ) {
         let src_barriers = self.barrier_range_src.iter().map(|(b, r)| {
             br::BufferMemoryBarrier::new(
                 &b.0,
@@ -335,7 +338,10 @@ impl TransferBatch {
         }
     }
 
-    pub fn sink_graphics_ready_commands(&self, r: &mut br::CmdRecord<impl br::CommandBuffer>) {
+    pub fn sink_graphics_ready_commands(
+        &self,
+        r: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut>,
+    ) {
         for (
             &stg,
             &ReadyResourceBarriers {

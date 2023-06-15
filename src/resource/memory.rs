@@ -107,6 +107,9 @@ where
     pub fn alloc(
         self,
     ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
+    where
+        Buffer: br::VkHandleMut,
+        Image: br::VkHandleMut,
     {
         let mt = self
             .g
@@ -139,6 +142,9 @@ where
     pub fn alloc_upload(
         self,
     ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
+    where
+        Buffer: br::VkHandleMut,
+        Image: br::VkHandleMut,
     {
         let mt = self
             .g
@@ -175,10 +181,11 @@ where
 }
 
 #[repr(transparent)]
-pub struct AutocloseMappedMemoryRange<'m, DeviceMemory: br::DeviceMemory + ?Sized + 'm>(
-    pub(super) Option<br::MappedMemoryRange<'m, DeviceMemory>>,
-);
-impl<'m, DeviceMemory: br::DeviceMemory + ?Sized + 'm> std::ops::Deref
+pub struct AutocloseMappedMemoryRange<
+    'm,
+    DeviceMemory: br::DeviceMemory + br::VkHandleMut + ?Sized + 'm,
+>(pub(super) Option<br::MappedMemoryRange<'m, DeviceMemory>>);
+impl<'m, DeviceMemory: br::DeviceMemory + br::VkHandleMut + ?Sized + 'm> std::ops::Deref
     for AutocloseMappedMemoryRange<'m, DeviceMemory>
 {
     type Target = br::MappedMemoryRange<'m, DeviceMemory>;
@@ -187,7 +194,7 @@ impl<'m, DeviceMemory: br::DeviceMemory + ?Sized + 'm> std::ops::Deref
         self.0.as_ref().expect("object has been dropped")
     }
 }
-impl<'m, DeviceMemory: br::DeviceMemory + ?Sized + 'm> Drop
+impl<'m, DeviceMemory: br::DeviceMemory + br::VkHandleMut + ?Sized + 'm> Drop
     for AutocloseMappedMemoryRange<'m, DeviceMemory>
 {
     fn drop(&mut self) {

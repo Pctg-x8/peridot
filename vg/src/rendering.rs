@@ -123,7 +123,7 @@ impl ModelData for Context {
 
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
         let transforms_stg = unsafe { mem.slice_mut(offsets.transforms, self.meshes().len()) };
@@ -208,22 +208,28 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        cmd: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
         buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     ) {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
         extras.interior_pipeline.bind(cmd);
-        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 0, &renderscale);
-        cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 3, &0u32);
-        cmd.bind_graphics_descriptor_sets(0, &[extras.transform_buffer_descriptor_set.into()], &[]);
+        let _ = cmd
+            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &renderscale)
+            .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 3, &0u32)
+            .bind_graphics_descriptor_sets(
+                0,
+                &[extras.transform_buffer_descriptor_set.into()],
+                &[],
+            );
 
-        cmd.bind_vertex_buffers(0, &[(buffer, self.buffer_offsets.interior_positions)]);
-        cmd.bind_index_buffer(
-            buffer,
-            self.buffer_offsets.interior_indices,
-            br::IndexType::U32,
-        );
+        let _ = cmd
+            .bind_vertex_buffers(0, &[(buffer, self.buffer_offsets.interior_positions)])
+            .bind_index_buffer(
+                buffer,
+                self.buffer_offsets.interior_indices,
+                br::IndexType::U32,
+            );
         for (n, ir) in self
             .render_info
             .interior_index_range_per_mesh
@@ -235,22 +241,24 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                 continue;
             }
 
-            cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32));
-            cmd.draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
+            let _ = cmd
+                .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
+                .draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
         }
         extras.curve_pipeline.bind(cmd);
-        cmd.bind_vertex_buffers(
-            0,
-            &[
-                (buffer, self.buffer_offsets.curve_positions),
-                (buffer, self.buffer_offsets.curve_helper_coords),
-            ],
-        );
-        cmd.bind_index_buffer(
-            buffer,
-            self.buffer_offsets.curve_indices,
-            br::IndexType::U32,
-        );
+        let _ = cmd
+            .bind_vertex_buffers(
+                0,
+                &[
+                    (buffer, self.buffer_offsets.curve_positions),
+                    (buffer, self.buffer_offsets.curve_helper_coords),
+                ],
+            )
+            .bind_index_buffer(
+                buffer,
+                self.buffer_offsets.curve_indices,
+                br::IndexType::U32,
+            );
         for (n, ir) in self
             .render_info
             .curve_index_range_per_mesh
@@ -261,8 +269,9 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                 continue;
             }
 
-            cmd.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32));
-            cmd.draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
+            let _ = cmd
+                .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
+                .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
         }
     }
 }
