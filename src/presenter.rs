@@ -247,7 +247,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             })
             .collect::<Vec<_>>();
 
-        recorder.pipeline_barrier(
+        let _ = recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             false,

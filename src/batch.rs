@@ -302,7 +302,7 @@ impl TransferBatch {
         });
         let barriers_i: Vec<_> = src_barriers_i.chain(dst_barriers_i).collect();
 
-        r.pipeline_barrier(
+        let _ = r.pipeline_barrier(
             br::PipelineStageFlags::HOST,
             br::PipelineStageFlags::TRANSFER,
             false,
@@ -311,12 +311,12 @@ impl TransferBatch {
             &barriers_i,
         );
         for (&(ref s, ref d), ref rs) in &self.copy_buffers {
-            r.copy_buffer(&s.0, &d.0, &rs);
+            let _ = r.copy_buffer(&s.0, &d.0, &rs);
         }
         for (d, (dex, s, so)) in &self.init_images {
             trace!("Copying Image: extent={dex:?}");
 
-            r.copy_buffer_to_image(
+            let _ = r.copy_buffer_to_image(
                 s,
                 &d.0,
                 br::ImageLayout::TransferDestOpt,
@@ -373,7 +373,7 @@ impl TransferBatch {
                     )
                 })
                 .collect();
-            r.pipeline_barrier(
+            let _ = r.pipeline_barrier(
                 br::PipelineStageFlags::TRANSFER,
                 stg,
                 false,
