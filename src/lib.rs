@@ -211,8 +211,11 @@ impl<PL: NativeLinker> Engine<PL> {
         )
         .expect("Failed to initialize Graphics Base Driver");
         let presenter = nativelink.new_presenter(&g);
-        g.submit_commands(|r| presenter.emit_initialize_backbuffer_commands(r))
-            .expect("Initializing Backbuffers");
+        g.submit_commands(|mut r| {
+            presenter.emit_initialize_backbuffer_commands(&mut r);
+            r
+        })
+        .expect("Initializing Backbuffers");
 
         Engine {
             ip: InputProcess::new().into(),
@@ -279,7 +282,9 @@ impl<NL: NativeLinker> Engine<NL> {
 
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>),
+        generator: impl FnOnce(
+            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
+        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -297,7 +302,10 @@ impl<NL: NativeLinker> Engine<NL> {
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>) + 's,
+        generator: impl FnOnce(
+                br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
+            ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>
+            + 's,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
     }
@@ -385,7 +393,10 @@ impl<PL: NativeLinker> Engine<PL> {
             let pres = &self.presenter;
 
             self.g
-                .submit_commands(|r| pres.emit_initialize_backbuffer_commands(r))
+                .submit_commands(|mut r| {
+                    pres.emit_initialize_backbuffer_commands(&mut r);
+                    r
+                })
                 .expect("Initializing Backbuffers");
         }
         userlib.on_resize(self, new_size);
@@ -857,13 +868,15 @@ impl Graphics {
     /// Submits any commands as transient commands.
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>),
+        generator: impl FnOnce(
+            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
+        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
     ) -> br::Result<()> {
         let mut cb = LocalCommandBundle(
             self.cp_onetime_submit.alloc(1, true)?,
             &mut self.cp_onetime_submit,
         );
-        generator(unsafe { &mut cb[0].begin_once()? });
+        generator(unsafe { cb[0].begin_once()? }).end()?;
         self.graphics_queue.q.get_mut().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             None::<&mut br::FenceObject<DeviceObject>>,
@@ -894,7 +907,9 @@ impl Graphics {
     #[cfg(feature = "mt")]
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(&mut br::CmdRecord<br::CommandBufferObject<DeviceObject>>),
+        generator: impl FnOnce(
+            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
+        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         let mut fence = std::sync::Arc::new(self.device.clone().new_fence(false)?);
 
@@ -904,7 +919,7 @@ impl Graphics {
             false,
         )?;
         let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
-        generator(&mut unsafe { cb[0].begin_once()? });
+        generator(unsafe { cb[0].begin_once()? }).end()?;
         self.graphics_queue.q.lock().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
