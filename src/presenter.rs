@@ -26,7 +26,7 @@ pub trait PlatformPresenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut crate::Graphics,
-        last_render_fence: &mut impl br::Fence,
+        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,

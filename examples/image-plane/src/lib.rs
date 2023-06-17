@@ -135,7 +135,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let mut mb = peridot::MemoryBadget::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Buffer(
-            bp.build().expect("Failed to create buffer"),
+            bp.build_transferred().expect("Failed to create buffer"),
         ));
         mb.add(peridot::MemoryBadgetEntry::Image(
             br::ImageDesc::new(
@@ -252,8 +252,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                         br::ImageLayout::TransferDestOpt,
                         &[br::vk::VkBufferImageCopy {
                             bufferOffset: staging_image_offset,
-                            bufferRowLength: image_data.0.stride as _,
-                            bufferImageHeight: image_data.0.size.1,
+                            bufferRowLength: (image_data.0.stride
+                                / (image_data.0.format.bpp() >> 3))
+                                as _,
+                            bufferImageHeight: 0,
                             imageSubresource: br::vk::VkImageSubresourceLayers {
                                 aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
                                 mipLevel: 0,
@@ -333,7 +335,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             let _ = rec
                 .pipeline_barrier(
                     // TODO: use excluding bits for less stalling
-                    br::PipelineStageFlags::VERTEX_SHADER,
+                    br::PipelineStageFlags::VERTEX_SHADER.host(),
                     br::PipelineStageFlags::TRANSFER,
                     true,
                     &[],
@@ -351,7 +353,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 )
                 .pipeline_barrier(
                     br::PipelineStageFlags::TRANSFER,
-                    br::PipelineStageFlags::VERTEX_SHADER,
+                    br::PipelineStageFlags::VERTEX_SHADER.host(),
                     true,
                     &[],
                     &reverse_buffer_barriers(enter_buffer_barriers),
@@ -478,6 +480,36 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .expect("Failed to set pipeline name");
         let gp = LayoutedPipeline::combine(gp, pl);
 
+        async_std::task::block_on(preconfigure_task).expect("Failed to preconfigure resources");
+
+        let image_view = image
+            .create_view(
+                None,
+                None,
+                &br::ComponentMapping::default(),
+                &br::ImageSubresourceRange::color(0..1, 0..1),
+            )
+            .expect("Failed to create main image view");
+        let mut dsub = DescriptorSetUpdateBatch::new();
+        dsub.write(
+            descriptor_main[0],
+            0,
+            br::DescriptorUpdateInfo::UniformBuffer(vec![(
+                buffer.native_ptr(),
+                range_from_length(mutable_data_offset as _, std::mem::size_of::<Uniform>()),
+            )]),
+        );
+        dsub.write(
+            descriptor_main[0],
+            1,
+            br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
+                None,
+                image_view.native_ptr(),
+                br::ImageLayout::ShaderReadOnlyOpt,
+            )]),
+        );
+        dsub.submit(e.graphics().device());
+
         let mut render_cb = CommandBundle::new(
             e.graphics(),
             CBSubmissionType::Graphics,
@@ -518,36 +550,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .end_render_pass();
             cr.end().expect("Failed to record render commands");
         }
-
-        async_std::task::block_on(preconfigure_task).expect("Failed to preconfigure resources");
-
-        let image_view = image
-            .create_view(
-                None,
-                None,
-                &br::ComponentMapping::default(),
-                &br::ImageSubresourceRange::color(0..1, 0..1),
-            )
-            .expect("Failed to create main image view");
-        let mut dsub = DescriptorSetUpdateBatch::new();
-        dsub.write(
-            descriptor_main[0],
-            0,
-            br::DescriptorUpdateInfo::UniformBuffer(vec![(
-                buffer.native_ptr(),
-                range_from_length(mutable_data_offset as _, std::mem::size_of::<Uniform>()),
-            )]),
-        );
-        dsub.write(
-            descriptor_main[0],
-            1,
-            br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                None,
-                image_view.native_ptr(),
-                br::ImageLayout::ShaderReadOnlyOpt,
-            )]),
-        );
-        dsub.submit(e.graphics().device());
 
         bgm.write().expect("Starting BGM").play();
 
