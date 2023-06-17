@@ -240,54 +240,54 @@ impl IndexedPrimitive<VertexUV2D> {
 
 #[repr(C, align(16))]
 #[derive(Debug, Clone, PartialEq)]
-pub struct VertexUV3D {
-    pub pos: math::Vector3F32,
-    pub uv: math::Vector2F32,
+pub struct VertexUV {
+    pub pos: math::Vector4F32,
+    pub uv: math::Vector4F32,
 }
-impl Primitive<VertexUV3D> {
-    /// 0.0 to size squared 2d plane with normalized uv, rendered as triangle strip
+impl Primitive<VertexUV> {
+    /// 0.0 to size squared plane with normalized uv, rendered as triangle strip
     pub fn uv_plane_xy(size: f32, z: f32) -> Self {
         Self {
             vertices: vec![
-                VertexUV3D {
-                    pos: math::Vector3(0.0, 0.0, z),
-                    uv: math::Vector2(0.0, 0.0),
+                VertexUV {
+                    pos: math::Vector4(0.0, 0.0, z, 1.0),
+                    uv: math::Vector4(0.0, 0.0, 0.0, 1.0),
                 },
-                VertexUV3D {
-                    pos: math::Vector3(0.0, size, z),
-                    uv: math::Vector2(0.0, 1.0),
+                VertexUV {
+                    pos: math::Vector4(0.0, size, z, 1.0),
+                    uv: math::Vector4(0.0, 1.0, 0.0, 1.0),
                 },
-                VertexUV3D {
-                    pos: math::Vector3(size, 0.0, z),
-                    uv: math::Vector2(1.0, 0.0),
+                VertexUV {
+                    pos: math::Vector4(size, 0.0, z, 1.0),
+                    uv: math::Vector4(1.0, 0.0, 0.0, 1.0),
                 },
-                VertexUV3D {
-                    pos: math::Vector3(size, size, z),
-                    uv: math::Vector2(1.0, 1.0),
+                VertexUV {
+                    pos: math::Vector4(size, size, z, 1.0),
+                    uv: math::Vector4(1.0, 1.0, 0.0, 1.0),
                 },
             ],
         }
     }
 
-    /// -size to size squared 2d plane with normalized uv, rendered as triangle strip
+    /// -size to size squared plane with normalized uv, rendered as triangle strip
     pub fn uv_plane_centric_xy(size: f32, z: f32) -> Self {
         Self {
             vertices: vec![
-                VertexUV3D {
-                    pos: math::Vector3(-size, -size, z),
-                    uv: math::Vector2(0.0, 0.0),
+                VertexUV {
+                    pos: math::Vector4(-size, size, z, 1.0),
+                    uv: math::Vector4(0.0, 0.0, 0.0, 1.0),
                 },
-                VertexUV3D {
-                    pos: math::Vector3(-size, size, z),
-                    uv: math::Vector2(0.0, 1.0),
+                VertexUV {
+                    pos: math::Vector4(-size, -size, z, 1.0),
+                    uv: math::Vector4(0.0, 1.0, 0.0, 1.0),
                 },
-                VertexUV3D {
-                    pos: math::Vector3(size, -size, z),
-                    uv: math::Vector2(1.0, 0.0),
+                VertexUV {
+                    pos: math::Vector4(size, size, z, 1.0),
+                    uv: math::Vector4(1.0, 0.0, 0.0, 1.0),
                 },
-                VertexUV3D {
-                    pos: math::Vector3(size, size, z),
-                    uv: math::Vector2(1.0, 1.0),
+                VertexUV {
+                    pos: math::Vector4(size, -size, z, 1.0),
+                    uv: math::Vector4(1.0, 1.0, 0.0, 1.0),
                 },
             ],
         }

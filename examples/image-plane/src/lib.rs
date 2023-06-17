@@ -111,14 +111,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 fov: 75.0f32.to_radians(),
             }),
             position: Vector3(-4.0, -1.0, -3.0),
-            rotation: Quaternion::new(45.0f32.to_radians(), Vector3::UP),
+            rotation: Quaternion::ONE,
             // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
             depth_range: 1.0..10.0,
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
 
         let mut bp = BufferPrealloc::new(e.graphics());
-        let vertices_offset = bp.add(BufferContent::vertices::<peridot::VertexUV3D>(
+        let vertices_offset = bp.add(BufferContent::vertices::<peridot::VertexUV>(
             plane_mesh.vertices.len(),
         ));
 
@@ -283,7 +283,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                                 &buffer,
                                 range_from_length(
                                     0,
-                                    (size_of::<peridot::VertexUV3D>() * plane_mesh.vertices.len())
+                                    (size_of::<peridot::VertexUV>() * plane_mesh.vertices.len())
                                         as _,
                                 ),
                                 br::AccessFlags::TRANSFER.write,
@@ -421,9 +421,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 false,
             )
             .expect("Create DescriptorPool");
-        let descriptor_main = descriptor_pool
-            .alloc(&[&descriptor_layout])
-            .expect("Create main Descriptor");
 
         let shaderfile = e
             .load("builtin.shaders.unlit_image")
@@ -490,6 +487,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 &br::ImageSubresourceRange::color(0..1, 0..1),
             )
             .expect("Failed to create main image view");
+        let descriptor_main = descriptor_pool
+            .alloc(&[&descriptor_layout])
+            .expect("Create main Descriptor");
         let mut dsub = DescriptorSetUpdateBatch::new();
         dsub.write(
             descriptor_main[0],
@@ -641,13 +641,6 @@ impl<PL: peridot::NativeLinker> Game<PL> {
             cr.end().expect("Failed to record render commands");
         }
     }
-}
-
-#[derive(Clone)]
-#[repr(C, align(4))]
-struct UVVert {
-    pos: Vector3F32,
-    uv: Vector2F32,
 }
 
 #[repr(C)]
