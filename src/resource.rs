@@ -212,7 +212,7 @@ impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
     /// Push transferring operations into a batcher.
     pub fn copy_from_stage_batches(
         &self,
-        tb: &mut TransferBatch,
+        tb: &mut TransferBatch<Device>,
         stgbuf: &SharedRef<
             Buffer<
                 impl br::Buffer<ConcreteDevice = Device> + 'static,
