@@ -3,12 +3,10 @@ use bedrock::traits::*;
 use br::{resources::Image, SubmissionBatch};
 use br::{CommandBuffer, DescriptorPool, Device, ImageChild};
 use log::*;
-use peridot::align2;
 use peridot::math::{
-    Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector2F32, Vector3,
-    Vector3F32,
+    Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3, Vector3F32,
 };
-use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedRef};
+use peridot::mthelper::{DynamicMutabilityProvider, SharedRef};
 use peridot::{
     audio::StreamingPlayableWav, BufferContent, BufferPrealloc, CBSubmissionType, CommandBundle,
     DescriptorSetUpdateBatch, LayoutedPipeline, SubpassDependencyTemplates,
