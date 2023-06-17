@@ -147,7 +147,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .create(e.graphics().device().clone())
             .expect("Failed to create main image object"),
         ));
-        let Ok::<[_; 2], _>([peridot::MemoryBoundResource::Buffer(buffer), peridot::MemoryBoundResource::Image(image)]) = mb.alloc().expect("Failed to allocate memory").try_into() else {
+        let Ok::<[_; 2], _>([
+            peridot::MemoryBoundResource::Buffer(buffer),
+            peridot::MemoryBoundResource::Image(image)
+        ]) = mb.alloc().expect("Failed to allocate memory").try_into() else {
             unreachable!("invalid return combination");
         };
         let mut mb =
@@ -157,7 +160,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .build_upload()
                 .expect("Failed to create mutable data buffer"),
         ));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(mut mut_buffer)]) = mb.alloc_upload().expect("Failed to allocate mutable data memory").try_into() else {
+        let Ok::<[_; 1], _>([
+            peridot::MemoryBoundResource::Buffer(mut mut_buffer)
+        ]) = mb.alloc_upload().expect("Failed to allocate mutable data memory").try_into() else {
             unreachable!("invalid return combination");
         };
 
@@ -170,7 +175,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     .build_upload()
                     .expect("Failed to create staging buffer"),
             ));
-            let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(b)]) = mb.alloc_upload().expect("Failed to allocate staging memory").try_into() else {
+            let Ok::<[_; 1], _>([
+                peridot::MemoryBoundResource::Buffer(b)
+            ]) = mb.alloc_upload().expect("Failed to allocate staging memory").try_into() else {
                 unreachable!("invalid return combination")
             };
 
