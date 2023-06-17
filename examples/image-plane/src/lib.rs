@@ -1,7 +1,7 @@
 use bedrock as br;
 use bedrock::traits::*;
 use br::{resources::Image, SubmissionBatch};
-use br::{CommandBuffer, DescriptorPool, Device, ImageChild, VulkanStructure};
+use br::{CommandBuffer, DescriptorPool, Device, ImageChild};
 use log::*;
 use peridot::align2;
 use peridot::math::{
@@ -11,8 +11,7 @@ use peridot::math::{
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedRef};
 use peridot::{
     audio::StreamingPlayableWav, BufferContent, BufferPrealloc, CBSubmissionType, CommandBundle,
-    DescriptorSetUpdateBatch, FixedBufferInitializer, FixedMemory, LayoutedPipeline,
-    SubpassDependencyTemplates, TextureInitializationGroup, TransferBatch,
+    DescriptorSetUpdateBatch, LayoutedPipeline, SubpassDependencyTemplates,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::convert::TryInto;
@@ -22,61 +21,10 @@ use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-pub struct IPFixedBufferInitializer {
-    vertices_offset: u64,
-}
-impl FixedBufferInitializer for IPFixedBufferInitializer {
-    fn stage_data(
-        &mut self,
-        m: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
-    ) {
-        unsafe {
-            m.slice_mut(self.vertices_offset as _, 4)
-                .clone_from_slice(&[
-                    UVVert {
-                        pos: Vector3(-1.0, 1.0, 0.0),
-                        uv: Vector2(0.0, 0.0),
-                    },
-                    UVVert {
-                        pos: Vector3(1.0, 1.0, 0.0),
-                        uv: Vector2(1.0, 0.0),
-                    },
-                    UVVert {
-                        pos: Vector3(-1.0, -1.0, 0.0),
-                        uv: Vector2(0.0, 1.0),
-                    },
-                    UVVert {
-                        pos: Vector3(1.0, -1.0, 0.0),
-                        uv: Vector2(1.0, 1.0),
-                    },
-                ]);
-        }
-    }
-
-    fn buffer_graphics_ready<Device: br::Device + 'static>(
-        &self,
-        tfb: &mut TransferBatch,
-        buffer: &SharedRef<
-            peridot::Buffer<
-                impl br::Buffer<ConcreteDevice = Device> + 'static,
-                impl br::DeviceMemory<ConcreteDevice = Device> + 'static,
-            >,
-        >,
-        buffer_range: Range<u64>,
-    ) {
-        tfb.add_buffer_graphics_ready(
-            br::PipelineStageFlags::VERTEX_INPUT.vertex_shader(),
-            buffer.clone(),
-            buffer_range.start as _..buffer_range.end as _,
-            br::AccessFlags::UNIFORM_READ | br::AccessFlags::VERTEX_ATTRIBUTE_READ,
-        );
-    }
-}
-
-fn range_from_length<N: std::ops::Add<N, Output = N> + Copy>(
-    start: N,
-    length: N,
-) -> std::ops::Range<N> {
+fn range_from_length<N>(start: N, length: N) -> Range<N>
+where
+    N: std::ops::Add<N, Output = N> + Copy,
+{
     start..start + length
 }
 
@@ -247,116 +195,118 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let preconfigure_task = e
             .submit_commands_async(|mut r| {
-                let _ = r.pipeline_barrier(
-                    br::PipelineStageFlags::ALL_COMMANDS,
-                    br::PipelineStageFlags::TRANSFER,
-                    true,
-                    &[],
-                    &[
-                        br::BufferMemoryBarrier::new(
-                            &buffer,
-                            0..bp.total_size(),
-                            br::AccessFlags::MEMORY.read,
-                            br::AccessFlags::TRANSFER.write,
-                        ),
-                        br::BufferMemoryBarrier::new(
-                            &mut_buffer,
-                            range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                            br::AccessFlags::HOST.write,
-                            br::AccessFlags::TRANSFER.read,
-                        ),
-                        br::BufferMemoryBarrier::new(
-                            &buffer_staging,
-                            0..bp_stg.total_size(),
-                            br::AccessFlags::HOST.write,
-                            br::AccessFlags::TRANSFER.read,
-                        ),
-                    ],
-                    &[br::ImageMemoryBarrier::new(
-                        &image,
-                        br::ImageSubresourceRange::color(0..1, 0..1),
-                        br::ImageLayout::Preinitialized,
-                        br::ImageLayout::TransferDestOpt,
-                    )],
-                )
-                .copy_buffer(
-                    &buffer_staging,
-                    &buffer,
-                    &[br::vk::VkBufferCopy {
-                        srcOffset: 0,
-                        dstOffset: 0,
-                        size: copy_buffer_data_length,
-                    }],
-                )
-                .copy_buffer(
-                    &mut_buffer,
-                    &buffer,
-                    &[br::vk::VkBufferCopy {
-                        srcOffset: mut_uniform_offset,
-                        dstOffset: mutable_data_offset,
-                        size: size_of::<Uniform>() as _,
-                    }],
-                )
-                .copy_buffer_to_image(
-                    &buffer_staging,
-                    &image,
-                    br::ImageLayout::TransferDestOpt,
-                    &[br::vk::VkBufferImageCopy {
-                        bufferOffset: staging_image_offset,
-                        bufferRowLength: image_data.0.stride as _,
-                        bufferImageHeight: image_data.0.size.1,
-                        imageSubresource: br::vk::VkImageSubresourceLayers {
-                            aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
-                            mipLevel: 0,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                        imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-                        imageExtent: br::vk::VkExtent3D {
-                            width: image_data.0.size.0,
-                            height: image_data.0.size.1,
-                            depth: 1,
-                        },
-                    }],
-                )
-                .pipeline_barrier(
-                    br::PipelineStageFlags::TRANSFER,
-                    br::PipelineStageFlags::VERTEX_SHADER
-                        .fragment_shader()
-                        .host()
-                        .vertex_input(),
-                    true,
-                    &[],
-                    &[
-                        br::BufferMemoryBarrier::new(
-                            &buffer,
-                            range_from_length(
-                                0,
-                                (size_of::<peridot::VertexUV3D>() * plane_mesh.vertices.len()) as _,
+                let _ = r
+                    .pipeline_barrier(
+                        br::PipelineStageFlags::ALL_COMMANDS,
+                        br::PipelineStageFlags::TRANSFER,
+                        true,
+                        &[],
+                        &[
+                            br::BufferMemoryBarrier::new(
+                                &buffer,
+                                0..bp.total_size(),
+                                br::AccessFlags::MEMORY.read,
+                                br::AccessFlags::TRANSFER.write,
                             ),
-                            br::AccessFlags::TRANSFER.write,
-                            br::AccessFlags::VERTEX_ATTRIBUTE_READ,
-                        ),
-                        br::BufferMemoryBarrier::new(
-                            &buffer,
-                            range_from_length(mutable_data_offset, size_of::<Uniform>() as _),
-                            br::AccessFlags::TRANSFER.write,
-                            br::AccessFlags::UNIFORM_READ,
-                        ),
-                        br::BufferMemoryBarrier::new(
-                            &mut_buffer,
-                            range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                            br::AccessFlags::TRANSFER.read,
-                            br::AccessFlags::HOST.write,
-                        ),
-                    ],
-                    &[br::ImageMemoryBarrier::new(
+                            br::BufferMemoryBarrier::new(
+                                &mut_buffer,
+                                range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
+                                br::AccessFlags::HOST.write,
+                                br::AccessFlags::TRANSFER.read,
+                            ),
+                            br::BufferMemoryBarrier::new(
+                                &buffer_staging,
+                                0..bp_stg.total_size(),
+                                br::AccessFlags::HOST.write,
+                                br::AccessFlags::TRANSFER.read,
+                            ),
+                        ],
+                        &[br::ImageMemoryBarrier::new(
+                            &image,
+                            br::ImageSubresourceRange::color(0..1, 0..1),
+                            br::ImageLayout::Preinitialized,
+                            br::ImageLayout::TransferDestOpt,
+                        )],
+                    )
+                    .copy_buffer(
+                        &buffer_staging,
+                        &buffer,
+                        &[br::vk::VkBufferCopy {
+                            srcOffset: 0,
+                            dstOffset: 0,
+                            size: copy_buffer_data_length,
+                        }],
+                    )
+                    .copy_buffer(
+                        &mut_buffer,
+                        &buffer,
+                        &[br::vk::VkBufferCopy {
+                            srcOffset: mut_uniform_offset,
+                            dstOffset: mutable_data_offset,
+                            size: size_of::<Uniform>() as _,
+                        }],
+                    )
+                    .copy_buffer_to_image(
+                        &buffer_staging,
                         &image,
-                        br::ImageSubresourceRange::color(0..1, 0..1),
                         br::ImageLayout::TransferDestOpt,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )],
-                );
+                        &[br::vk::VkBufferImageCopy {
+                            bufferOffset: staging_image_offset,
+                            bufferRowLength: image_data.0.stride as _,
+                            bufferImageHeight: image_data.0.size.1,
+                            imageSubresource: br::vk::VkImageSubresourceLayers {
+                                aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
+                                mipLevel: 0,
+                                baseArrayLayer: 0,
+                                layerCount: 1,
+                            },
+                            imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
+                            imageExtent: br::vk::VkExtent3D {
+                                width: image_data.0.size.0,
+                                height: image_data.0.size.1,
+                                depth: 1,
+                            },
+                        }],
+                    )
+                    .pipeline_barrier(
+                        br::PipelineStageFlags::TRANSFER,
+                        br::PipelineStageFlags::VERTEX_SHADER
+                            .fragment_shader()
+                            .host()
+                            .vertex_input(),
+                        true,
+                        &[],
+                        &[
+                            br::BufferMemoryBarrier::new(
+                                &buffer,
+                                range_from_length(
+                                    0,
+                                    (size_of::<peridot::VertexUV3D>() * plane_mesh.vertices.len())
+                                        as _,
+                                ),
+                                br::AccessFlags::TRANSFER.write,
+                                br::AccessFlags::VERTEX_ATTRIBUTE_READ,
+                            ),
+                            br::BufferMemoryBarrier::new(
+                                &buffer,
+                                range_from_length(mutable_data_offset, size_of::<Uniform>() as _),
+                                br::AccessFlags::TRANSFER.write,
+                                br::AccessFlags::UNIFORM_READ,
+                            ),
+                            br::BufferMemoryBarrier::new(
+                                &mut_buffer,
+                                range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
+                                br::AccessFlags::TRANSFER.read,
+                                br::AccessFlags::HOST.write,
+                            ),
+                        ],
+                        &[br::ImageMemoryBarrier::new(
+                            &image,
+                            br::ImageSubresourceRange::color(0..1, 0..1),
+                            br::ImageLayout::TransferDestOpt,
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )],
+                    );
                 r
             })
             .expect("Failed to submit preconfigure commands");
@@ -380,32 +330,33 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 ),
             ];
 
-            let _ = rec.pipeline_barrier(
-                // TODO: use excluding bits for less stalling
-                br::PipelineStageFlags::VERTEX_SHADER,
-                br::PipelineStageFlags::TRANSFER,
-                true,
-                &[],
-                enter_buffer_barriers,
-                &[],
-            )
-            .copy_buffer(
-                &mut_buffer,
-                &buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: mut_uniform_offset,
-                    dstOffset: mutable_data_offset,
-                    size: size_of::<Uniform>() as _,
-                }],
-            )
-            .pipeline_barrier(
-                br::PipelineStageFlags::TRANSFER,
-                br::PipelineStageFlags::VERTEX_SHADER,
-                true,
-                &[],
-                &reverse_buffer_barriers(enter_buffer_barriers),
-                &[],
-            );
+            let _ = rec
+                .pipeline_barrier(
+                    // TODO: use excluding bits for less stalling
+                    br::PipelineStageFlags::VERTEX_SHADER,
+                    br::PipelineStageFlags::TRANSFER,
+                    true,
+                    &[],
+                    enter_buffer_barriers,
+                    &[],
+                )
+                .copy_buffer(
+                    &mut_buffer,
+                    &buffer,
+                    &[br::vk::VkBufferCopy {
+                        srcOffset: mut_uniform_offset,
+                        dstOffset: mutable_data_offset,
+                        size: size_of::<Uniform>() as _,
+                    }],
+                )
+                .pipeline_barrier(
+                    br::PipelineStageFlags::TRANSFER,
+                    br::PipelineStageFlags::VERTEX_SHADER,
+                    true,
+                    &[],
+                    &reverse_buffer_barriers(enter_buffer_barriers),
+                    &[],
+                );
             rec.end().expect("Failed to record update commands");
         }
 
