@@ -514,12 +514,12 @@ pub struct TwoPassStencilSDFRendererBuffers<'b> {
 impl TwoPassStencilSDFRenderer {
     pub fn populate_commands(
         &self,
-        rec: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        rec: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
         framebuffer: &impl br::Framebuffer,
         buffers: &TwoPassStencilSDFRendererBuffers,
     ) {
         // Stencil Pass
-        rec.begin_render_pass(
+        let _ = rec.begin_render_pass(
             &self.render_pass,
             framebuffer,
             self.render_area(),
@@ -527,26 +527,29 @@ impl TwoPassStencilSDFRenderer {
             true,
         );
         self.triangle_fans_stencil_pipeline.bind(rec);
-        rec.bind_vertex_buffers(
-            0,
-            &[(&buffers.buffer, buffers.fill_triangle_points_offset as _)],
-        )
-        .bind_index_buffer(
-            buffers.buffer,
-            buffers.fill_triangle_indices_offset as _,
-            br::IndexType::U16,
-        );
+        let _ = rec
+            .bind_vertex_buffers(
+                0,
+                &[(&buffers.buffer, buffers.fill_triangle_points_offset as _)],
+            )
+            .bind_index_buffer(
+                buffers.buffer,
+                buffers.fill_triangle_indices_offset as _,
+                br::IndexType::U16,
+            );
         let mut vo = 0;
         for &(vertices, indices) in buffers.fill_triangle_groups.iter() {
-            rec.draw_indexed(indices, 1, 0, vo as i32, 0);
+            let _ = rec.draw_indexed(indices, 1, 0, vo as i32, 0);
             vo += vertices;
         }
-        rec.bind_graphics_pipeline(self.curve_triangles_stencil_pipeline.pipeline())
+        let _ = rec
+            .bind_graphics_pipeline(self.curve_triangles_stencil_pipeline.pipeline())
             .bind_vertex_buffers(0, &[(&buffers.buffer, buffers.curve_triangles_offset as _)])
             .draw(buffers.curve_triangles_count, 1, 0, 0);
 
         // Outline Distance and Invert Pass
-        rec.next_subpass(true)
+        let _ = rec
+            .next_subpass(true)
             .bind_graphics_pipeline(self.outline_distance_pipeline.pipeline())
             .bind_vertex_buffers(0, &[(&buffers.buffer, buffers.outline_rects_offset as _)])
             .draw(buffers.outline_rects_count * 6, 1, 0, 0)
@@ -733,7 +736,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 }
             })
             .expect("Failed to set init data");
-        let mut tfb = peridot::TransferBatch::new();
+        let mut tfb = peridot::TransferBatch::<peridot::DeviceObject>::new();
         tfb.add_mirroring_buffer(
             SharedRef::new(buffer_init),
             buffer.clone(),
@@ -747,10 +750,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             br::AccessFlags::VERTEX_ATTRIBUTE_READ,
         );
 
-        e.submit_commands(|r| {
-            tfb.sink_transfer_commands(r);
-            tfb.sink_graphics_ready_commands(r);
-            r.pipeline_barrier(
+        e.submit_commands(|mut r| {
+            tfb.sink_transfer_commands(&mut r);
+            tfb.sink_graphics_ready_commands(&mut r);
+            let _ = r.pipeline_barrier(
                 br::PipelineStageFlags::BOTTOM_OF_PIPE,
                 br::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                 true,
@@ -763,6 +766,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                     br::ImageLayout::DepthStencilReadOnlyOpt,
                 )],
             );
+
+            r
         })
         .expect("Failed to initialize resources");
 
@@ -821,7 +826,9 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         for (cx, fb) in fb.iter().enumerate() {
             let mut rec = unsafe { cmd[cx].begin().expect("Failed to begin recording commands") };
             sdf_renderer.populate_commands(&mut rec, fb, &buffers);
-            rec.end_render_pass();
+            let _ = rec.end_render_pass();
+
+            rec.end().expect("Failed to record commands");
         }
 
         Game {
@@ -1015,7 +1022,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 }
             })
             .expect("Failed to set init data");
-        let mut tfb = peridot::TransferBatch::new();
+        let mut tfb = peridot::TransferBatch::<peridot::DeviceObject>::new();
         tfb.add_mirroring_buffer(
             SharedRef::new(buffer_init),
             self.buffer.clone(),
@@ -1029,10 +1036,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             br::AccessFlags::VERTEX_ATTRIBUTE_READ,
         );
 
-        e.submit_commands(|r| {
-            tfb.sink_transfer_commands(r);
-            tfb.sink_graphics_ready_commands(r);
-            r.pipeline_barrier(
+        e.submit_commands(|mut r| {
+            tfb.sink_transfer_commands(&mut r);
+            tfb.sink_graphics_ready_commands(&mut r);
+            let _ = r.pipeline_barrier(
                 br::PipelineStageFlags::BOTTOM_OF_PIPE,
                 br::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                 true,
@@ -1045,6 +1052,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                     br::ImageLayout::DepthStencilReadOnlyOpt,
                 )],
             );
+
+            r
         })
         .expect("Failed to initialize resources");
 
@@ -1083,7 +1092,9 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         for (cx, fb) in self.fb.iter().enumerate() {
             let mut rec = unsafe { cmd[cx].begin().expect("Failed to begin recording commands") };
             self.sdf_renderer.populate_commands(&mut rec, fb, &buffers);
-            rec.end_render_pass();
+            let _ = rec.end_render_pass();
+
+            rec.end().expect("Failed to record commands");
         }
     }
 }
