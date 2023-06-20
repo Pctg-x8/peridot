@@ -206,7 +206,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let transfer_total_size = bp.total_size();
         e.submit_commands(|mut rec| {
-            let mut tfb = TransferBatch::new();
+            let mut tfb = TransferBatch::<peridot::DeviceObject>::new();
             tfb.add_mirroring_buffer(
                 SharedRef::new(stg_buffer),
                 buffer.clone(),
@@ -238,7 +238,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             e.backbuffer_format(),
             e.requesting_backbuffer_layout().0,
         )
-        .create(e.graphics())
+        .create(e.graphics().device().clone())
         .expect("RenderPass Creation");
         let framebuffers = (0..e.backbuffer_count())
             .map(|bb_index| {
@@ -385,7 +385,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .multisample_state(Some(br::MultisampleState::new()));
         let gp = LayoutedPipeline::combine(
             gpb.create(
-                e.graphics(),
+                e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
             .expect("Create GraphicsPipeline"),
@@ -405,7 +405,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         );
         let gp2 = LayoutedPipeline::combine(
             gpb.create(
-                e.graphics(),
+                e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
             .expect("Creating GraphicsPipeline2"),
@@ -414,7 +414,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         gpb.vertex_processing(curve_vertex_processing);
         let gp_curve = LayoutedPipeline::combine(
             gpb.create(
-                e.graphics(),
+                e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
             .expect("Create GraphicsPipeline of CurveRender"),
@@ -434,7 +434,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         );
         let gp2_curve = LayoutedPipeline::combine(
             gpb.create(
-                e.graphics(),
+                e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
             .expect("Creating GraphicsPipeline2 for CurveRender"),
