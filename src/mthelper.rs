@@ -96,3 +96,9 @@ use std::ops::{Deref, DerefMut};
 pub use std::sync::{Arc as SharedRef, Weak as SharedWeakRef};
 #[cfg(not(feature = "mt"))]
 pub use std::{cell::RefCell as DynamicMut, rc::Rc as SharedRef, rc::Weak as SharedWeakRef};
+
+pub type SharedMutableRef<T> = SharedRef<DynamicMut<T>>;
+#[inline]
+pub fn make_shared_mutable_ref<T>(value: T) -> SharedMutableRef<T> {
+    SharedRef::new(DynamicMut::new(value))
+}

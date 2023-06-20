@@ -90,7 +90,7 @@ impl peridot::PlatformPresenter for Presenter {
 
     fn emit_initialize_backbuffer_commands(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
     ) {
         self.sc.emit_initialize_backbuffer_commands(recorder)
     }
@@ -103,7 +103,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::Fence,
+        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -525,7 +525,7 @@ impl peridot::PlatformPresenter for Presenter {
 
     fn emit_initialize_backbuffer_commands(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
     ) {
         let barriers = self
             .backbuffers
@@ -561,7 +561,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::Fence,
+        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
         _backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,

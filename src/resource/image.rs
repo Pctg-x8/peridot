@@ -13,8 +13,10 @@ pub struct Image<Backend: br::Image, DeviceMemory: br::DeviceMemory>(
     SharedRef<DynamicMut<DeviceMemory>>,
     u64,
 );
-impl<Backend: br::Image + br::MemoryBound, DeviceMemory: br::DeviceMemory>
-    Image<Backend, DeviceMemory>
+impl<
+        Backend: br::Image + br::MemoryBound + br::VkHandleMut,
+        DeviceMemory: br::DeviceMemory + br::VkHandleMut,
+    > Image<Backend, DeviceMemory>
 {
     pub fn bound(
         mut r: Backend,
@@ -25,14 +27,15 @@ impl<Backend: br::Image + br::MemoryBound, DeviceMemory: br::DeviceMemory>
             .map(move |_| Self(r.into(), mem.clone(), offset))
     }
 
+    pub fn format(&self) -> super::PixelFormat {
+        unsafe { std::mem::transmute(self.0.format()) }
+    }
+}
+impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> Image<Backend, DeviceMemory> {
     /// Reference to a memory object bound with this object.
     #[inline]
     pub const fn memory(&self) -> &SharedRef<DynamicMut<DeviceMemory>> {
         &self.1
-    }
-
-    pub fn format(&self) -> super::PixelFormat {
-        unsafe { std::mem::transmute(self.0.format()) }
     }
 }
 impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> std::ops::Deref

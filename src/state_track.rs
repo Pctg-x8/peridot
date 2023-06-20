@@ -13,7 +13,7 @@ impl<Device: br::Device> StateFence<br::FenceObject<Device>> {
         d.new_fence(false).map(Self::Unsignaled)
     }
 }
-impl<Fence: br::Fence> StateFence<Fence> {
+impl<Fence: br::Fence + br::VkHandleMut> StateFence<Fence> {
     #[allow(dead_code)]
     /// Wrap a unsignaled fence
     pub const unsafe fn wrap_unsignaled(f: Fence) -> Self {

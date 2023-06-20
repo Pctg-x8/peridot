@@ -205,8 +205,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Creating Transform BufferView 2");
 
         let transfer_total_size = bp.total_size();
-        e.submit_commands(|rec| {
-            let mut tfb = TransferBatch::new();
+        e.submit_commands(|mut rec| {
+            let mut tfb = TransferBatch::<peridot::DeviceObject>::new();
             tfb.add_mirroring_buffer(
                 SharedRef::new(stg_buffer),
                 buffer.clone(),
@@ -221,8 +221,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     | br::AccessFlags::VERTEX_ATTRIBUTE_READ
                     | br::AccessFlags::INDEX_READ,
             );
-            tfb.sink_transfer_commands(rec);
-            tfb.sink_graphics_ready_commands(rec);
+            tfb.sink_transfer_commands(&mut rec);
+            tfb.sink_graphics_ready_commands(&mut rec);
+
+            rec
         })
         .expect("ImmResource Initialization");
 

@@ -164,7 +164,7 @@ impl<Device: br::Device> TextureInitializationGroup<Device> {
 }
 impl TexturePreallocatedGroup<br::ImageObject<DeviceObject>> {
     pub fn alloc_and_instantiate<
-        Buffer: br::Buffer<ConcreteDevice = DeviceObject> + br::MemoryBound,
+        Buffer: br::Buffer<ConcreteDevice = DeviceObject> + br::MemoryBound + br::VkHandleMut,
     >(
         self,
         mut badget: MemoryBadget<Buffer, br::ImageObject<DeviceObject>>,
@@ -193,7 +193,10 @@ impl TexturePreallocatedGroup<br::ImageObject<DeviceObject>> {
 }
 impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
     /// Copy texture pixels into a staging buffer.
-    pub fn stage_data(&self, mr: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>) {
+    pub fn stage_data(
+        &self,
+        mr: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
+    ) {
         trace!("Staging Texture Data...");
         for &(ref pd, offs) in &self.0 {
             let s = unsafe {
@@ -209,7 +212,7 @@ impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
     /// Push transferring operations into a batcher.
     pub fn copy_from_stage_batches(
         &self,
-        tb: &mut TransferBatch,
+        tb: &mut TransferBatch<Device>,
         stgbuf: &SharedRef<
             Buffer<
                 impl br::Buffer<ConcreteDevice = Device> + 'static,
@@ -601,10 +604,23 @@ impl<Image: br::Image> DeviceWorkingTextureRef<Image> for DeviceWorkingTexture3D
     }
 }
 
+pub struct BufferWithLength<Object> {
+    pub object: Object,
+    pub length: u64,
+}
+impl<Object> BufferWithLength<Object> {
+    pub const fn full_range(&self) -> std::ops::Range<u64> {
+        0..self.length
+    }
+}
+
 /// Describing the type that can be used as initializer of `FixedBuffer`s
 pub trait FixedBufferInitializer {
     /// Setup memory data in staging buffer
-    fn stage_data(&mut self, m: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>);
+    fn stage_data(
+        &mut self,
+        m: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
+    );
     fn buffer_graphics_ready<Device: br::Device + 'static>(
         &self,
         tfb: &mut TransferBatch,
@@ -619,10 +635,10 @@ pub trait FixedBufferInitializer {
 }
 /// The Fix-sized buffers and textures manager
 pub struct FixedMemory<Device: br::Device, Buffer: br::Buffer> {
-    /// Device accessible buffer object
-    pub buffer: (SharedRef<Buffer>, u64),
-    /// Host buffer staging per-frame mutable data
-    pub mut_buffer: (SharedRef<DynamicMut<Buffer>>, u64),
+    /// Device accessible buffer object: (buffer object, byte length)
+    pub buffer: BufferWithLength<SharedRef<Buffer>>,
+    /// Host buffer staging per-frame mutable data: (buffer object, byte length)
+    pub mut_buffer: BufferWithLength<SharedRef<DynamicMut<Buffer>>>,
     /// The placement offset of mut_buffer data in buffer
     pub mut_buffer_placement: u64,
     /// Textures
@@ -686,11 +702,14 @@ impl
         initializer.buffer_graphics_ready(tfb, &buffer, 0..imm_buffer_size);
 
         Ok(FixedMemory {
-            buffer: (buffer, imm_buffer_size),
-            mut_buffer: (
-                SharedRef::new(DynamicMut::new(mut_buffer)),
-                prealloc_mut.total_size(),
-            ),
+            buffer: BufferWithLength {
+                object: buffer,
+                length: imm_buffer_size,
+            },
+            mut_buffer: BufferWithLength {
+                object: SharedRef::new(DynamicMut::new(mut_buffer)),
+                length: prealloc_mut.total_size(),
+            },
             mut_buffer_placement,
             textures: textures.into_textures(),
         })

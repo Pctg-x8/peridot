@@ -11,7 +11,7 @@ pub trait ModelData {
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
         offsets: Self::PreallocOffsetType,
     ) -> Self::RendererParams;
 }
@@ -21,7 +21,7 @@ pub trait DefaultRenderCommands<'e, Device: br::Device> {
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        cmd: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
         buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     );
@@ -40,7 +40,7 @@ impl<VT: Clone> ModelData for Primitive<VT> {
     }
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
         vo: u64,
     ) {
         unsafe {
@@ -66,7 +66,7 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
     }
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
         (vo, io): (u64, u64),
     ) {
         unsafe {
@@ -199,6 +199,30 @@ impl Primitive<VertexUV2D> {
             ],
         }
     }
+
+    /// Primitive covers entire of the viewport area
+    pub fn fill_rect() -> Self {
+        Self {
+            vertices: vec![
+                VertexUV2D {
+                    pos: math::Vector2(-1.0, 1.0),
+                    uv: math::Vector2(0.0, 0.0),
+                },
+                VertexUV2D {
+                    pos: math::Vector2(1.0, 1.0),
+                    uv: math::Vector2(1.0, 0.0),
+                },
+                VertexUV2D {
+                    pos: math::Vector2(-1.0, -1.0),
+                    uv: math::Vector2(0.0, 1.0),
+                },
+                VertexUV2D {
+                    pos: math::Vector2(1.0, -1.0),
+                    uv: math::Vector2(1.0, 1.0),
+                },
+            ],
+        }
+    }
 }
 impl IndexedPrimitive<VertexUV2D> {
     /// 0.0 to size squared 2d plane with normalized uv,
@@ -213,6 +237,63 @@ impl IndexedPrimitive<VertexUV2D> {
         Primitive::uv_plane_centric(size).with_indices(vec![0, 1, 2, 1, 2, 3])
     }
 }
+
+#[repr(C, align(16))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct VertexUV {
+    pub pos: math::Vector4F32,
+    pub uv: math::Vector4F32,
+}
+impl Primitive<VertexUV> {
+    /// 0.0 to size squared plane with normalized uv, rendered as triangle strip
+    pub fn uv_plane_xy(size: f32, z: f32) -> Self {
+        Self {
+            vertices: vec![
+                VertexUV {
+                    pos: math::Vector4(0.0, 0.0, z, 1.0),
+                    uv: math::Vector4(0.0, 0.0, 0.0, 1.0),
+                },
+                VertexUV {
+                    pos: math::Vector4(0.0, size, z, 1.0),
+                    uv: math::Vector4(0.0, 1.0, 0.0, 1.0),
+                },
+                VertexUV {
+                    pos: math::Vector4(size, 0.0, z, 1.0),
+                    uv: math::Vector4(1.0, 0.0, 0.0, 1.0),
+                },
+                VertexUV {
+                    pos: math::Vector4(size, size, z, 1.0),
+                    uv: math::Vector4(1.0, 1.0, 0.0, 1.0),
+                },
+            ],
+        }
+    }
+
+    /// -size to size squared plane with normalized uv, rendered as triangle strip
+    pub fn uv_plane_centric_xy(size: f32, z: f32) -> Self {
+        Self {
+            vertices: vec![
+                VertexUV {
+                    pos: math::Vector4(-size, size, z, 1.0),
+                    uv: math::Vector4(0.0, 0.0, 0.0, 1.0),
+                },
+                VertexUV {
+                    pos: math::Vector4(-size, -size, z, 1.0),
+                    uv: math::Vector4(0.0, 1.0, 0.0, 1.0),
+                },
+                VertexUV {
+                    pos: math::Vector4(size, size, z, 1.0),
+                    uv: math::Vector4(1.0, 0.0, 0.0, 1.0),
+                },
+                VertexUV {
+                    pos: math::Vector4(size, -size, z, 1.0),
+                    uv: math::Vector4(1.0, 1.0, 0.0, 1.0),
+                },
+            ],
+        }
+    }
+}
+
 #[repr(C, align(16))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColoredVertex {
