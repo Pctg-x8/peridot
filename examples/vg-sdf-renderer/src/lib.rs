@@ -9,7 +9,7 @@ use peridot_vg::FlatPathBuilder;
 #[derive(peridot_derive::SpecConstantStorage)]
 #[repr(C)]
 pub struct FillFragmentShaderParameters {
-    enable_color_output: bool,
+    enable_color_output: br::vk::VkBool32,
 }
 
 pub struct TwoPassStencilSDFRenderer {
@@ -48,7 +48,7 @@ impl TwoPassStencilSDFRenderer {
     const STENCIL_MATCH: br::vk::VkStencilOpState = br::vk::VkStencilOpState {
         failOp: br::vk::VK_STENCIL_OP_KEEP,
         depthFailOp: br::vk::VK_STENCIL_OP_KEEP,
-        passOp: br::vk::VK_STENCIL_OP_ZERO,
+        passOp: br::vk::VK_STENCIL_OP_KEEP,
         compareOp: br::vk::VK_COMPARE_OP_EQUAL,
         compareMask: 0x01,
         writeMask: 0x01,
@@ -143,7 +143,7 @@ impl TwoPassStencilSDFRenderer {
             },
         ];
         let fill_fsh_color_output = FillFragmentShaderParameters {
-            enable_color_output: true,
+            enable_color_output: true as _,
         };
 
         let scissors =
@@ -338,7 +338,7 @@ impl TwoPassStencilSDFRenderer {
             },
         ];
         let fill_fsh_color_output = FillFragmentShaderParameters {
-            enable_color_output: true,
+            enable_color_output: true as _,
         };
 
         let scissors = [br::vk::VkRect2D {
