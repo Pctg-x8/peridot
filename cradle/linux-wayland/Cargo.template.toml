@@ -1,0 +1,11 @@
+[package]
+name = "linux-wayland"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+wayland-client = "0.30.2"
+peridot = { path = "../" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_wayland_surface"] }
