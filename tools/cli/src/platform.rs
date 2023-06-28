@@ -1,5 +1,6 @@
 mod android;
 mod linux;
+mod linux_wayland;
 mod mac;
 mod windows;
 
@@ -14,6 +15,7 @@ arg_enum! {
         Windows,
         Mac,
         Linux,
+        LinuxWayland,
         Android
     }
 }
@@ -51,6 +53,7 @@ impl Platform {
             Self::Windows => "windows",
             Self::Mac => "mac",
             Self::Linux => "linux",
+            Self::LinuxWayland => "linux-wayland",
             Self::Android => "android",
         }
     }
@@ -60,6 +63,7 @@ impl Platform {
             Self::Windows => "windows",
             Self::Mac => "mac",
             Self::Linux => "linux",
+            Self::LinuxWayland => "linux-wayland",
             Self::Android => "android",
         }
     }
@@ -74,6 +78,7 @@ impl Platform {
             Self::Windows => self::windows::build(options, project_config, build_mode),
             Self::Mac => self::mac::build(options, project_config, build_mode),
             Self::Linux => self::linux::build(options, project_config, build_mode),
+            Self::LinuxWayland => self::linux_wayland::build(options, project_config, build_mode),
             Self::Android => self::android::build(options, build_mode),
         }
     }
