@@ -55,7 +55,7 @@ pub struct InputNativeLink<PosProvider: PointerPositionProvider> {
 }
 impl<PosProvider: PointerPositionProvider> InputNativeLink<PosProvider> {
     pub fn new(ws: PosProvider) -> Self {
-        InputNativeLink {
+        Self {
             position_provider: ws,
         }
     }
@@ -67,11 +67,11 @@ impl<PosProvider: PointerPositionProvider> peridot::NativeInput for InputNativeL
 }
 
 fn lookup_device_name(d: &udev::Device) -> Option<String> {
-    match d.property_value(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"NAME\0") }) {
-        Some(n) => Some(String::from(n.to_str().expect("decoding failed"))),
-        None => d.parent().as_ref().and_then(lookup_device_name),
-    }
+    d.name()
+        .map(|x| x.to_str().expect("decoding failed").to_string())
+        .or_else(|| d.parent().as_ref().and_then(lookup_device_name))
 }
+
 #[allow(dead_code)]
 fn diag_device(d: &udev::Device) {
     for p in d.iter_properties() {
@@ -82,18 +82,18 @@ fn diag_device(d: &udev::Device) {
             .expect("decoding failed");
         if let Some(v) = p.value() {
             println!(
-                "  * {} = {}",
-                name,
+                "  * {name} = {}",
                 v.to_str().expect("decoding failed value")
             );
         } else {
-            println!("  * {}", name);
+            println!("  * {name}");
         }
     }
+
     if let Some(p) = d.parent() {
         println!(
             "    * name = {}",
-            p.property_value(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"NAME\0") })
+            p.name()
                 .map_or("<none>", |s| s.to_str().expect("decoding failed"))
         );
         println!(
@@ -107,6 +107,7 @@ fn diag_device(d: &udev::Device) {
                 .map_or("<none>", |s| s.to_str().expect("decoding failed"))
         );
         println!("    * initialized ? {}", p.is_initialized());
+
         for p in p.iter_properties() {
             let name = p
                 .name()
@@ -115,12 +116,11 @@ fn diag_device(d: &udev::Device) {
                 .expect("decoding failed");
             if let Some(v) = p.value() {
                 println!(
-                    "    * {} = {}",
-                    name,
+                    "    * {name} = {}",
                     v.to_str().expect("decoding failed value")
                 );
             } else {
-                println!("    * {}", name);
+                println!("    * {name}");
             }
         }
     }
@@ -188,25 +188,24 @@ impl EventDeviceManager {
             device_id_by_node.insert(node, n as u64);
         }
 
-        EventDeviceManager {
+        Self {
             epoll_id_resv,
             devices_by_id,
             id_free_list: BTreeSet::new(),
             device_id_by_node,
         }
     }
+
     pub fn len(&self) -> usize {
         self.devices_by_id.len()
     }
 
     /// Returns assigned id(in EventDeviceManager)
     pub fn add(&mut self, node: String, device: EventDevice, epoll: &Epoll) -> u64 {
-        let id = if let Some(&n) = self.id_free_list.iter().next() {
-            self.id_free_list.remove(&n);
-            n
-        } else {
-            self.devices_by_id.len() as u64
-        };
+        let id = self
+            .id_free_list
+            .pop_first()
+            .unwrap_or_else(|| self.devices_by_id.len() as u64);
         epoll
             .add_fd(device.fd, libc::EPOLLIN as _, id + self.epoll_id_resv)
             .expect("Failed to register device fd to epoll");
@@ -215,13 +214,16 @@ impl EventDeviceManager {
 
         id
     }
+
     pub fn remove(&mut self, id: u64, epoll: &Epoll) {
-        if let Some(d) = self.devices_by_id.remove(&id) {
-            self.id_free_list.insert(id);
-            epoll
-                .remove_fd(d.fd)
-                .expect("Failed to unregister device fd from epoll");
-        }
+        let Some(d) = self.devices_by_id.remove(&id) else {
+            return;
+        };
+
+        self.id_free_list.insert(id);
+        epoll
+            .remove_fd(d.fd)
+            .expect("Failed to unregister device fd from epoll");
     }
 
     pub fn lookup_id_by_node(&self, node: &str) -> Option<u64> {
@@ -244,24 +246,22 @@ impl InputSystem {
     pub fn new(epoll: &Epoll, epid_monitor: u64, epid_devices_start: u64) -> Self {
         let udev = udev::Context::new().expect("Failed to initialize udev");
         let enumerator = udev::Enumerate::new(&udev).expect("Failed to create udev Enumerator");
-        let target_subsystem_name = std::ffi::CString::new("input").expect("encoding failed");
+        let target_subsystem_name =
+            unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"input\0") };
         enumerator
-            .add_match_subsystem(&target_subsystem_name)
+            .add_match_subsystem(target_subsystem_name)
             .expect("Failed to set subsystem filter");
         enumerator
             .add_match_is_initialized()
             .expect("Failed to set initialized filter");
         enumerator.scan_devices().expect("Failed to scan devices");
-        let id_input_mouse =
-            unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"ID_INPUT_MOUSE\0") };
         let event_device_regex = regex::Regex::new("event[0-9]+$").expect("invalid regex");
         let initial_devices = enumerator.iter().filter_map(|e| {
             let syspath = e.name().expect("no name?");
             let device =
                 udev::Device::from_syspath(&udev, syspath).expect("Failed to create udev Device");
-            let devnode_c = match device.devnode() {
-                Some(s) => s,
-                None => return None,
+            let Some(devnode_c) = device.devnode() else {
+                return None;
             };
             let devnode = devnode_c.to_str().expect("decoding failed");
             if !event_device_regex.is_match(devnode) {
@@ -270,15 +270,13 @@ impl InputSystem {
             let device_name = lookup_device_name(&device)
                 .unwrap_or_else(|| String::from("<unknown device name>"));
             // diag_device(&device);
-            let is_mouse = device
-                .property_value(id_input_mouse)
-                .map_or(false, |s| s.to_str() == Ok("1"));
 
-            info!("Registering Input Device: {} ({})", devnode, device_name);
+            info!("Registering Input Device: {devnode} ({device_name})");
 
             Some((
                 String::from(devnode),
-                EventDevice::open(devnode_c, is_mouse).expect("Failed to open event device"),
+                EventDevice::open(devnode_c, device.is_mouse())
+                    .expect("Failed to open event device"),
             ))
         });
 
@@ -287,10 +285,7 @@ impl InputSystem {
         })
         .expect("Failed to create udev monitor");
         monitor
-            .filter_add_match_subsystem_devtype(
-                unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"input\0") },
-                None,
-            )
+            .filter_add_match_subsystem_devtype(target_subsystem_name, None)
             .expect("Failed to set monitor subsystem filter");
         monitor
             .filter_update()
@@ -304,21 +299,21 @@ impl InputSystem {
             .add_fd(monitor_fd, libc::EPOLLIN as _, epid_monitor)
             .expect("Failed to add udev monitor fd");
 
-        InputSystem {
+        Self {
             devmgr: EventDeviceManager::new(initial_devices, epid_devices_start, epoll),
             event_device_regex,
             monitor,
         }
     }
+
     pub fn managed_devices_count(&self) -> usize {
         self.devmgr.len()
     }
 
     pub fn process_monitor_event(&mut self, ep: &Epoll) {
         let device = self.monitor.receive_device().expect("no device received?");
-        let devnode_c = match device.devnode() {
-            Some(s) => s,
-            None => return,
+        let Some(devnode_c) = device.devnode() else {
+            return;
         };
         let devnode = devnode_c.to_str().expect("decoding failed");
         if !self.event_device_regex.is_match(devnode) {
@@ -327,30 +322,25 @@ impl InputSystem {
         let action = device.action().to_str().expect("action decoding failed");
         let device_name =
             lookup_device_name(&device).unwrap_or_else(|| String::from("<unknown device name>"));
-        println!("Incoming Device Event: {}", action);
         // diag_device(&device);
 
         match action {
             "add" => {
-                let is_mouse = device
-                    .property_value(unsafe {
-                        std::ffi::CStr::from_bytes_with_nul_unchecked(b"ID_INPUT_MOUSE\0")
-                    })
-                    .map_or(false, |s| s.to_str() == Ok("1"));
-                info!("Registering Input Device: {} ({})", devnode, device_name);
+                info!("Registering Input Device: {devnode} ({device_name})");
                 self.devmgr.add(
                     String::from(devnode),
-                    EventDevice::open(devnode_c, is_mouse).expect("Failed to open added device"),
+                    EventDevice::open(devnode_c, device.is_mouse())
+                        .expect("Failed to open added device"),
                     ep,
                 );
             }
             "remove" => {
                 if let Some(id) = self.devmgr.lookup_id_by_node(devnode) {
-                    info!("Unregistering Input Device: {} ({})", devnode, device_name);
+                    info!("Unregistering Input Device: {devnode} ({device_name})");
                     self.devmgr.remove(id, &ep);
                 }
             }
-            a => debug!("Unknown device action: {:?}", a),
+            a => debug!("Unknown device action: {a:?}"),
         }
     }
 
@@ -367,12 +357,12 @@ impl InputSystem {
             Some(d) => match d.read() {
                 Ok(ev) => (ev, d.is_mouse),
                 Err(e) => {
-                    error!("Failed to read from device: {:?}", e);
+                    error!("Failed to read from device: {e:?}");
                     return;
                 }
             },
             None => {
-                error!("device not found? ev={}", ep_value);
+                error!("device not found? ev={ep_value}");
                 return;
             }
         };
@@ -627,7 +617,7 @@ fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
         ));
     }
 
-    debug!("key event: code={}", key);
+    debug!("key event: code={key}");
     None
 }
 fn map_mouse_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
