@@ -107,12 +107,12 @@ impl Dispatch<XdgToplevel, ()> for State {
     }
 }
 wayland_client::delegate_noop!(State: ignore WlSeat);
-impl Dispatch<WlPointer, ()> for State {
+impl Dispatch<WlPointer, WlSurface> for State {
     fn event(
         state: &mut Self,
         _proxy: &WlPointer,
         event: <WlPointer as Proxy>::Event,
-        _data: &(),
+        data: &WlSurface,
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
@@ -122,11 +122,13 @@ impl Dispatch<WlPointer, ()> for State {
                 surface_x,
                 surface_y,
                 ..
-            } => {
+            } if surface == *data => {
                 state.pointer_entered = true;
                 state.pointer_position = peridot::math::Vector2(surface_x as _, surface_y as _);
             }
-            wayland_client::protocol::wl_pointer::Event::Leave { surface, .. } => {
+            wayland_client::protocol::wl_pointer::Event::Leave { surface, .. }
+                if surface == *data =>
+            {
                 state.pointer_entered = false;
             }
             wayland_client::protocol::wl_pointer::Event::Motion {
@@ -211,7 +213,7 @@ impl Wayland {
         let seat: WlSeat = interfaces
             .bind_interface(&registry, &event_queue.handle(), ())
             .expect("No seat interface found");
-        let pointer = seat.get_pointer(&event_queue.handle(), ());
+        let pointer = seat.get_pointer(&event_queue.handle(), surface.clone());
 
         event_queue
             .roundtrip(&mut state)
