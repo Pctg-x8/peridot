@@ -334,7 +334,13 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         if let Some(mut old) = self.swapchain.take_lw() {
             old.backbuffer_images.clear();
             let (_, s) = SharedRef::try_unwrap(old.swapchain)
-                .unwrap_or_else(|_| panic!("there are some references of swapchain left"))
+                .unwrap_or_else(|refs| {
+                    panic!(
+                        "there are some references of swapchain left: strong={} weak={}",
+                        SharedRef::strong_count(&refs),
+                        SharedRef::weak_count(&refs)
+                    )
+                })
                 .deconstruct();
             self.swapchain.set_lw(IntegratedSwapchainObject::new(
                 g,

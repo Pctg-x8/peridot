@@ -5,7 +5,10 @@ use br::PhysicalDevice;
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
 use wayland_backend::client::ReadEventsGuard;
 use wayland_client::{
-    protocol::{wl_compositor::WlCompositor, wl_registry::WlRegistry, wl_surface::WlSurface},
+    protocol::{
+        wl_compositor::WlCompositor, wl_pointer::WlPointer, wl_registry::WlRegistry,
+        wl_seat::WlSeat, wl_surface::WlSurface,
+    },
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
 };
 use wayland_protocols::xdg::{
@@ -31,6 +34,8 @@ impl BorrowFd for ReadinessGuard {
 pub struct State {
     close_requested: bool,
     geometry: peridot::math::Vector2<usize>,
+    pointer_entered: bool,
+    pointer_position: peridot::math::Vector2<usize>,
 }
 wayland_client::delegate_noop!(State: ignore WlCompositor);
 wayland_client::delegate_noop!(State: ignore WlSurface);
@@ -93,7 +98,43 @@ impl Dispatch<XdgToplevel, ()> for State {
                 states,
             } => {
                 debug!("Configure XdgToplevel: {width} {height} {states:?}");
-                state.geometry = peridot::math::Vector2(width as _, height as _);
+                if width > 0 && height > 0 {
+                    state.geometry = peridot::math::Vector2(width as _, height as _);
+                }
+            }
+            _ => (),
+        }
+    }
+}
+wayland_client::delegate_noop!(State: ignore WlSeat);
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlPointer,
+        event: <WlPointer as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wayland_client::protocol::wl_pointer::Event::Enter {
+                surface,
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                state.pointer_entered = true;
+                state.pointer_position = peridot::math::Vector2(surface_x as _, surface_y as _);
+            }
+            wayland_client::protocol::wl_pointer::Event::Leave { surface, .. } => {
+                state.pointer_entered = false;
+            }
+            wayland_client::protocol::wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                state.pointer_position = peridot::math::Vector2(surface_x as _, surface_y as _);
             }
             _ => (),
         }
@@ -112,6 +153,8 @@ pub struct Wayland {
         WlCompositor,
         XdgWmBase,
         ZxdgDecorationManagerV1,
+        WlSeat,
+        WlPointer,
     ),
 }
 impl Wayland {
@@ -133,6 +176,8 @@ impl Wayland {
         let mut state = State {
             close_requested: false,
             geometry: peridot::math::Vector2(640, 480),
+            pointer_entered: false,
+            pointer_position: peridot::math::Vector2(0, 0),
         };
         let mut event_queue = con.new_event_queue();
         let compositor: WlCompositor = interfaces
@@ -163,6 +208,11 @@ impl Wayland {
         );
         surface.commit();
 
+        let seat: WlSeat = interfaces
+            .bind_interface(&registry, &event_queue.handle(), ())
+            .expect("No seat interface found");
+        let pointer = seat.get_pointer(&event_queue.handle(), ());
+
         event_queue
             .roundtrip(&mut state)
             .expect("Failed to final roundtrip");
@@ -179,6 +229,8 @@ impl Wayland {
                 compositor,
                 xdg_wm_base,
                 xdg_decoration_manager,
+                seat,
+                pointer,
             ),
         })
     }
@@ -329,18 +381,20 @@ impl peridot::PlatformPresenter for Presenter {
 }
 impl PointerPositionProvider for Wayland {
     fn get_pointer_position(&self) -> Option<(f32, f32)> {
-        // TODO
-        None
+        self.state.pointer_entered.then(|| {
+            (
+                self.state.pointer_position.0 as _,
+                self.state.pointer_position.1 as _,
+            )
+        })
     }
 
     fn query_input_focus(&self) -> bool {
-        // TODO
-        false
+        self.state.pointer_entered
     }
 
     fn query_input_focus_and_pointer_entered(&self) -> (bool, bool) {
-        // TODO
-        (false, false)
+        (self.state.pointer_entered, self.state.pointer_entered)
     }
 }
 

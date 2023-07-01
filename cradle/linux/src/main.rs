@@ -3,13 +3,13 @@ extern crate log;
 
 use input::PointerPositionProvider;
 use peridot::{
-    mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef, SharedRef},
+    mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef},
     EngineEvents, FeatureRequests, NativeLinker,
 };
 use presenter::PresenterProvider;
-use std::io::Result as IOResult;
 use std::path::PathBuf;
 use std::{fs::File, os::fd::AsRawFd};
+use std::{io::Result as IOResult, os::fd::RawFd};
 
 mod sound_backend;
 use sound_backend::NativeAudioEngine;
@@ -105,11 +105,12 @@ pub struct GameDriver<NL: NativeLinker> {
     usercode: userlib::Game<NL>,
     _snd: NativeAudioEngine,
 }
-impl<PP> GameDriver<NativeLink<SharedRef<PP>>>
+impl<PP> GameDriver<NativeLink<SharedMutableRef<PP>>>
 where
-    SharedRef<PP>: PresenterProvider + PointerPositionProvider + Send + Sync + 'static,
+    SharedMutableRef<PP>: PresenterProvider + PointerPositionProvider + 'static,
+    PP: Send + Sync,
 {
-    fn new(pp: SharedRef<PP>) -> Self {
+    fn new(pp: SharedMutableRef<PP>) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
             pp: pp.clone(),
@@ -118,7 +119,7 @@ where
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
             nl,
-            userlib::Game::<NativeLink<SharedRef<PP>>>::requested_features(),
+            userlib::Game::<NativeLink<SharedMutableRef<PP>>>::requested_features(),
         );
         let usercode = userlib::Game::init(&mut engine);
         engine
@@ -144,10 +145,33 @@ where
     }
 }
 
+pub struct EpollTemporaryAddFd<'e> {
+    instance: &'e epoll::Epoll,
+    fd: RawFd,
+}
+impl<'e> EpollTemporaryAddFd<'e> {
+    pub fn add(
+        instance: &'e epoll::Epoll,
+        fd: RawFd,
+        events: u32,
+        extras: u64,
+    ) -> std::io::Result<Self> {
+        instance.add_fd(fd, events, extras)?;
+        Ok(Self { instance, fd })
+    }
+}
+impl Drop for EpollTemporaryAddFd<'_> {
+    fn drop(&mut self) {
+        self.instance
+            .remove_fd(self.fd)
+            .expect("Failed to remove fd from epoll instance");
+    }
+}
+
 fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
-    W: WindowBackend + EventProcessor + PointerPositionProvider + 'static,
-    SharedMutableRef<W>: PresenterProvider + PointerPositionProvider + Send + Sync,
+    W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
+    SharedMutableRef<W>: PresenterProvider + PointerPositionProvider,
 {
     let mut gd = GameDriver::new(window_backend.clone());
 
@@ -160,10 +184,7 @@ where
         .write()
         .expect("Failed to mutate audio mixer")
         .start();
-    let mut events = vec![
-        unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
-        2 + input.managed_devices_count()
-    ];
+    let mut events = Vec::new();
     let mut last_drawn_geometry = window_backend.borrow().geometry();
     while !window_backend.borrow().has_close_requested() {
         if events.len() != 2 + input.managed_devices_count() {
@@ -174,17 +195,20 @@ where
         }
 
         let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
+        let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
+            &ep,
+            window_backend_readiness_guard.borrow_fd().as_raw_fd(),
+            libc::EPOLLIN as _,
+            0,
+        );
 
-        let window_backend_fd = window_backend_readiness_guard.borrow_fd().as_raw_fd();
-        ep.add_fd(window_backend_fd, libc::EPOLLIN as _, 0)
-            .expect("Failed to add window backend fd");
         let count = ep
             .wait(&mut events, Some(1))
             .expect("Failed to waiting epoll");
+        drop(window_backend_temporary_epoll);
+
         // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 {
-            ep.remove_fd(window_backend_fd)
-                .expect("Failed to remove window backend fd");
             drop(window_backend_readiness_guard);
             if last_drawn_geometry != window_backend.borrow().geometry() {
                 last_drawn_geometry = window_backend.borrow().geometry();
@@ -210,14 +234,29 @@ where
                 );
             }
         }
-        ep.remove_fd(window_backend_fd)
-            .expect("Failed to remove window backend fd");
     }
     info!("Terminating Program...");
 }
 
 fn main() {
     env_logger::init();
+
+    if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
+        if backend_name == "wayland" {
+            run_with_window_backend(make_shared_mutable_ref(
+                Wayland::try_init().expect("Failed to initialize wayland backend"),
+            ));
+            return;
+        }
+        if backend_name == "xcb" {
+            run_with_window_backend(make_shared_mutable_ref(
+                X11::try_init().expect("Failed to initialize xcb backend"),
+            ));
+            return;
+        }
+
+        warn!("unknown backend specified({backend_name}), ignoring");
+    }
 
     if let Some(x) = Wayland::try_init() {
         run_with_window_backend(make_shared_mutable_ref(x));
