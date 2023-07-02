@@ -1,3 +1,6 @@
+concurrency:
+  cancel-in-progress: true
+  group: "${{ github.ref }}"
 jobs:
   check-baselayer:
     name: Base Layer

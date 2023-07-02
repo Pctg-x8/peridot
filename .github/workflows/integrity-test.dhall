@@ -209,6 +209,10 @@ in  GithubActions.Workflow::{
               ]
             }
           }
+    , concurrency = Some GithubActions.ConcurrencyGroup::{
+      , group = GithubActions.mkExpression "github.ref"
+      , cancel-in-progress = Some True
+      }
     , jobs = toMap
         { preconditions
         , check-formats =
