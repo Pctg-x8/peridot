@@ -1,18 +1,18 @@
 jobs:
-  "make-pr-for-deliver":
+  make-pr-for-deliver:
     name: Make Delivering PullRequest
-    "runs-on": "ubuntu-latest"
+    runs-on: ubuntu-latest
     steps:
-    - name: Checking out
-      uses: "actions/checkout@v3"
-    - name: Fetching all branches
-      run: "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
-    - env:
-        GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-      name: Create PullRequest
-      uses: "./.github/actions/create-dev-delivery-prs"
-name: "SubProject-dev Auto Deliveries"
-'on':
+      - name: Checking out
+        uses: "actions/checkout@v3"
+      - name: Fetching all branches
+        run: "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
+      - env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        name: Create PullRequest
+        uses: "./.github/actions/create-dev-delivery-prs"
+name: SubProject-dev Auto Deliveries
+on:
   push:
     branches:
-    - dev
+      - dev
