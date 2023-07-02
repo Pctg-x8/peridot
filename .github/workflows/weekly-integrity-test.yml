@@ -120,6 +120,9 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - if: 'true'
+      name: install extra packages
+      run: "apt-get update && apt-get install libwayland-client"
+    - if: 'true'
       name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v3"
       with:
@@ -510,6 +513,6 @@ jobs:
         report_name: Weekly Check
         status: success
 name: "Integrity Check (Weekly)"
-'on':
+on:
   schedule:
   - cron: "0 12 * * wed"

@@ -130,6 +130,9 @@ jobs:
     "runs-on": "ubuntu-latest"
     steps:
     - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      name: install extra packages
+      run: "apt-get update && apt-get install libwayland-client"
+    - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
       name: "Checking out (HEAD commit)"
       uses: "actions/checkout@v3"
       with:
@@ -642,7 +645,7 @@ jobs:
         report_name: PR Integrity Check
         status: success
 name: Integrity Check
-'on':
+on:
   pull_request:
     types:
     - opened
