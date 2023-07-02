@@ -1,23 +1,23 @@
 jobs:
-  "doc-gen-deploy":
+  doc-gen-deploy:
     name: Doc Generate and Deploy
-    "runs-on": "ubuntu-latest"
+    runs-on: ubuntu-latest
     steps:
-    - name: Checking out
-      uses: "actions/checkout@v3"
-      with:
-        ref: dev
-    - name: Build docs
-      uses: "./.github/actions/build-doc"
-    - env:
-        FIREBASE_TOKEN: "${{ secrets.DOC_HOST_FIREBASE_TOKEN }}"
-      name: "Deployment to Firebase Hosting (for Dev)"
-      uses: "./.github/actions/deployment-dev"
+      - name: Checking out
+        uses: "actions/checkout@v3"
+        with:
+          ref: dev
+      - name: Build docs
+        uses: "./.github/actions/build-doc"
+      - env:
+          FIREBASE_TOKEN: "${{ secrets.DOC_HOST_FIREBASE_TOKEN }}"
+        name: "Deployment to Firebase Hosting (for Dev)"
+        uses: "./.github/actions/deployment-dev"
 name: "Document Continuous Deployment (for dev)"
-'on':
+on:
   push:
     branches:
-    - dev
+      - dev
     paths:
-    - "**.rs"
-    - "**.toml"
+      - "**.rs"
+      - "**.toml"

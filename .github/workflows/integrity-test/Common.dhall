@@ -138,18 +138,18 @@ let checkFormats =
                   , checkoutStep
                   ,   CodeformCheckerAction.step
                         { script = CodeformCheckerAction.Script.codeform_check }
-                    ⫽ { name = "Running Check: Line Width" }
+                    ⫽ { name = "Running Check - Line Width" }
                   ,   CodeformCheckerAction.step
                         { script =
                             CodeformCheckerAction.Script.vulnerabilities_elliminator
                         }
-                    ⫽ { name = "Running Check: Debugging Weaks" }
+                    ⫽ { name = "Running Check - Debugging Weaks" }
                   ,   CodeformCheckerAction.step
                         { script =
                             CodeformCheckerAction.Script.trailing_newline_checker
                         }
                     ⫽ { name =
-                          "Running Check: Trailing Newline for Source Code Files"
+                          "Running Check - Trailing Newline for Source Code Files"
                       }
                   ]
               , List/map
@@ -424,7 +424,12 @@ let checkCradleLinux =
               [ List/end_map
                   GithubActions.Step.Type
                   (withConditionStep precondition)
-                  [ checkoutHeadStep
+                  [ GithubActions.Step::{
+                    , name = "install extra packages"
+                    , run = Some
+                        "sudo apt-get update && sudo apt-get install libwayland-dev"
+                    }
+                  , checkoutHeadStep
                   , checkoutStep
                   , cacheStep
                   , GithubActions.Step::{
