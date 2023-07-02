@@ -380,17 +380,17 @@ jobs:
       - env:
           RUN_SCRIPT: codeform_check
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Running Check: Line Width
+        name: Running Check - Line Width
         uses: "./.github/actions/codeform-checker"
       - env:
           RUN_SCRIPT: vulnerabilities_elliminator
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Running Check: Debugging Weaks
+        name: Running Check - Debugging Weaks
         uses: "./.github/actions/codeform-checker"
       - env:
           RUN_SCRIPT: trailing_newline_checker
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Running Check: Trailing Newline for Source Code Files
+        name: Running Check - Trailing Newline for Source Code Files
         uses: "./.github/actions/codeform-checker"
       - if: "failure()"
         name: Configure for Slack Notification
