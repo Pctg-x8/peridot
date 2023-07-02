@@ -46,12 +46,12 @@ let depends =
 let withCondition =
       λ(cond : Text) →
       λ(job : GithubActions.Job.Type) →
-        job ⫽ { if = Some cond }
+        job ⫽ { `if` = Some cond }
 
 let withConditionStep =
       λ(cond : Text) →
       λ(step : GithubActions.Step.Type) →
-        step ⫽ { if = Some cond }
+        step ⫽ { `if` = Some cond }
 
 let runStepOnFailure = withConditionStep "failure()"
 
@@ -88,7 +88,7 @@ let cacheStep =
       GithubActions.Step::{
       , name = "Initialize Cache"
       , uses = Some "actions/cache@v2"
-      , with = Some
+      , `with` = Some
           ( toMap
               { path =
                   GithubActions.WithParameterType.Text
@@ -489,7 +489,7 @@ let checkCradleAndroid =
                   , GithubActions.Step::{
                     , name = "Setup Java"
                     , uses = Some "actions/setup-java@v3"
-                    , with = Some
+                    , `with` = Some
                         ( toMap
                             { distribution =
                                 GithubActions.WithParameterType.Text "adopt"
