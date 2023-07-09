@@ -134,7 +134,7 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: install extra packages
-        run: "sudo apt-get update && sudo apt-get install libwayland-dev clang"
+        run: "sudo apt-get update && sudo apt-get install libwayland-dev clang lldb lld"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
