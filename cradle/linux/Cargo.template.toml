@@ -22,6 +22,9 @@ regex = "1.4"
 wayland-backend = { version = "0.1.2", features = ["client_system"] }
 wayland-client = "0.30.2"
 wayland-protocols = { version = "0.30.0", features = ["client", "staging", "unstable"] }
+pipewire = "0.6.0"
+libspa-sys = "0.6.0"
+parking_lot = "0.12.1"
 
 [dependencies.async-std]
 version = "1.0"
