@@ -121,7 +121,7 @@ jobs:
     steps:
       - if: 'true'
         name: install extra packages
-        run: "sudo apt-get update && sudo apt-get install libwayland-dev clang lldb lld"
+        run: "sudo apt-get update && sudo apt-get install libwayland-dev"
       - if: 'true'
         name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
@@ -139,6 +139,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+      - id: llvm-cache
+        if: 'true'
+        name: Initialize LLVM Cache
+        uses: "actions/cache@v3"
+        with:
+          key: "${{ runner.os }}-llvm-11"
+          path: "./llvm"
+      - if: 'true'
+        name: Install LLVM
+        uses: "KyleMayes/install-llvm-action@v1"
+        with:
+          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
+          version: '11'
       - if: 'true'
         name: Build CLI
         run: cargo build

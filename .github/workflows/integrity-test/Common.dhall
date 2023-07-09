@@ -108,6 +108,20 @@ let cacheStep =
           )
       }
 
+let cacheLLVMStep =
+      GithubActions.Step::{
+      , name = "Initialize LLVM Cache"
+      , uses = Some "actions/cache@v3"
+      , `with` = Some
+          ( toMap
+              { path = GithubActions.WithParameterType.Text "./llvm"
+              , key =
+                  GithubActions.WithParameterType.Text
+                    "${GithubActions.mkExpression "runner.os"}-llvm-11"
+              }
+          )
+      }
+
 let SlackNotification = < Success | Failure : Text >
 
 let SlackNotifyProvider =
@@ -427,11 +441,28 @@ let checkCradleLinux =
                   [ GithubActions.Step::{
                     , name = "install extra packages"
                     , run = Some
-                        "sudo apt-get update && sudo apt-get install libwayland-dev clang lldb lld"
+                        "sudo apt-get update && sudo apt-get install libwayland-dev"
                     }
                   , checkoutHeadStep
                   , checkoutStep
                   , cacheStep
+                  , cacheLLVMStep ⫽ { id = Some "llvm-cache" }
+                  , GithubActions.Step::{
+                    , name = "Install LLVM"
+                    , uses = Some "KyleMayes/install-llvm-action@v1"
+                    , `with` = Some
+                        ( toMap
+                            { version =
+                                GithubActions.WithParameterType.Text "11"
+                            , cached =
+                                GithubActions.WithParameterType.Text
+                                  ( GithubActions.mkRefStepOutputExpression
+                                      "llvm-cache"
+                                      "cache-hit"
+                                  )
+                            }
+                        )
+                    }
                   , GithubActions.Step::{
                     , name = "Build CLI"
                     , run = Some "cargo build"
