@@ -14,6 +14,7 @@ use pw::stream::ListenerBuilderT;
 
 use super::AudioBitstreamConverter;
 use super::Float32Converter;
+use super::SoundBackend;
 
 extern "C" {
     // TODO: fixing linked name is still not released.
@@ -62,6 +63,17 @@ pub struct NativeAudioEngine {
     pw_sender: pw::channel::Sender<()>,
 }
 impl NativeAudioEngine {
+    pub fn is_available() -> bool {
+        let Ok(mainloop) = pw::MainLoop::new() else {
+            return false;
+        };
+        let Ok(ctx) = pw::Context::new(&mainloop) else {
+            return false;
+        };
+
+        ctx.connect(None).is_ok()
+    }
+
     pub fn new(mixer: &Arc<StdRwLock<peridot::audio::Mixer>>) -> Self {
         info!("Starting AudioEngine via PipeWire......");
 
@@ -206,3 +218,4 @@ impl Drop for NativeAudioEngine {
         }
     }
 }
+impl SoundBackend for NativeAudioEngine {}

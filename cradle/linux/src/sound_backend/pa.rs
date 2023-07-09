@@ -10,7 +10,7 @@ use std::{
 
 use crate::sound_backend::{Float32Converter, SignedInt24LEConverter, SignedInt32LEConverter};
 
-use super::AudioBitstreamConverter;
+use super::{AudioBitstreamConverter, SoundBackend};
 
 struct AudioDataWriter {
     mixer: Arc<RwLock<peridot::audio::Mixer>>,
@@ -139,3 +139,4 @@ impl Drop for NativeAudioEngine {
         Pin::into_inner(self.mlp.as_mut()).stop();
     }
 }
+impl SoundBackend for NativeAudioEngine {}

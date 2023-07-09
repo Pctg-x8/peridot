@@ -7,6 +7,7 @@ use peridot::{
     EngineEvents, FeatureRequests, NativeLinker,
 };
 use presenter::PresenterProvider;
+use sound_backend::SoundBackend;
 use std::path::PathBuf;
 use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
@@ -102,7 +103,7 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
 pub struct GameDriver<NL: NativeLinker> {
     engine: peridot::Engine<NL>,
     usercode: userlib::Game<NL>,
-    _snd: sound_backend::pipewire::NativeAudioEngine,
+    _snd: Box<dyn SoundBackend>,
 }
 impl<PP> GameDriver<NativeLink<SharedMutableRef<PP>>>
 where
@@ -125,7 +126,16 @@ where
             .input_mut()
             .set_nativelink(Box::new(input::InputNativeLink::new(pp)));
         engine.postinit();
-        let _snd = sound_backend::pipewire::NativeAudioEngine::new(engine.audio_mixer());
+        let _snd = if sound_backend::pipewire::NativeAudioEngine::is_available() {
+            Box::new(sound_backend::pipewire::NativeAudioEngine::new(
+                engine.audio_mixer(),
+            )) as Box<dyn SoundBackend>
+        } else {
+            // fallback
+            Box::new(sound_backend::pa::NativeAudioEngine::new(
+                engine.audio_mixer(),
+            ))
+        };
 
         Self {
             engine,
