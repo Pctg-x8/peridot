@@ -1,6 +1,8 @@
 pub mod pa;
 pub mod pipewire;
 
+pub trait SoundBackend {}
+
 trait AudioBitstreamConverter {
     fn sample_count(&self, bytes: usize) -> usize;
     fn convert(&self, floats: &[f32], into: &mut [u8]);
