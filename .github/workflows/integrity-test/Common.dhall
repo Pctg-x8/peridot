@@ -427,7 +427,7 @@ let checkCradleLinux =
                   [ GithubActions.Step::{
                     , name = "install extra packages"
                     , run = Some
-                        "sudo apt-get update && sudo apt-get install libwayland-dev"
+                        "sudo apt-get update && sudo apt-get install libwayland-dev clang"
                     }
                   , checkoutHeadStep
                   , checkoutStep

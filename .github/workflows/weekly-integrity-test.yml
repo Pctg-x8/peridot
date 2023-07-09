@@ -121,7 +121,7 @@ jobs:
     steps:
       - if: 'true'
         name: install extra packages
-        run: "sudo apt-get update && sudo apt-get install libwayland-dev"
+        run: "sudo apt-get update && sudo apt-get install libwayland-dev clang"
       - if: 'true'
         name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
