@@ -14,7 +14,8 @@ use std::time::{Duration, Instant as InstantTimer};
 
 mod graphics;
 pub use self::graphics::{
-    CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle, MemoryTypeManager,
+    CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
+    MemoryTypeManager,
 };
 mod state_track;
 use self::state_track::StateFence;

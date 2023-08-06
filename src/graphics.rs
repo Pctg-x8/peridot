@@ -23,6 +23,32 @@ mod async_fence_driver;
 #[cfg(feature = "mt")]
 pub use self::async_fence_driver::*;
 
+#[derive(Debug)]
+pub enum GraphicsInitializationError {
+    LayerEnumerationFailed(br::VkResultBox),
+    VulkanError(br::VkResultBox),
+    NoPhysicalDevices,
+    NoSuitableGraphicsQueue,
+}
+impl From<br::VkResultBox> for GraphicsInitializationError {
+    fn from(value: br::VkResultBox) -> Self {
+        Self::VulkanError(value)
+    }
+}
+impl std::fmt::Display for GraphicsInitializationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LayerEnumerationFailed(r) => write!(f, "vk layer enumeration failed: {r}"),
+            Self::VulkanError(r) => std::fmt::Display::fmt(r, f),
+            Self::NoPhysicalDevices => write!(f, "no physical devices available on this machine"),
+            Self::NoSuitableGraphicsQueue => {
+                write!(f, "no suitable graphics queue found on device")
+            }
+        }
+    }
+}
+impl std::error::Error for GraphicsInitializationError {}
+
 /// Graphics manager
 pub struct Graphics {
     pub(crate) adapter: br::PhysicalDeviceObject<InstanceObject>,
@@ -42,11 +68,13 @@ impl Graphics {
         instance_extensions: Vec<&str>,
         device_extensions: Vec<&str>,
         features: br::vk::VkPhysicalDeviceFeatures,
-    ) -> br::Result<Self> {
+    ) -> Result<Self, GraphicsInitializationError> {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
         #[cfg(debug_assertions)]
-        for l in br::enumerate_layer_properties().expect("failed to enumerate layer properties") {
+        for l in br::enumerate_layer_properties()
+            .map_err(GraphicsInitializationError::LayerEnumerationFailed)?
+        {
             let name_str = unsafe {
                 l.layerName
                     .as_cstr_unchecked()
@@ -57,6 +85,7 @@ impl Graphics {
                 "* {name_str} :: {}/{}",
                 l.specVersion, l.implementationVersion
             );
+
             if name_str == "VK_LAYER_KHRONOS_validation" {
                 validation_layer_available = true;
             }
@@ -87,14 +116,14 @@ impl Graphics {
         let adapter = instance
             .iter_physical_devices()?
             .next()
-            .expect("no physical devices");
+            .ok_or(GraphicsInitializationError::NoPhysicalDevices)?;
         let memory_type_manager = MemoryTypeManager::new(&adapter);
         MemoryTypeManager::diagnose_heaps(&adapter);
         memory_type_manager.diagnose_types();
         let gqf_index = adapter
             .queue_family_properties()
             .find_matching_index(br::QueueFlags::GRAPHICS)
-            .expect("No graphics queue");
+            .ok_or(GraphicsInitializationError::NoSuitableGraphicsQueue)?;
         let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
         let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
