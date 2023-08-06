@@ -125,7 +125,7 @@ where
         engine
             .input_mut()
             .set_nativelink(Box::new(input::InputNativeLink::new(pp)));
-        engine.postinit();
+        engine.post_init();
         let _snd = NativeAudioEngine::new(engine.audio_mixer());
 
         Self {

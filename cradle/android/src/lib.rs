@@ -35,7 +35,7 @@ impl Game {
         engine.input_mut().set_nativelink(Box::new(InputNativeLink {
             pos_cache: pos_cache.clone(),
         }));
-        engine.postinit();
+        engine.post_init();
 
         Self {
             userlib: userlib::Game::init(&mut engine),

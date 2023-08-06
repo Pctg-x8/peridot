@@ -305,7 +305,7 @@ impl GameDriver {
         engine.input_mut().set_nativelink(nih);
         let mut nae = NativeAudioEngine::init();
         nae.start(engine.audio_mixer().clone());
-        engine.postinit();
+        engine.post_init();
 
         GameDriver {
             engine,
