@@ -231,6 +231,7 @@ impl Deref for Graphics {
     }
 }
 
+#[derive(Clone)]
 pub struct MemoryType(u32, br::vk::VkMemoryType);
 impl MemoryType {
     pub const fn index(&self) -> u32 {
@@ -306,33 +307,23 @@ pub struct MemoryTypeManager {
 impl MemoryTypeManager {
     fn new(pd: &impl br::PhysicalDevice) -> Self {
         let mem = pd.memory_properties();
-        let (device_memory_types, host_memory_types): (Vec<_>, Vec<_>) = mem
+        let (mut device_memory_types, mut host_memory_types) = (Vec::new(), Vec::new());
+        for mt in mem
             .types()
             .enumerate()
-            .map(|(n, mt)| {
-                let is_device_local =
-                    (mt.propertyFlags & br::vk::VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
-                let is_host_visible =
-                    (mt.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
-
-                (
-                    if is_device_local {
-                        MemoryType(n as _, mt.clone()).into()
-                    } else {
-                        None
-                    },
-                    if is_host_visible {
-                        MemoryType(n as _, mt.clone()).into()
-                    } else {
-                        None
-                    },
-                )
-            })
-            .unzip();
+            .map(|(n, mt)| MemoryType(n as _, mt.clone()))
+        {
+            if mt.is_device_local() {
+                device_memory_types.push(mt.clone());
+            }
+            if mt.visible_from_host() {
+                host_memory_types.push(mt.clone());
+            }
+        }
 
         Self {
-            device_memory_types: device_memory_types.into_iter().filter_map(|x| x).collect(),
-            host_memory_types: host_memory_types.into_iter().filter_map(|x| x).collect(),
+            device_memory_types,
+            host_memory_types,
         }
     }
 
