@@ -3,19 +3,19 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
+use br::Device;
 #[cfg(feature = "mt")]
 use br::Status;
-use br::{
-    CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Queue,
-    SubmissionBatch,
-};
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
-use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant as InstantTimer};
 
+mod graphics;
+pub use self::graphics::{
+    CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle, MemoryTypeManager,
+};
 mod state_track;
 use self::state_track::StateFence;
 mod window;
@@ -186,31 +186,31 @@ pub trait FeatureRequests {
 }
 
 pub struct Engine<NL: NativeLinker> {
-    nativelink: NL,
+    native_link: NL,
     presenter: NL::Presenter,
     pub(self) g: Graphics,
     ip: InputProcess,
-    gametimer: GameTimer,
+    game_timer: GameTimer,
     last_rendering_completion: StateFence<br::FenceObject<DeviceObject>>,
-    amixer: Arc<RwLock<audio::Mixer>>,
+    audio_mixer: Arc<RwLock<audio::Mixer>>,
     request_resize: bool,
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
         name: &str,
         version: (u32, u32, u32),
-        nativelink: PL,
+        native_link: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
         let mut g = Graphics::new(
             name,
             version,
-            nativelink.instance_extensions(),
-            nativelink.device_extensions(),
+            native_link.instance_extensions(),
+            native_link.device_extensions(),
             requested_features,
         )
         .expect("Failed to initialize Graphics Base Driver");
-        let presenter = nativelink.new_presenter(&g);
+        let presenter = native_link.new_presenter(&g);
         g.submit_commands(|mut r| {
             presenter.emit_initialize_backbuffer_commands(&mut r);
             r
@@ -219,18 +219,18 @@ impl<PL: NativeLinker> Engine<PL> {
 
         Engine {
             ip: InputProcess::new().into(),
-            gametimer: GameTimer::new(),
+            game_timer: GameTimer::new(),
             last_rendering_completion: StateFence::new(g.device.clone())
                 .expect("Failed to create State Fence for Rendering"),
-            amixer: Arc::new(RwLock::new(audio::Mixer::new())),
-            nativelink,
+            audio_mixer: Arc::new(RwLock::new(audio::Mixer::new())),
+            native_link,
             g,
             presenter,
             request_resize: false,
         }
     }
 
-    pub fn postinit(&mut self) {
+    pub fn post_init(&mut self) {
         trace!("PostInit BaseEngine...");
     }
 }
@@ -312,24 +312,28 @@ impl<NL: NativeLinker> Engine<NL> {
 
     #[inline]
     pub fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> {
-        &self.amixer
+        &self.audio_mixer
     }
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get(path, A::EXT)?)
+        A::from_asset(self.native_link.asset_loader().get(path, A::EXT)?)
     }
     pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.nativelink.asset_loader().get_streaming(path, A::EXT)?)
+        A::from_asset(
+            self.native_link
+                .asset_loader()
+                .get_streaming(path, A::EXT)?,
+        )
     }
 
     pub fn rendering_precision(&self) -> f32 {
-        self.nativelink.rendering_precision()
+        self.native_link.rendering_precision()
     }
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn do_update<EH: EngineEvents<PL>>(&mut self, userlib: &mut EH) {
-        let dt = self.gametimer.delta_time();
+        let dt = self.game_timer.delta_time();
 
         let bb_index = match self.presenter.next_backbuffer_index() {
             Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -388,8 +392,8 @@ impl<PL: NativeLinker> Engine<PL> {
         StateFence::wait(&mut self.last_rendering_completion)
             .expect("Waiting Last command completion");
         userlib.discard_backbuffer_resources();
-        let needs_reinit_backbuffers = self.presenter.resize(&self.g, new_size.clone());
-        if needs_reinit_backbuffers {
+        let needs_re_init_backbuffers = self.presenter.resize(&self.g, new_size.clone());
+        if needs_re_init_backbuffers {
             let pres = &self.presenter;
 
             self.g
@@ -428,6 +432,7 @@ impl<T> LateInit<T> {
         Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
     }
 }
+
 pub struct Discardable<T>(DynamicMut<Option<T>>);
 impl<T> Discardable<T> {
     pub fn new() -> Self {
@@ -474,506 +479,6 @@ impl<T> From<T> for Discardable<T> {
     }
 }
 
-use br::vk::{
-    VkMemoryType, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-    VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT, VK_MEMORY_PROPERTY_PROTECTED_BIT,
-};
-
-pub struct MemoryType(u32, VkMemoryType);
-impl MemoryType {
-    pub fn index(&self) -> u32 {
-        self.0
-    }
-    pub fn corresponding_mask(&self) -> u32 {
-        0x01 << self.0
-    }
-    pub fn has_property_flags(&self, other: br::MemoryPropertyFlags) -> bool {
-        (self.1.propertyFlags & other.bits()) != 0
-    }
-    pub fn is_host_coherent(&self) -> bool {
-        self.has_property_flags(br::MemoryPropertyFlags::HOST_COHERENT)
-    }
-    pub fn is_host_cached(&self) -> bool {
-        self.has_property_flags(br::MemoryPropertyFlags::HOST_CACHED)
-    }
-}
-impl std::fmt::Debug for MemoryType {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut flags = Vec::with_capacity(7);
-        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 {
-            flags.push("DEVICE LOCAL");
-        }
-        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 {
-            flags.push("HOST VISIBLE");
-        }
-        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0 {
-            flags.push("CACHED");
-        }
-        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0 {
-            flags.push("COHERENT");
-        }
-        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 {
-            flags.push("PROTECTED");
-        }
-        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 {
-            flags.push("LAZILY ALLOCATED");
-        }
-        if (self.1.propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 {
-            flags.push("PROTECTED");
-        }
-
-        write!(
-            fmt,
-            "{}: [{}] in heap #{}",
-            self.index(),
-            flags.join("/"),
-            self.1.heapIndex
-        )
-    }
-}
-pub struct MemoryTypeManager {
-    device_memory_types: Vec<MemoryType>,
-    host_memory_types: Vec<MemoryType>,
-}
-impl MemoryTypeManager {
-    pub fn new(pd: &impl br::PhysicalDevice) -> Self {
-        let mem = pd.memory_properties();
-        let (device_memory_types, host_memory_types): (Vec<_>, Vec<_>) = mem
-            .types()
-            .enumerate()
-            .map(|(n, mt)| {
-                let is_device_local = (mt.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
-                let is_host_visible = (mt.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
-
-                (
-                    if is_device_local {
-                        MemoryType(n as _, mt.clone()).into()
-                    } else {
-                        None
-                    },
-                    if is_host_visible {
-                        MemoryType(n as _, mt.clone()).into()
-                    } else {
-                        None
-                    },
-                )
-            })
-            .unzip();
-
-        Self {
-            device_memory_types: device_memory_types.into_iter().filter_map(|x| x).collect(),
-            host_memory_types: host_memory_types.into_iter().filter_map(|x| x).collect(),
-        }
-    }
-
-    pub fn exact_host_visible_index(
-        &self,
-        mask: u32,
-        required: br::MemoryPropertyFlags,
-    ) -> Option<&MemoryType> {
-        self.host_memory_types
-            .iter()
-            .find(|mt| (mask & mt.corresponding_mask()) != 0 && mt.has_property_flags(required))
-    }
-
-    pub fn host_visible_index(
-        &self,
-        mask: u32,
-        preference: br::MemoryPropertyFlags,
-    ) -> Option<&MemoryType> {
-        self.exact_host_visible_index(mask, preference).or_else(|| {
-            self.host_memory_types
-                .iter()
-                .find(|mt| (mask & mt.corresponding_mask()) != 0)
-        })
-    }
-
-    pub fn device_local_index(&self, mask: u32) -> Option<&MemoryType> {
-        self.device_memory_types
-            .iter()
-            .find(|mt| (mask & mt.corresponding_mask()) != 0)
-    }
-
-    fn diagnose_heaps(p: &impl br::PhysicalDevice) {
-        info!("Memory Heaps: ");
-        for (n, &br::vk::VkMemoryHeap { size, flags }) in p.memory_properties().heaps().enumerate()
-        {
-            let (mut nb, mut unit) = (size as f32, "bytes");
-            if nb >= 10000.0 {
-                nb /= 1024.0;
-                unit = "KB";
-            }
-            if nb >= 10000.0 {
-                nb /= 1024.0;
-                unit = "MB";
-            }
-            if nb >= 10000.0 {
-                nb /= 1024.0;
-                unit = "GB";
-            }
-            if (flags & br::vk::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 {
-                info!("  #{}: {} {} [DEVICE LOCAL]", n, nb, unit);
-            } else {
-                info!("  #{}: {} {}", n, nb, unit);
-            }
-        }
-    }
-
-    fn diagnose_types(&self) {
-        info!("Device Memory Types: ");
-        for mt in &self.device_memory_types {
-            info!("  {:?}", mt);
-        }
-        info!("Host Visible Memory Types: ");
-        for mt in &self.host_memory_types {
-            info!("  {:?}", mt);
-        }
-    }
-}
-
-#[cfg(feature = "mt")]
-struct FenceReactorThread<Device: br::Device> {
-    pending_fences: std::sync::Arc<
-        parking_lot::Mutex<
-            Vec<(
-                std::task::Waker,
-                std::sync::Weak<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
-            )>,
-        >,
-    >,
-    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread_handle: Option<std::thread::JoinHandle<()>>,
-    thread_waker: std::sync::Arc<parking_lot::Condvar>,
-}
-#[cfg(feature = "mt")]
-impl<Device: br::Device + 'static> FenceReactorThread<Device> {
-    pub fn new() -> Self {
-        let pending_fences = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let thread_waker = std::sync::Arc::new(parking_lot::Condvar::new());
-
-        let pf2 = pending_fences.clone();
-        let s2 = shutdown.clone();
-        let tw2 = thread_waker.clone();
-        let thread_handle = std::thread::Builder::new()
-            .name(String::from("Peridot Fence Reactor"))
-            .spawn(move || {
-                let mut managed_fences = Vec::<(
-                    std::task::Waker,
-                    std::sync::Weak<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
-                )>::new();
-                let mut signaled_indexes = Vec::new();
-
-                loop {
-                    {
-                        let mut pf = pf2.lock();
-                        if managed_fences.is_empty() {
-                            tw2.wait(&mut pf);
-                        }
-
-                        if s2.load(std::sync::atomic::Ordering::Acquire) {
-                            break;
-                        }
-
-                        managed_fences.extend(pf.drain(..));
-                    }
-
-                    if !managed_fences.is_empty() {
-                        for (n, (_, f)) in managed_fences.iter().enumerate().rev() {
-                            if let Some(f) = f.upgrade() {
-                                if f.status().expect("Failed to get fence status") {
-                                    signaled_indexes.push((n, true));
-                                }
-                            } else {
-                                // observing fence was dropped externally
-                                signaled_indexes.push((n, false));
-                            }
-                        }
-                        // signaled_indexes is sorted larger to smaller
-                        for (dx, wake) in signaled_indexes.drain(..) {
-                            let (wk, _) = managed_fences.remove(dx);
-                            if wake {
-                                wk.wake();
-                            }
-                        }
-                    }
-                }
-            })
-            .expect("Failed to spawn Fence Reactor Thread");
-
-        Self {
-            pending_fences,
-            shutdown,
-            thread_handle: Some(thread_handle),
-            thread_waker,
-        }
-    }
-
-    pub fn register(
-        &self,
-        fence: &std::sync::Arc<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
-        waker: std::task::Waker,
-    ) {
-        self.pending_fences
-            .lock()
-            .push((waker, std::sync::Arc::downgrade(fence)));
-        self.thread_waker.notify_all();
-    }
-}
-#[cfg(feature = "mt")]
-impl<Device: br::Device> Drop for FenceReactorThread<Device> {
-    fn drop(&mut self) {
-        if let Some(th) = self.thread_handle.take() {
-            self.shutdown
-                .store(true, std::sync::atomic::Ordering::Release);
-            self.thread_waker.notify_all();
-            th.join().expect("Joining Fence Reactor Thread failed");
-        }
-    }
-}
-
-#[cfg(feature = "mt")]
-struct FenceWaitFuture<'d, Device: br::Device> {
-    reactor: &'d FenceReactorThread<Device>,
-    object: std::sync::Arc<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
-    registered: bool,
-}
-#[cfg(feature = "mt")]
-impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, Device> {
-    type Output = br::Result<()>;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        match self.object.status() {
-            Err(e) => std::task::Poll::Ready(Err(e)),
-            Ok(true) => std::task::Poll::Ready(Ok(())),
-            Ok(false) => {
-                if !self.registered {
-                    self.reactor.register(&self.object, cx.waker().clone());
-                    self.get_mut().registered = true;
-                }
-
-                std::task::Poll::Pending
-            }
-        }
-    }
-}
-
-pub type InstanceObject = SharedRef<br::InstanceObject>;
-pub type DeviceObject = SharedRef<br::DeviceObject<InstanceObject>>;
-/// Queue object with family index
-pub struct QueueSet<Device: br::Device> {
-    q: parking_lot::Mutex<br::QueueObject<Device>>,
-    family: u32,
-}
-/// Graphics manager
-pub struct Graphics {
-    pub(self) adapter: br::PhysicalDeviceObject<InstanceObject>,
-    device: DeviceObject,
-    graphics_queue: QueueSet<DeviceObject>,
-    cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
-    pub memory_type_manager: MemoryTypeManager,
-    #[cfg(feature = "mt")]
-    fence_reactor: FenceReactorThread<DeviceObject>,
-    #[cfg(feature = "debug")]
-    _debug_instance: br::DebugUtilsMessengerObject<InstanceObject>,
-}
-impl Graphics {
-    fn new(
-        appname: &str,
-        appversion: (u32, u32, u32),
-        instance_extensions: Vec<&str>,
-        device_extensions: Vec<&str>,
-        features: br::vk::VkPhysicalDeviceFeatures,
-    ) -> br::Result<Self> {
-        info!("Supported Layers: ");
-        let mut validation_layer_available = false;
-        #[cfg(debug_assertions)]
-        for l in br::enumerate_layer_properties().expect("failed to enumerate layer properties") {
-            let name = unsafe { CStr::from_ptr(l.layerName.as_ptr()) };
-            let name_str = name
-                .to_str()
-                .expect("unexpected invalid sequence in layer name");
-            info!(
-                "* {name_str} :: {}/{}",
-                l.specVersion, l.implementationVersion
-            );
-            if name_str == "VK_LAYER_KHRONOS_validation" {
-                validation_layer_available = true;
-            }
-        }
-
-        let mut ib = br::InstanceBuilder::new(appname, appversion, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(instance_extensions);
-        #[cfg(debug_assertions)]
-        ib.add_extension("VK_EXT_debug_report");
-        if validation_layer_available {
-            ib.add_layer("VK_LAYER_KHRONOS_validation");
-        } else {
-            warn!("Validation Layer is not found!");
-        }
-        #[cfg(feature = "debug")]
-        {
-            ib.add_extension("VK_EXT_debug_utils");
-            debug!("Debug reporting activated");
-        }
-        let instance = SharedRef::new(ib.create()?);
-
-        #[cfg(feature = "debug")]
-        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
-            .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
-            .create(instance.clone())?;
-
-        let adapter = instance
-            .iter_physical_devices()?
-            .next()
-            .expect("no physical devices");
-        let memory_type_manager = MemoryTypeManager::new(&adapter);
-        MemoryTypeManager::diagnose_heaps(&adapter);
-        memory_type_manager.diagnose_types();
-        let gqf_index = adapter
-            .queue_family_properties()
-            .find_matching_index(br::QueueFlags::GRAPHICS)
-            .expect("No graphics queue");
-        let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
-        let device = {
-            let mut db = br::DeviceBuilder::new(&adapter);
-            db.add_extensions(device_extensions).add_queue(qci);
-            if validation_layer_available {
-                db.add_layer("VK_LAYER_KHRONOS_validation");
-            }
-            *db.mod_features() = features;
-            SharedRef::new(db.create()?.clone_parent())
-        };
-
-        Ok(Self {
-            cp_onetime_submit: device.clone().new_command_pool(gqf_index, true, false)?,
-            graphics_queue: QueueSet {
-                q: parking_lot::Mutex::new(device.clone().queue(gqf_index, 0)),
-                family: gqf_index,
-            },
-            adapter: adapter.clone_parent(),
-            device,
-            memory_type_manager,
-            #[cfg(feature = "mt")]
-            fence_reactor: FenceReactorThread::new(),
-            #[cfg(feature = "debug")]
-            _debug_instance,
-        })
-    }
-
-    /// Submits any commands as transient commands.
-    pub fn submit_commands(
-        &mut self,
-        generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-    ) -> br::Result<()> {
-        let mut cb = LocalCommandBundle(
-            self.cp_onetime_submit.alloc(1, true)?,
-            &mut self.cp_onetime_submit,
-        );
-        generator(unsafe { cb[0].begin_once()? }).end()?;
-        self.graphics_queue.q.get_mut().submit(
-            &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
-            None::<&mut br::FenceObject<DeviceObject>>,
-        )?;
-        self.graphics_queue.q.get_mut().wait()
-    }
-    pub fn submit_buffered_commands(
-        &mut self,
-        batches: &[impl br::SubmissionBatch],
-        fence: &mut (impl br::Fence + br::VkHandleMut),
-    ) -> br::Result<()> {
-        self.graphics_queue.q.get_mut().submit(batches, Some(fence))
-    }
-    pub fn submit_buffered_commands_raw(
-        &mut self,
-        batches: &[br::vk::VkSubmitInfo],
-        fence: &mut (impl br::Fence + br::VkHandleMut),
-    ) -> br::Result<()> {
-        self.graphics_queue
-            .q
-            .get_mut()
-            .submit_raw(batches, Some(fence))
-    }
-
-    /// Submits any commands as transient commands.
-    /// ## Note
-    /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
-    #[cfg(feature = "mt")]
-    pub fn submit_commands_async<'s>(
-        &'s self,
-        generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-    ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
-        let mut fence = std::sync::Arc::new(self.device.clone().new_fence(false)?);
-
-        let mut pool = self.device.clone().new_command_pool(
-            self.graphics_queue_family_index(),
-            true,
-            false,
-        )?;
-        let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
-        generator(unsafe { cb[0].begin_once()? }).end()?;
-        self.graphics_queue.q.lock().submit(
-            &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
-            Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
-        )?;
-
-        Ok(async move {
-            self.await_fence(fence).await?;
-
-            // keep alive command buffers while execution
-            drop(cb);
-
-            Ok(())
-        })
-    }
-
-    /// Awaits fence on background thread
-    #[cfg(feature = "mt")]
-    pub fn await_fence<'s>(
-        &'s self,
-        fence: std::sync::Arc<
-            impl br::Fence<ConcreteDevice = DeviceObject> + Send + Sync + 'static,
-        >,
-    ) -> impl std::future::Future<Output = br::Result<()>> + 's {
-        FenceWaitFuture {
-            reactor: &self.fence_reactor,
-            object: fence,
-            registered: false,
-        }
-    }
-
-    pub fn instance(&self) -> &InstanceObject {
-        self.device.instance()
-    }
-
-    pub fn adapter(&self) -> &br::PhysicalDeviceObject<InstanceObject> {
-        &self.adapter
-    }
-
-    pub fn device(&self) -> &DeviceObject {
-        &self.device
-    }
-
-    pub fn graphics_queue_family_index(&self) -> u32 {
-        self.graphics_queue.family
-    }
-}
-impl Deref for Graphics {
-    type Target = DeviceObject;
-
-    fn deref(&self) -> &DeviceObject {
-        &self.device
-    }
-}
-
 struct GameTimer(Option<InstantTimer>);
 impl GameTimer {
     pub fn new() -> Self {
@@ -990,92 +495,15 @@ impl GameTimer {
     }
 }
 
-struct LocalCommandBundle<
-    'p,
-    CommandBuffer: br::CommandBuffer,
-    CommandPool: br::CommandPool + br::VkHandleMut + 'p,
->(Vec<CommandBuffer>, &'p mut CommandPool);
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p>
-    Deref for LocalCommandBundle<'p, CommandBuffer, CommandPool>
-{
-    type Target = [CommandBuffer];
-
-    fn deref(&self) -> &[CommandBuffer] {
-        &self.0
-    }
-}
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p>
-    DerefMut for LocalCommandBundle<'p, CommandBuffer, CommandPool>
-{
-    fn deref_mut(&mut self) -> &mut [CommandBuffer] {
-        &mut self.0
-    }
-}
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p> Drop
-    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
-{
-    fn drop(&mut self) {
-        unsafe {
-            self.1.free(&self.0[..]);
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum CBSubmissionType {
-    Graphics,
-    Transfer,
-}
-pub struct CommandBundle<Device: br::Device>(
-    Vec<br::CommandBufferObject<Device>>,
-    br::CommandPoolObject<Device>,
-);
-impl<Device: br::Device> Deref for CommandBundle<Device> {
-    type Target = [br::CommandBufferObject<Device>];
-
-    fn deref(&self) -> &[br::CommandBufferObject<Device>] {
-        &self.0
-    }
-}
-impl<Device: br::Device> DerefMut for CommandBundle<Device> {
-    fn deref_mut(&mut self) -> &mut [br::CommandBufferObject<Device>] {
-        &mut self.0
-    }
-}
-impl<Device: br::Device> Drop for CommandBundle<Device> {
-    fn drop(&mut self) {
-        unsafe {
-            self.1.free(&self.0[..]);
-        }
-    }
-}
-impl CommandBundle<DeviceObject> {
-    pub fn new(g: &Graphics, submission_type: CBSubmissionType, count: usize) -> br::Result<Self> {
-        let qf = match submission_type {
-            CBSubmissionType::Graphics => g.graphics_queue.family,
-            CBSubmissionType::Transfer => g.graphics_queue.family,
-        };
-        let mut cp = g.device.clone().new_command_pool(qf, false, false)?;
-
-        Ok(Self(cp.alloc(count as _, true)?, cp))
-    }
-}
-impl<Device: br::Device> CommandBundle<Device> {
-    #[inline]
-    pub fn reset(&mut self) -> br::Result<()> {
-        self.1.reset(true)
-    }
-}
-
 pub enum SubpassDependencyTemplates {}
 impl SubpassDependencyTemplates {
     pub fn to_color_attachment_in(
         from_subpass: Option<u32>,
-        occurence_subpass: u32,
+        occurrence_subpass: u32,
         by_region: bool,
     ) -> br::vk::VkSubpassDependency {
         br::vk::VkSubpassDependency {
-            dstSubpass: occurence_subpass,
+            dstSubpass: occurrence_subpass,
             srcSubpass: from_subpass.unwrap_or(br::vk::VK_SUBPASS_EXTERNAL),
             dstStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
             dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
@@ -1097,14 +525,14 @@ impl RenderPassTemplates {
         outer_requesting_layout: br::ImageLayout,
     ) -> br::RenderPassBuilder {
         let mut b = br::RenderPassBuilder::new();
-        let adesc = br::AttachmentDescription::new(
+        let attachment_desc = br::AttachmentDescription::new(
             format,
             outer_requesting_layout,
             outer_requesting_layout,
         )
         .load_op(br::LoadOp::Clear)
         .store_op(br::StoreOp::Store);
-        b.add_attachment(adesc);
+        b.add_attachment(attachment_desc);
         b.add_subpass(br::SubpassDescription::new().add_color_output(
             0,
             br::ImageLayout::ColorAttachmentOpt,
