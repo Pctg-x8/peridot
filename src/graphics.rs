@@ -1,4 +1,4 @@
-use crate::{debug::debug_utils_out, mthelper::SharedRef};
+use crate::mthelper::SharedRef;
 use bedrock as br;
 use br::{
     CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Queue,
@@ -109,7 +109,7 @@ impl Graphics {
         let instance = SharedRef::new(ib.create()?);
 
         #[cfg(feature = "debug")]
-        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(debug_utils_out)
+        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(crate::debug::debug_utils_out)
             .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
             .create(instance.clone())?;
 
