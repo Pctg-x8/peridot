@@ -29,13 +29,194 @@ where
     start..start + length
 }
 
-fn reverse_buffer_barriers(barriers: &[br::BufferMemoryBarrier]) -> Vec<br::BufferMemoryBarrier> {
-    barriers
-        .iter()
-        .cloned()
-        .map(br::BufferMemoryBarrier::flip)
-        .rev()
-        .collect()
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BufferUsage(pub u64);
+impl BufferUsage {
+    pub const UNUSED: Self = Self(0);
+
+    pub const HOST_RO: Self = Self(1 << 0);
+    pub const HOST_RW: Self = Self(1 << 1);
+    pub const TRANSFER_SRC: Self = Self(1 << 2);
+    pub const TRANSFER_DST: Self = Self(1 << 3);
+    pub const VERTEX_BUFFER: Self = Self(1 << 4);
+    pub const INDEX_BUFFER: Self = Self(1 << 5);
+    pub const INDIRECT_BUFFER: Self = Self(1 << 6);
+
+    // shader resources usage
+    pub const VERTEX_UNIFORM: Self = Self(1 << 8);
+    pub const VERTEX_STORAGE_RO: Self = Self(1 << 9);
+    pub const VERTEX_STORAGE_RW: Self = Self(1 << 10);
+    pub const FRAGMENT_UNIFORM: Self = Self(1 << 11);
+    pub const FRAGMENT_STORAGE_RO: Self = Self(1 << 12);
+    pub const FRAGMENT_STORAGE_RW: Self = Self(1 << 13);
+
+    pub const fn has_bits(&self, bits: Self) -> bool {
+        (self.0 & bits.0) != 0
+    }
+
+    pub fn vk_pipeline_stage_mask_requirements(&self) -> br::PipelineStageFlags {
+        let mut f = br::PipelineStageFlags(0);
+
+        f = if self.has_bits(Self::HOST_RO | Self::HOST_RW) {
+            f.host()
+        } else {
+            f
+        };
+        f = if self.has_bits(Self::TRANSFER_SRC | Self::TRANSFER_DST) {
+            f.transfer()
+        } else {
+            f
+        };
+        f = if self.has_bits(Self::VERTEX_BUFFER) {
+            f.vertex_input()
+        } else {
+            f
+        };
+        f = if self.has_bits(Self::INDEX_BUFFER) {
+            f.vertex_input()
+        } else {
+            f
+        };
+        f = if self.has_bits(Self::INDIRECT_BUFFER) {
+            f.draw_indirect()
+        } else {
+            f
+        };
+        f = if self
+            .has_bits(Self::VERTEX_UNIFORM | Self::VERTEX_STORAGE_RO | Self::VERTEX_STORAGE_RW)
+        {
+            f.vertex_shader()
+        } else {
+            f
+        };
+        f = if self.has_bits(
+            Self::FRAGMENT_UNIFORM | Self::FRAGMENT_STORAGE_RO | Self::FRAGMENT_STORAGE_RW,
+        ) {
+            f.fragment_shader()
+        } else {
+            f
+        };
+
+        f
+    }
+
+    pub fn vk_access_flags_requirements(&self) -> br::vk::VkAccessFlags {
+        let mut f = 0;
+
+        f |= if self.has_bits(Self::HOST_RO) {
+            br::AccessFlags::HOST.read
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::HOST_RW) {
+            br::AccessFlags::HOST.write | br::AccessFlags::HOST.read
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::TRANSFER_SRC) {
+            br::AccessFlags::TRANSFER.read
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::TRANSFER_DST) {
+            br::AccessFlags::TRANSFER.write
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::VERTEX_BUFFER) {
+            br::AccessFlags::VERTEX_ATTRIBUTE_READ
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::INDEX_BUFFER) {
+            br::AccessFlags::INDEX_READ
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::INDIRECT_BUFFER) {
+            br::AccessFlags::INDIRECT_COMMAND_READ
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::VERTEX_UNIFORM | Self::FRAGMENT_UNIFORM) {
+            br::AccessFlags::UNIFORM_READ
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::VERTEX_STORAGE_RO | Self::FRAGMENT_STORAGE_RO) {
+            br::AccessFlags::SHADER.read
+        } else {
+            0
+        };
+        f |= if self.has_bits(Self::VERTEX_STORAGE_RW | Self::FRAGMENT_STORAGE_RW) {
+            br::AccessFlags::SHADER.read | br::AccessFlags::SHADER.write
+        } else {
+            0
+        };
+
+        f
+    }
+}
+impl std::ops::BitOr for BufferUsage {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+impl std::ops::BitOrAssign for BufferUsage {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+fn vk_pipeline_stage_mask_requirements_for_image_layout(
+    l: br::ImageLayout,
+) -> br::PipelineStageFlags {
+    match l {
+        br::ImageLayout::Undefined | br::ImageLayout::Preinitialized => br::PipelineStageFlags(0),
+        br::ImageLayout::General => br::PipelineStageFlags::ALL_COMMANDS,
+        br::ImageLayout::ColorAttachmentOpt => br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        br::ImageLayout::DepthStencilAttachmentOpt => {
+            br::PipelineStageFlags::EARLY_FRAGMENT_TESTS.late_fragment_tests()
+        }
+        br::ImageLayout::DepthStencilReadOnlyOpt => br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        br::ImageLayout::ShaderReadOnlyOpt => {
+            br::PipelineStageFlags::VERTEX_SHADER.fragment_shader()
+        }
+        br::ImageLayout::TransferSrcOpt | br::ImageLayout::TransferDestOpt => {
+            br::PipelineStageFlags::TRANSFER
+        }
+        br::ImageLayout::PresentSrc => br::PipelineStageFlags::BOTTOM_OF_PIPE,
+    }
+}
+
+pub struct BufferUsageTransitionBarrier<'r, B: br::Buffer> {
+    pub buffer: &'r RangedBuffer<B>,
+    pub from_usage: BufferUsage,
+    pub to_usage: BufferUsage,
+}
+impl<B: br::Buffer> BufferUsageTransitionBarrier<'_, B> {
+    pub fn make_vk_barrier(&self) -> br::BufferMemoryBarrier {
+        br::BufferMemoryBarrier::new(
+            &self.buffer.0,
+            self.buffer.1.clone(),
+            self.from_usage.vk_access_flags_requirements(),
+            self.to_usage.vk_access_flags_requirements(),
+        )
+    }
+}
+impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<'_, B> {
+    fn add_into(self, barrier: &mut PipelineBarrier) {
+        barrier.buffer_barriers.push(self.make_vk_barrier());
+        barrier.src_stage_mask |= self.from_usage.vk_pipeline_stage_mask_requirements();
+        barrier.dst_stage_mask |= self.to_usage.vk_pipeline_stage_mask_requirements();
+    }
+
+    fn reserve_hints(barrier: &mut PipelineBarrier, count: usize) {
+        barrier.buffer_barriers.reserve(count);
+    }
 }
 
 pub struct RangedBuffer<B: br::Buffer>(B, Range<u64>);
@@ -58,6 +239,18 @@ impl<B: br::Buffer> RangedBuffer<B> {
         to_access_mask: br::vk::VkAccessFlags,
     ) -> br::BufferMemoryBarrier {
         br::BufferMemoryBarrier::new(&self.0, self.1.clone(), from_access_mask, to_access_mask)
+    }
+
+    pub fn usage_barrier(
+        &self,
+        from_usage: BufferUsage,
+        to_usage: BufferUsage,
+    ) -> BufferUsageTransitionBarrier<B> {
+        BufferUsageTransitionBarrier {
+            buffer: &self,
+            from_usage,
+            to_usage,
+        }
     }
 }
 
@@ -160,6 +353,34 @@ impl<P: br::Pipeline, L: br::PipelineLayout> GraphicsCommand
     }
 }
 
+pub trait PipelineBarrierEntry {
+    fn add_into(self, barrier: &mut PipelineBarrier);
+
+    fn reserve_hints(barrier: &mut PipelineBarrier, count: usize) {}
+}
+impl PipelineBarrierEntry for br::ImageMemoryBarrier {
+    fn add_into(self, barrier: &mut PipelineBarrier) {
+        let r: br::vk::VkImageMemoryBarrier = self.into();
+        barrier.src_stage_mask |= vk_pipeline_stage_mask_requirements_for_image_layout(unsafe {
+            std::mem::transmute(r.oldLayout)
+        });
+        barrier.dst_stage_mask |= vk_pipeline_stage_mask_requirements_for_image_layout(unsafe {
+            std::mem::transmute(r.newLayout)
+        });
+        barrier.image_barriers.push(r.into());
+    }
+
+    fn reserve_hints(barrier: &mut PipelineBarrier, count: usize) {
+        barrier.image_barriers.reserve(count);
+    }
+}
+
+impl<const N: usize, B: br::Buffer> GraphicsCommand for [BufferUsageTransitionBarrier<'_, B>; N] {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        PipelineBarrier::new().with_barriers(self).execute(cb)
+    }
+}
+
 pub struct PipelineBarrier {
     pub src_stage_mask: br::PipelineStageFlags,
     pub dst_stage_mask: br::PipelineStageFlags,
@@ -185,13 +406,28 @@ impl PipelineBarrier {
         }
     }
 
-    pub fn add_buffer_barrier(mut self, b: br::BufferMemoryBarrier) -> Self {
-        self.buffer_barriers.push(b);
+    pub fn with_barrier(mut self, b: impl PipelineBarrierEntry) -> Self {
+        b.add_into(&mut self);
         self
     }
 
-    pub fn add_image_barrier(mut self, b: br::ImageMemoryBarrier) -> Self {
-        self.image_barriers.push(b);
+    pub fn with_barriers<I>(mut self, bs: I) -> Self
+    where
+        I: IntoIterator,
+        <I as IntoIterator>::Item: PipelineBarrierEntry,
+    {
+        let iter = bs.into_iter();
+        let (expected_min_size, _) = iter.size_hint();
+        <<I as IntoIterator>::Item as PipelineBarrierEntry>::reserve_hints(
+            &mut self,
+            expected_min_size,
+        );
+
+        iter.fold(self, |t, b| t.with_barrier(b))
+    }
+
+    pub fn add_buffer_barrier(mut self, b: br::BufferMemoryBarrier) -> Self {
+        self.buffer_barriers.push(b);
         self
     }
 }
@@ -662,49 +898,38 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     RangedBuffer::for_type::<Uniform>(&buffer, mutable_data_offset);
                 let texture = RangedImage::single_color_plane(&image);
 
-                let in_barrier = PipelineBarrier {
-                    src_stage_mask: br::PipelineStageFlags::ALL_COMMANDS,
-                    dst_stage_mask: br::PipelineStageFlags::TRANSFER,
-                    by_region: true,
-                    buffer_barriers: vec![
-                        all_buffer.barrier(
-                            br::AccessFlags::MEMORY.read,
-                            br::AccessFlags::TRANSFER.write,
-                        ),
-                        mut_buffer
-                            .barrier(br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read),
-                        staging_init
-                            .barrier(br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read),
-                    ],
-                    image_barriers: vec![texture.barrier(
+                let in_barriers = PipelineBarrier::new()
+                    .with_barrier(
+                        all_buffer.usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
+                    )
+                    .with_barrier(
+                        mut_buffer.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                    )
+                    .with_barrier(
+                        staging_init.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                    )
+                    .with_barrier(texture.barrier(
                         br::ImageLayout::Preinitialized,
                         br::ImageLayout::TransferDestOpt,
-                    )],
-                };
-                let out_barrier = PipelineBarrier {
-                    src_stage_mask: br::PipelineStageFlags::TRANSFER,
-                    dst_stage_mask: br::PipelineStageFlags::VERTEX_SHADER
-                        .fragment_shader()
-                        .host()
-                        .vertex_input(),
-                    by_region: true,
-                    buffer_barriers: vec![
-                        vertex_buffer.barrier(
-                            br::AccessFlags::TRANSFER.write,
-                            br::AccessFlags::VERTEX_ATTRIBUTE_READ,
-                        ),
-                        uniform_buffer.barrier(
-                            br::AccessFlags::TRANSFER.write,
-                            br::AccessFlags::UNIFORM_READ,
-                        ),
-                        mut_buffer
-                            .barrier(br::AccessFlags::TRANSFER.write, br::AccessFlags::HOST.write),
-                    ],
-                    image_barriers: vec![texture.barrier(
+                    ))
+                    .by_region();
+                let out_barriers = PipelineBarrier::new()
+                    .with_barrier(
+                        vertex_buffer
+                            .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_BUFFER),
+                    )
+                    .with_barrier(
+                        uniform_buffer
+                            .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_UNIFORM),
+                    )
+                    .with_barrier(
+                        mut_buffer.usage_barrier(BufferUsage::TRANSFER_SRC, BufferUsage::HOST_RW),
+                    )
+                    .with_barrier(texture.barrier(
                         br::ImageLayout::TransferDestOpt,
                         br::ImageLayout::ShaderReadOnlyOpt,
-                    )],
-                };
+                    ))
+                    .by_region();
                 let staging_copy = CopyBuffer::new(&buffer_staging, &buffer)
                     .with_mirroring(0, copy_buffer_data_length as _);
                 let mutable_copy = CopyBuffer::new(&mut_buffer.0, &buffer)
@@ -721,7 +946,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 );
                 let copies = (staging_copy, mutable_copy, tex_copy);
 
-                copies.between(in_barrier, out_barrier).execute(&mut r);
+                copies.between(in_barriers, out_barriers).execute(&mut r);
                 r
             })
             .expect("Failed to submit pre-configure commands");
@@ -733,39 +958,23 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             let staging_uniform_buffer =
                 RangedBuffer::for_type::<Uniform>(&mut_buffer, mut_uniform_offset);
 
-            let in_barrier = PipelineBarrier {
-                src_stage_mask: br::PipelineStageFlags::VERTEX_SHADER.host(),
-                dst_stage_mask: br::PipelineStageFlags::TRANSFER,
-                by_region: true,
-                buffer_barriers: vec![
-                    uniform_buffer.barrier(
-                        br::AccessFlags::UNIFORM_READ,
-                        br::AccessFlags::TRANSFER.write,
-                    ),
-                    staging_uniform_buffer
-                        .barrier(br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read),
-                ],
-                image_barriers: Vec::new(),
-            };
-            let out_barrier = PipelineBarrier {
-                src_stage_mask: br::PipelineStageFlags::TRANSFER,
-                dst_stage_mask: br::PipelineStageFlags::VERTEX_SHADER.host(),
-                by_region: true,
-                buffer_barriers: vec![
-                    uniform_buffer.barrier(
-                        br::AccessFlags::TRANSFER.write,
-                        br::AccessFlags::UNIFORM_READ,
-                    ),
-                    staging_uniform_buffer
-                        .barrier(br::AccessFlags::TRANSFER.read, br::AccessFlags::HOST.write),
-                ],
-                image_barriers: Vec::new(),
-            };
+            let in_barriers = [
+                uniform_buffer
+                    .usage_barrier(BufferUsage::VERTEX_UNIFORM, BufferUsage::TRANSFER_DST),
+                staging_uniform_buffer
+                    .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+            ];
+            let out_barriers = [
+                uniform_buffer
+                    .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_UNIFORM),
+                staging_uniform_buffer
+                    .usage_barrier(BufferUsage::TRANSFER_SRC, BufferUsage::HOST_RW),
+            ];
             let copy_uniform = CopyBuffer::new(&mut_buffer, &buffer)
                 .with_range_for_type::<Uniform>(mut_uniform_offset, mutable_data_offset);
 
             copy_uniform
-                .between(in_barrier, out_barrier)
+                .between(in_barriers, out_barriers)
                 .execute_into(unsafe { update_cb.synchronized_nth(0) })
                 .expect("Failed to record update commands");
         }
