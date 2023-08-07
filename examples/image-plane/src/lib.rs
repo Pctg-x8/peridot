@@ -1,7 +1,7 @@
 use bedrock as br;
 use bedrock::traits::*;
 use br::{resources::Image, SubmissionBatch};
-use br::{CommandBuffer, DescriptorPool, Device, ImageChild};
+use br::{DescriptorPool, Device, ImageChild};
 use log::*;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3, Vector3F32,
@@ -19,6 +19,9 @@ use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+#[cfg(feature = "debug")]
+use br::VkObject;
+
 fn range_from_length<N>(start: N, length: N) -> Range<N>
 where
     N: std::ops::Add<N, Output = N> + Copy,
@@ -33,6 +36,452 @@ fn reverse_buffer_barriers(barriers: &[br::BufferMemoryBarrier]) -> Vec<br::Buff
         .map(br::BufferMemoryBarrier::flip)
         .rev()
         .collect()
+}
+
+pub struct RangedBuffer<B: br::Buffer>(B, Range<u64>);
+impl<B: br::Buffer> RangedBuffer<B> {
+    pub const fn from_offset_length(buffer: B, offset: u64, length: usize) -> Self {
+        Self(buffer, offset..offset + length as u64)
+    }
+
+    pub const fn for_type<T>(buffer: B, offset: u64) -> Self {
+        Self::from_offset_length(buffer, offset, std::mem::size_of::<T>())
+    }
+
+    pub fn make_ref<'s>(&'s self) -> RangedBuffer<&'s B> {
+        RangedBuffer(&self.0, self.1.clone())
+    }
+
+    pub fn barrier(
+        &self,
+        from_access_mask: br::vk::VkAccessFlags,
+        to_access_mask: br::vk::VkAccessFlags,
+    ) -> br::BufferMemoryBarrier {
+        br::BufferMemoryBarrier::new(&self.0, self.1.clone(), from_access_mask, to_access_mask)
+    }
+}
+
+pub struct RangedImage<R: br::Image>(R, br::ImageSubresourceRange);
+impl<R: br::Image> RangedImage<R> {
+    pub fn single_color_plane(resource: R) -> Self {
+        Self(resource, br::ImageSubresourceRange::color(0..1, 0..1))
+    }
+
+    pub fn barrier(
+        &self,
+        from_layout: br::ImageLayout,
+        to_layout: br::ImageLayout,
+    ) -> br::ImageMemoryBarrier {
+        br::ImageMemoryBarrier::new(&self.0, self.1.clone(), from_layout, to_layout)
+    }
+}
+
+pub trait GraphicsCommand {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>);
+
+    unsafe fn execute_into_ext_sync(
+        self,
+        cb: &mut (impl br::CommandBuffer + br::VkHandleMut),
+    ) -> br::Result<()>
+    where
+        Self: Sized,
+    {
+        let mut r = cb.begin()?;
+        self.execute(&mut r);
+        r.end()
+    }
+    fn execute_into(
+        self,
+        mut sync_cb: br::SynchronizedCommandBuffer<
+            '_,
+            '_,
+            impl br::CommandPool + br::VkHandleMut,
+            impl br::CommandBuffer + br::VkHandleMut,
+        >,
+    ) -> br::Result<()>
+    where
+        Self: Sized,
+    {
+        let mut r = sync_cb.begin()?;
+        self.execute(&mut r);
+        r.end()
+    }
+
+    #[inline]
+    fn then<C>(self, next: C) -> (Self, C)
+    where
+        Self: Sized,
+    {
+        (self, next)
+    }
+
+    #[inline]
+    fn after_of<B>(self, before: B) -> (B, Self)
+    where
+        Self: Sized,
+    {
+        (before, self)
+    }
+
+    #[inline]
+    fn between<B, A>(self, before: B, after: A) -> (B, Self, A)
+    where
+        Self: Sized,
+    {
+        (before, self, after)
+    }
+}
+/// consecutive exec
+impl<A: GraphicsCommand, B: GraphicsCommand> GraphicsCommand for (A, B) {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        self.0.execute(cb);
+        self.1.execute(cb);
+    }
+}
+/// consecutive exec
+impl<A: GraphicsCommand, B: GraphicsCommand, C: GraphicsCommand> GraphicsCommand for (A, B, C) {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        self.0.execute(cb);
+        self.1.execute(cb);
+        self.2.execute(cb);
+    }
+}
+
+impl<P: br::Pipeline, L: br::PipelineLayout> GraphicsCommand for peridot::LayoutedPipeline<P, L> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        self.bind(cb);
+    }
+}
+impl<P: br::Pipeline, L: br::PipelineLayout> GraphicsCommand
+    for &'_ peridot::LayoutedPipeline<P, L>
+{
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        self.bind(cb);
+    }
+}
+
+pub struct PipelineBarrier {
+    pub src_stage_mask: br::PipelineStageFlags,
+    pub dst_stage_mask: br::PipelineStageFlags,
+    pub by_region: bool,
+    pub buffer_barriers: Vec<br::BufferMemoryBarrier>,
+    pub image_barriers: Vec<br::ImageMemoryBarrier>,
+}
+impl PipelineBarrier {
+    pub const fn new() -> Self {
+        Self {
+            src_stage_mask: br::PipelineStageFlags(0),
+            dst_stage_mask: br::PipelineStageFlags(0),
+            by_region: false,
+            buffer_barriers: Vec::new(),
+            image_barriers: Vec::new(),
+        }
+    }
+
+    pub fn by_region(self) -> Self {
+        Self {
+            by_region: true,
+            ..self
+        }
+    }
+
+    pub fn add_buffer_barrier(mut self, b: br::BufferMemoryBarrier) -> Self {
+        self.buffer_barriers.push(b);
+        self
+    }
+
+    pub fn add_image_barrier(mut self, b: br::ImageMemoryBarrier) -> Self {
+        self.image_barriers.push(b);
+        self
+    }
+}
+impl GraphicsCommand for PipelineBarrier {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.pipeline_barrier(
+            self.src_stage_mask,
+            self.dst_stage_mask,
+            self.by_region,
+            &[],
+            &self.buffer_barriers,
+            &self.image_barriers,
+        );
+    }
+}
+
+pub struct CopyBuffer<S: br::Buffer, D: br::Buffer>(S, D, Vec<br::vk::VkBufferCopy>);
+impl<S: br::Buffer, D: br::Buffer> CopyBuffer<S, D> {
+    pub const fn new(source: S, dest: D) -> Self {
+        Self(source, dest, Vec::new())
+    }
+
+    pub fn with_range(mut self, src_offset: u64, dest_offset: u64, size: usize) -> Self {
+        self.2.push(br::vk::VkBufferCopy {
+            srcOffset: src_offset,
+            dstOffset: dest_offset,
+            size: size as _,
+        });
+        self
+    }
+
+    pub fn with_range_for_type<T>(self, src_offset: u64, dest_offset: u64) -> Self {
+        self.with_range(src_offset, dest_offset, std::mem::size_of::<T>())
+    }
+
+    pub fn with_mirroring(self, offset: u64, size: usize) -> Self {
+        self.with_range(offset, offset, size)
+    }
+
+    pub fn with_mirroring_for_type<T>(self, offset: u64) -> Self {
+        self.with_mirroring(offset, std::mem::size_of::<T>())
+    }
+}
+impl<S: br::Buffer, D: br::Buffer> GraphicsCommand for CopyBuffer<S, D> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.copy_buffer(&self.0, &self.1, &self.2);
+    }
+}
+
+pub struct CopyBufferToImage<S: br::Buffer, D: br::Image> {
+    source: S,
+    dest: D,
+    dest_image_layout: br::ImageLayout,
+    regions: Vec<br::vk::VkBufferImageCopy>,
+}
+impl<S: br::Buffer, D: br::Image> CopyBufferToImage<S, D> {
+    pub const fn new(source: S, dest: D) -> Self {
+        Self {
+            source,
+            dest,
+            dest_image_layout: br::ImageLayout::TransferDestOpt,
+            regions: Vec::new(),
+        }
+    }
+
+    /// default is TransferDestOpt
+    pub fn with_more_optimal_image_layout(mut self, layout: br::ImageLayout) -> Self {
+        self.dest_image_layout = layout;
+        self
+    }
+
+    pub fn with_range(
+        mut self,
+        buffer_data_desc: BufferImageDataDesc,
+        image_range: ImageResourceRange,
+    ) -> Self {
+        self.regions.push(br::vk::VkBufferImageCopy {
+            bufferOffset: buffer_data_desc.offset,
+            bufferRowLength: buffer_data_desc.row_bytes,
+            bufferImageHeight: buffer_data_desc.image_height,
+            imageSubresource: image_range.layers,
+            imageOffset: image_range.offset,
+            imageExtent: image_range.extent,
+        });
+        self
+    }
+}
+impl<S: br::Buffer, D: br::Image> GraphicsCommand for CopyBufferToImage<S, D> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.copy_buffer_to_image(
+            &self.source,
+            &self.dest,
+            self.dest_image_layout,
+            &self.regions,
+        );
+    }
+}
+
+pub struct BeginRenderPass<R: br::RenderPass, F: br::Framebuffer> {
+    render_pass: R,
+    framebuffer: F,
+    rect: br::vk::VkRect2D,
+    clear_values: Vec<br::ClearValue>,
+    inline_commands: bool,
+}
+impl<'f, R, D, I> BeginRenderPass<R, &'f br::FramebufferObject<D, I>>
+where
+    R: br::RenderPass<ConcreteDevice = D>,
+    D: br::Device,
+    I: br::ImageView<ConcreteDevice = D>,
+{
+    pub fn for_entire_framebuffer(
+        render_pass: R,
+        framebuffer: &'f br::FramebufferObject<D, I>,
+        clear_values: Vec<br::ClearValue>,
+    ) -> Self {
+        Self {
+            rect: framebuffer
+                .size()
+                .clone()
+                .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
+            render_pass,
+            framebuffer,
+            clear_values,
+            inline_commands: true,
+        }
+    }
+
+    pub fn non_inline_commands(self) -> Self {
+        Self {
+            inline_commands: false,
+            ..self
+        }
+    }
+}
+impl<R: br::RenderPass, F: br::Framebuffer> GraphicsCommand for BeginRenderPass<R, F> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.begin_render_pass(
+            &self.render_pass,
+            &self.framebuffer,
+            self.rect,
+            &self.clear_values,
+            self.inline_commands,
+        );
+    }
+}
+
+pub struct NextSubpass(bool);
+impl NextSubpass {
+    const WITH_INLINE_COMMANDS: Self = Self(true);
+    const WITH_COMMAND_BUFFER_EXECUTIONS: Self = Self(false);
+}
+impl GraphicsCommand for NextSubpass {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.next_subpass(self.0);
+    }
+}
+
+pub struct EndRenderPass;
+impl GraphicsCommand for EndRenderPass {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.end_render_pass();
+    }
+}
+
+pub struct BindGraphicsDescriptorSets {
+    from: u32,
+    sets: Vec<br::vk::VkDescriptorSet>,
+    dynamic_offsets: Vec<u32>,
+}
+impl BindGraphicsDescriptorSets {
+    pub const fn new(sets: Vec<br::vk::VkDescriptorSet>) -> Self {
+        Self {
+            from: 0,
+            sets,
+            dynamic_offsets: Vec::new(),
+        }
+    }
+
+    pub const fn with_first(first: u32, sets: Vec<br::vk::VkDescriptorSet>) -> Self {
+        Self {
+            from: first,
+            sets,
+            dynamic_offsets: Vec::new(),
+        }
+    }
+}
+impl GraphicsCommand for BindGraphicsDescriptorSets {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.bind_graphics_descriptor_sets(self.from, &self.sets, &self.dynamic_offsets);
+    }
+}
+
+pub struct DrawMesh<'b, B: br::Buffer> {
+    vertex_buffers: Vec<RangedBuffer<&'b B>>,
+    vertex_count: u32,
+    instance_count: u32,
+    vertex_start: u32,
+    instance_start: u32,
+}
+impl<'b, B: br::Buffer> DrawMesh<'b, B> {
+    pub const fn new(vertex_buffers: Vec<RangedBuffer<&'b B>>, vertex_count: u32) -> Self {
+        Self {
+            vertex_buffers,
+            vertex_count,
+            instance_count: 1,
+            vertex_start: 0,
+            instance_start: 0,
+        }
+    }
+
+    pub fn with_instance_count(self, count: u32) -> Self {
+        Self {
+            instance_count: count,
+            ..self
+        }
+    }
+}
+impl<B: br::Buffer> GraphicsCommand for DrawMesh<'_, B> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let vertex_buffers = self
+            .vertex_buffers
+            .iter()
+            .map(|rb| (rb.0, rb.1.start as usize))
+            .collect::<Vec<_>>();
+
+        let _ = cb.bind_vertex_buffers(0, &vertex_buffers).draw(
+            self.vertex_count,
+            self.instance_count,
+            self.vertex_start,
+            self.instance_start,
+        );
+    }
+}
+
+pub struct BufferImageDataDesc {
+    offset: u64,
+    row_bytes: u32,
+    image_height: u32,
+}
+impl BufferImageDataDesc {
+    pub const fn new(offset: u64, row_bytes: u32) -> Self {
+        Self {
+            offset,
+            row_bytes,
+            image_height: 0,
+        }
+    }
+
+    pub const fn with_explicit_image_height(self, image_height: u32) -> Self {
+        Self {
+            image_height,
+            ..self
+        }
+    }
+}
+
+pub struct ImageResourceRange {
+    layers: br::vk::VkImageSubresourceLayers,
+    offset: br::vk::VkOffset3D,
+    extent: br::vk::VkExtent3D,
+}
+impl ImageResourceRange {
+    pub const fn for_single_color_from_rect2d(rect: br::vk::VkRect2D) -> Self {
+        Self {
+            layers: br::vk::VkImageSubresourceLayers {
+                aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
+                mipLevel: 0,
+                baseArrayLayer: 0,
+                layerCount: 1,
+            },
+            offset: br::vk::VkOffset3D {
+                x: rect.offset.x,
+                y: rect.offset.y,
+                z: 0,
+            },
+            extent: br::vk::VkExtent3D {
+                width: rect.extent.width,
+                height: rect.extent.height,
+                depth: 1,
+            },
+        }
+    }
+
+    /// default is 0
+    pub const fn with_mip_level(mut self, level: u32) -> Self {
+        self.layers.mipLevel = level;
+
+        self
+    }
 }
 
 pub struct Game<PL: peridot::NativeLinker> {
@@ -197,174 +646,128 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 };
             })
             .expect("Failed to setup mutable data");
+        let vertex_buffer = RangedBuffer::from_offset_length(
+            &buffer,
+            vertices_offset,
+            std::mem::size_of::<peridot::VertexUV>() * plane_mesh.vertices.len(),
+        );
 
-        let preconfigure_task = e
+        let pre_configure_task = e
             .submit_commands_async(|mut r| {
-                let _ = r
-                    .pipeline_barrier(
-                        br::PipelineStageFlags::ALL_COMMANDS,
-                        br::PipelineStageFlags::TRANSFER,
-                        true,
-                        &[],
-                        &[
-                            br::BufferMemoryBarrier::new(
-                                &buffer,
-                                0..bp.total_size(),
-                                br::AccessFlags::MEMORY.read,
-                                br::AccessFlags::TRANSFER.write,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &mut_buffer,
-                                range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                                br::AccessFlags::HOST.write,
-                                br::AccessFlags::TRANSFER.read,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &buffer_staging,
-                                0..bp_stg.total_size(),
-                                br::AccessFlags::HOST.write,
-                                br::AccessFlags::TRANSFER.read,
-                            ),
-                        ],
-                        &[br::ImageMemoryBarrier::new(
-                            &image,
-                            br::ImageSubresourceRange::color(0..1, 0..1),
-                            br::ImageLayout::Preinitialized,
-                            br::ImageLayout::TransferDestOpt,
-                        )],
-                    )
-                    .copy_buffer(
-                        &buffer_staging,
-                        &buffer,
-                        &[br::vk::VkBufferCopy {
-                            srcOffset: 0,
-                            dstOffset: 0,
-                            size: copy_buffer_data_length,
-                        }],
-                    )
-                    .copy_buffer(
-                        &mut_buffer,
-                        &buffer,
-                        &[br::vk::VkBufferCopy {
-                            srcOffset: mut_uniform_offset,
-                            dstOffset: mutable_data_offset,
-                            size: size_of::<Uniform>() as _,
-                        }],
-                    )
-                    .copy_buffer_to_image(
-                        &buffer_staging,
-                        &image,
+                let all_buffer = RangedBuffer::from_offset_length(&buffer, 0, bp.total_size() as _);
+                let mut_buffer = RangedBuffer::for_type::<Uniform>(&mut_buffer, mut_uniform_offset);
+                let staging_init =
+                    RangedBuffer::from_offset_length(&buffer_staging, 0, bp_stg.total_size() as _);
+                let uniform_buffer =
+                    RangedBuffer::for_type::<Uniform>(&buffer, mutable_data_offset);
+                let texture = RangedImage::single_color_plane(&image);
+
+                let in_barrier = PipelineBarrier {
+                    src_stage_mask: br::PipelineStageFlags::ALL_COMMANDS,
+                    dst_stage_mask: br::PipelineStageFlags::TRANSFER,
+                    by_region: true,
+                    buffer_barriers: vec![
+                        all_buffer.barrier(
+                            br::AccessFlags::MEMORY.read,
+                            br::AccessFlags::TRANSFER.write,
+                        ),
+                        mut_buffer
+                            .barrier(br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read),
+                        staging_init
+                            .barrier(br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read),
+                    ],
+                    image_barriers: vec![texture.barrier(
+                        br::ImageLayout::Preinitialized,
                         br::ImageLayout::TransferDestOpt,
-                        &[br::vk::VkBufferImageCopy {
-                            bufferOffset: staging_image_offset,
-                            bufferRowLength: (image_data.0.stride
-                                / (image_data.0.format.bpp() >> 3))
-                                as _,
-                            bufferImageHeight: 0,
-                            imageSubresource: br::vk::VkImageSubresourceLayers {
-                                aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
-                                mipLevel: 0,
-                                baseArrayLayer: 0,
-                                layerCount: 1,
-                            },
-                            imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-                            imageExtent: br::vk::VkExtent3D {
-                                width: image_data.0.size.0,
-                                height: image_data.0.size.1,
-                                depth: 1,
-                            },
-                        }],
-                    )
-                    .pipeline_barrier(
-                        br::PipelineStageFlags::TRANSFER,
-                        br::PipelineStageFlags::VERTEX_SHADER
-                            .fragment_shader()
-                            .host()
-                            .vertex_input(),
-                        true,
-                        &[],
-                        &[
-                            br::BufferMemoryBarrier::new(
-                                &buffer,
-                                range_from_length(
-                                    0,
-                                    (size_of::<peridot::VertexUV>() * plane_mesh.vertices.len())
-                                        as _,
-                                ),
-                                br::AccessFlags::TRANSFER.write,
-                                br::AccessFlags::VERTEX_ATTRIBUTE_READ,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &buffer,
-                                range_from_length(mutable_data_offset, size_of::<Uniform>() as _),
-                                br::AccessFlags::TRANSFER.write,
-                                br::AccessFlags::UNIFORM_READ,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &mut_buffer,
-                                range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                                br::AccessFlags::TRANSFER.read,
-                                br::AccessFlags::HOST.write,
-                            ),
-                        ],
-                        &[br::ImageMemoryBarrier::new(
-                            &image,
-                            br::ImageSubresourceRange::color(0..1, 0..1),
-                            br::ImageLayout::TransferDestOpt,
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )],
-                    );
+                    )],
+                };
+                let out_barrier = PipelineBarrier {
+                    src_stage_mask: br::PipelineStageFlags::TRANSFER,
+                    dst_stage_mask: br::PipelineStageFlags::VERTEX_SHADER
+                        .fragment_shader()
+                        .host()
+                        .vertex_input(),
+                    by_region: true,
+                    buffer_barriers: vec![
+                        vertex_buffer.barrier(
+                            br::AccessFlags::TRANSFER.write,
+                            br::AccessFlags::VERTEX_ATTRIBUTE_READ,
+                        ),
+                        uniform_buffer.barrier(
+                            br::AccessFlags::TRANSFER.write,
+                            br::AccessFlags::UNIFORM_READ,
+                        ),
+                        mut_buffer
+                            .barrier(br::AccessFlags::TRANSFER.write, br::AccessFlags::HOST.write),
+                    ],
+                    image_barriers: vec![texture.barrier(
+                        br::ImageLayout::TransferDestOpt,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    )],
+                };
+                let staging_copy = CopyBuffer::new(&buffer_staging, &buffer)
+                    .with_mirroring(0, copy_buffer_data_length as _);
+                let mutable_copy = CopyBuffer::new(&mut_buffer.0, &buffer)
+                    .with_range_for_type::<Uniform>(mut_uniform_offset, mutable_data_offset);
+                let tex_copy = CopyBufferToImage::new(&buffer_staging, &image).with_range(
+                    BufferImageDataDesc::new(
+                        staging_image_offset,
+                        (image_data.0.stride / (image_data.0.format.bpp() >> 3)) as _,
+                    ),
+                    ImageResourceRange::for_single_color_from_rect2d(br::vk::VkRect2D {
+                        offset: br::vk::VkOffset2D { x: 0, y: 0 },
+                        extent: image_data.0.size.into(),
+                    }),
+                );
+                let copies = (staging_copy, mutable_copy, tex_copy);
+
+                copies.between(in_barrier, out_barrier).execute(&mut r);
                 r
             })
-            .expect("Failed to submit preconfigure commands");
+            .expect("Failed to submit pre-configure commands");
 
         let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
             .expect("Alloc UpdateCB");
         {
-            let mut rec = unsafe { update_cb[0].begin().expect("Begin UpdateCmdRec") };
-            let enter_buffer_barriers = &[
-                br::BufferMemoryBarrier::new(
-                    &mut_buffer,
-                    range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                    br::AccessFlags::HOST.write,
-                    br::AccessFlags::TRANSFER.read,
-                ),
-                br::BufferMemoryBarrier::new(
-                    &buffer,
-                    range_from_length(mutable_data_offset, size_of::<Uniform>() as _),
-                    br::AccessFlags::UNIFORM_READ,
-                    br::AccessFlags::TRANSFER.write,
-                ),
-            ];
+            let uniform_buffer = RangedBuffer::for_type::<Uniform>(&buffer, mutable_data_offset);
+            let staging_uniform_buffer =
+                RangedBuffer::for_type::<Uniform>(&mut_buffer, mut_uniform_offset);
 
-            let _ = rec
-                .pipeline_barrier(
-                    // TODO: use excluding bits for less stalling
-                    br::PipelineStageFlags::VERTEX_SHADER.host(),
-                    br::PipelineStageFlags::TRANSFER,
-                    true,
-                    &[],
-                    enter_buffer_barriers,
-                    &[],
-                )
-                .copy_buffer(
-                    &mut_buffer,
-                    &buffer,
-                    &[br::vk::VkBufferCopy {
-                        srcOffset: mut_uniform_offset,
-                        dstOffset: mutable_data_offset,
-                        size: size_of::<Uniform>() as _,
-                    }],
-                )
-                .pipeline_barrier(
-                    br::PipelineStageFlags::TRANSFER,
-                    br::PipelineStageFlags::VERTEX_SHADER.host(),
-                    true,
-                    &[],
-                    &reverse_buffer_barriers(enter_buffer_barriers),
-                    &[],
-                );
-            rec.end().expect("Failed to record update commands");
+            let in_barrier = PipelineBarrier {
+                src_stage_mask: br::PipelineStageFlags::VERTEX_SHADER.host(),
+                dst_stage_mask: br::PipelineStageFlags::TRANSFER,
+                by_region: true,
+                buffer_barriers: vec![
+                    uniform_buffer.barrier(
+                        br::AccessFlags::UNIFORM_READ,
+                        br::AccessFlags::TRANSFER.write,
+                    ),
+                    staging_uniform_buffer
+                        .barrier(br::AccessFlags::HOST.write, br::AccessFlags::TRANSFER.read),
+                ],
+                image_barriers: Vec::new(),
+            };
+            let out_barrier = PipelineBarrier {
+                src_stage_mask: br::PipelineStageFlags::TRANSFER,
+                dst_stage_mask: br::PipelineStageFlags::VERTEX_SHADER.host(),
+                by_region: true,
+                buffer_barriers: vec![
+                    uniform_buffer.barrier(
+                        br::AccessFlags::TRANSFER.write,
+                        br::AccessFlags::UNIFORM_READ,
+                    ),
+                    staging_uniform_buffer
+                        .barrier(br::AccessFlags::TRANSFER.read, br::AccessFlags::HOST.write),
+                ],
+                image_barriers: Vec::new(),
+            };
+            let copy_uniform = CopyBuffer::new(&mut_buffer, &buffer)
+                .with_range_for_type::<Uniform>(mut_uniform_offset, mutable_data_offset);
+
+            copy_uniform
+                .between(in_barrier, out_barrier)
+                .execute_into(unsafe { update_cb.synchronized_nth(0) })
+                .expect("Failed to record update commands");
         }
 
         let outer_layout = e.requesting_backbuffer_layout().0;
@@ -427,11 +830,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             )
             .expect("Create DescriptorPool");
 
-        let shaderfile = e
+        let shader = e
             .load("builtin.shaders.unlit_image")
             .expect("Loading shader");
         let shader =
-            PvpShaderModules::new(e.graphics().device(), shaderfile).expect("Create ShaderModules");
+            PvpShaderModules::new(e.graphics().device(), shader).expect("Create ShaderModules");
         let vp = [br::vk::VkViewport {
             width: screen_size.width as _,
             height: screen_size.height as _,
@@ -482,7 +885,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .expect("Failed to set pipeline name");
         let gp = LayoutedPipeline::combine(gp, pl);
 
-        async_std::task::block_on(preconfigure_task).expect("Failed to preconfigure resources");
+        async_std::task::block_on(pre_configure_task).expect("Failed to pre-configure resources");
 
         let image_view = image
             .create_view(
@@ -531,29 +934,23 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                         .expect("invalid sequence?"),
                 ),
             )
-            .apply(e.graphics())
+            .apply(e.graphics().device())
             .expect("Failed to set render cb name");
-            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
-            let _ = cr.begin_render_pass(
+
+            let begin_main_rp = BeginRenderPass::for_entire_framebuffer(
                 &renderpass,
                 fb,
-                fb.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[br::ClearValue::color([0.0; 4])],
-                true,
+                vec![br::ClearValue::color([0.0; 4])],
             );
-            gp.bind(&mut cr);
-            let _ = cr
-                .bind_graphics_descriptor_sets(
-                    0,
-                    unsafe { std::mem::transmute(&descriptor_main[..]) },
-                    &[],
-                )
-                .bind_vertex_buffers(0, &[(&buffer, vertices_offset as _)])
-                .draw(4, 1, 0, 0)
-                .end_render_pass();
-            cr.end().expect("Failed to record render commands");
+            let render_image_plane = DrawMesh::new(vec![vertex_buffer.make_ref()], 4)
+                .after_of(BindGraphicsDescriptorSets::new(vec![*descriptor_main[0]]));
+
+            unsafe {
+                (&gp, render_image_plane)
+                    .between(begin_main_rp, EndRenderPass)
+                    .execute_into_ext_sync(cb)
+                    .expect("Failed to record render commands");
+            }
         }
 
         bgm.write().expect("Starting BGM").play();
@@ -622,28 +1019,27 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 }
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn populate_render_commands(&mut self) {
+        let vertex_buffer = RangedBuffer::from_offset_length(
+            &self.buffer,
+            self.vertices_offset,
+            std::mem::size_of::<peridot::VertexUV>(),
+        );
+
         for (cb, fb) in self.render_cb.iter_mut().zip(&self.framebuffers) {
-            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
-            let _ = cr.begin_render_pass(
+            let begin_main_rp = BeginRenderPass::for_entire_framebuffer(
                 &self.renderpass,
                 fb,
-                fb.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[br::ClearValue::color([0.0; 4])],
-                true,
+                vec![br::ClearValue::color([0.0; 4])],
             );
-            self.gp_main.bind(&mut cr);
-            let _ = cr
-                .bind_graphics_descriptor_sets(
-                    0,
-                    unsafe { std::mem::transmute(&self.descriptor.2[..]) },
-                    &[],
-                )
-                .bind_vertex_buffers(0, &[(&self.buffer, self.vertices_offset as _)])
-                .draw(4, 1, 0, 0)
-                .end_render_pass();
-            cr.end().expect("Failed to record render commands");
+            let render_image_plane = DrawMesh::new(vec![vertex_buffer.make_ref()], 4)
+                .after_of(BindGraphicsDescriptorSets::new(vec![*self.descriptor.2[0]]));
+
+            unsafe {
+                (&self.gp_main, render_image_plane)
+                    .between(begin_main_rp, EndRenderPass)
+                    .execute_into_ext_sync(cb)
+                    .expect("Failed to record render commands");
+            }
         }
     }
 }
