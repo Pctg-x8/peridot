@@ -270,6 +270,16 @@ impl<B: br::Buffer + Clone> RangedBuffer<&'_ B> {
         RangedBuffer(self.0.clone(), self.1.clone())
     }
 }
+impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br::VkHandleMut>
+    RangedBuffer<peridot::Buffer<B, M>>
+{
+    pub fn guard_map<R>(
+        &mut self,
+        action: impl FnOnce(&br::MappedMemoryRange<M>) -> R,
+    ) -> br::Result<R> {
+        self.0.guard_map(self.1.clone(), action)
+    }
+}
 
 pub struct RangedImage<R: br::Image>(R, br::ImageSubresourceRange);
 impl<R: br::Image> RangedImage<R> {

@@ -15,8 +15,6 @@ use peridot::{
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::convert::TryInto;
 use std::marker::PhantomData;
-use std::mem::size_of;
-use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -25,8 +23,8 @@ use br::VkObject;
 
 use crate::command_object::{
     BeginRenderPass, BindGraphicsDescriptorSets, BufferImageDataDesc, BufferUsage, CopyBuffer,
-    CopyBufferToImage, DrawMesh, EndRenderPass, ImageResourceRange, Mesh, PipelineBarrier,
-    RangedBuffer, RangedImage,
+    CopyBufferToImage, EndRenderPass, ImageResourceRange, Mesh, PipelineBarrier, RangedBuffer,
+    RangedImage,
 };
 use crate::descriptor_pointer::DescriptorPointer;
 
@@ -71,10 +69,11 @@ pub struct Game<PL: peridot::NativeLinker> {
             br::DeviceMemoryObject<peridot::DeviceObject>,
         >,
     >,
-    mutable_buffer_offsets: MutableBufferOffsets,
-    mutable_buffer: peridot::Buffer<
-        br::BufferObject<peridot::DeviceObject>,
-        br::DeviceMemoryObject<peridot::DeviceObject>,
+    mutable_uniform_buffer: RangedBuffer<
+        peridot::Buffer<
+            br::BufferObject<peridot::DeviceObject>,
+            br::DeviceMemoryObject<peridot::DeviceObject>,
+        >,
     >,
     _image_view: br::ImageViewObject<
         peridot::Image<
@@ -208,6 +207,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 };
             })
             .expect("Failed to setup mutable data");
+
         let vertex_buffer = RangedBuffer::from_offset_length(
             &buffer,
             buffer_offsets.plane_vertices,
@@ -478,6 +478,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
 
         bgm.write().expect("Starting BGM").play();
+        let RangedBuffer(_, mutable_uniform_range) = mut_uniform_buffer;
 
         Game {
             render_cb,
@@ -487,9 +488,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             gp_main: gp,
             rot: 0.0,
             plane_mesh,
-            mutable_buffer_offsets,
+            mutable_uniform_buffer: RangedBuffer(mut_buffer, mutable_uniform_range),
             _sampler: smp,
-            mutable_buffer: mut_buffer,
             _image_view: image_view,
             update_cb,
             ph: PhantomData,
@@ -499,15 +499,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn update(&mut self, e: &mut peridot::Engine<PL>, on_backbuffer_of: u32, delta_time: Duration) {
         let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
         self.rot += dtsec * 15.0;
-        let (mut_uniform_offset, rot) = (self.mutable_buffer_offsets.uniform, self.rot);
-        self.mutable_buffer
-            .guard_map(
-                0..mut_uniform_offset + size_of::<Uniform>() as u64,
-                |m| unsafe {
-                    m.get_mut::<Uniform>(mut_uniform_offset as _).object =
-                        Quaternion::new(rot, Vector3F32::UP).into();
-                },
-            )
+        let rot = self.rot;
+        self.mutable_uniform_buffer
+            .guard_map(|m| unsafe {
+                m.get_mut::<Uniform>(0).object = Quaternion::new(rot, Vector3F32::UP).into();
+            })
             .expect("Update DynamicStgBuffer");
 
         e.do_render(
