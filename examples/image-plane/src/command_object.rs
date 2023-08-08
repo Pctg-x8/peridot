@@ -191,6 +191,11 @@ impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<'_, B>
         barrier.buffer_barriers.reserve(count);
     }
 }
+impl<const N: usize, B: br::Buffer> GraphicsCommand for [BufferUsageTransitionBarrier<'_, B>; N] {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        PipelineBarrier::new().with_barriers(self).execute(cb)
+    }
+}
 
 pub struct RangedBuffer<B: br::Buffer>(pub B, pub Range<u64>);
 impl<B: br::Buffer> RangedBuffer<B> {
@@ -219,14 +224,6 @@ impl<B: br::Buffer> RangedBuffer<B> {
             self.0.native_ptr(),
             self.1.start as usize..self.1.end as usize,
         )
-    }
-
-    pub fn barrier(
-        &self,
-        from_access_mask: br::vk::VkAccessFlags,
-        to_access_mask: br::vk::VkAccessFlags,
-    ) -> br::BufferMemoryBarrier {
-        br::BufferMemoryBarrier::new(&self.0, self.1.clone(), from_access_mask, to_access_mask)
     }
 
     pub fn usage_barrier(
@@ -395,6 +392,7 @@ impl<P: br::Pipeline, L: br::PipelineLayout> GraphicsCommand
 pub trait PipelineBarrierEntry {
     fn add_into(self, barrier: &mut PipelineBarrier);
 
+    #[allow(unused_variables)]
     fn reserve_hints(barrier: &mut PipelineBarrier, count: usize) {}
 }
 impl PipelineBarrierEntry for br::ImageMemoryBarrier {
@@ -411,12 +409,6 @@ impl PipelineBarrierEntry for br::ImageMemoryBarrier {
 
     fn reserve_hints(barrier: &mut PipelineBarrier, count: usize) {
         barrier.image_barriers.reserve(count);
-    }
-}
-
-impl<const N: usize, B: br::Buffer> GraphicsCommand for [BufferUsageTransitionBarrier<'_, B>; N] {
-    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
-        PipelineBarrier::new().with_barriers(self).execute(cb)
     }
 }
 
@@ -463,11 +455,6 @@ impl PipelineBarrier {
         );
 
         iter.fold(self, |t, b| t.with_barrier(b))
-    }
-
-    pub fn add_buffer_barrier(mut self, b: br::BufferMemoryBarrier) -> Self {
-        self.buffer_barriers.push(b);
-        self
     }
 }
 impl GraphicsCommand for PipelineBarrier {
@@ -735,16 +722,8 @@ impl ImageResourceRange {
                 baseArrayLayer: 0,
                 layerCount: 1,
             },
-            offset: br::vk::VkOffset3D {
-                x: rect.offset.x,
-                y: rect.offset.y,
-                z: 0,
-            },
-            extent: br::vk::VkExtent3D {
-                width: rect.extent.width,
-                height: rect.extent.height,
-                depth: 1,
-            },
+            offset: rect.offset.with_z(0),
+            extent: rect.extent.with_depth(1),
         }
     }
 
