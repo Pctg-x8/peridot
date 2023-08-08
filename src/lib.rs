@@ -250,6 +250,7 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn transfer_queue_family_index(&self) -> u32 {
         self.g.graphics_queue.family
     }
+
     pub fn backbuffer_format(&self) -> br::vk::VkFormat {
         self.presenter.format()
     }
@@ -272,6 +273,12 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.presenter.requesting_backbuffer_layout()
     }
+    pub fn backbuffer_attachment_desc(&self) -> br::AttachmentDescription {
+        let (ol, _) = self.requesting_backbuffer_layout();
+
+        br::AttachmentDescription::new(self.backbuffer_format(), ol, ol)
+    }
+
     pub fn input(&self) -> &InputProcess {
         &self.ip
     }

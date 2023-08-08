@@ -226,6 +226,9 @@ impl BufferContent {
             std::mem::align_of::<T>() as _,
         )
     }
+    pub const fn vertices_for<T>(slice: &[T]) -> Self {
+        Self::vertices::<T>(slice.len())
+    }
 
     pub const fn index<T>() -> Self {
         BufferContent::Index(
@@ -287,6 +290,19 @@ impl BufferContent {
     }
     pub const fn storage_texel_dynarray<T>(count: usize) -> Self {
         BufferContent::StorageTexel(
+            std::mem::size_of::<T>() as u64 * count as u64,
+            std::mem::align_of::<T>() as _,
+        )
+    }
+
+    pub const fn raw<T>() -> Self {
+        BufferContent::Raw(
+            std::mem::size_of::<T>() as _,
+            std::mem::align_of::<T>() as _,
+        )
+    }
+    pub const fn raw_dynarray<T>(count: usize) -> Self {
+        BufferContent::Raw(
             std::mem::size_of::<T>() as u64 * count as u64,
             std::mem::align_of::<T>() as _,
         )

@@ -192,7 +192,7 @@ impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<'_, B>
     }
 }
 
-pub struct RangedBuffer<B: br::Buffer>(B, Range<u64>);
+pub struct RangedBuffer<B: br::Buffer>(pub B, pub Range<u64>);
 impl<B: br::Buffer> RangedBuffer<B> {
     pub const fn from_offset_length(buffer: B, offset: u64, length: usize) -> Self {
         Self(buffer, offset..offset + length as u64)
@@ -202,8 +202,23 @@ impl<B: br::Buffer> RangedBuffer<B> {
         Self::from_offset_length(buffer, offset, std::mem::size_of::<T>())
     }
 
+    pub const fn offset(&self) -> u64 {
+        self.1.start
+    }
+
+    pub const fn byte_length(&self) -> u64 {
+        self.1.end - self.1.start
+    }
+
     pub fn make_ref<'s>(&'s self) -> RangedBuffer<&'s B> {
         RangedBuffer(&self.0, self.1.clone())
+    }
+
+    pub fn descriptor_uniform_buffer_write_info(&self) -> (br::vk::VkBuffer, Range<usize>) {
+        (
+            self.0.native_ptr(),
+            self.1.start as usize..self.1.end as usize,
+        )
     }
 
     pub fn barrier(
@@ -224,6 +239,26 @@ impl<B: br::Buffer> RangedBuffer<B> {
             from_usage,
             to_usage,
         }
+    }
+
+    pub fn usage_barrier3(
+        &self,
+        first_usage: BufferUsage,
+        intermedial_usage: BufferUsage,
+        last_usage: BufferUsage,
+    ) -> [BufferUsageTransitionBarrier<B>; 2] {
+        [
+            self.usage_barrier(first_usage, intermedial_usage),
+            self.usage_barrier(intermedial_usage, last_usage),
+        ]
+    }
+
+    pub fn usage_barrier3_switching(
+        &self,
+        first_usage: BufferUsage,
+        intermedial_usage: BufferUsage,
+    ) -> [BufferUsageTransitionBarrier<B>; 2] {
+        self.usage_barrier3(first_usage, intermedial_usage, first_usage)
     }
 
     pub fn inner_ref(&self) -> &B {
@@ -248,6 +283,18 @@ impl<R: br::Image> RangedImage<R> {
         to_layout: br::ImageLayout,
     ) -> br::ImageMemoryBarrier {
         br::ImageMemoryBarrier::new(&self.0, self.1.clone(), from_layout, to_layout)
+    }
+
+    pub fn barrier3(
+        &self,
+        first_layout: br::ImageLayout,
+        intermedial_layout: br::ImageLayout,
+        last_layout: br::ImageLayout,
+    ) -> [br::ImageMemoryBarrier; 2] {
+        [
+            self.barrier(first_layout, intermedial_layout),
+            self.barrier(intermedial_layout, last_layout),
+        ]
     }
 }
 
@@ -603,41 +650,38 @@ impl GraphicsCommand for BindGraphicsDescriptorSets {
     }
 }
 
-pub struct DrawMesh<'b, B: br::Buffer> {
-    vertex_buffers: Vec<RangedBuffer<&'b B>>,
-    vertex_count: u32,
-    instance_count: u32,
-    vertex_start: u32,
-    instance_start: u32,
+pub struct Mesh<B: br::Buffer> {
+    pub vertex_buffers: Vec<RangedBuffer<B>>,
+    pub vertex_count: u32,
 }
-impl<'b, B: br::Buffer> DrawMesh<'b, B> {
-    pub const fn new(vertex_buffers: Vec<RangedBuffer<&'b B>>, vertex_count: u32) -> Self {
-        Self {
-            vertex_buffers,
-            vertex_count,
-            instance_count: 1,
+impl<B: br::Buffer> Mesh<B> {
+    pub const fn draw<'m>(&'m self, instance_count: u32) -> DrawMesh<'m, B> {
+        DrawMesh {
+            mesh: self,
+            instance_count,
             vertex_start: 0,
             instance_start: 0,
         }
     }
+}
 
-    pub fn with_instance_count(self, count: u32) -> Self {
-        Self {
-            instance_count: count,
-            ..self
-        }
-    }
+pub struct DrawMesh<'m, B: br::Buffer> {
+    mesh: &'m Mesh<B>,
+    instance_count: u32,
+    vertex_start: u32,
+    instance_start: u32,
 }
 impl<B: br::Buffer> GraphicsCommand for DrawMesh<'_, B> {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
         let vertex_buffers = self
+            .mesh
             .vertex_buffers
             .iter()
-            .map(|rb| (rb.0, rb.1.start as usize))
+            .map(|rb| (&rb.0, rb.1.start as usize))
             .collect::<Vec<_>>();
 
         let _ = cb.bind_vertex_buffers(0, &vertex_buffers).draw(
-            self.vertex_count,
+            self.mesh.vertex_count,
             self.instance_count,
             self.vertex_start,
             self.instance_start,
