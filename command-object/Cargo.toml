@@ -1,0 +1,12 @@
+[package]
+name = "peridot-command-object"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
+    "Implements",
+] }
+peridot = { path = ".." }

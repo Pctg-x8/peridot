@@ -38,5 +38,6 @@ members = [
     "image",
     "vg",
     "derive",
-    "transition"
+    "transition",
+    "command-object",
 ]

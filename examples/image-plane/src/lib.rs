@@ -2,7 +2,6 @@ use bedrock as br;
 use bedrock::traits::*;
 use br::{resources::Image, SubmissionBatch};
 use br::{DescriptorPool, Device, ImageChild};
-use command_object::GraphicsCommand;
 use log::*;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3, Vector3F32,
@@ -21,15 +20,11 @@ use std::time::Duration;
 #[cfg(feature = "debug")]
 use br::VkObject;
 
-use crate::command_object::{
+use peridot_command_object::{
     BeginRenderPass, BindGraphicsDescriptorSets, BufferImageDataDesc, BufferUsage, CopyBuffer,
-    CopyBufferToImage, EndRenderPass, ImageResourceRange, Mesh, PipelineBarrier, RangedBuffer,
-    RangedImage,
+    CopyBufferToImage, DescriptorPointer, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh,
+    PipelineBarrier, RangedBuffer, RangedImage,
 };
-use crate::descriptor_pointer::DescriptorPointer;
-
-mod command_object;
-mod descriptor_pointer;
 
 struct BufferOffsets {
     pub plane_vertices: u64,
