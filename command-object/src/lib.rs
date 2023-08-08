@@ -36,45 +36,26 @@ impl BufferUsage {
     pub fn vk_pipeline_stage_mask_requirements(&self) -> br::PipelineStageFlags {
         let mut f = br::PipelineStageFlags(0);
 
-        f = if self.has_bits(Self::HOST_RO | Self::HOST_RW) {
-            f.host()
-        } else {
-            f
-        };
-        f = if self.has_bits(Self::TRANSFER_SRC | Self::TRANSFER_DST) {
-            f.transfer()
-        } else {
-            f
-        };
-        f = if self.has_bits(Self::VERTEX_BUFFER) {
-            f.vertex_input()
-        } else {
-            f
-        };
-        f = if self.has_bits(Self::INDEX_BUFFER) {
-            f.vertex_input()
-        } else {
-            f
-        };
-        f = if self.has_bits(Self::INDIRECT_BUFFER) {
-            f.draw_indirect()
-        } else {
-            f
-        };
-        f = if self
-            .has_bits(Self::VERTEX_UNIFORM | Self::VERTEX_STORAGE_RO | Self::VERTEX_STORAGE_RW)
-        {
-            f.vertex_shader()
-        } else {
-            f
-        };
-        f = if self.has_bits(
+        if self.has_bits(Self::HOST_RO | Self::HOST_RW) {
+            f = f.host();
+        }
+        if self.has_bits(Self::TRANSFER_SRC | Self::TRANSFER_DST) {
+            f = f.transfer();
+        }
+        if self.has_bits(Self::VERTEX_BUFFER | Self::INDEX_BUFFER) {
+            f = f.vertex_input();
+        }
+        if self.has_bits(Self::INDIRECT_BUFFER) {
+            f = f.draw_indirect();
+        }
+        if self.has_bits(Self::VERTEX_UNIFORM | Self::VERTEX_STORAGE_RO | Self::VERTEX_STORAGE_RW) {
+            f = f.vertex_shader();
+        }
+        if self.has_bits(
             Self::FRAGMENT_UNIFORM | Self::FRAGMENT_STORAGE_RO | Self::FRAGMENT_STORAGE_RW,
         ) {
-            f.fragment_shader()
-        } else {
-            f
-        };
+            f = f.fragment_shader();
+        }
 
         f
     }
@@ -82,56 +63,36 @@ impl BufferUsage {
     pub fn vk_access_flags_requirements(&self) -> br::vk::VkAccessFlags {
         let mut f = 0;
 
-        f |= if self.has_bits(Self::HOST_RO) {
-            br::AccessFlags::HOST.read
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::HOST_RW) {
-            br::AccessFlags::HOST.write | br::AccessFlags::HOST.read
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::TRANSFER_SRC) {
-            br::AccessFlags::TRANSFER.read
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::TRANSFER_DST) {
-            br::AccessFlags::TRANSFER.write
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::VERTEX_BUFFER) {
-            br::AccessFlags::VERTEX_ATTRIBUTE_READ
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::INDEX_BUFFER) {
-            br::AccessFlags::INDEX_READ
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::INDIRECT_BUFFER) {
-            br::AccessFlags::INDIRECT_COMMAND_READ
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::VERTEX_UNIFORM | Self::FRAGMENT_UNIFORM) {
-            br::AccessFlags::UNIFORM_READ
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::VERTEX_STORAGE_RO | Self::FRAGMENT_STORAGE_RO) {
-            br::AccessFlags::SHADER.read
-        } else {
-            0
-        };
-        f |= if self.has_bits(Self::VERTEX_STORAGE_RW | Self::FRAGMENT_STORAGE_RW) {
-            br::AccessFlags::SHADER.read | br::AccessFlags::SHADER.write
-        } else {
-            0
-        };
+        if self.has_bits(Self::HOST_RO) {
+            f |= br::AccessFlags::HOST.read;
+        }
+        if self.has_bits(Self::HOST_RW) {
+            f |= br::AccessFlags::HOST.write | br::AccessFlags::HOST.read;
+        }
+        if self.has_bits(Self::TRANSFER_SRC) {
+            f |= br::AccessFlags::TRANSFER.read;
+        }
+        if self.has_bits(Self::TRANSFER_DST) {
+            f |= br::AccessFlags::TRANSFER.write;
+        }
+        if self.has_bits(Self::VERTEX_BUFFER) {
+            f |= br::AccessFlags::VERTEX_ATTRIBUTE_READ;
+        }
+        if self.has_bits(Self::INDEX_BUFFER) {
+            f |= br::AccessFlags::INDEX_READ;
+        }
+        if self.has_bits(Self::INDIRECT_BUFFER) {
+            f |= br::AccessFlags::INDIRECT_COMMAND_READ;
+        }
+        if self.has_bits(Self::VERTEX_UNIFORM | Self::FRAGMENT_UNIFORM) {
+            f |= br::AccessFlags::UNIFORM_READ;
+        }
+        if self.has_bits(Self::VERTEX_STORAGE_RO | Self::FRAGMENT_STORAGE_RO) {
+            f |= br::AccessFlags::SHADER.read;
+        }
+        if self.has_bits(Self::VERTEX_STORAGE_RW | Self::FRAGMENT_STORAGE_RW) {
+            f |= br::AccessFlags::SHADER.read | br::AccessFlags::SHADER.write;
+        }
 
         f
     }
