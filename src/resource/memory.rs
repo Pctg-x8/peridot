@@ -78,12 +78,21 @@ where
             last_resource_tiling: None,
         }
     }
+    pub fn with_entries(
+        g: &'g crate::Graphics,
+        entries: Vec<MemoryBadgetEntry<Buffer, Image>>,
+    ) -> (Self, Vec<u64>) {
+        let mut this = Self::new(g);
+        let mut offsets = Vec::with_capacity(entries.len());
+        this.entries.reserve(entries.len());
+        for e in entries {
+            offsets.push(this.add(e));
+        }
 
-    pub fn add(&mut self, v: MemoryBadgetEntry<Buffer, Image>) -> u64
-    where
-        Buffer: br::MemoryBound,
-        Image: br::MemoryBound,
-    {
+        (this, offsets)
+    }
+
+    pub fn add(&mut self, v: MemoryBadgetEntry<Buffer, Image>) -> u64 {
         let req = v.requirements();
         let new_offset = super::align2!(self.total_size, req.alignment);
         let align_required = self
