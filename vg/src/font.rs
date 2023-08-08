@@ -4,7 +4,7 @@ use peridot::math::Vector2;
 
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 use objc_ext::ObjcObject;
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
+#[cfg(all(windows, not(feature = "use-freetype")))]
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, DWRITE_FACTORY_TYPE_SHARED,
 };
@@ -117,7 +117,8 @@ impl From<windows::core::Error> for GlyphLoadingError {
 }
 
 pub struct FontProvider {
-    #[cfg(target_os = "windows")]
+    #[cfg(windows)]
+    #[cfg(not(feature = "use-freetype"))]
     factory: IDWriteFactory,
     #[cfg(feature = "use-freetype")]
     ftlib: self::ft_drivers::System,
@@ -127,7 +128,8 @@ pub struct FontProvider {
 impl FontProvider {
     pub fn new() -> Result<Self, FontConstructionError> {
         Ok(FontProvider {
-            #[cfg(target_os = "windows")]
+            #[cfg(windows)]
+            #[cfg(not(feature = "use-freetype"))]
             factory: unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? },
             #[cfg(feature = "use-freetype")]
             ftlib: self::ft_drivers::System::new(),
