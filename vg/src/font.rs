@@ -5,11 +5,10 @@ use peridot::math::Vector2;
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 use objc_ext::ObjcObject;
 #[cfg(all(windows, not(feature = "use-freetype")))]
-use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, DWRITE_FACTORY_TYPE_SHARED,
-};
+use windows::{Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink, core::AsImpl};
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_SIMULATIONS_NONE, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
 };
@@ -379,7 +378,7 @@ impl FontProvider {
         size: f32,
     ) -> Result<Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
-        let conv = ATFRegisterScope::register(&self.factory, AssetToFontConverter::new(a))?;
+        let conv = FontFileLoaderRegisterScope::register(&self.factory, AssetToFontConverter::new(a).into())?;
         let fntfile = unsafe {
             self.factory.CreateCustomFontFileReference(
                 &1u32 as *const u32 as _,
@@ -429,7 +428,13 @@ impl Font {
     }
 
     pub fn glyph_id(&self, c: char) -> Option<u32> {
-        unsafe { self.0.GetGlyphIndices(&(c as u32), 1).ok().map(|x| x as _) }
+        let mut index = std::mem::MaybeUninit::uninit();
+        unsafe {
+            self.0
+                .GetGlyphIndices(&(c as u32), 1, index.as_mut_ptr())
+                .ok()
+                .map(|_| index.assume_init() as _)
+        }
     }
     pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
         let mut gm = std::mem::MaybeUninit::uninit();
@@ -466,7 +471,7 @@ impl Font {
         glyph: u32,
         builder: &mut B,
     ) -> Result<(), GlyphLoadingError> {
-        let mut sink = PathEventReceiver::new();
+        let sink = ID2D1SimplifiedGeometrySink::from(PathEventReceiver::new());
 
         unsafe {
             self.0.GetGlyphRunOutline(
@@ -480,7 +485,7 @@ impl Font {
                 &sink,
             )?
         }
-        for pe in sink.drain_all_paths() {
+        for pe in sink.as_impl().drain_all_paths() {
             builder.path_event(pe);
         }
 

@@ -25,10 +25,15 @@ impl PathEventReceiver {
         }
     }
 
-    pub fn drain_all_paths(&mut self) -> std::vec::Drain<PathEvent> {
-        self.paths.get_mut().drain(..)
+    pub fn drain_all_paths(&self) -> Vec<PathEvent> {
+        std::mem::replace(&mut self.paths.borrow_mut(), Vec::new())
+    }
+
+    pub fn cast_sink_interface(&self) -> ID2D1SimplifiedGeometrySink {
+        unsafe { self.cast().expect("conversion needs success") }
     }
 }
+#[allow(non_snake_case)]
 impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
     fn AddLines(&self, p: *const D2D_POINT_2F, count: u32) {
         for p in unsafe { from_raw_parts(p, count as _) } {
@@ -83,17 +88,12 @@ impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
         trace!("*UNIMPLEMENTED* SetSegmentFlags with {vertexflags:?}");
     }
 }
-impl From<&'_ PathEventReceiver> for &'_ ID2D1SimplifiedGeometrySink {
-    fn from(value: &'_ PathEventReceiver) -> Self {
-        unsafe { std::mem::transmute(value) }
-    }
-}
 
-pub struct ATFRegisterScope<'a>(&'a IDWriteFactory, AssetToFontConverter);
-impl<'a> ATFRegisterScope<'a> {
+pub struct FontFileLoaderRegisterScope<'a>(&'a IDWriteFactory, IDWriteFontFileLoader);
+impl<'a> FontFileLoaderRegisterScope<'a> {
     pub fn register(
         factory: &'a IDWriteFactory,
-        atf: AssetToFontConverter,
+        atf: IDWriteFontFileLoader,
     ) -> windows::core::Result<Self> {
         unsafe {
             factory
@@ -102,11 +102,11 @@ impl<'a> ATFRegisterScope<'a> {
         }
     }
 
-    pub fn object(&self) -> &AssetToFontConverter {
+    pub fn object(&self) -> &IDWriteFontFileLoader {
         &self.1
     }
 }
-impl Drop for ATFRegisterScope<'_> {
+impl Drop for FontFileLoaderRegisterScope<'_> {
     fn drop(&mut self) {
         unsafe {
             self.0
@@ -127,6 +127,7 @@ impl AssetToFontConverter {
         }
     }
 }
+#[allow(non_snake_case)]
 impl IDWriteFontFileLoader_Impl for AssetToFontConverter {
     fn CreateStreamFromKey(
         &self,
@@ -144,11 +145,6 @@ impl IDWriteFontFileLoader_Impl for AssetToFontConverter {
         }
     }
 }
-impl From<&'_ AssetToFontConverter> for &'_ IDWriteFontFileLoader {
-    fn from(value: &'_ AssetToFontConverter) -> Self {
-        unsafe { std::mem::transmute(value) }
-    }
-}
 
 #[windows::core::implement(IDWriteFontFileStream)]
 pub struct AssetStreamBridge {
@@ -159,6 +155,7 @@ impl AssetStreamBridge {
         Self { asset }
     }
 }
+#[allow(non_snake_case)]
 impl IDWriteFontFileStream_Impl for AssetStreamBridge {
     fn GetFileSize(&self) -> windows::core::Result<u64> {
         Ok(self.asset.0.len() as _)
