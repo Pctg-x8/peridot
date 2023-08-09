@@ -91,6 +91,10 @@ impl<R: br::Image> RangedImage<R> {
         Self(resource, br::ImageSubresourceRange::color(0..1, 0..1))
     }
 
+    pub fn single_depth_stencil_plane(resource: R) -> Self {
+        Self(resource, br::ImageSubresourceRange::depth_stencil(0..1, 0..1))
+    }
+
     pub fn barrier(
         &self,
         from_layout: br::ImageLayout,

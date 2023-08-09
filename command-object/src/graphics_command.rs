@@ -1,10 +1,22 @@
 use bedrock as br;
 
-use crate::{vk_pipeline_stage_mask_requirements_for_image_layout, Mesh};
+use crate::{vk_pipeline_stage_mask_requirements_for_image_layout, IndexedMesh, Mesh};
 
 pub trait GraphicsCommand {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>);
 
+    fn execute_and_finish(
+        self,
+        mut cb: br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>,
+    ) -> br::Result<()>
+    where
+        Self: Sized,
+    {
+        self.execute(&mut cb);
+        cb.end()
+    }
+
+    #[deprecated = "please use execute_and_finish instead, due to reduce maintenance cost"]
     unsafe fn execute_into_ext_sync(
         self,
         cb: &mut (impl br::CommandBuffer + br::VkHandleMut),
@@ -12,10 +24,9 @@ pub trait GraphicsCommand {
     where
         Self: Sized,
     {
-        let mut r = cb.begin()?;
-        self.execute(&mut r);
-        r.end()
+        self.execute_and_finish(cb.begin()?)
     }
+    #[deprecated = "please use execute_and_finish instead, due to reduce maintenance cost"]
     fn execute_into(
         self,
         mut sync_cb: br::SynchronizedCommandBuffer<
@@ -28,9 +39,17 @@ pub trait GraphicsCommand {
     where
         Self: Sized,
     {
-        let mut r = sync_cb.begin()?;
-        self.execute(&mut r);
-        r.end()
+        self.execute_and_finish(sync_cb.begin()?)
+    }
+
+    fn submit(self, engine: &mut peridot::Engine<impl peridot::NativeLinker>) -> br::Result<()>
+    where
+        Self: Sized,
+    {
+        engine.submit_commands(|mut r| {
+            self.execute(&mut r);
+            r
+        })
     }
 
     #[inline]
@@ -249,12 +268,38 @@ impl<S: br::Buffer, D: br::Image> GraphicsCommand for CopyBufferToImage<S, D> {
     }
 }
 
+/// Default is for inline commands execution(for bundle execution needs explicit switching)
 pub struct BeginRenderPass<R: br::RenderPass, F: br::Framebuffer> {
     render_pass: R,
     framebuffer: F,
     rect: br::vk::VkRect2D,
     clear_values: Vec<br::ClearValue>,
     inline_commands: bool,
+}
+impl<R: br::RenderPass, F: br::Framebuffer> BeginRenderPass<R, F> {
+    pub const fn new(render_pass: R, framebuffer: F, rect: br::vk::VkRect2D) -> Self {
+        Self {
+            render_pass,
+            framebuffer,
+            rect,
+            clear_values: Vec::new(),
+            inline_commands: true,
+        }
+    }
+
+    pub fn with_clear_values(self, clear_values: Vec<br::ClearValue>) -> Self {
+        Self {
+            clear_values,
+            ..self
+        }
+    }
+
+    pub fn non_inline_commands(self) -> Self {
+        Self {
+            inline_commands: false,
+            ..self
+        }
+    }
 }
 impl<'f, R, D, I> BeginRenderPass<R, &'f br::FramebufferObject<D, I>>
 where
@@ -276,13 +321,6 @@ where
             framebuffer,
             clear_values,
             inline_commands: true,
-        }
-    }
-
-    pub fn non_inline_commands(self) -> Self {
-        Self {
-            inline_commands: false,
-            ..self
         }
     }
 }
@@ -316,31 +354,110 @@ impl GraphicsCommand for EndRenderPass {
     }
 }
 
-pub struct BindGraphicsDescriptorSets {
-    from: u32,
-    sets: Vec<br::vk::VkDescriptorSet>,
-    dynamic_offsets: Vec<u32>,
+#[repr(transparent)]
+pub struct DescriptorSets(pub Vec<br::vk::VkDescriptorSet>);
+impl DescriptorSets {
+    pub fn bind_graphics(&self) -> BindGraphicsDescriptorSets {
+        BindGraphicsDescriptorSets {
+            from: 0,
+            sets: &self.0[..],
+            dynamic_offsets: &[],
+        }
+    }
 }
-impl BindGraphicsDescriptorSets {
-    pub const fn new(sets: Vec<br::vk::VkDescriptorSet>) -> Self {
+
+pub struct BindGraphicsDescriptorSets<'s> {
+    from: u32,
+    sets: &'s [br::vk::VkDescriptorSet],
+    dynamic_offsets: &'s [u32],
+}
+impl<'s> BindGraphicsDescriptorSets<'s> {
+    pub const fn new(sets: &'s [br::vk::VkDescriptorSet]) -> Self {
         Self {
             from: 0,
             sets,
-            dynamic_offsets: Vec::new(),
+            dynamic_offsets: &[],
         }
     }
 
-    pub const fn with_first(first: u32, sets: Vec<br::vk::VkDescriptorSet>) -> Self {
+    pub const fn with_first(first: u32, sets: &'s [br::vk::VkDescriptorSet]) -> Self {
         Self {
             from: first,
             sets,
-            dynamic_offsets: Vec::new(),
+            dynamic_offsets: &[],
+        }
+    }
+
+    pub const fn from(self, first: u32) -> Self {
+        Self {
+            from: first,
+            ..self
         }
     }
 }
-impl GraphicsCommand for BindGraphicsDescriptorSets {
+impl GraphicsCommand for BindGraphicsDescriptorSets<'_> {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
-        let _ = cb.bind_graphics_descriptor_sets(self.from, &self.sets, &self.dynamic_offsets);
+        let _ = cb.bind_graphics_descriptor_sets(self.from, self.sets, self.dynamic_offsets);
+    }
+}
+
+pub struct PushConstant<T> {
+    shader_stage: br::ShaderStage,
+    offset: u32,
+    value: T,
+}
+impl<T> PushConstant<T> {
+    pub const fn for_fragment(offset: u32, value: T) -> Self {
+        Self {
+            shader_stage: br::ShaderStage::FRAGMENT,
+            offset,
+            value,
+        }
+    }
+}
+impl<T> GraphicsCommand for PushConstant<T> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        if (self.shader_stage.0 & br::vk::VK_SHADER_STAGE_COMPUTE_BIT) != 0 {
+            // assumes compute pipeline
+            let _ = cb.push_compute_constant(self.shader_stage, self.offset, &self.value);
+        } else {
+            let _ = cb.push_graphics_constant(self.shader_stage, self.offset, &self.value);
+        }
+    }
+}
+
+pub struct ViewportWithScissorRect(pub br::vk::VkViewport, pub br::vk::VkRect2D);
+impl GraphicsCommand for ViewportWithScissorRect {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.set_viewport(0, &[self.0]).set_scissor(0, &[self.1]);
+    }
+}
+impl<const N: usize> GraphicsCommand for [ViewportWithScissorRect; N] {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let (viewports, scissors): (Vec<_>, Vec<_>) = self.into_iter().map(|a| (a.0, a.1)).unzip();
+
+        let _ = cb.set_viewport(0, &viewports).set_scissor(0, &scissors);
+    }
+}
+
+pub struct PreConfigureDraw<'m, B: br::Buffer>(pub &'m Mesh<B>);
+impl<B: br::Buffer> GraphicsCommand for PreConfigureDraw<'_, B> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let vertex_buffers = self
+            .0
+            .vertex_buffers
+            .iter()
+            .map(|rb| (&rb.0, rb.1.start as usize))
+            .collect::<Vec<_>>();
+
+        let _ = cb.bind_vertex_buffers(0, &vertex_buffers);
+    }
+}
+
+pub struct SimpleDraw(pub u32, pub u32, pub u32, pub u32);
+impl GraphicsCommand for SimpleDraw {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.draw(self.0, self.1, self.2, self.3);
     }
 }
 
@@ -352,6 +469,26 @@ pub struct DrawMesh<'m, B: br::Buffer> {
 }
 impl<B: br::Buffer> GraphicsCommand for DrawMesh<'_, B> {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        PreConfigureDraw(self.mesh)
+            .then(SimpleDraw(
+                self.mesh.vertex_count,
+                self.instance_count,
+                self.vertex_start,
+                self.instance_start,
+            ))
+            .execute(cb);
+    }
+}
+
+pub struct DrawIndexedMesh<'m, B: br::Buffer, IB: br::Buffer> {
+    pub mesh: &'m IndexedMesh<B, IB>,
+    pub instance_count: u32,
+    pub vertex_start: u32,
+    pub index_offset: i32,
+    pub instance_start: u32,
+}
+impl<B: br::Buffer, IB: br::Buffer> GraphicsCommand for DrawIndexedMesh<'_, B, IB> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
         let vertex_buffers = self
             .mesh
             .vertex_buffers
@@ -359,12 +496,20 @@ impl<B: br::Buffer> GraphicsCommand for DrawMesh<'_, B> {
             .map(|rb| (&rb.0, rb.1.start as usize))
             .collect::<Vec<_>>();
 
-        let _ = cb.bind_vertex_buffers(0, &vertex_buffers).draw(
-            self.mesh.vertex_count,
-            self.instance_count,
-            self.vertex_start,
-            self.instance_start,
-        );
+        let _ = cb
+            .bind_vertex_buffers(0, &vertex_buffers)
+            .bind_index_buffer(
+                &self.mesh.index_buffer.inner_ref(),
+                self.mesh.index_buffer.offset() as _,
+                self.mesh.index_type,
+            )
+            .draw_indexed(
+                self.mesh.vertex_count,
+                self.instance_count,
+                self.vertex_start,
+                self.index_offset,
+                self.instance_start,
+            );
     }
 }
 

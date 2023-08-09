@@ -176,4 +176,26 @@ impl<B: br::Buffer> Mesh<B> {
             instance_start: 0,
         }
     }
+
+    pub const fn pre_configure_for_draw<'m>(&'m self) -> PreConfigureDraw<'m, B> {
+        PreConfigureDraw(self)
+    }
+}
+
+pub struct IndexedMesh<B: br::Buffer, IB: br::Buffer> {
+    pub vertex_buffers: Vec<RangedBuffer<B>>,
+    pub index_buffer: RangedBuffer<IB>,
+    pub index_type: br::IndexType,
+    pub vertex_count: u32,
+}
+impl<B: br::Buffer, IB: br::Buffer> IndexedMesh<B, IB> {
+    pub const fn draw<'m>(&'m self, instance_count: u32) -> DrawIndexedMesh<'m, B, IB> {
+        DrawIndexedMesh {
+            mesh: self,
+            instance_count,
+            vertex_start: 0,
+            index_offset: 0,
+            instance_start: 0,
+        }
+    }
 }
