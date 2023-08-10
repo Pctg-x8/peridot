@@ -177,7 +177,7 @@ impl GraphicsCommand for PipelineBarrier {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
         // Note: src_stage_mask=0はVulkanの仕様上だめらしい
         let src_stage_mask = if self.src_stage_mask.0 == 0 {
-            br::PipelineStageFlags::ALL_COMMANDS
+            br::PipelineStageFlags::TOP_OF_PIPE
         } else {
             self.src_stage_mask
         };
