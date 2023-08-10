@@ -175,8 +175,15 @@ impl PipelineBarrier {
 }
 impl GraphicsCommand for PipelineBarrier {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        // Note: src_stage_mask=0はVulkanの仕様上だめらしい
+        let src_stage_mask = if self.src_stage_mask.0 == 0 {
+            br::PipelineStageFlags::ALL_COMMANDS
+        } else {
+            self.src_stage_mask
+        };
+
         let _ = cb.pipeline_barrier(
-            self.src_stage_mask,
+            src_stage_mask,
             self.dst_stage_mask,
             self.by_region,
             &[],
@@ -510,6 +517,17 @@ impl<B: br::Buffer, IB: br::Buffer> GraphicsCommand for DrawIndexedMesh<'_, B, I
                 self.index_offset,
                 self.instance_start,
             );
+    }
+}
+
+impl<const N: usize> GraphicsCommand for [br::vk::VkCommandBuffer; N] {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = unsafe { cb.execute_commands(&self) };
+    }
+}
+impl GraphicsCommand for Vec<br::vk::VkCommandBuffer> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = unsafe { cb.execute_commands(&self[..]) };
     }
 }
 
