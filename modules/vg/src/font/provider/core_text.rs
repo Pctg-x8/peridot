@@ -2,8 +2,6 @@
 
 use crate::{Font, FontConstructionError, FontProperties, FontProvider, FontProviderConstruct};
 
-const CTFONT_DEFAULT_SIZE: f32 = 12.0;
-
 pub struct CoreTextFontProvider;
 impl FontProviderConstruct for CoreTextFontProvider {
     fn new() -> Result<Self, FontConstructionError> {

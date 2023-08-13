@@ -1,19 +1,22 @@
 use cfg_if::cfg_if;
 
-use crate::{Font, FontConstructionError, FontProperties};
+use crate::{FontConstructionError, FontProperties};
 
 pub trait FontProviderConstruct: Sized + FontProvider {
     /// Creates font provider
     fn new() -> Result<Self, FontConstructionError>;
 }
-pub trait FontProvider: Sized {
+pub trait FontProvider {
+    /// Associated font type for this provider
+    type Font: crate::Font;
+
     /// Create a best-matching font for family name and provided properties
     fn best_match(
         &self,
         family_name: &str,
         properties: &FontProperties,
         size: f32,
-    ) -> Result<Font, FontConstructionError>;
+    ) -> Result<Self::Font, FontConstructionError>;
 
     /// Load a font from a specific asset
     fn load<NL: peridot::NativeLinker>(
@@ -21,7 +24,7 @@ pub trait FontProvider: Sized {
         e: &peridot::Engine<NL>,
         asset_path: &str,
         size: f32,
-    ) -> Result<Font, FontConstructionError>;
+    ) -> Result<Self::Font, FontConstructionError>;
 }
 
 cfg_if! {

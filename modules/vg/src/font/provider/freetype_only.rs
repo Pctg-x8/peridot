@@ -1,21 +1,26 @@
 //! Dummy Font Provider for freetype-only environments
 
-use super::super::ft_drivers;
-use crate::{Font, FontConstructionError, FontProvider, FontProviderConstruct, TTFBlob};
+use super::super::freetype;
+use crate::{
+    font::freetype::FreetypeFont, FontConstructionError, FontProvider, FontProviderConstruct,
+    TTFBlob,
+};
 
-pub struct FreetypeOnlyFontProvider(ft_drivers::System);
+pub struct FreetypeOnlyFontProvider(freetype::System);
 impl FontProviderConstruct for FreetypeOnlyFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
-        Ok(Self(ft_drivers::System::new()))
+        Ok(Self(freetype::System::new()))
     }
 }
 impl FontProvider for FreetypeOnlyFontProvider {
+    type Font = FreetypeFont;
+
     fn best_match(
         &self,
         _family_name: &str,
         _properties: &crate::FontProperties,
         _size: f32,
-    ) -> Result<crate::Font, crate::FontConstructionError> {
+    ) -> Result<Self::Font, crate::FontConstructionError> {
         Err(FontConstructionError::MatcherUnavailable)
     }
 
@@ -24,7 +29,7 @@ impl FontProvider for FreetypeOnlyFontProvider {
         e: &peridot::Engine<NL>,
         asset_path: &str,
         size: f32,
-    ) -> Result<crate::Font, crate::FontConstructionError> {
+    ) -> Result<Self::Font, crate::FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
         let f = self
             .0
@@ -32,9 +37,9 @@ impl FontProvider for FreetypeOnlyFontProvider {
             .map_err(FontConstructionError::FT2)?;
         let face = self
             .0
-            .new_face_group(vec![ft_drivers::FaceGroupEntry::LoadedMem(f, a.0.into())]);
+            .new_face_group(vec![freetype::FaceGroupEntry::LoadedMem(f, a.0.into())]);
         face.set_size(size);
 
-        Ok(Font(face, size))
+        Ok(FreetypeFont(face, size))
     }
 }

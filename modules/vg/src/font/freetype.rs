@@ -1,11 +1,66 @@
 //! FreeType and Fontconfig Loaders
 
+use euclid::Rect;
 use freetype2::outline::*;
 use freetype2::*;
 use lyon_path::builder::{FlatPathBuilder, PathBuilder};
 use std::cell::{Cell, Ref, RefCell};
 use std::ffi::{CStr, CString};
 use std::rc::Rc;
+
+use crate::{Font, GlyphLoadingError};
+
+pub struct FreetypeFont(pub(crate) FaceGroup, pub(crate) f32);
+impl Font for FreetypeFont {
+    type GlyphID = (usize, u32);
+
+    fn set_em_size(&mut self, size: f32) {
+        self.1 = size;
+        self.0.set_size(size);
+    }
+    fn size(&self) -> f32 {
+        self.1
+    }
+
+    fn scale_value(&self) -> f32 {
+        self.1 / self.units_per_em() as f32
+    }
+    fn ascent(&self) -> f32 {
+        self.0.ascender() as _
+    }
+    fn units_per_em(&self) -> u32 {
+        self.0.units_per_em() as _
+    }
+
+    fn glyph_id(&self, c: char) -> Option<Self::GlyphID> {
+        self.0.char_index(c)
+    }
+    fn advance_h(&self, glyph: &Self::GlyphID) -> Result<f32, GlyphLoadingError> {
+        self.0.get(glyph.0).load_glyph(glyph.1)?;
+
+        Ok(self.0.get(glyph.0).glyph_advance().x as f32 / 64.0)
+    }
+    fn bounds(&self, glyph: &Self::GlyphID) -> Result<Rect<f32>, GlyphLoadingError> {
+        let fnt = self.0.get(glyph.0);
+        fnt.load_glyph(glyph.1)?;
+        let m = fnt.glyph_metrics();
+
+        Ok(Rect::new(
+            euclid::point2(m.horiBearingX as f32 / 64.0, m.horiBearingY as f32 / 64.0),
+            euclid::size2(m.width as f32 / 64.0, m.height as f32 / 64.0),
+        ))
+    }
+    fn outline<B: PathBuilder>(
+        &self,
+        glyph: &Self::GlyphID,
+        builder: &mut B,
+    ) -> Result<(), GlyphLoadingError> {
+        self.0.get(glyph.0).load_glyph(glyph.1)?;
+        self.0.get(glyph.0).decompose_outline(builder);
+
+        Ok(())
+    }
+}
 
 #[repr(transparent)]
 pub struct UniqueSystem(FT_Library);

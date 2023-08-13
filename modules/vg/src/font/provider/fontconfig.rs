@@ -2,30 +2,35 @@
 
 use fontconfig::FcRange;
 
-use crate::{Font, FontConstructionError, FontProvider, FontProviderConstruct, TTFBlob};
+use crate::{
+    font::freetype::FreetypeFont, FontConstructionError, FontProvider, FontProviderConstruct,
+    TTFBlob,
+};
 
-use super::super::ft_drivers;
+use super::super::freetype;
 use fontconfig::*;
 
 pub struct FontconfigFontProvider {
-    ft: ft_drivers::System,
+    ft: freetype::System,
     fc: Config,
 }
 impl FontProviderConstruct for FontconfigFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
         Ok(Self {
-            ft: ft_drivers::System::new(),
+            ft: freetype::System::new(),
             fc: Config::init(),
         })
     }
 }
 impl FontProvider for FontconfigFontProvider {
+    type Font = FreetypeFont;
+
     fn best_match(
         &self,
         family_name: &str,
         properties: &crate::FontProperties,
         size: f32,
-    ) -> Result<crate::Font, crate::FontConstructionError> {
+    ) -> Result<Self::Font, crate::FontConstructionError> {
         let c_family_name = std::ffi::CString::new(family_name).expect("FFI Conversion failure");
         let mut pat = Pattern::with_name_weight_style_size(
             c_family_name.as_ptr() as *const _,
@@ -53,7 +58,7 @@ impl FontProvider for FontconfigFontProvider {
                             "FcPatternGetInteger",
                         ))?;
 
-                Ok(ft_drivers::FaceGroupEntry::unloaded(
+                Ok(freetype::FaceGroupEntry::unloaded(
                     font_path,
                     face_index as _,
                 ))
@@ -62,7 +67,7 @@ impl FontProvider for FontconfigFontProvider {
         let face = self.ft.new_face_group(group_desc);
         face.set_size(size);
 
-        Ok(Font(face, size))
+        Ok(FreetypeFont(face, size))
     }
 
     fn load<NL: peridot::NativeLinker>(
@@ -70,7 +75,7 @@ impl FontProvider for FontconfigFontProvider {
         e: &peridot::Engine<NL>,
         asset_path: &str,
         size: f32,
-    ) -> Result<crate::Font, crate::FontConstructionError> {
+    ) -> Result<Self::Font, crate::FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
         let f = self
             .ft
@@ -78,10 +83,10 @@ impl FontProvider for FontconfigFontProvider {
             .map_err(FontConstructionError::FT2)?;
         let face = self
             .ft
-            .new_face_group(vec![ft_drivers::FaceGroupEntry::LoadedMem(f, a.0.into())]);
+            .new_face_group(vec![freetype::FaceGroupEntry::LoadedMem(f, a.0.into())]);
         face.set_size(size);
 
-        Ok(Font(face, size))
+        Ok(FreetypeFont(face, size))
     }
 }
 

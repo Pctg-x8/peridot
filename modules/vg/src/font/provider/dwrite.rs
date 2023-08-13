@@ -11,7 +11,8 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 
 use crate::{
-    Font, FontConstructionError, FontProperties, FontProvider, FontProviderConstruct, TTFBlob,
+    font::dwrite::DirectWriteFont, FontConstructionError, FontProperties, FontProvider,
+    FontProviderConstruct, TTFBlob,
 };
 
 pub struct DirectWriteFontProvider(IDWriteFactory);
@@ -25,12 +26,14 @@ impl FontProviderConstruct for DirectWriteFontProvider {
     }
 }
 impl FontProvider for DirectWriteFontProvider {
+    type Font = DirectWriteFont;
+
     fn best_match(
         &self,
         family_name: &str,
         properties: &FontProperties,
         size: f32,
-    ) -> Result<Font, FontConstructionError> {
+    ) -> Result<Self::Font, FontConstructionError> {
         let mut collection = None;
         unsafe { self.0.GetSystemFontCollection(&mut collection, false)? };
         let collection = collection.expect("no system font collection");
@@ -62,7 +65,7 @@ impl FontProvider for DirectWriteFontProvider {
 
         unsafe {
             font.CreateFontFace()
-                .map(|x| Font(x, size))
+                .map(|x| DirectWriteFont(x, size))
                 .map_err(From::from)
         }
     }
@@ -72,7 +75,7 @@ impl FontProvider for DirectWriteFontProvider {
         e: &peridot::Engine<NL>,
         asset_path: &str,
         size: f32,
-    ) -> Result<Font, FontConstructionError> {
+    ) -> Result<Self::Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
         let converter =
             FontFileLoaderRegisterScope::register(&self.0, AssetToFontConverter::new(a).into())?;
@@ -104,7 +107,7 @@ impl FontProvider for DirectWriteFontProvider {
                     0,
                     DWRITE_FONT_SIMULATIONS_NONE,
                 )
-                .map(|x| Font(x, size))
+                .map(|x| DirectWriteFont(x, size))
                 .map_err(From::from)
         }
     }

@@ -4,16 +4,12 @@ use peridot::math::Vector2;
 
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 use objc_ext::ObjcObject;
-use windows::core::AsImpl;
-use windows::Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink;
+#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
+mod core_text;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-use windows::Win32::Graphics::DirectWrite::IDWriteFontFace;
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-mod dwrite_driver;
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-use self::dwrite_driver::*;
+mod dwrite;
 #[cfg(feature = "use-freetype")]
-mod ft_drivers;
+mod freetype;
 
 mod provider;
 pub use self::provider::*;
@@ -112,260 +108,28 @@ impl From<windows::core::Error> for GlyphLoadingError {
     }
 }
 
-#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-type UnderlyingHandle = IDWriteFontFace;
-#[cfg(feature = "use-freetype")]
-type UnderlyingHandle = self::ft_drivers::FaceGroup;
-pub struct Font(pub(crate) UnderlyingHandle, pub(crate) f32);
-#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-impl Font {
-    pub fn set_em_size(&mut self, size: f32) {
-        self.1 = size;
-    }
-    pub fn size(&self) -> f32 {
-        self.1
-    }
-    pub fn scale_value(&self) -> f32 {
-        self.1 / FontProvider::CTFONT_DEFAULT_SIZE
-    }
-    pub fn ascent(&self) -> f32 {
-        self.0.ascent() as f32 * self.scale_value()
-    }
+pub trait Font {
+    type GlyphID;
 
-    pub fn glyph_id(&self, c: char) -> Option<u32> {
-        let mut u16s = [0u16; 2];
-        c.encode_utf16(&mut u16s);
-        // remove surrogate paired codepoint
-        self.0
-            .glyphs_for_characters(&u16s[..1])
-            .ok()
-            .map(|x| x[0] as _)
-    }
-    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
-        Ok(self
-            .0
-            .advances_for_glyphs(appkit::CTFontOrientation::Horizontal, &[glyph as _], None)
-            as _)
-    }
-    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
-        let r = self.0.bounding_rects_for_glyphs(
-            appkit::CTFontOrientation::Horizontal,
-            &[glyph as _],
-            None,
-        );
-        Ok(Rect::new(
-            euclid::point2(
-                r.origin.x as f32 * self.scale_value(),
-                r.origin.y as f32 * self.scale_value(),
-            ),
-            euclid::size2(
-                r.size.width as f32 * self.scale_value(),
-                r.size.height as f32 * self.scale_value(),
-            ),
-        ))
-    }
-    pub fn outline<B: PathBuilder>(
-        &self,
-        glyph: u32,
-        builder: &mut B,
-    ) -> Result<(), GlyphLoadingError> {
-        let path = self
-            .0
-            .create_path_for_glyph(glyph as _, None)
-            .map_err(|_| GlyphLoadingError::SysAPICallError("CTFont::create_path_for_glyph"))?;
-        path.apply(|e| match e.type_ {
-            appkit::CGPathElementType::MoveToPoint => unsafe {
-                builder.move_to(euclid::point2(
-                    (*e.points).x as f32 * self.scale_value(),
-                    (*e.points).y as f32 * self.scale_value() - self.ascent(),
-                ));
-            },
-            appkit::CGPathElementType::CloseSubpath => builder.close(),
-            appkit::CGPathElementType::AddLineToPoint => unsafe {
-                builder.line_to(euclid::point2(
-                    (*e.points).x as f32 * self.scale_value(),
-                    (*e.points).y as f32 * self.scale_value() - self.ascent(),
-                ));
-            },
-            appkit::CGPathElementType::AddCurveToPoint => unsafe {
-                let points = std::slice::from_raw_parts(e.points, 3);
-                builder.cubic_bezier_to(
-                    euclid::point2(
-                        points[0].x as f32 * self.scale_value(),
-                        points[0].y as f32 * self.scale_value() - self.ascent(),
-                    ),
-                    euclid::point2(
-                        points[1].x as f32 * self.scale_value(),
-                        points[1].y as f32 * self.scale_value() - self.ascent(),
-                    ),
-                    euclid::point2(
-                        points[2].x as f32 * self.scale_value(),
-                        points[2].y as f32 * self.scale_value() - self.ascent(),
-                    ),
-                );
-            },
-            appkit::CGPathElementType::AddQuadCurveToPoint => unsafe {
-                let points = std::slice::from_raw_parts(e.points, 2);
-                builder.quadratic_bezier_to(
-                    euclid::point2(
-                        points[0].x as f32 * self.scale_value(),
-                        points[0].y as f32 * self.scale_value() - self.ascent(),
-                    ),
-                    euclid::point2(
-                        points[1].x as f32 * self.scale_value(),
-                        points[1].y as f32 * self.scale_value() - self.ascent(),
-                    ),
-                );
-            },
-        });
+    fn set_em_size(&mut self, size: f32);
+    fn size(&self) -> f32;
 
-        Ok(())
-    }
+    fn scale_value(&self) -> f32;
+    fn ascent(&self) -> f32;
+    fn units_per_em(&self) -> u32;
 
-    pub fn units_per_em(&self) -> u32 {
-        self.0.units_per_em()
-    }
-}
-
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-impl Font {
-    pub fn set_em_size(&mut self, size: f32) {
-        self.1 = size;
-    }
-    pub fn size(&self) -> f32 {
-        self.1
-    }
-    pub fn scale_value(&self) -> f32 {
-        (96.0 * self.1 / 72.0) / self.units_per_em() as f32
-    }
-    /// Returns a scaled ascent metric value
-    pub fn ascent(&self) -> f32 {
-        let mut fm = core::mem::MaybeUninit::uninit();
-        unsafe {
-            self.0.GetMetrics(fm.as_mut_ptr());
-            fm.assume_init_ref().ascent as _
-        }
-    }
-
-    pub fn glyph_id(&self, c: char) -> Option<u32> {
-        unsafe { self.0.GetGlyphIndices(&(c as u32), 1).ok().map(|x| x as _) }
-    }
-    pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
-        let mut gm = core::mem::MaybeUninit::uninit();
-        unsafe {
-            self.0
-                .GetDesignGlyphMetrics(&(glyph as u16), 1, gm.as_mut_ptr(), false)?;
-            Ok(gm.assume_init_ref().advanceWidth as _)
-        }
-    }
+    fn glyph_id(&self, c: char) -> Option<Self::GlyphID>;
+    fn advance_h(&self, glyph: &Self::GlyphID) -> Result<f32, GlyphLoadingError>;
     /// in dip
-    pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
-        let mut gm = core::mem::MaybeUninit::uninit();
-        let gm = unsafe {
-            self.0
-                .GetDesignGlyphMetrics(&(glyph as u16), 1, gm.as_mut_ptr(), false)?;
-            gm.assume_init()
-        };
-
-        Ok(Rect::new(
-            euclid::point2(
-                gm.leftSideBearing as f32 * self.scale_value(),
-                (gm.verticalOriginY - gm.topSideBearing) as f32 * self.scale_value(),
-            ),
-            euclid::size2(
-                (gm.leftSideBearing + gm.rightSideBearing + gm.advanceWidth as i32) as f32
-                    * self.scale_value(),
-                (gm.topSideBearing + gm.bottomSideBearing + gm.advanceHeight as i32) as f32
-                    * self.scale_value(),
-            ),
-        ))
-    }
-    pub fn outline<B: PathBuilder>(
+    fn bounds(&self, glyph: &Self::GlyphID) -> Result<Rect<f32>, GlyphLoadingError>;
+    fn outline<B: PathBuilder>(
         &self,
-        glyph: u32,
+        glyph: &Self::GlyphID,
         builder: &mut B,
-    ) -> Result<(), GlyphLoadingError> {
-        let sink = ID2D1SimplifiedGeometrySink::from(PathEventReceiver::new());
-
-        unsafe {
-            self.0.GetGlyphRunOutline(
-                96.0 * self.1 as f32 / 72.0,
-                &(glyph as _),
-                None,
-                None,
-                1,
-                false,
-                false,
-                &sink,
-            )?
-        }
-        for pe in sink.as_impl().drain_all_paths() {
-            builder.path_event(pe);
-        }
-
-        Ok(())
-    }
-
-    pub fn units_per_em(&self) -> u32 {
-        let mut fm = std::mem::MaybeUninit::uninit();
-        unsafe {
-            self.0.GetMetrics(fm.as_mut_ptr());
-            fm.assume_init_ref().designUnitsPerEm as _
-        }
-    }
+    ) -> Result<(), GlyphLoadingError>;
 }
 
-#[cfg(feature = "use-freetype")]
-impl Font {
-    pub fn set_em_size(&mut self, size: f32) {
-        self.1 = size;
-        self.0.set_size(size);
-    }
-    pub fn size(&self) -> f32 {
-        self.1
-    }
-    pub fn scale_value(&self) -> f32 {
-        self.1 / self.units_per_em() as f32
-    }
-    pub fn ascent(&self) -> f32 {
-        self.0.ascender() as _
-    }
-
-    pub fn glyph_id(&self, c: char) -> Option<(usize, u32)> {
-        self.0.char_index(c)
-    }
-    pub fn advance_h(&self, glyph: (usize, u32)) -> Result<f32, GlyphLoadingError> {
-        self.0.get(glyph.0).load_glyph(glyph.1)?;
-
-        Ok(self.0.get(glyph.0).glyph_advance().x as f32 / 64.0)
-    }
-    pub fn bounds(&self, glyph: (usize, u32)) -> Result<Rect<f32>, GlyphLoadingError> {
-        let fnt = self.0.get(glyph.0);
-        fnt.load_glyph(glyph.1)?;
-        let m = fnt.glyph_metrics();
-
-        Ok(Rect::new(
-            euclid::point2(m.horiBearingX as f32 / 64.0, m.horiBearingY as f32 / 64.0),
-            euclid::size2(m.width as f32 / 64.0, m.height as f32 / 64.0),
-        ))
-    }
-    pub fn outline<B: PathBuilder>(
-        &self,
-        glyph: (usize, u32),
-        builder: &mut B,
-    ) -> Result<(), GlyphLoadingError> {
-        self.0.get(glyph.0).load_glyph(glyph.1)?;
-        self.0.get(glyph.0).decompose_outline(builder);
-
-        Ok(())
-    }
-
-    pub fn units_per_em(&self) -> u32 {
-        self.0.units_per_em() as _
-    }
-}
+pub type DefaultFont = <DefaultFontProvider as FontProvider>::Font;
 
 /// An asset represents ttf blob
 pub struct TTFBlob(pub(crate) Vec<u8>);

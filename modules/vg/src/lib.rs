@@ -79,17 +79,21 @@ impl Context {
         }
     }
 
-    pub fn text(&mut self, font: &Font, text: &str) -> Result<&mut Self, GlyphLoadingError> {
+    pub fn text<F>(&mut self, font: &F, text: &str) -> Result<&mut Self, GlyphLoadingError>
+    where
+        F: Font,
+        <F as Font>::GlyphID: Default,
+    {
         let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or_default());
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
         for g in glyphs {
-            let (adv, size) = (font.advance_h(g)?, font.bounds(g)?);
+            let (adv, size) = (font.advance_h(&g)?, font.bounds(&g)?);
             let mut g0 = Partitioner::new();
             let tf = self.current_transform.post_translate(Vector2D::new(
                 left_offs * font.scale_value() * self.screen_scaling,
                 -font.ascent() * font.scale_value() * self.screen_scaling,
             ));
-            if font.outline(g, g0.builder_mut()).is_ok() {
+            if font.outline(&g, g0.builder_mut()).is_ok() {
                 g0.partition(FillRule::Winding);
                 g0.builder_mut().build_and_reset();
                 let (st, ext) = tfconv_st_ext(tf);
