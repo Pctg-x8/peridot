@@ -15,11 +15,15 @@ debug = ["peridot/debug"]
 mt = ["peridot/mt"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "VK_MVK_macos_surface"] }
-peridot = { path = "../.." }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
+    "VK_KHR_surface",
+    "VK_KHR_swapchain",
+    "Implements",
+    "VK_MVK_macos_surface",
+] }
+peridot = { path = "../../base" }
 log = "0.4"
 env_logger = "0.5"
 objc = "0.2"
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 libc = "0.2"
-

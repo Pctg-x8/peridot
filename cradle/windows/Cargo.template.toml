@@ -17,15 +17,19 @@ transparent = [
     "windows/Win32_Graphics_Direct3D",
     "windows/Win32_Graphics_Direct3D12",
     "windows/Win32_System_SystemServices",
-    "windows/Win32_System_WindowsProgramming"
+    "windows/Win32_System_WindowsProgramming",
 ]
 IterationBuild = []
 debug = ["peridot/debug"]
 mt = ["peridot/mt"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Presentation", "Implements", "VK_KHR_win32_surface"] }
-peridot = { path = "../.." }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
+    "Presentation",
+    "Implements",
+    "VK_KHR_win32_surface",
+] }
+peridot = { path = "../../base" }
 log = "0.4"
 env_logger = "0.5"
 rayon = "1.0"
@@ -51,5 +55,5 @@ features = [
     "Win32_UI_Input",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_XboxController",
-    "Win32_System_Threading"
+    "Win32_System_Threading",
 ]
