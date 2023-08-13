@@ -17,10 +17,11 @@ use windows::Win32::Graphics::DirectWrite::{
 mod dwrite_driver;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 use self::dwrite_driver::*;
-#[cfg(feature = "use-fontconfig")]
-mod fc_drivers;
 #[cfg(feature = "use-freetype")]
 mod ft_drivers;
+
+mod provider;
+pub use self::provider::*;
 
 pub struct GlyphBound<T> {
     left: T,
@@ -116,104 +117,13 @@ impl From<windows::core::Error> for GlyphLoadingError {
     }
 }
 
-pub struct FontProvider {
-    #[cfg(target_os = "windows")]
-    factory: IDWriteFactory,
-    #[cfg(feature = "use-freetype")]
-    ftlib: self::ft_drivers::System,
-    #[cfg(feature = "use-fontconfig")]
-    fc: self::fc_drivers::Config,
-}
-impl FontProvider {
-    pub fn new() -> Result<Self, FontConstructionError> {
-        Ok(FontProvider {
-            #[cfg(target_os = "windows")]
-            factory: unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? },
-            #[cfg(feature = "use-freetype")]
-            ftlib: self::ft_drivers::System::new(),
-            #[cfg(feature = "use-fontconfig")]
-            fc: self::fc_drivers::Config::init(),
-        })
-    }
-}
-
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 type UnderlyingHandle = appkit::ExternalRc<appkit::CTFont>;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 type UnderlyingHandle = IDWriteFontFace;
 #[cfg(feature = "use-freetype")]
 type UnderlyingHandle = self::ft_drivers::FaceGroup;
-pub struct Font(UnderlyingHandle, f32);
-#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-impl FontProvider {
-    const CTFONT_DEFAULT_SIZE: f32 = 12.0;
-
-    pub fn best_match(
-        &self,
-        family_name: &str,
-        properties: &FontProperties,
-        size: f32,
-    ) -> Result<Font, FontConstructionError> {
-        let traits = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
-            FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity")
-        })?;
-        let weight_num = appkit::NSNumber::from_float(properties.native_weight())
-            .map_err(|_| FontConstructionError::SysAPICallError("NSNumber::from_float"))?;
-        let symbolic_traits = appkit::NSNumber::from_uint(if properties.italic {
-            appkit::CTFontSymbolicTraits::ItalicTrait as u32
-        } else {
-            0u32
-        } as _)
-        .map_err(|_| FontConstructionError::SysAPICallError("NSNumber::from_uint"))?;
-        traits.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontWeightTrait }),
-            weight_num.as_id(),
-        );
-        traits.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontSymbolicTrait }),
-            symbolic_traits.as_id(),
-        );
-        let attrs = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
-            FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity")
-        })?;
-        let family_name_nsstr = appkit::NSString::from_str(family_name)
-            .map_err(|_| FontConstructionError::SysAPICallError("NSString::from_str"))?;
-        attrs.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontFamilyNameAttribute }),
-            family_name_nsstr.as_id(),
-        );
-        attrs.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontTraitsAttribute }),
-            traits.as_id(),
-        );
-
-        let fd =
-            appkit::CTFontDescriptor::with_attributes(AsRef::as_ref(&**attrs)).map_err(|_| {
-                FontConstructionError::SysAPICallError("CTFontDescriptor::with_attributes")
-            })?;
-        appkit::CTFont::from_font_descriptor(&fd, Self::CTFONT_DEFAULT_SIZE as _, None)
-            .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
-            .map(|x| Font(x, size))
-    }
-
-    pub fn load<NL: peridot::NativeLinker>(
-        &self,
-        e: &peridot::Engine<NL>,
-        asset_path: &str,
-        size: f32,
-    ) -> Result<Font, FontConstructionError> {
-        let a: TTFBlob = e.load(asset_path)?;
-        let d = appkit::CFData::new(&a.0)
-            .ok_or(FontConstructionError::SysAPICallError("CFData::new"))?;
-        let fd = appkit::CTFontDescriptor::from_data(&d).ok_or(
-            FontConstructionError::SysAPICallError("CTFontDescriptor::from_data"),
-        )?;
-
-        appkit::CTFont::from_font_descriptor(&fd, Self::CTFONT_DEFAULT_SIZE as _, None)
-            .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
-            .map(|x| Font(x, size))
-    }
-}
+pub struct Font(pub(crate) UnderlyingHandle, pub(crate) f32);
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 impl Font {
     pub fn set_em_size(&mut self, size: f32) {
@@ -325,88 +235,6 @@ impl Font {
 }
 
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-impl FontProvider {
-    pub fn best_match(
-        &self,
-        family_name: &str,
-        properties: &FontProperties,
-        size: f32,
-    ) -> Result<Font, FontConstructionError> {
-        let mut collection = None;
-        unsafe {
-            self.factory
-                .GetSystemFontCollection(&mut collection, false)?
-        };
-        let collection = collection.expect("no system font collection");
-        let mut family_index = 0;
-        let mut exists = Default::default();
-        let family_name = widestring::WideCString::from_str(family_name).expect("invalid sequence");
-        unsafe {
-            collection.FindFamilyName(
-                windows::core::PCWSTR(family_name.as_ptr()),
-                &mut family_index,
-                &mut exists,
-            )?;
-        }
-        let family_index = if exists.as_bool() { family_index } else { 0 };
-        let family = unsafe { collection.GetFontFamily(family_index)? };
-        let font_style = if properties.italic {
-            DWRITE_FONT_STYLE_ITALIC
-        } else {
-            DWRITE_FONT_STYLE_NORMAL
-        };
-        let font = unsafe {
-            family.GetFirstMatchingFont(
-                DWRITE_FONT_WEIGHT(properties.weight as _),
-                DWRITE_FONT_STRETCH_NORMAL,
-                font_style,
-            )?
-        };
-
-        unsafe {
-            font.CreateFontFace()
-                .map(|x| Font(x, size))
-                .map_err(From::from)
-        }
-    }
-
-    pub fn load<NL: peridot::NativeLinker>(
-        &self,
-        e: &peridot::Engine<NL>,
-        asset_path: &str,
-        size: f32,
-    ) -> Result<Font, FontConstructionError> {
-        let a: TTFBlob = e.load(asset_path)?;
-        let conv = ATFRegisterScope::register(&self.factory, AssetToFontConverter::new(a))?;
-        let fntfile = unsafe {
-            self.factory.CreateCustomFontFileReference(
-                &1u32 as *const u32 as _,
-                std::mem::size_of::<u32>() as _,
-                conv.object(),
-            )?
-        };
-        let (mut is_supported, mut file_type, mut face_type, mut face_count) = Default::default();
-        unsafe {
-            fntfile.Analyze(
-                &mut is_supported,
-                &mut file_type,
-                Some(&mut face_type),
-                &mut face_count,
-            )?
-        };
-        if !is_supported.as_bool() {
-            return Err(FontConstructionError::UnsupportedFontFile);
-        }
-
-        unsafe {
-            self.factory
-                .CreateFontFace(face_type, &[Some(fntfile)], 0, DWRITE_FONT_SIMULATIONS_NONE)
-                .map(|x| Font(x, size))
-                .map_err(From::from)
-        }
-    }
-}
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 impl Font {
     pub fn set_em_size(&mut self, size: f32) {
         self.1 = size;
@@ -494,84 +322,6 @@ impl Font {
     }
 }
 
-#[cfg(feature = "use-freetype")]
-impl FontProvider {
-    #[cfg(feature = "use-fontconfig")]
-    pub fn best_match(
-        &self,
-        family_name: &str,
-        properties: &FontProperties,
-        size: f32,
-    ) -> Result<Font, FontConstructionError> {
-        let c_family_name = std::ffi::CString::new(family_name).expect("FFI Conversion failure");
-        let mut pat = fc_drivers::Pattern::with_name_weight_style_size(
-            c_family_name.as_ptr() as *const _,
-            properties.weight as _,
-            properties.italic,
-            size,
-        )
-        .ok_or(FontConstructionError::SysAPICallError("FcPatternBuild"))?;
-        self.fc.substitute_pattern(&mut pat);
-        pat.default_substitute();
-        let fonts = self
-            .fc
-            .sort_fonts(&pat)
-            .ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
-
-        let group_desc = fonts
-            .iter()
-            .map(|f| {
-                let font_path = f
-                    .get_filepath()
-                    .ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
-                let face_index =
-                    f.get_face_index()
-                        .ok_or(FontConstructionError::SysAPICallError(
-                            "FcPatternGetInteger",
-                        ))?;
-
-                Ok(ft_drivers::FaceGroupEntry::unloaded(
-                    font_path,
-                    face_index as _,
-                ))
-            })
-            .collect::<Result<_, FontConstructionError>>()?;
-        let face = self.ftlib.new_face_group(group_desc);
-        face.set_size(size);
-
-        Ok(Font(face, size))
-    }
-    #[cfg(not(feature = "use-fontconfig"))]
-    pub fn best_match(
-        &self,
-        _: &str,
-        _: &FontProperties,
-        _: f32,
-    ) -> Result<Font, FontConstructionError> {
-        // no matching algorithm is available!
-
-        Err(FontConstructionError::MatcherUnavailable)
-    }
-
-    pub fn load<NL: peridot::NativeLinker>(
-        &self,
-        e: &peridot::Engine<NL>,
-        asset_path: &str,
-        size: f32,
-    ) -> Result<Font, FontConstructionError> {
-        let a: TTFBlob = e.load(asset_path)?;
-        let f = self
-            .ftlib
-            .new_face_from_mem(&a.0, 0)
-            .map_err(FontConstructionError::FT2)?;
-        let face = self
-            .ftlib
-            .new_face_group(vec![ft_drivers::FaceGroupEntry::LoadedMem(f, a.0.into())]);
-        face.set_size(size);
-
-        Ok(Font(face, size))
-    }
-}
 #[cfg(feature = "use-freetype")]
 impl Font {
     pub fn set_em_size(&mut self, size: f32) {

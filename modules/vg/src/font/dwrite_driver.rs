@@ -1,17 +1,11 @@
 use euclid::point2;
 use log::*;
 use lyon_path::PathEvent;
+use std::cell::RefCell;
 use std::slice::from_raw_parts;
-use std::{cell::RefCell, ptr::null_mut};
-use windows::Win32::Graphics::{
-    Direct2D::Common::{
-        ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl, D2D1_FIGURE_END_CLOSED,
-        D2D_POINT_2F,
-    },
-    DirectWrite::{
-        IDWriteFactory, IDWriteFontFileLoader, IDWriteFontFileLoader_Impl, IDWriteFontFileStream,
-        IDWriteFontFileStream_Impl,
-    },
+use windows::Win32::Graphics::Direct2D::Common::{
+    ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl, D2D1_FIGURE_END_CLOSED,
+    D2D_POINT_2F,
 };
 
 #[windows::core::implement(ID2D1SimplifiedGeometrySink)]
@@ -87,101 +81,4 @@ impl From<&'_ PathEventReceiver> for &'_ ID2D1SimplifiedGeometrySink {
     fn from(value: &'_ PathEventReceiver) -> Self {
         unsafe { std::mem::transmute(value) }
     }
-}
-
-pub struct ATFRegisterScope<'a>(&'a IDWriteFactory, AssetToFontConverter);
-impl<'a> ATFRegisterScope<'a> {
-    pub fn register(
-        factory: &'a IDWriteFactory,
-        atf: AssetToFontConverter,
-    ) -> windows::core::Result<Self> {
-        unsafe {
-            factory
-                .RegisterFontFileLoader(&atf)
-                .map(|_| Self(factory, atf))
-        }
-    }
-
-    pub fn object(&self) -> &AssetToFontConverter {
-        &self.1
-    }
-}
-impl Drop for ATFRegisterScope<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.0
-                .UnregisterFontFileLoader(&self.1)
-                .expect("Failed to unregister FontFileLoader")
-        };
-    }
-}
-
-#[windows::core::implement(IDWriteFontFileLoader)]
-pub struct AssetToFontConverter {
-    asset: RefCell<Option<super::TTFBlob>>,
-}
-impl AssetToFontConverter {
-    pub fn new(asset: super::TTFBlob) -> Self {
-        Self {
-            asset: RefCell::new(Some(asset)),
-        }
-    }
-}
-impl IDWriteFontFileLoader_Impl for AssetToFontConverter {
-    fn CreateStreamFromKey(
-        &self,
-        _fontfilereferencekey: *const core::ffi::c_void,
-        _fontfilereferencekeysize: u32,
-    ) -> windows::core::Result<windows::Win32::Graphics::DirectWrite::IDWriteFontFileStream> {
-        unsafe {
-            AssetStreamBridge::new(
-                self.asset
-                    .borrow_mut()
-                    .take()
-                    .expect("ATF create stream called twice?"),
-            )
-            .cast()
-        }
-    }
-}
-impl From<&'_ AssetToFontConverter> for &'_ IDWriteFontFileLoader {
-    fn from(value: &'_ AssetToFontConverter) -> Self {
-        unsafe { std::mem::transmute(value) }
-    }
-}
-
-#[windows::core::implement(IDWriteFontFileStream)]
-pub struct AssetStreamBridge {
-    asset: super::TTFBlob,
-}
-impl AssetStreamBridge {
-    fn new(asset: super::TTFBlob) -> Self {
-        Self { asset }
-    }
-}
-impl IDWriteFontFileStream_Impl for AssetStreamBridge {
-    fn GetFileSize(&self) -> windows::core::Result<u64> {
-        Ok(self.asset.0.len() as _)
-    }
-
-    fn GetLastWriteTime(&self) -> windows::core::Result<u64> {
-        Ok(0)
-    }
-
-    fn ReadFileFragment(
-        &self,
-        fragmentstart: *mut *mut core::ffi::c_void,
-        fileoffset: u64,
-        _fragmentsize: u64,
-        fragmentcontext: *mut *mut core::ffi::c_void,
-    ) -> windows::core::Result<()> {
-        unsafe {
-            *fragmentcontext = null_mut();
-            *fragmentstart = self.asset.0.as_ptr().add(fileoffset as _) as *mut _;
-        }
-
-        Ok(())
-    }
-
-    fn ReleaseFileFragment(&self, _fragmentcontext: *mut core::ffi::c_void) {}
 }
