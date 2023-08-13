@@ -1,14 +1,15 @@
 //! Dummy Font Provider for freetype-only environments
 
 use super::super::ft_drivers;
-use crate::{Font, FontConstructionError, FontProvider, TTFBlob};
+use crate::{Font, FontConstructionError, FontProvider, FontProviderConstruct, TTFBlob};
 
 pub struct FreetypeOnlyFontProvider(ft_drivers::System);
-impl FontProvider for FreetypeOnlyFontProvider {
+impl FontProviderConstruct for FreetypeOnlyFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
         Ok(Self(ft_drivers::System::new()))
     }
-
+}
+impl FontProvider for FreetypeOnlyFontProvider {
     fn best_match(
         &self,
         _family_name: &str,

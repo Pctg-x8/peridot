@@ -1,15 +1,16 @@
 //! CoreText Font Provider impl
 
-use crate::{Font, FontConstructionError, FontProperties, FontProvider};
+use crate::{Font, FontConstructionError, FontProperties, FontProvider, FontProviderConstruct};
 
 const CTFONT_DEFAULT_SIZE: f32 = 12.0;
 
 pub struct CoreTextFontProvider;
-impl FontProvider for CoreTextFontProvider {
+impl FontProviderConstruct for CoreTextFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
         Ok(Self)
     }
-
+}
+impl FontProvider for CoreTextFontProvider {
     fn best_match(
         &self,
         family_name: &str,

@@ -2,10 +2,11 @@ use cfg_if::cfg_if;
 
 use crate::{Font, FontConstructionError, FontProperties};
 
-pub trait FontProvider: Sized {
+pub trait FontProviderConstruct: Sized + FontProvider {
     /// Creates font provider
     fn new() -> Result<Self, FontConstructionError>;
-
+}
+pub trait FontProvider: Sized {
     /// Create a best-matching font for family name and provided properties
     fn best_match(
         &self,

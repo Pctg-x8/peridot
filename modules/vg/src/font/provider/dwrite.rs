@@ -10,10 +10,12 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
 };
 
-use crate::{Font, FontConstructionError, FontProperties, FontProvider, TTFBlob};
+use crate::{
+    Font, FontConstructionError, FontProperties, FontProvider, FontProviderConstruct, TTFBlob,
+};
 
 pub struct DirectWriteFontProvider(IDWriteFactory);
-impl FontProvider for DirectWriteFontProvider {
+impl FontProviderConstruct for DirectWriteFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
         unsafe {
             DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)
@@ -21,7 +23,8 @@ impl FontProvider for DirectWriteFontProvider {
                 .map_err(From::from)
         }
     }
-
+}
+impl FontProvider for DirectWriteFontProvider {
     fn best_match(
         &self,
         family_name: &str,

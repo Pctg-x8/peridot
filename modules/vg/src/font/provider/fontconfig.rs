@@ -2,7 +2,7 @@
 
 use fontconfig::FcRange;
 
-use crate::{Font, FontConstructionError, FontProvider, TTFBlob};
+use crate::{Font, FontConstructionError, FontProvider, FontProviderConstruct, TTFBlob};
 
 use super::super::ft_drivers;
 use fontconfig::*;
@@ -11,14 +11,15 @@ pub struct FontconfigFontProvider {
     ft: ft_drivers::System,
     fc: Config,
 }
-impl FontProvider for FontconfigFontProvider {
+impl FontProviderConstruct for FontconfigFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
         Ok(Self {
             ft: ft_drivers::System::new(),
             fc: Config::init(),
         })
     }
-
+}
+impl FontProvider for FontconfigFontProvider {
     fn best_match(
         &self,
         family_name: &str,
