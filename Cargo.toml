@@ -2,12 +2,12 @@
 exclude = ["extras/", "cradle/", "examples/", "tools"]
 members = [
     "base",
-    "archive",
-    "serialization-utils",
-    "vertex-processing-pack",
-    "math",
-    "image",
-    "vg",
     "derive",
-    "transition",
+    "modules/archive",
+    "modules/serialization-utils",
+    "modules/vertex-processing-pack",
+    "modules/math",
+    "modules/image",
+    "modules/vg",
+    "modules/transition",
 ]

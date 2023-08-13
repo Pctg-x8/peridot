@@ -18,5 +18,5 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
 ] }
 log = "0.4"
 
-peridot-vg = { path = "../../vg" }
-peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-vg = { path = "../../modules/vg" }
+peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }

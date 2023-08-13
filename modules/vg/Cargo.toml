@@ -11,7 +11,7 @@ use-fontconfig = ["fontconfig"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
-peridot = { path = "../base" }
+peridot = { path = "../../base" }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 lyon_path = "0.12"
 lyon_geom = "0.12"

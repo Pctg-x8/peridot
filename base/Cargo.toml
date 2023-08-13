@@ -19,8 +19,8 @@ num_cpus = "1.0"
 num = "*"
 parking_lot = "0.12"
 
-peridot-archive = { path = "../archive" }
-peridot-math = { path = "../math" }
+peridot-archive = { path = "../modules/archive" }
+peridot-math = { path = "../modules/math" }
 peridot-derive = { path = "../derive", optional = true }
 
 [dependencies.bedrock]
