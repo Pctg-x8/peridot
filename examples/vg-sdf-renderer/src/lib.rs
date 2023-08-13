@@ -4,7 +4,7 @@ use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
 use peridot_vertex_processing_pack::PvpShaderModules;
-use peridot_vg::FlatPathBuilder;
+use peridot_vg::{FlatPathBuilder, FontProviderConstruct, FontProvider, Font};
 
 #[derive(peridot_derive::SpecConstantStorage)]
 #[repr(C)]
@@ -598,18 +598,18 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         )
         .clone();
 
-        let font = peridot_vg::FontProvider::new()
+        let font = peridot_vg::DefaultFontProvider::new()
             .expect("Failed to create font provider")
             .best_match("sans-serif", &peridot_vg::FontProperties::default(), 120.0)
             .expect("no suitable font");
         let gid = font.glyph_id('A').expect("no glyph contained");
         let mut gen = peridot_vg::SDFGenerator::new(1.0, Self::SDF_SIZE);
-        let glyph_metrics = font.bounds(gid).expect("Failed to get glyph bounds");
+        let glyph_metrics = font.bounds(&gid).expect("Failed to get glyph bounds");
         gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(
             -glyph_metrics.origin.x + Self::SDF_SIZE,
             -glyph_metrics.origin.y - Self::SDF_SIZE,
         ));
-        font.outline(gid, &mut gen)
+        font.outline(&gid, &mut gen)
             .expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
         let (
@@ -862,7 +862,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
     }
     fn on_resize(&mut self, e: &mut peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
         // rebuild font meshes
-        let font = peridot_vg::FontProvider::new()
+        let font = peridot_vg::DefaultFontProvider::new()
             .expect("Failed to create font provider")
             .best_match(
                 "MS UI Gothic",
@@ -872,12 +872,12 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .expect("no suitable font");
         let gid = font.glyph_id('A').expect("no glyph contained");
         let mut gen = peridot_vg::SDFGenerator::new(1.0, Self::SDF_SIZE);
-        let glyph_metrics = font.bounds(gid).expect("Failed to get glyph bounds");
+        let glyph_metrics = font.bounds(&gid).expect("Failed to get glyph bounds");
         gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(
             -glyph_metrics.origin.x + Self::SDF_SIZE,
             -glyph_metrics.origin.y - Self::SDF_SIZE,
         ));
-        font.outline(gid, &mut gen)
+        font.outline(&gid, &mut gen)
             .expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
         let (

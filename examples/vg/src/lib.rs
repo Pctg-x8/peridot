@@ -1,4 +1,5 @@
 use log::*;
+use pvg::{FontProviderConstruct, FontProvider};
 use std::marker::PhantomData;
 extern crate bedrock as br;
 use br::{
@@ -85,7 +86,7 @@ pub struct Game<PL: peridot::NativeLinker> {
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &mut peridot::Engine<PL>) -> Self {
-        let font_provider = pvg::FontProvider::new().expect("FontProvider initialization error");
+        let font_provider = pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
         let font = font_provider
             .best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
             .expect("No Fonts");
