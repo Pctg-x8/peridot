@@ -1,5 +1,4 @@
 use log::*;
-use peridot_derive::SpecConstantStorage;
 use std::marker::PhantomData;
 extern crate bedrock as br;
 use br::{
