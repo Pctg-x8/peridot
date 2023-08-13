@@ -23,6 +23,7 @@ impl PathEventReceiver {
         self.paths.get_mut().drain(..)
     }
 }
+#[allow(non_snake_case)]
 impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
     fn AddLines(&self, p: *const D2D_POINT_2F, count: u32) {
         for p in unsafe { from_raw_parts(p, count as _) } {
@@ -35,9 +36,9 @@ impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
     fn AddBeziers(
         &self,
         beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
-        bezierscount: u32,
+        beziers_count: u32,
     ) {
-        for p in unsafe { from_raw_parts(beziers, bezierscount as _) } {
+        for p in unsafe { from_raw_parts(beziers, beziers_count as _) } {
             let (p1, p2) = (
                 point2(p.point1.x, -p.point1.y),
                 point2(p.point2.x, -p.point2.y),
@@ -49,15 +50,15 @@ impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
 
     fn BeginFigure(
         &self,
-        startpoint: &D2D_POINT_2F,
-        _figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
+        start_point: &D2D_POINT_2F,
+        _figure_begin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
     ) {
-        let p = point2(startpoint.x, -startpoint.y);
+        let p = point2(start_point.x, -start_point.y);
         self.paths.borrow_mut().push(PathEvent::MoveTo(p));
     }
 
-    fn EndFigure(&self, figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END) {
-        if figureend == D2D1_FIGURE_END_CLOSED {
+    fn EndFigure(&self, figure_end: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END) {
+        if figure_end == D2D1_FIGURE_END_CLOSED {
             self.paths.borrow_mut().push(PathEvent::Close);
         }
     }
@@ -66,15 +67,15 @@ impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
         Ok(())
     }
 
-    fn SetFillMode(&self, fillmode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE) {
-        trace!("*UNIMPLEMENTED* SetFillMode with {fillmode:?}");
+    fn SetFillMode(&self, fill_mode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE) {
+        trace!("*UNIMPLEMENTED* SetFillMode with {fill_mode:?}");
     }
 
     fn SetSegmentFlags(
         &self,
-        vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
+        vertex_flags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
     ) {
-        trace!("*UNIMPLEMENTED* SetSegmentFlags with {vertexflags:?}");
+        trace!("*UNIMPLEMENTED* SetSegmentFlags with {vertex_flags:?}");
     }
 }
 impl From<&'_ PathEventReceiver> for &'_ ID2D1SimplifiedGeometrySink {
