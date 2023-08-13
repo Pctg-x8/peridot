@@ -71,12 +71,13 @@ impl FontProvider for DirectWriteFontProvider {
         size: f32,
     ) -> Result<Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
-        let converter = ATFRegisterScope::register(&self.0, AssetToFontConverter::new(a))?;
+        let converter =
+            FontFileLoaderRegisterScope::register(&self.0, AssetToFontConverter::new(a).into())?;
         let fnt_file = unsafe {
             self.0.CreateCustomFontFileReference(
                 &1u32 as *const u32 as _,
                 std::mem::size_of::<u32>() as _,
-                converter.object(),
+                converter.loader(),
             )?
         };
         let (mut is_supported, mut file_type, mut face_type, mut face_count) = Default::default();
@@ -106,11 +107,11 @@ impl FontProvider for DirectWriteFontProvider {
     }
 }
 
-struct ATFRegisterScope<'a>(&'a IDWriteFactory, AssetToFontConverter);
-impl<'a> ATFRegisterScope<'a> {
+struct FontFileLoaderRegisterScope<'a>(&'a IDWriteFactory, IDWriteFontFileLoader);
+impl<'a> FontFileLoaderRegisterScope<'a> {
     fn register(
         factory: &'a IDWriteFactory,
-        atf: AssetToFontConverter,
+        atf: IDWriteFontFileLoader,
     ) -> windows::core::Result<Self> {
         unsafe {
             factory
@@ -119,11 +120,11 @@ impl<'a> ATFRegisterScope<'a> {
         }
     }
 
-    fn object(&self) -> &AssetToFontConverter {
+    fn loader(&self) -> &IDWriteFontFileLoader {
         &self.1
     }
 }
-impl Drop for ATFRegisterScope<'_> {
+impl Drop for FontFileLoaderRegisterScope<'_> {
     fn drop(&mut self) {
         unsafe {
             self.0
@@ -160,11 +161,6 @@ impl IDWriteFontFileLoader_Impl for AssetToFontConverter {
             )
             .cast()
         }
-    }
-}
-impl From<&'_ AssetToFontConverter> for &'_ IDWriteFontFileLoader {
-    fn from(value: &'_ AssetToFontConverter) -> Self {
-        unsafe { std::mem::transmute(value) }
     }
 }
 

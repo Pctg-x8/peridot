@@ -4,15 +4,10 @@ use peridot::math::Vector2;
 
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 use objc_ext::ObjcObject;
+use windows::core::AsImpl;
+use windows::Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, DWRITE_FACTORY_TYPE_SHARED,
-};
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
-use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FONT_SIMULATIONS_NONE, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-};
+use windows::Win32::Graphics::DirectWrite::IDWriteFontFace;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
 mod dwrite_driver;
 #[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
@@ -247,7 +242,7 @@ impl Font {
     }
     /// Returns a scaled ascent metric value
     pub fn ascent(&self) -> f32 {
-        let mut fm = std::mem::MaybeUninit::uninit();
+        let mut fm = core::mem::MaybeUninit::uninit();
         unsafe {
             self.0.GetMetrics(fm.as_mut_ptr());
             fm.assume_init_ref().ascent as _
@@ -258,7 +253,7 @@ impl Font {
         unsafe { self.0.GetGlyphIndices(&(c as u32), 1).ok().map(|x| x as _) }
     }
     pub fn advance_h(&self, glyph: u32) -> Result<f32, GlyphLoadingError> {
-        let mut gm = std::mem::MaybeUninit::uninit();
+        let mut gm = core::mem::MaybeUninit::uninit();
         unsafe {
             self.0
                 .GetDesignGlyphMetrics(&(glyph as u16), 1, gm.as_mut_ptr(), false)?;
@@ -267,7 +262,7 @@ impl Font {
     }
     /// in dip
     pub fn bounds(&self, glyph: u32) -> Result<Rect<f32>, GlyphLoadingError> {
-        let mut gm = std::mem::MaybeUninit::uninit();
+        let mut gm = core::mem::MaybeUninit::uninit();
         let gm = unsafe {
             self.0
                 .GetDesignGlyphMetrics(&(glyph as u16), 1, gm.as_mut_ptr(), false)?;
@@ -292,7 +287,7 @@ impl Font {
         glyph: u32,
         builder: &mut B,
     ) -> Result<(), GlyphLoadingError> {
-        let mut sink = PathEventReceiver::new();
+        let sink = ID2D1SimplifiedGeometrySink::from(PathEventReceiver::new());
 
         unsafe {
             self.0.GetGlyphRunOutline(
@@ -306,7 +301,7 @@ impl Font {
                 &sink,
             )?
         }
-        for pe in sink.drain_all_paths() {
+        for pe in sink.as_impl().drain_all_paths() {
             builder.path_event(pe);
         }
 

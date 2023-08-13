@@ -19,8 +19,8 @@ impl PathEventReceiver {
         }
     }
 
-    pub fn drain_all_paths(&mut self) -> std::vec::Drain<PathEvent> {
-        self.paths.get_mut().drain(..)
+    pub fn drain_all_paths(&self) -> Vec<PathEvent> {
+        std::mem::replace(&mut self.paths.borrow_mut(), Vec::new())
     }
 }
 #[allow(non_snake_case)]
@@ -76,10 +76,5 @@ impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
         vertex_flags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
     ) {
         trace!("*UNIMPLEMENTED* SetSegmentFlags with {vertex_flags:?}");
-    }
-}
-impl From<&'_ PathEventReceiver> for &'_ ID2D1SimplifiedGeometrySink {
-    fn from(value: &'_ PathEventReceiver) -> Self {
-        unsafe { std::mem::transmute(value) }
     }
 }
