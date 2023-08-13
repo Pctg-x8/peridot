@@ -314,7 +314,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: examples
+          TARGET_PATH: "./examples"
         if: 'true'
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"
@@ -406,7 +406,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: '.'
+          TARGET_PATH: "./modules"
         if: 'true'
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"
@@ -452,7 +452,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: tools
+          TARGET_PATH: "./tools"
         if: 'true'
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"
