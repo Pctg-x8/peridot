@@ -91,6 +91,14 @@ impl<A: GraphicsCommand, B: GraphicsCommand, C: GraphicsCommand> GraphicsCommand
         self.2.execute(cb);
     }
 }
+/// consecutive exec
+impl<T: GraphicsCommand> GraphicsCommand for Vec<T> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        for r in self {
+            r.execute(cb);
+        }
+    }
+}
 
 impl<P: br::Pipeline, L: br::PipelineLayout> GraphicsCommand for peridot::LayoutedPipeline<P, L> {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
