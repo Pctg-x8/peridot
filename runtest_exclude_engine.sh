@@ -3,7 +3,7 @@
 shopt -s extglob
 
 # for first branch
-for c in !(examples|vertex-processing-pack|vg)/Cargo.toml
+for c in !(examples|vertex-processing-pack|vg|base)/Cargo.toml
 do (echo testing $c; cd $(dirname $c) && cargo test --verbose) || exit 1; done
 
 # for second branch
@@ -16,6 +16,5 @@ do (echo testing $c; cd $(dirname $c) && cargo test --verbose) || exit 2; done
 # for peridot-dependent tools
 (echo checking tools/shaderbuild; cd tools/shaderbuild && cargo check --verbose --features=bedrock/VK_EXT_debug_report) || exit 4
 
-echo check engine
-cargo check --verbose --features=bedrock/VK_EXT_debug_report
-
+echo checking engine
+(cd base && cargo check --verbose --features=bedrock/VK_EXT_debug_report)
