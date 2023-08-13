@@ -5,7 +5,7 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
 [features]
-default = ["use-freetype", "use-fontconfig"]
+default = []
 use-freetype = ["freetype2"]
 use-fontconfig = ["fontconfig"]
 
@@ -18,6 +18,7 @@ lyon_geom = "0.12"
 euclid = "0.19"
 log = "*"
 libc = "0.2"
+cfg-if = "1.0.0"
 
 [target.'cfg(target_os="macos")'.dependencies]
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
