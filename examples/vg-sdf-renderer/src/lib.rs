@@ -368,8 +368,7 @@ impl TwoPassStencilSDFRenderer {
                 br::DynamicArrayState::Static(&scissors),
             )
             .multisample_state(Some(br::MultisampleState::new()))
-            .stencil_control_front(Self::stencil_invert())
-            .stencil_control_back(Self::stencil_invert())
+            .stencil_control(Self::stencil_invert())
             .stencil_test_enable(true)
             .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
         let triangle_fans_stencil_pipeline = pipebuild
@@ -398,8 +397,7 @@ impl TwoPassStencilSDFRenderer {
         pipebuild
             .render_pass(&render_pass, 1)
             .vertex_processing(invert_fill_shader)
-            .stencil_control_front(Self::stencil_match())
-            .stencil_control_back(Self::stencil_match())
+            .stencil_control(Self::stencil_match())
             .set_attachment_blends(vec![ColorAttachmentBlending::new_color(
                 Blending::source_only(br::BlendFactor::OneMinusDestColor),
                 Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
@@ -416,8 +414,7 @@ impl TwoPassStencilSDFRenderer {
         outline_render_vps.vertex_shader_mut().specinfo = Some(outline_vsh_parameters.as_pair());
         pipebuild
             .vertex_processing(outline_render_vps)
-            .stencil_control_front(Self::stencil_noop())
-            .stencil_control_back(Self::stencil_noop())
+            .stencil_control(Self::stencil_noop())
             .stencil_test_enable(false)
             .set_attachment_blends(vec![ColorAttachmentBlending::MAX.into_vk()]);
         let outline_distance_pipeline = pipebuild
@@ -496,8 +493,7 @@ impl TwoPassStencilSDFRenderer {
                 br::DynamicArrayState::Static(&scissors),
             )
             .multisample_state(Some(br::MultisampleState::new()))
-            .stencil_control_front(Self::stencil_invert())
-            .stencil_control_back(Self::stencil_invert())
+            .stencil_control(Self::stencil_invert())
             .stencil_test_enable(true)
             .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
         let triangle_fans_stencil_pipeline = pipebuild
@@ -527,8 +523,7 @@ impl TwoPassStencilSDFRenderer {
         pipebuild
             .render_pass(&self.render_pass, 1)
             .vertex_processing(invert_fill_shader)
-            .stencil_control_front(Self::stencil_match())
-            .stencil_control_back(Self::stencil_match())
+            .stencil_control(Self::stencil_match())
             .set_attachment_blends(vec![ColorAttachmentBlending::new_color(
                 Blending::source_only(br::BlendFactor::OneMinusDestColor),
                 Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
@@ -546,8 +541,7 @@ impl TwoPassStencilSDFRenderer {
         outline_render_vps.vertex_shader_mut().specinfo = Some(outline_vsh_parameters.as_pair());
         pipebuild
             .vertex_processing(outline_render_vps)
-            .stencil_control_front(Self::stencil_noop())
-            .stencil_control_back(Self::stencil_noop())
+            .stencil_control(Self::stencil_noop())
             .stencil_test_enable(false)
             .set_attachment_blends(vec![ColorAttachmentBlending::MAX.into_vk()]);
         let outline_distance_pipeline = pipebuild
