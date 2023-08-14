@@ -20,6 +20,8 @@ let List/map = https://prelude.dhall-lang.org/List/map
 
 let List/end_map = λ(t : Type) → λ(f : t → t) → λ(a : List t) → List/map t t f a
 
+let Text/concatSep = https://prelude.dhall-lang.org/Text/concatSep
+
 let eRepositoryOwnerLogin =
       GithubActions.mkExpression "github.event.repository.owner.login"
 
@@ -425,6 +427,16 @@ let checkCradleMacos =
               ]
         }
 
+let aptInstallStep =
+      λ(packages : List Text) →
+        let packagesLine = Text/concatSep " " packages
+
+        in  GithubActions.Step::{
+            , name = "install apt packages"
+            , run = Some
+                "sudo apt-get update && sudo apt-get install ${packagesLine}"
+            }
+
 let checkCradleLinux =
       λ(notifyProvider : SlackNotifyProvider) →
       λ(precondition : Text) →
@@ -438,11 +450,8 @@ let checkCradleLinux =
               [ List/end_map
                   GithubActions.Step.Type
                   (withConditionStep precondition)
-                  [ GithubActions.Step::{
-                    , name = "install extra packages"
-                    , run = Some
-                        "sudo apt-get update && sudo apt-get install libwayland-dev"
-                    }
+                  [   aptInstallStep [ "libwayland-dev", "libpipewire-dev" ]
+                    ⫽ { name = "install extra packages" }
                   , checkoutHeadStep
                   , checkoutStep
                   , cacheStep
