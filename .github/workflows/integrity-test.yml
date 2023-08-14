@@ -134,7 +134,7 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: install extra packages
-        run: "sudo apt-get update && sudo apt-get install libwayland-dev"
+        run: "sudo apt-get update && sudo apt-get install libwayland-dev libpipewire-0.3-dev"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
@@ -152,6 +152,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+      - id: llvm-cache
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize LLVM Cache
+        uses: "actions/cache@v3"
+        with:
+          key: "${{ runner.os }}-llvm-11"
+          path: "./llvm"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Install LLVM
+        uses: "KyleMayes/install-llvm-action@v1"
+        with:
+          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
+          version: '11'
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
@@ -341,7 +354,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: examples
+          TARGET_PATH: "./examples"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"
@@ -441,7 +454,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: '.'
+          TARGET_PATH: "./modules"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"
@@ -546,7 +559,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: tools
+          TARGET_PATH: "./tools"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"

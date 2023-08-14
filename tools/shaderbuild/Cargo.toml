@@ -7,6 +7,6 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 clap = "2.31"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock.git", branch = "peridot" }
 regex = "1.0"
-peridot-vertex-processing-pack = { path = "../../vertex-processing-pack", default-features = false }
+peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack", default-features = false }
 log = "0.4"
 env_logger = "0.5"

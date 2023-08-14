@@ -11,13 +11,14 @@ use-fontconfig = ["fontconfig"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
-peridot = { path = ".." }
+peridot = { path = "../../base" }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 lyon_path = "0.12"
 lyon_geom = "0.12"
 euclid = "0.19"
 log = "*"
 libc = "0.2"
+cfg-if = "1.0.0"
 
 [target.'cfg(target_os="macos")'.dependencies]
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
@@ -28,7 +29,12 @@ android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
 
 [target.'cfg(target_os="windows")'.dependencies.windows]
 version = "0.48"
-features = ["implement", "Win32_Foundation", "Win32_Graphics_DirectWrite", "Win32_Graphics_Direct2D_Common"]
+features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Direct2D_Common",
+]
 
 [target.'cfg(target_os="windows")'.dependencies]
 widestring = "1.0"
