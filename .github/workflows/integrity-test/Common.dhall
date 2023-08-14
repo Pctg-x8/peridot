@@ -226,7 +226,7 @@ let checkTools =
                   [ checkoutHeadStep
                   , checkoutStep
                   , cacheStep
-                  , CheckBuildSubdirAction.step { path = "tools" }
+                  , CheckBuildSubdirAction.step { path = "./tools" }
                   ]
               , List/map
                   GithubActions.Step.Type
@@ -256,7 +256,7 @@ let checkModules =
                   [ checkoutHeadStep
                   , checkoutStep
                   , cacheStep
-                  , CheckBuildSubdirAction.step { path = "." }
+                  , CheckBuildSubdirAction.step { path = "./modules" }
                   ]
               , List/map
                   GithubActions.Step.Type
@@ -286,7 +286,7 @@ let checkExamples =
                   [ checkoutHeadStep
                   , checkoutStep
                   , cacheStep
-                  , CheckBuildSubdirAction.step { path = "examples" }
+                  , CheckBuildSubdirAction.step { path = "./examples" }
                   ]
               , List/map
                   GithubActions.Step.Type

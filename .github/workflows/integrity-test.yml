@@ -354,7 +354,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: examples
+          TARGET_PATH: "./examples"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"
@@ -454,7 +454,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: '.'
+          TARGET_PATH: "./modules"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"
@@ -559,7 +559,7 @@ jobs:
             ~/.cargo/git
             target
       - env:
-          TARGET_PATH: tools
+          TARGET_PATH: "./tools"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Building as Checking
         uses: "./.github/actions/checkbuild-subdir"

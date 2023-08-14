@@ -54,12 +54,12 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             .adapter
             .surface_capabilities(&surface)
             .expect("Failed to query Surface Capabilities");
-        let ew = if si.currentExtent.width == 0xffff_ffff {
+        let ew = if si.currentExtent.width == u32::MAX {
             default_extent.0 as _
         } else {
             si.currentExtent.width
         };
-        let eh = if si.currentExtent.height == 0xffff_ffff {
+        let eh = if si.currentExtent.height == u32::MAX {
             default_extent.1 as _
         } else {
             si.currentExtent.height

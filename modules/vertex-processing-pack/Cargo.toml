@@ -9,5 +9,5 @@ with-loader-impl = ["peridot"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
-peridot = { path = "..", optional = true }
+peridot = { path = "../../base", optional = true }
 peridot-serialization-utils = { path = "../serialization-utils" }

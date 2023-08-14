@@ -98,7 +98,7 @@ impl GameDriver {
             .set_nativelink(Box::new(self::input::NativeInputHandler::new(
                 window.clone(),
             )));
-        base.postinit();
+        base.post_init();
         let _snd =
             NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
 

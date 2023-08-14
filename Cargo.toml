@@ -1,42 +1,13 @@
-[package]
-name = "peridot"
-description = "Peridot Engine"
-version = "0.1.0"
-authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
-
-[features]
-debug = ["bedrock/VK_EXT_debug_utils"]
-derive = ["peridot-derive"]
-mt = []
-
-[dependencies]
-pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
-log = "*"
-libc = "*"
-rayon = "1.0"
-num_cpus = "1.0"
-num = "*"
-parking_lot = "0.12"
-
-peridot-archive = { path = "archive" }
-peridot-math = { path = "math" }
-peridot-derive = { path = "derive", optional = true }
-
-[dependencies.bedrock]
-git = "https://github.com/Pctg-x8/bedrock"
-branch = "peridot"
-features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "Multithreaded"]
-
 [workspace]
 exclude = ["extras/", "cradle/", "examples/", "tools"]
 members = [
-    "archive",
-    "serialization-utils",
-    "vertex-processing-pack",
-    "math",
-    "image",
-    "vg",
+    "base",
     "derive",
-    "transition"
+    "modules/archive",
+    "modules/serialization-utils",
+    "modules/vertex-processing-pack",
+    "modules/math",
+    "modules/image",
+    "modules/vg",
+    "modules/transition",
 ]
