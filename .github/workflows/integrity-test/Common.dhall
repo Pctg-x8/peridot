@@ -450,12 +450,7 @@ let checkCradleLinux =
               [ List/end_map
                   GithubActions.Step.Type
                   (withConditionStep precondition)
-                  [ GithubActions.Step::{
-                    , name = "setup extra ppa"
-                    , run = Some
-                        "sudo apt-add-repository ppa:pipewire-debian/pipewire-upstream"
-                    }
-                  ,   aptInstallStep [ "libwayland-dev", "libpipewire-dev" ]
+                  [   aptInstallStep [ "libwayland-dev", "libpipewire-0.3-dev" ]
                     ⫽ { name = "install extra packages" }
                   , checkoutHeadStep
                   , checkoutStep
