@@ -465,11 +465,60 @@ impl<B: br::Buffer> GraphicsCommand for PreConfigureDraw<'_, B> {
         let _ = cb.bind_vertex_buffers(0, &vertex_buffers);
     }
 }
+pub struct PreConfigureDrawIndexed<'m, B: br::Buffer, IB: br::Buffer>(pub &'m IndexedMesh<B, IB>);
+impl<B: br::Buffer, IB: br::Buffer> GraphicsCommand for PreConfigureDrawIndexed<'_, B, IB> {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let vertex_buffers = self
+            .0
+            .vertex_buffers
+            .iter()
+            .map(|rb| (&rb.0, rb.1.start as usize))
+            .collect::<Vec<_>>();
+
+        let _ = cb
+            .bind_vertex_buffers(0, &vertex_buffers)
+            .bind_index_buffer(
+                &self.0.index_buffer.inner_ref(),
+                self.0.index_buffer.offset() as _,
+                self.0.index_type,
+            );
+    }
+}
 
 pub struct SimpleDraw(pub u32, pub u32, pub u32, pub u32);
 impl GraphicsCommand for SimpleDraw {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
         let _ = cb.draw(self.0, self.1, self.2, self.3);
+    }
+}
+
+pub struct SimpleDrawIndexed {
+    pub index_count: u32,
+    pub instance_count: u32,
+    pub first_index: u32,
+    pub vertex_offset: i32,
+    pub first_instance: u32,
+}
+impl SimpleDrawIndexed {
+    pub const fn new(index_count: u32, instance_count: u32) -> Self {
+        Self {
+            index_count,
+            instance_count,
+            first_index: 0,
+            vertex_offset: 0,
+            first_instance: 0,
+        }
+    }
+}
+impl GraphicsCommand for SimpleDrawIndexed {
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        let _ = cb.draw_indexed(
+            self.index_count,
+            self.instance_count,
+            self.first_index,
+            self.vertex_offset,
+            self.first_instance,
+        );
     }
 }
 
@@ -481,13 +530,15 @@ pub struct DrawMesh<'m, B: br::Buffer> {
 }
 impl<B: br::Buffer> GraphicsCommand for DrawMesh<'_, B> {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
-        PreConfigureDraw(self.mesh)
-            .then(SimpleDraw(
+        (
+            self.mesh.pre_configure_for_draw(),
+            SimpleDraw(
                 self.mesh.vertex_count,
                 self.instance_count,
                 self.vertex_start,
                 self.instance_start,
-            ))
+            ),
+        )
             .execute(cb);
     }
 }
@@ -501,27 +552,17 @@ pub struct DrawIndexedMesh<'m, B: br::Buffer, IB: br::Buffer> {
 }
 impl<B: br::Buffer, IB: br::Buffer> GraphicsCommand for DrawIndexedMesh<'_, B, IB> {
     fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
-        let vertex_buffers = self
-            .mesh
-            .vertex_buffers
-            .iter()
-            .map(|rb| (&rb.0, rb.1.start as usize))
-            .collect::<Vec<_>>();
-
-        let _ = cb
-            .bind_vertex_buffers(0, &vertex_buffers)
-            .bind_index_buffer(
-                &self.mesh.index_buffer.inner_ref(),
-                self.mesh.index_buffer.offset() as _,
-                self.mesh.index_type,
-            )
-            .draw_indexed(
-                self.mesh.vertex_count,
-                self.instance_count,
-                self.vertex_start,
-                self.index_offset,
-                self.instance_start,
-            );
+        (
+            self.mesh.pre_configure_for_draw(),
+            SimpleDrawIndexed {
+                index_count: self.mesh.vertex_count,
+                instance_count: self.instance_count,
+                first_index: self.vertex_start,
+                vertex_offset: self.index_offset,
+                first_instance: self.instance_start,
+            },
+        )
+            .execute(cb);
     }
 }
 

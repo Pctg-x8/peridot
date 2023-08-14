@@ -198,4 +198,8 @@ impl<B: br::Buffer, IB: br::Buffer> IndexedMesh<B, IB> {
             instance_start: 0,
         }
     }
+
+    pub const fn pre_configure_for_draw<'m>(&'m self) -> PreConfigureDrawIndexed<'m, B, IB> {
+        PreConfigureDrawIndexed(self)
+    }
 }
