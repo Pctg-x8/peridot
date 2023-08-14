@@ -1,5 +1,5 @@
 use log::*;
-use pvg::{FontProviderConstruct, FontProvider};
+use pvg::{FontProvider, FontProviderConstruct};
 use std::marker::PhantomData;
 extern crate bedrock as br;
 use br::{
@@ -86,7 +86,8 @@ pub struct Game<PL: peridot::NativeLinker> {
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &mut peridot::Engine<PL>) -> Self {
-        let font_provider = pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
+        let font_provider =
+            pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
         let font = font_provider
             .best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
             .expect("No Fonts");
@@ -462,7 +463,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             };
 
             let mut cbr = unsafe { r.begin().expect("Start Recoding CB") };
-            cbr.begin_render_pass(
+            let _ = cbr.begin_render_pass(
                 &renderpass,
                 f,
                 f.size()
@@ -473,7 +474,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             );
             vg_renderer_params2.default_render_commands(e, &mut cbr, &buffer, vg_renderer_exinst2);
             vg_renderer_params.default_render_commands(e, &mut cbr, &buffer, vg_renderer_exinst);
-            cbr.end_render_pass();
+            let _ = cbr.end_render_pass();
+
+            cbr.end().expect("Failed to finish render commands");
         }
 
         Game {
@@ -544,7 +547,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 target_pixels: self.target_size.clone(),
             };
 
-            cbr.begin_render_pass(
+            let _ = cbr.begin_render_pass(
                 &self.renderpass,
                 f,
                 f.size()
@@ -565,7 +568,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 &self.buffer,
                 vg_renderer_exinst,
             );
-            cbr.end_render_pass();
+            let _ = cbr.end_render_pass();
+
+            cbr.end().expect("Failed to finish render commands");
         }
     }
 }
