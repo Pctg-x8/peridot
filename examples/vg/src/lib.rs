@@ -1,5 +1,9 @@
 use log::*;
-use peridot_command_object::{BeginRenderPass, EndRenderPass, GraphicsCommand, RenderBaseModel};
+use peridot_command_object::{
+    BeginRenderPass, BufferUsage, CopyBuffer, DescriptorPointer, EndRenderPass, GraphicsCommand,
+    RangedBuffer, RenderBaseModel,
+};
+use std::convert::TryInto;
 use std::marker::PhantomData;
 extern crate bedrock as br;
 use br::{
@@ -8,9 +12,8 @@ use br::{
 use peridot::math::Vector2;
 use peridot::mthelper::SharedRef;
 use peridot::{
-    BufferPrealloc, CBSubmissionType, CommandBundle, DefaultRenderCommands,
-    DescriptorSetUpdateBatch, LayoutedPipeline, MemoryBadget, ModelData, RenderPassTemplates,
-    SpecConstantStorage, TransferBatch,
+    BufferPrealloc, CBSubmissionType, CommandBundle, DescriptorSetUpdateBatch, LayoutedPipeline,
+    MemoryBadget, ModelData, RenderPassTemplates, SpecConstantStorage,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg as pvg;
@@ -166,20 +169,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut mb_stg =
             MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(buffer)]) =
+            mb.alloc().expect("Mem Allocation").try_into() else {
+                unreachable!("unexpected return combination");
+            };
+        let buffer = SharedRef::new(buffer);
         mb_stg.add(peridot::MemoryBadgetEntry::Buffer(stg_buffer));
-        let buffer = SharedRef::new(
-            mb.alloc()
-                .expect("Mem Allocation")
-                .pop()
-                .expect("no objects?")
-                .unwrap_buffer(),
-        );
-        let mut stg_buffer = mb_stg
-            .alloc_upload()
-            .expect("StgMem Allocation")
-            .pop()
-            .expect("no objects?")
-            .unwrap_buffer();
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(mut stg_buffer)]) =
+            mb_stg.alloc_upload().expect("StgMem Allocation").try_into() else {
+                unreachable!("unexpected return combination");
+            };
 
         let (vg_renderer_params, vg_renderer_params2) = stg_buffer
             .guard_map(0..bp.total_size(), |m| {
@@ -205,29 +204,32 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Creating Transform BufferView 2");
 
         let transfer_total_size = bp.total_size();
-        let mut tfb = TransferBatch::<peridot::DeviceObject>::new();
-        tfb.add_mirroring_buffer(
-            SharedRef::new(stg_buffer),
-            buffer.clone(),
-            0,
-            transfer_total_size as _,
-        );
-        tfb.add_buffer_graphics_ready(
-            br::PipelineStageFlags::VERTEX_SHADER.vertex_input(),
-            buffer.clone(),
-            0..transfer_total_size as _,
-            br::AccessFlags::SHADER.read
-                | br::AccessFlags::VERTEX_ATTRIBUTE_READ
-                | br::AccessFlags::INDEX_READ,
-        );
-        e.submit_commands(|mut rec| {
-            tfb.sink_transfer_commands(&mut rec);
-            tfb.sink_graphics_ready_commands(&mut rec);
+        {
+            let all_stg_buffer =
+                RangedBuffer::from_offset_length(&stg_buffer, 0, transfer_total_size as _);
+            let all_buffer =
+                RangedBuffer::from_offset_length(&*buffer, 0, transfer_total_size as _);
 
-            rec
-        })
-        .expect("ImmResource Initialization");
-        drop(tfb);
+            let copy =
+                CopyBuffer::new(&stg_buffer, &*buffer).with_mirroring(0, transfer_total_size as _);
+
+            let [all_buffer_in_barrier, all_buffer_out_barrier] = all_buffer.usage_barrier3(
+                BufferUsage::UNUSED,
+                BufferUsage::TRANSFER_DST,
+                BufferUsage::VERTEX_BUFFER
+                    | BufferUsage::INDEX_BUFFER
+                    | BufferUsage::VERTEX_STORAGE_RO,
+            );
+            let in_barrier = [
+                all_stg_buffer.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                all_buffer_in_barrier,
+            ];
+            let out_barrier = [all_buffer_out_barrier];
+
+            copy.between(in_barrier, out_barrier)
+                .submit(e)
+                .expect("ImmResource Initialization");
+        }
 
         let screen_size = e
             .backbuffer(0)
@@ -279,14 +281,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let descs = dp.alloc(&[&dsl, &dsl]).expect("DescriptorSet Allocation");
 
         let mut dub = DescriptorSetUpdateBatch::new();
-        dub.write(
-            descs[0],
-            0,
+        DescriptorPointer::new(descs[0]).write(
+            &mut dub,
             br::DescriptorUpdateInfo::UniformTexelBuffer(vec![bufview.native_ptr()]),
         );
-        dub.write(
-            descs[1],
-            0,
+        DescriptorPointer::new(descs[1]).write(
+            &mut dub,
             br::DescriptorUpdateInfo::UniformTexelBuffer(vec![bufview2.native_ptr()]),
         );
         dub.submit(e.graphics().device());
@@ -303,14 +303,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .expect("Loading CurveShader"),
         )
         .expect("Creating CurveShader");
-        let sc = [AsRef::<br::vk::VkExtent2D>::as_ref(&screen_size)
-            .clone()
-            .into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
-        let vp = [br::vk::VkViewport::from_rect_with_depth_range(
-            &sc[0],
-            0.0..1.0,
-        )];
-        debug!("ScreenSize: {:?}", screen_size);
+        debug!("ScreenSize: {screen_size:?}");
+        let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
+        let vp = [sc[0].make_viewport(0.0..1.0)];
         let pl = SharedRef::new(
             e.graphics()
                 .device()
