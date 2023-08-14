@@ -88,11 +88,15 @@ impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br
 pub struct RangedImage<R: br::Image>(R, br::ImageSubresourceRange);
 impl<R: br::Image> RangedImage<R> {
     pub fn single_color_plane(resource: R) -> Self {
-        Self(resource, br::ImageSubresourceRange::color(0..1, 0..1))
+        Self(resource, br::ImageSubresourceRange::color(0, 0))
     }
 
     pub fn single_depth_stencil_plane(resource: R) -> Self {
-        Self(resource, br::ImageSubresourceRange::depth_stencil(0..1, 0..1))
+        Self(resource, br::ImageSubresourceRange::depth_stencil(0, 0))
+    }
+
+    pub fn single_stencil_plane(resource: R) -> Self {
+        Self(resource, br::ImageSubresourceRange::stencil(0, 0))
     }
 
     pub fn barrier(
