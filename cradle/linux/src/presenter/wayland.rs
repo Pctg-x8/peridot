@@ -433,6 +433,7 @@ impl Dispatch<WlRegistry, ()> for RegistryCollector {
                 interface,
                 version,
             } => {
+                debug!("Wayland Registry collected: {interface} version={version}");
                 state.0.insert(interface, (name, version));
             }
             wayland_client::protocol::wl_registry::Event::GlobalRemove { name } => {

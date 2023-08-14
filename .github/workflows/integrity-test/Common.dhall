@@ -20,6 +20,8 @@ let List/map = https://prelude.dhall-lang.org/List/map
 
 let List/end_map = λ(t : Type) → λ(f : t → t) → λ(a : List t) → List/map t t f a
 
+let Text/concatSep = https://prelude.dhall-lang.org/Text/concatSep
+
 let eRepositoryOwnerLogin =
       GithubActions.mkExpression "github.event.repository.owner.login"
 
@@ -104,6 +106,20 @@ let cacheStep =
                         GithubActions.mkExpression "hashFiles('**/Cargo.lock')"
 
                   in  GithubActions.WithParameterType.Text "${os}-cargo-${hash}"
+              }
+          )
+      }
+
+let cacheLLVMStep =
+      GithubActions.Step::{
+      , name = "Initialize LLVM Cache"
+      , uses = Some "actions/cache@v3"
+      , `with` = Some
+          ( toMap
+              { path = GithubActions.WithParameterType.Text "./llvm"
+              , key =
+                  GithubActions.WithParameterType.Text
+                    "${GithubActions.mkExpression "runner.os"}-llvm-11"
               }
           )
       }
@@ -411,6 +427,16 @@ let checkCradleMacos =
               ]
         }
 
+let aptInstallStep =
+      λ(packages : List Text) →
+        let packagesLine = Text/concatSep " " packages
+
+        in  GithubActions.Step::{
+            , name = "install apt packages"
+            , run = Some
+                "sudo apt-get update && sudo apt-get install ${packagesLine}"
+            }
+
 let checkCradleLinux =
       λ(notifyProvider : SlackNotifyProvider) →
       λ(precondition : Text) →
@@ -424,14 +450,28 @@ let checkCradleLinux =
               [ List/end_map
                   GithubActions.Step.Type
                   (withConditionStep precondition)
-                  [ GithubActions.Step::{
-                    , name = "install extra packages"
-                    , run = Some
-                        "sudo apt-get update && sudo apt-get install libwayland-dev"
-                    }
+                  [   aptInstallStep [ "libwayland-dev", "libpipewire-0.3-dev" ]
+                    ⫽ { name = "install extra packages" }
                   , checkoutHeadStep
                   , checkoutStep
                   , cacheStep
+                  , cacheLLVMStep ⫽ { id = Some "llvm-cache" }
+                  , GithubActions.Step::{
+                    , name = "Install LLVM"
+                    , uses = Some "KyleMayes/install-llvm-action@v1"
+                    , `with` = Some
+                        ( toMap
+                            { version =
+                                GithubActions.WithParameterType.Text "11"
+                            , cached =
+                                GithubActions.WithParameterType.Text
+                                  ( GithubActions.mkRefStepOutputExpression
+                                      "llvm-cache"
+                                      "cache-hit"
+                                  )
+                            }
+                        )
+                    }
                   , GithubActions.Step::{
                     , name = "Build CLI"
                     , run = Some "cargo build"
