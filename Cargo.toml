@@ -3,7 +3,6 @@ exclude = ["extras/", "cradle/", "examples/", "tools"]
 members = [
     "base",
     "derive",
-    "command-object",
     "modules/archive",
     "modules/serialization-utils",
     "modules/vertex-processing-pack",
@@ -11,4 +10,5 @@ members = [
     "modules/image",
     "modules/vg",
     "modules/transition",
+	"modules/command-object",
 ]
