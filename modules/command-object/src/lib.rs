@@ -158,7 +158,10 @@ impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<'_, B>
     }
 }
 impl<const N: usize, B: br::Buffer> GraphicsCommand for [BufferUsageTransitionBarrier<'_, B>; N] {
-    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+    fn execute(
+        self,
+        cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
+    ) {
         PipelineBarrier::new().with_barriers(self).execute(cb)
     }
 }
