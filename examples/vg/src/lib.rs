@@ -231,12 +231,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .expect("ImmResource Initialization");
         }
 
-        let screen_size = e
-            .backbuffer(0)
-            .expect("no backbuffer")
-            .image()
-            .size()
-            .clone();
+        let screen_size = e.backbuffer(0).expect("no backbuffer").image().size().wh();
         let renderpass = RenderPassTemplates::single_render(
             e.backbuffer_format(),
             e.requesting_backbuffer_layout().0,
@@ -304,7 +299,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         )
         .expect("Creating CurveShader");
         debug!("ScreenSize: {screen_size:?}");
-        let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
+        let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
         let pl = SharedRef::new(
             e.graphics()
