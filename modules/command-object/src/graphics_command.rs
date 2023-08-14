@@ -586,7 +586,7 @@ impl ImageResourceRange {
 }
 
 // Peridot base Model integration
-pub struct DefaultRenderCommands<'r, 'e, 'b, R, NL, Device, B>
+pub struct RenderBaseModel<'r, 'e, 'b, R, NL, Device, B>
 where
     R: peridot::DefaultRenderCommands<'e, Device>,
     B: br::Buffer<ConcreteDevice = Device>,
@@ -598,7 +598,7 @@ where
     pub buffer: &'b B,
     pub extras: R::Extras,
 }
-impl<'e, R, NL, Device, B> GraphicsCommand for DefaultRenderCommands<'_, 'e, '_, R, NL, Device, B>
+impl<'e, R, NL, Device, B> GraphicsCommand for RenderBaseModel<'_, 'e, '_, R, NL, Device, B>
 where
     R: peridot::DefaultRenderCommands<'e, Device>,
     B: br::Buffer<ConcreteDevice = Device>,

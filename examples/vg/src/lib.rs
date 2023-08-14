@@ -1,4 +1,5 @@
 use log::*;
+use peridot_command_object::{BeginRenderPass, EndRenderPass, GraphicsCommand, RenderBaseModel};
 use std::marker::PhantomData;
 extern crate bedrock as br;
 use br::{
@@ -204,28 +205,29 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Creating Transform BufferView 2");
 
         let transfer_total_size = bp.total_size();
+        let mut tfb = TransferBatch::<peridot::DeviceObject>::new();
+        tfb.add_mirroring_buffer(
+            SharedRef::new(stg_buffer),
+            buffer.clone(),
+            0,
+            transfer_total_size as _,
+        );
+        tfb.add_buffer_graphics_ready(
+            br::PipelineStageFlags::VERTEX_SHADER.vertex_input(),
+            buffer.clone(),
+            0..transfer_total_size as _,
+            br::AccessFlags::SHADER.read
+                | br::AccessFlags::VERTEX_ATTRIBUTE_READ
+                | br::AccessFlags::INDEX_READ,
+        );
         e.submit_commands(|mut rec| {
-            let mut tfb = TransferBatch::<peridot::DeviceObject>::new();
-            tfb.add_mirroring_buffer(
-                SharedRef::new(stg_buffer),
-                buffer.clone(),
-                0,
-                transfer_total_size as _,
-            );
-            tfb.add_buffer_graphics_ready(
-                br::PipelineStageFlags::VERTEX_SHADER.vertex_input(),
-                buffer.clone(),
-                0..transfer_total_size as _,
-                br::AccessFlags::SHADER.read
-                    | br::AccessFlags::VERTEX_ATTRIBUTE_READ
-                    | br::AccessFlags::INDEX_READ,
-            );
             tfb.sink_transfer_commands(&mut rec);
             tfb.sink_graphics_ready_commands(&mut rec);
 
             rec
         })
         .expect("ImmResource Initialization");
+        drop(tfb);
 
         let screen_size = e
             .backbuffer(0)
@@ -460,19 +462,27 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
             };
 
-            let mut cbr = unsafe { r.begin().expect("Start Recoding CB") };
-            cbr.begin_render_pass(
-                &renderpass,
-                f,
-                f.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[br::ClearValue::color([1.0; 4])],
-                true,
-            );
-            vg_renderer_params2.default_render_commands(e, &mut cbr, &buffer, vg_renderer_exinst2);
-            vg_renderer_params.default_render_commands(e, &mut cbr, &buffer, vg_renderer_exinst);
-            cbr.end_render_pass();
+            let rp = BeginRenderPass::for_entire_framebuffer(&renderpass, f)
+                .with_clear_values(vec![br::ClearValue::color([1.0; 4])]);
+            let render_vg = RenderBaseModel {
+                provider: &vg_renderer_params,
+                engine: e,
+                buffer: &buffer,
+                extras: vg_renderer_exinst,
+            };
+            let render_vg2 = RenderBaseModel {
+                provider: &vg_renderer_params2,
+                engine: e,
+                buffer: &buffer,
+                extras: vg_renderer_exinst2,
+            };
+
+            (render_vg2, render_vg)
+                .between(rp, EndRenderPass)
+                .execute_and_finish(unsafe {
+                    r.begin().expect("Failed to begin render command recording")
+                })
+                .expect("Failed to finish render commands");
         }
 
         Game {
@@ -528,8 +538,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
         for (r, f) in self.render_cb.iter_mut().zip(&self.framebuffers) {
-            let mut cbr = unsafe { r.begin().expect("Start Recording CB") };
-
             let vg_renderer_exinst = pvg::RendererExternalInstances {
                 interior_pipeline: &self.gp1,
                 curve_pipeline: &self.gp1_curve,
@@ -543,28 +551,25 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 target_pixels: self.target_size.clone(),
             };
 
-            cbr.begin_render_pass(
-                &self.renderpass,
-                f,
-                f.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[br::ClearValue::color([1.0; 4])],
-                true,
-            );
-            self.vg_renderer_params2.default_render_commands(
-                e,
-                &mut cbr,
-                &self.buffer,
-                vg_renderer_exinst2,
-            );
-            self.vg_renderer_params.default_render_commands(
-                e,
-                &mut cbr,
-                &self.buffer,
-                vg_renderer_exinst,
-            );
-            cbr.end_render_pass();
+            let rp = BeginRenderPass::for_entire_framebuffer(&self.renderpass, f)
+                .with_clear_values(vec![br::ClearValue::color([1.0; 4])]);
+            let render_vg = RenderBaseModel {
+                provider: &self.vg_renderer_params,
+                engine: e,
+                buffer: &self.buffer,
+                extras: vg_renderer_exinst,
+            };
+            let render_vg2 = RenderBaseModel {
+                provider: &self.vg_renderer_params2,
+                engine: e,
+                buffer: &self.buffer,
+                extras: vg_renderer_exinst2,
+            };
+
+            (render_vg2, render_vg)
+                .between(rp, EndRenderPass)
+                .execute_and_finish(unsafe { r.begin().expect("Start Recording CB") })
+                .expect("Failed to finish render commands");
         }
     }
 }
