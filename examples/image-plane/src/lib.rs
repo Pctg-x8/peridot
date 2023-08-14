@@ -1,7 +1,7 @@
 use bedrock as br;
 use bedrock::traits::*;
 use br::{resources::Image, SubmissionBatch};
-use br::{DescriptorPool, Device, ImageChild};
+use br::{CommandBuffer, DescriptorPool, Device, ImageChild};
 use log::*;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3, Vector3F32,
@@ -22,8 +22,8 @@ use br::VkObject;
 
 use peridot_command_object::{
     BeginRenderPass, BindGraphicsDescriptorSets, BufferImageDataDesc, BufferUsage, CopyBuffer,
-    CopyBufferToImage, DescriptorPointer, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh,
-    PipelineBarrier, RangedBuffer, RangedImage,
+    CopyBufferToImage, DescriptorPointer, DescriptorSets, EndRenderPass, GraphicsCommand,
+    ImageResourceRange, Mesh, PipelineBarrier, RangedBuffer, RangedImage,
 };
 
 struct BufferOffsets {
@@ -455,21 +455,17 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .apply(e.graphics().device())
             .expect("Failed to set render cb name");
 
-            let begin_main_rp = BeginRenderPass::for_entire_framebuffer(
-                &renderpass,
-                fb,
-                vec![br::ClearValue::color([0.0; 4])],
-            );
-            let render_image_plane = plane_mesh
-                .draw(1)
-                .after_of(BindGraphicsDescriptorSets::new(vec![*descriptor_main[0]]));
+            let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
+                .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+            let descriptor_sets = DescriptorSets(vec![*descriptor_main[0]]);
+            let render_image_plane = plane_mesh.draw(1).after_of(descriptor_sets.bind_graphics());
 
-            unsafe {
-                (&gp, render_image_plane)
-                    .between(begin_main_rp, EndRenderPass)
-                    .execute_into_ext_sync(cb)
-                    .expect("Failed to record render commands");
-            }
+            (&gp, render_image_plane)
+                .between(begin_main_rp, EndRenderPass)
+                .execute_and_finish(unsafe {
+                    cb.begin().expect("Failed to begin command recording")
+                })
+                .expect("Failed to record render commands");
         }
 
         bgm.write().expect("Starting BGM").play();
@@ -534,23 +530,21 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 impl<PL: peridot::NativeLinker> Game<PL> {
     fn populate_render_commands(&mut self) {
         for (cb, fb) in self.render_cb.iter_mut().zip(&self.framebuffers) {
-            let begin_main_rp = BeginRenderPass::for_entire_framebuffer(
-                &self.renderpass,
-                fb,
-                vec![br::ClearValue::color([0.0; 4])],
-            );
+            let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&self.renderpass, fb)
+                .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+            let descriptor_sets = DescriptorSets(vec![*self.descriptor.2[0]]);
             let render_image_plane = self
                 .plane_mesh
                 .draw(1)
-                .after_of(BindGraphicsDescriptorSets::new(vec![*self.descriptor.2[0]]));
+                .after_of(descriptor_sets.bind_graphics());
 
             let commands =
                 (&self.gp_main, render_image_plane).between(begin_main_rp, EndRenderPass);
-            unsafe {
-                commands
-                    .execute_into_ext_sync(cb)
-                    .expect("Failed to record render commands");
-            }
+            commands
+                .execute_and_finish(unsafe {
+                    cb.begin().expect("Failed to begin command recording")
+                })
+                .expect("Failed to record render commands");
         }
     }
 }
