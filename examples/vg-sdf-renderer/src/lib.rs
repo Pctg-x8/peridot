@@ -108,6 +108,101 @@ impl From<StencilState> for br::vk::VkStencilOpState {
     }
 }
 
+pub struct Blending {
+    pub src_factor: br::BlendFactor,
+    pub dst_factor: br::BlendFactor,
+    pub op: br::BlendOp,
+}
+impl Blending {
+    pub const fn new(src: br::BlendFactor, op: br::BlendOp, dst: br::BlendFactor) -> Self {
+        Self {
+            src_factor: src,
+            dst_factor: dst,
+            op,
+        }
+    }
+
+    pub const fn source_only(factor: br::BlendFactor) -> Self {
+        Self::new(factor, br::BlendOp::Add, br::BlendFactor::Zero)
+    }
+
+    pub const fn pure_color_op(op: br::BlendOp) -> Self {
+        Self::new(br::BlendFactor::SourceColor, op, br::BlendFactor::DestColor)
+    }
+
+    pub const fn pure_alpha_op(op: br::BlendOp) -> Self {
+        Self::new(br::BlendFactor::SourceAlpha, op, br::BlendFactor::DestAlpha)
+    }
+
+    pub const MAX_COLOR: Self = Self::pure_color_op(br::BlendOp::Max);
+    pub const MAX_ALPHA: Self = Self::pure_alpha_op(br::BlendOp::Max);
+}
+pub enum ColorAttachmentBlending {
+    Disabled,
+    Color {
+        color: Blending,
+        alpha: Blending,
+        color_write_mask: u32,
+    },
+}
+impl ColorAttachmentBlending {
+    pub const fn new_color(color: Blending, alpha: Blending) -> Self {
+        Self::Color {
+            color,
+            alpha,
+            color_write_mask: br::vk::VK_COLOR_COMPONENT_A_BIT
+                | br::vk::VK_COLOR_COMPONENT_B_BIT
+                | br::vk::VK_COLOR_COMPONENT_G_BIT
+                | br::vk::VK_COLOR_COMPONENT_R_BIT,
+        }
+    }
+
+    pub const MAX: Self = Self::new_color(Blending::MAX_COLOR, Blending::MAX_ALPHA);
+
+    pub const fn with_color_write_mask(self, mask: u32) -> Self {
+        match self {
+            Self::Color { color, alpha, .. } => Self::Color {
+                color,
+                alpha,
+                color_write_mask: mask,
+            },
+            s => s,
+        }
+    }
+
+    pub const fn into_vk(self) -> br::vk::VkPipelineColorBlendAttachmentState {
+        match self {
+            Self::Disabled => br::vk::VkPipelineColorBlendAttachmentState {
+                blendEnable: false as _,
+                srcColorBlendFactor: br::BlendFactor::One as _,
+                dstColorBlendFactor: br::BlendFactor::One as _,
+                colorBlendOp: br::BlendOp::Add as _,
+                srcAlphaBlendFactor: br::BlendFactor::One as _,
+                dstAlphaBlendFactor: br::BlendFactor::One as _,
+                alphaBlendOp: br::BlendOp::Add as _,
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_A_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_R_BIT,
+            },
+            Self::Color {
+                color,
+                alpha,
+                color_write_mask,
+            } => br::vk::VkPipelineColorBlendAttachmentState {
+                blendEnable: true as _,
+                srcColorBlendFactor: color.src_factor as _,
+                dstColorBlendFactor: color.dst_factor as _,
+                colorBlendOp: color.op as _,
+                srcAlphaBlendFactor: alpha.src_factor as _,
+                dstAlphaBlendFactor: alpha.dst_factor as _,
+                alphaBlendOp: alpha.op as _,
+                colorWriteMask: color_write_mask,
+            },
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(SpecConstantStorage)]
 struct StencilTriangleVertexShaderParameters {
@@ -273,7 +368,7 @@ impl TwoPassStencilSDFRenderer {
             .stencil_control_front(Self::STENCIL_INVERT)
             .stencil_control_back(Self::STENCIL_INVERT)
             .stencil_test_enable(true)
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend());
+            .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
         let triangle_fans_stencil_pipeline = pipebuild
             .create(
                 e.graphics().device().clone(),
@@ -302,19 +397,11 @@ impl TwoPassStencilSDFRenderer {
             .vertex_processing(invert_fill_shader)
             .stencil_control_front(Self::STENCIL_MATCH)
             .stencil_control_back(Self::STENCIL_MATCH)
-            .set_attachment_blends(vec![br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: true as _,
-                srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
-                dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
-                colorBlendOp: br::vk::VK_BLEND_OP_ADD,
-                srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
-                dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
-                alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
-                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
-                    | br::vk::VK_COLOR_COMPONENT_G_BIT
-                    | br::vk::VK_COLOR_COMPONENT_B_BIT
-                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
-            }]);
+            .set_attachment_blends(vec![ColorAttachmentBlending::new_color(
+                Blending::source_only(br::BlendFactor::OneMinusDestColor),
+                Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
+            )
+            .into_vk()]);
         let invert_pipeline = pipebuild
             .create(
                 e.graphics().device().clone(),
@@ -329,19 +416,7 @@ impl TwoPassStencilSDFRenderer {
             .stencil_control_front(Self::STENCIL_NOOP)
             .stencil_control_back(Self::STENCIL_NOOP)
             .stencil_test_enable(false)
-            .set_attachment_blends(vec![br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: true as _,
-                srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_COLOR,
-                dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_DST_COLOR,
-                colorBlendOp: br::vk::VK_BLEND_OP_MAX,
-                srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
-                dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
-                alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
-                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
-                    | br::vk::VK_COLOR_COMPONENT_G_BIT
-                    | br::vk::VK_COLOR_COMPONENT_B_BIT
-                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
-            }]);
+            .set_attachment_blends(vec![ColorAttachmentBlending::MAX.into_vk()]);
         let outline_distance_pipeline = pipebuild
             .create(
                 e.graphics().device().clone(),
@@ -421,7 +496,7 @@ impl TwoPassStencilSDFRenderer {
             .stencil_control_front(Self::STENCIL_INVERT)
             .stencil_control_back(Self::STENCIL_INVERT)
             .stencil_test_enable(true)
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend());
+            .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
         let triangle_fans_stencil_pipeline = pipebuild
             .create(
                 g.device().clone(),
@@ -451,19 +526,11 @@ impl TwoPassStencilSDFRenderer {
             .vertex_processing(invert_fill_shader)
             .stencil_control_front(Self::STENCIL_MATCH)
             .stencil_control_back(Self::STENCIL_MATCH)
-            .set_attachment_blends(vec![br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: true as _,
-                srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
-                dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
-                colorBlendOp: br::vk::VK_BLEND_OP_ADD,
-                srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
-                dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
-                alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
-                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
-                    | br::vk::VK_COLOR_COMPONENT_G_BIT
-                    | br::vk::VK_COLOR_COMPONENT_B_BIT
-                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
-            }]);
+            .set_attachment_blends(vec![ColorAttachmentBlending::new_color(
+                Blending::source_only(br::BlendFactor::OneMinusDestColor),
+                Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
+            )
+            .into_vk()]);
         let invert_pipeline = pipebuild
             .create(
                 g.device().clone(),
@@ -479,19 +546,7 @@ impl TwoPassStencilSDFRenderer {
             .stencil_control_front(Self::STENCIL_NOOP)
             .stencil_control_back(Self::STENCIL_NOOP)
             .stencil_test_enable(false)
-            .set_attachment_blends(vec![br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: true as _,
-                srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_COLOR,
-                dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_DST_COLOR,
-                colorBlendOp: br::vk::VK_BLEND_OP_MAX,
-                srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
-                dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
-                alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
-                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
-                    | br::vk::VK_COLOR_COMPONENT_G_BIT
-                    | br::vk::VK_COLOR_COMPONENT_B_BIT
-                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
-            }]);
+            .set_attachment_blends(vec![ColorAttachmentBlending::MAX.into_vk()]);
         let outline_distance_pipeline = pipebuild
             .create(
                 g.device().clone(),
@@ -519,13 +574,11 @@ impl TwoPassStencilSDFRenderer {
     }
 
     pub const fn render_area(&self) -> br::vk::VkRect2D {
-        br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D { x: 0, y: 0 },
-            extent: br::vk::VkExtent2D {
-                width: self.target_size.0,
-                height: self.target_size.1,
-            },
+        br::vk::VkExtent2D {
+            width: self.target_size.0,
+            height: self.target_size.1,
         }
+        .into_rect(br::vk::VkOffset2D::ZERO)
     }
     pub const CLEAR_VALUES: &'static [br::ClearValue] = &[
         br::ClearValue::color_f32([0.0; 4]), // ignored
@@ -708,7 +761,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                     None,
                     None,
                     &Default::default(),
-                    &br::ImageSubresourceRange::stencil(0..1, 0..1),
+                    &br::ImageSubresourceRange::stencil(0, 0),
                 )
                 .expect("Failed to create Stencil Buffer View"),
         );
