@@ -9,4 +9,4 @@ edition = "2021"
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
     "Implements",
 ] }
-peridot = { path = ".." }
+peridot = { path = "../../base" }
