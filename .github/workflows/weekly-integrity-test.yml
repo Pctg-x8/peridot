@@ -120,6 +120,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
+        name: setup extra ppa
+        run: sudo apt-add-repository ppa:pipewire-debian/pipewire-upstream
+      - if: 'true'
         name: install extra packages
         run: "sudo apt-get update && sudo apt-get install libwayland-dev libpipewire-dev"
       - if: 'true'
