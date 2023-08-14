@@ -75,12 +75,12 @@ impl Graphics {
         for l in br::enumerate_layer_properties()
             .map_err(GraphicsInitializationError::LayerEnumerationFailed)?
         {
-            let name_str = unsafe {
-                l.layerName
-                    .as_cstr_unchecked()
-                    .to_str()
-                    .expect("invalid sequence in layer name")
-            };
+            let name_str = l
+                .layerName
+                .as_cstr()
+                .expect("Failed to decode")
+                .to_str()
+                .expect("invalid sequence in layer name");
             info!(
                 "* {name_str} :: {}/{}",
                 l.specVersion, l.implementationVersion
