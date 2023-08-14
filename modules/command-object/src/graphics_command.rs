@@ -325,18 +325,15 @@ where
     pub fn for_entire_framebuffer(
         render_pass: R,
         framebuffer: &'f br::FramebufferObject<D, I>,
-        clear_values: Vec<br::ClearValue>,
     ) -> Self {
-        Self {
-            rect: framebuffer
-                .size()
-                .clone()
-                .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
+        Self::new(
             render_pass,
             framebuffer,
-            clear_values,
-            inline_commands: true,
-        }
+            framebuffer
+                .size()
+                .clone()
+                .into_rect(br::vk::VkOffset2D::ZERO),
+        )
     }
 }
 impl<R: br::RenderPass, F: br::Framebuffer> GraphicsCommand for BeginRenderPass<R, F> {
@@ -585,5 +582,31 @@ impl ImageResourceRange {
         self.layers.mipLevel = level;
 
         self
+    }
+}
+
+// Peridot base Model integration
+pub struct DefaultRenderCommands<'r, 'e, 'b, R, NL, Device, B>
+where
+    R: peridot::DefaultRenderCommands<'e, Device>,
+    B: br::Buffer<ConcreteDevice = Device>,
+    Device: br::Device,
+    NL: peridot::NativeLinker,
+{
+    pub provider: &'r R,
+    pub engine: &'e peridot::Engine<NL>,
+    pub buffer: &'b B,
+    pub extras: R::Extras,
+}
+impl<'e, R, NL, Device, B> GraphicsCommand for DefaultRenderCommands<'_, 'e, '_, R, NL, Device, B>
+where
+    R: peridot::DefaultRenderCommands<'e, Device>,
+    B: br::Buffer<ConcreteDevice = Device>,
+    Device: br::Device,
+    NL: peridot::NativeLinker,
+{
+    fn execute(self, cb: &mut br::CmdRecord<'_, impl br::CommandBuffer + br::VkHandleMut>) {
+        self.provider
+            .default_render_commands(self.engine, cb, self.buffer, self.extras)
     }
 }
