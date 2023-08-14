@@ -13,8 +13,7 @@ use-fontconfig = ["peridot-vg/use-fontconfig"]
 
 [dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
-peridot = { path = "../../base" }
+peridot = { path = "../../base", features = ["derive"] }
 peridot-vg = { path = "../../modules/vg" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
-peridot-derive = { path = "../../derive" }
 peridot-command-object = { path = "../../modules/command-object" }

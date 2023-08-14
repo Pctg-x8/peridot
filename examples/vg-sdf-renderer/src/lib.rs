@@ -1,5 +1,7 @@
 #![feature(const_trait_impl)]
 
+use std::convert::TryInto;
+
 use bedrock as br;
 use br::{CommandBuffer, Device, Image, ImageChild, SubmissionBatch};
 use peridot::mthelper::SharedRef;
@@ -12,7 +14,7 @@ use peridot_command_object::{
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg::FlatPathBuilder;
 
-#[derive(peridot_derive::SpecConstantStorage)]
+#[derive(SpecConstantStorage)]
 #[repr(C)]
 pub struct FillFragmentShaderParameters {
     enable_color_output: br::vk::VkBool32,
@@ -106,6 +108,21 @@ impl From<StencilState> for br::vk::VkStencilOpState {
     }
 }
 
+#[repr(C)]
+#[derive(SpecConstantStorage)]
+struct StencilTriangleVertexShaderParameters {
+    pub target_width: f32,
+    pub target_height: f32,
+}
+
+#[repr(C)]
+#[derive(SpecConstantStorage)]
+struct OutlineVertexShaderParameters {
+    pub target_width: f32,
+    pub target_height: f32,
+    pub sdf_max_distance: f32,
+}
+
 pub struct TwoPassStencilSDFRenderer {
     render_pass: br::RenderPassObject<peridot::DeviceObject>,
     target_size: peridot::math::Vector2<u32>,
@@ -138,8 +155,8 @@ impl TwoPassStencilSDFRenderer {
         .into_vk();
     const STENCIL_NOOP: br::vk::VkStencilOpState = StencilState::new(br::StencilOp::Keep).into_vk();
 
-    pub fn new<NL: peridot::NativeLinker>(
-        e: &peridot::Engine<NL>,
+    pub fn new(
+        e: &peridot::Engine<impl peridot::NativeLinker>,
         color_format: br::vk::VkFormat,
         target_final_layout: br::ImageLayout,
         target_layout_transition_stage: br::PipelineStageFlags,
@@ -148,15 +165,13 @@ impl TwoPassStencilSDFRenderer {
     ) -> Self {
         let ad_main =
             br::AttachmentDescription::new(color_format, target_final_layout, target_final_layout)
-                .load_op(br::LoadOp::Load)
-                .store_op(br::StoreOp::Store);
+                .color_memory_op(br::LoadOp::Load, br::StoreOp::Store);
         let ad_stencil = br::AttachmentDescription::new(
             br::vk::VK_FORMAT_S8_UINT,
             br::ImageLayout::DepthStencilReadOnlyOpt,
             br::ImageLayout::DepthStencilReadOnlyOpt,
         )
-        .stencil_load_op(br::LoadOp::Clear)
-        .stencil_store_op(br::StoreOp::DontCare);
+        .stencil_load_op(br::LoadOp::Clear);
         let sp_stencil = br::SubpassDescription::new()
             .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt);
         let sp_main = br::SubpassDescription::new()
@@ -190,43 +205,22 @@ impl TwoPassStencilSDFRenderer {
             .create(e.graphics().device().clone())
             .expect("Failed to create RenderPass");
 
-        let vertex_shader_parameter_values = [
-            init_target_size.0 as f32,
-            init_target_size.1 as _,
+        let stencil_triangle_vsh_parameters = StencilTriangleVertexShaderParameters {
+            target_width: init_target_size.0 as _,
+            target_height: init_target_size.1 as _,
+        };
+        let outline_vsh_parameters = OutlineVertexShaderParameters {
+            target_width: init_target_size.0 as _,
+            target_height: init_target_size.1 as _,
             sdf_max_distance,
-        ];
-        let vertex_shader_common_parameter_placements = [
-            br::vk::VkSpecializationMapEntry {
-                constantID: 0,
-                offset: 0,
-                size: std::mem::size_of::<f32>() as _,
-            },
-            br::vk::VkSpecializationMapEntry {
-                constantID: 1,
-                offset: std::mem::size_of::<f32>() as _,
-                size: std::mem::size_of::<f32>() as _,
-            },
-        ];
-        let outline_vsh_parameter_placements = [
-            vertex_shader_common_parameter_placements[0].clone(),
-            vertex_shader_common_parameter_placements[1].clone(),
-            br::vk::VkSpecializationMapEntry {
-                constantID: 2,
-                offset: (std::mem::size_of::<f32>() * 2) as _,
-                size: std::mem::size_of::<f32>() as _,
-            },
-        ];
+        };
         let fill_fsh_color_output = FillFragmentShaderParameters {
             enable_color_output: true as _,
         };
 
         let scissors =
-            [br::vk::VkExtent2D::from(init_target_size)
-                .into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
-        let viewports = [br::vk::VkViewport::from_rect_with_depth_range(
-            &scissors[0],
-            0.0..1.0,
-        )];
+            [br::vk::VkExtent2D::from(init_target_size).into_rect(br::vk::VkOffset2D::ZERO)];
+        let viewports = [scissors[0].make_viewport(0.0..1.0)];
         let fill_shader = PvpShaderModules::new(
             e.graphics().device(),
             e.load("builtin.vg.sdf.shaders.triangle_fans")
@@ -258,10 +252,8 @@ impl TwoPassStencilSDFRenderer {
 
         let mut stencil_triangle_shader =
             fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_triangle_shader.vertex_shader_mut().specinfo = Some((
-            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
-            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values),
-        ));
+        stencil_triangle_shader.vertex_shader_mut().specinfo =
+            Some(stencil_triangle_vsh_parameters.as_pair());
         let mut pipebuild = br::GraphicsPipelineBuilder::<
             _,
             br::PipelineObject<peridot::DeviceObject>,
@@ -290,10 +282,8 @@ impl TwoPassStencilSDFRenderer {
             .expect("Failed to create Triangle Fans Stencil Pipeline");
         let mut stencil_curve_shader =
             curve_fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_curve_shader.vertex_shader_mut().specinfo = Some((
-            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
-            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values),
-        ));
+        stencil_curve_shader.vertex_shader_mut().specinfo =
+            Some(stencil_triangle_vsh_parameters.as_pair());
         pipebuild.vertex_processing(stencil_curve_shader);
         let curve_triangles_stencil_pipeline = pipebuild
             .create(
@@ -333,10 +323,7 @@ impl TwoPassStencilSDFRenderer {
             .expect("Failed to create Invert Pipeline");
         let mut outline_render_vps =
             outline_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        outline_render_vps.vertex_shader_mut().specinfo = Some((
-            std::borrow::Cow::Borrowed(&outline_vsh_parameter_placements),
-            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values),
-        ));
+        outline_render_vps.vertex_shader_mut().specinfo = Some(outline_vsh_parameters.as_pair());
         pipebuild
             .vertex_processing(outline_render_vps)
             .stencil_control_front(Self::STENCIL_NOOP)
@@ -383,57 +370,34 @@ impl TwoPassStencilSDFRenderer {
             ),
         }
     }
+
     pub fn resize(
         &mut self,
         g: &peridot::Graphics,
         new_size: peridot::math::Vector2<u32>,
         sdf_max_distance: f32,
     ) {
-        let vertex_shader_parameter_values = [new_size.0 as f32, new_size.1 as _, sdf_max_distance];
-        let vertex_shader_common_parameter_placements = [
-            br::vk::VkSpecializationMapEntry {
-                constantID: 0,
-                offset: 0,
-                size: std::mem::size_of::<f32>() as _,
-            },
-            br::vk::VkSpecializationMapEntry {
-                constantID: 1,
-                offset: std::mem::size_of::<f32>() as _,
-                size: std::mem::size_of::<f32>() as _,
-            },
-        ];
-        let outline_vsh_parameter_placements = [
-            vertex_shader_common_parameter_placements[0].clone(),
-            vertex_shader_common_parameter_placements[1].clone(),
-            br::vk::VkSpecializationMapEntry {
-                constantID: 2,
-                offset: (std::mem::size_of::<f32>() * 2) as _,
-                size: std::mem::size_of::<f32>() as _,
-            },
-        ];
+        let stencil_vsh_parameters = StencilTriangleVertexShaderParameters {
+            target_width: new_size.0 as _,
+            target_height: new_size.1 as _,
+        };
+        let outline_vsh_parameters = OutlineVertexShaderParameters {
+            target_width: new_size.0 as _,
+            target_height: new_size.1 as _,
+            sdf_max_distance,
+        };
         let fill_fsh_color_output = FillFragmentShaderParameters {
             enable_color_output: true as _,
         };
 
-        let scissors = [br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D { x: 0, y: 0 },
-            extent: br::vk::VkExtent2D {
-                width: new_size.0,
-                height: new_size.1,
-            },
-        }];
-        let viewports = [br::vk::VkViewport::from_rect_with_depth_range(
-            &scissors[0],
-            0.0..1.0,
-        )];
+        let scissors = [br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO)];
+        let viewports = [scissors[0].make_viewport(0.0..1.0)];
 
         let mut stencil_triangle_shader = self
             .fill_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_triangle_shader.vertex_shader_mut().specinfo = Some((
-            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
-            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values),
-        ));
+        stencil_triangle_shader.vertex_shader_mut().specinfo =
+            Some(stencil_vsh_parameters.as_pair());
         let mut pipebuild = br::GraphicsPipelineBuilder::<
             _,
             br::PipelineObject<peridot::DeviceObject>,
@@ -467,10 +431,7 @@ impl TwoPassStencilSDFRenderer {
         let mut stencil_curve_shader = self
             .curve_fill_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_curve_shader.vertex_shader_mut().specinfo = Some((
-            std::borrow::Cow::Borrowed(&vertex_shader_common_parameter_placements),
-            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values),
-        ));
+        stencil_curve_shader.vertex_shader_mut().specinfo = Some(stencil_vsh_parameters.as_pair());
         pipebuild.vertex_processing(stencil_curve_shader);
         let curve_triangles_stencil_pipeline = pipebuild
             .create(
@@ -512,10 +473,7 @@ impl TwoPassStencilSDFRenderer {
         let mut outline_render_vps = self
             .outline_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        outline_render_vps.vertex_shader_mut().specinfo = Some((
-            std::borrow::Cow::Borrowed(&outline_vsh_parameter_placements),
-            br::DynamicDataCell::from_slice(&vertex_shader_parameter_values),
-        ));
+        outline_render_vps.vertex_shader_mut().specinfo = Some(outline_vsh_parameters.as_pair());
         pipebuild
             .vertex_processing(outline_render_vps)
             .stencil_control_front(Self::STENCIL_NOOP)
@@ -724,31 +682,25 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let mut mb =
             peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
-        let buffer = mb
-            .alloc()
-            .expect("Failed to allocate memory")
-            .pop()
-            .expect("no objects?")
-            .unwrap_buffer();
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(buffer)]) =
+            mb.alloc().expect("Failed to allocate memory").try_into() else {
+                unreachable!("unexpected return combination");
+            };
         let buffer = SharedRef::new(buffer);
         let mut mb_upload =
             peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb_upload.add(peridot::MemoryBadgetEntry::Buffer(buffer_init));
-        let mut buffer_init = mb_upload
-            .alloc_upload()
-            .expect("Failed to allocate init buffer memory")
-            .pop()
-            .expect("no objects?")
-            .unwrap_buffer();
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(mut buffer_init)]) =
+            mb_upload.alloc_upload().expect("Failed to allocate init buffer memory").try_into() else {
+                unreachable!("unexpected return combination");
+            };
         let mut mb_tex =
             peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
         mb_tex.add(peridot::MemoryBadgetEntry::Image(stencil_buffer));
-        let stencil_buffer = mb_tex
-            .alloc()
-            .expect("Failed to allocate Texture Memory")
-            .pop()
-            .expect("no objects?")
-            .unwrap_image();
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(stencil_buffer)]) =
+            mb_tex.alloc().expect("Failed to allocate Texture Memory").try_into() else {
+                unreachable!("unexpected return combination");
+            };
 
         let stencil_buffer_view = SharedRef::new(
             stencil_buffer
@@ -920,7 +872,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 .expect("Failed to record commands");
         }
 
-        Game {
+        Self {
             buffer,
             stencil_buffer_view,
             sdf_renderer,
