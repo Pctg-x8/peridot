@@ -1,3 +1,5 @@
+#![feature(const_trait_impl)]
+
 use bedrock as br;
 use br::{CommandBuffer, Device, Image, ImageChild, SubmissionBatch};
 use peridot::mthelper::SharedRef;
@@ -14,6 +16,94 @@ use peridot_vg::FlatPathBuilder;
 #[repr(C)]
 pub struct FillFragmentShaderParameters {
     enable_color_output: br::vk::VkBool32,
+}
+
+pub struct StencilOpGroup {
+    pub fail: br::vk::VkCompareOp,
+    pub depth_fail: br::vk::VkCompareOp,
+    pub pass: br::vk::VkCompareOp,
+}
+#[const_trait]
+pub trait StencilOp {
+    fn construct(self) -> StencilOpGroup;
+}
+impl const StencilOp for br::StencilOp {
+    fn construct(self) -> StencilOpGroup {
+        StencilOpGroup {
+            fail: self as _,
+            depth_fail: self as _,
+            pass: self as _,
+        }
+    }
+}
+/// (fail, pass) pair
+impl StencilOp for (br::StencilOp, br::StencilOp) {
+    fn construct(self) -> StencilOpGroup {
+        StencilOpGroup {
+            fail: self.0 as _,
+            depth_fail: self.0 as _,
+            pass: self.1 as _,
+        }
+    }
+}
+
+pub struct StencilCompare {
+    pub op: br::CompareOp,
+    pub reference: u32,
+    pub mask: u32,
+}
+impl StencilCompare {
+    pub const fn new(op: br::CompareOp, reference: u32) -> Self {
+        Self {
+            op,
+            reference,
+            mask: 0xffff_ffff,
+        }
+    }
+
+    pub const fn with_mask(self, mask: u32) -> Self {
+        Self { mask, ..self }
+    }
+}
+
+pub struct StencilState {
+    pub ops: StencilOpGroup,
+    pub compare: StencilCompare,
+    pub write_mask: u32,
+}
+impl StencilState {
+    pub const fn new(ops: impl ~const StencilOp) -> Self {
+        Self {
+            ops: ops.construct(),
+            compare: StencilCompare::new(br::CompareOp::Always, 0),
+            write_mask: 0xffff_ffff,
+        }
+    }
+
+    pub const fn with_compare(self, compare: StencilCompare) -> Self {
+        Self { compare, ..self }
+    }
+
+    pub const fn with_write_mask(self, write_mask: u32) -> Self {
+        Self { write_mask, ..self }
+    }
+
+    pub const fn into_vk(self) -> br::vk::VkStencilOpState {
+        br::vk::VkStencilOpState {
+            failOp: self.ops.fail,
+            passOp: self.ops.pass,
+            depthFailOp: self.ops.depth_fail,
+            compareOp: self.compare.op as _,
+            compareMask: self.compare.mask,
+            writeMask: self.write_mask,
+            reference: self.compare.reference,
+        }
+    }
+}
+impl From<StencilState> for br::vk::VkStencilOpState {
+    fn from(value: StencilState) -> Self {
+        value.into_vk()
+    }
 }
 
 pub struct TwoPassStencilSDFRenderer {
@@ -40,33 +130,13 @@ pub struct TwoPassStencilSDFRenderer {
     >,
 }
 impl TwoPassStencilSDFRenderer {
-    const STENCIL_INVERT: br::vk::VkStencilOpState = br::vk::VkStencilOpState {
-        failOp: br::vk::VK_STENCIL_OP_INVERT,
-        depthFailOp: br::vk::VK_STENCIL_OP_INVERT,
-        passOp: br::vk::VK_STENCIL_OP_INVERT,
-        compareOp: br::vk::VK_COMPARE_OP_ALWAYS,
-        compareMask: 0,
-        writeMask: 0x01,
-        reference: 0,
-    };
-    const STENCIL_MATCH: br::vk::VkStencilOpState = br::vk::VkStencilOpState {
-        failOp: br::vk::VK_STENCIL_OP_KEEP,
-        depthFailOp: br::vk::VK_STENCIL_OP_KEEP,
-        passOp: br::vk::VK_STENCIL_OP_KEEP,
-        compareOp: br::vk::VK_COMPARE_OP_EQUAL,
-        compareMask: 0x01,
-        writeMask: 0x01,
-        reference: 0x01,
-    };
-    const STENCIL_NOOP: br::vk::VkStencilOpState = br::vk::VkStencilOpState {
-        failOp: br::vk::VK_STENCIL_OP_KEEP,
-        depthFailOp: br::vk::VK_STENCIL_OP_KEEP,
-        passOp: br::vk::VK_STENCIL_OP_KEEP,
-        compareOp: br::vk::VK_COMPARE_OP_ALWAYS,
-        compareMask: 0,
-        writeMask: 0,
-        reference: 0,
-    };
+    const STENCIL_INVERT: br::vk::VkStencilOpState = StencilState::new(br::StencilOp::Invert)
+        .with_write_mask(0x01)
+        .into_vk();
+    const STENCIL_MATCH: br::vk::VkStencilOpState = StencilState::new(br::StencilOp::Keep)
+        .with_compare(StencilCompare::new(br::CompareOp::Equal, 0x01).with_mask(0x01))
+        .into_vk();
+    const STENCIL_NOOP: br::vk::VkStencilOpState = StencilState::new(br::StencilOp::Keep).into_vk();
 
     pub fn new<NL: peridot::NativeLinker>(
         e: &peridot::Engine<NL>,
