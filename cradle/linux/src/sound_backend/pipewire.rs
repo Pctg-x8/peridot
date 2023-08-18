@@ -1,7 +1,6 @@
 //! PipeWire Sound Backend
 
 use libspa_sys::spa_format_audio_raw_parse;
-use parking_lot::RwLock;
 use pw::spa::pod::deserialize::PodDeserializer;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -93,25 +92,21 @@ impl NativeAudioEngine {
 
         let ctx = pw::Context::new(&mainloop).expect("Failed to create pw context");
         let core = ctx.connect(None).expect("Failed to connect to pw");
-        let stream = Arc::new(RwLock::new(
-            pw::stream::Stream::new(
-                &core,
-                crate::userlib::APP_TITLE,
-                pw::properties! {
-                    *pw::keys::MEDIA_TYPE => "Audio",
-                    *pw::keys::MEDIA_CATEGORY => "Playback"
-                },
-            )
-            .expect("Failed to create stream"),
-        ));
-        let stream_wref = Arc::downgrade(&stream);
+        let stream = pw::stream::Stream::new(
+            &core,
+            crate::userlib::APP_TITLE,
+            pw::properties! {
+                *pw::keys::MEDIA_TYPE => "Audio",
+                *pw::keys::MEDIA_CATEGORY => "Playback"
+            },
+        )
+        .expect("Failed to create stream");
         let stream_listener = stream
-            .write()
             .add_local_listener_with_user_data(writer)
             .state_changed(|old_state, new_state| {
                 trace!("State Changed: {old_state:?} -> {new_state:?}");
             })
-            .param_changed(move |stream, id, userdata, params| {
+            .param_changed(|stream, id, userdata, params| {
                 trace!("Param Changed: id={id}");
                 if let Some(p) = params {
                     if let Ok((_rest, param_value)) =
@@ -175,7 +170,6 @@ impl NativeAudioEngine {
         }];
 
         stream
-            .read()
             .connect(
                 pw::spa::Direction::Output,
                 None,
@@ -190,10 +184,7 @@ impl NativeAudioEngine {
 
         let _ = attach.deattach();
         stream_listener.unregister();
-        stream
-            .read()
-            .disconnect()
-            .expect("Failed to disconnect stream");
+        stream.disconnect().expect("Failed to disconnect stream");
     }
 }
 impl Drop for NativeAudioEngine {
