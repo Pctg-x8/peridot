@@ -44,7 +44,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     framebuffers: Vec<
         br::FramebufferObject<
             peridot::DeviceObject,
-            SharedRef<<PL::Presenter as peridot::PlatformPresenter>::Backbuffer>,
+            SharedRef<<PL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
         >,
     >,
     gp_main: LayoutedPipeline<
@@ -78,8 +78,8 @@ impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &mut peridot::Engine<PL>) -> Self {
         let screen_size = e
-            .backbuffer(0)
-            .expect("no backbuffers")
+            .back_buffer(0)
+            .expect("no back buffers")
             .image()
             .size()
             .clone();
@@ -198,7 +198,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             })
             .expect("Failed to setup mutable data");
 
-        let preconfigure_task = e
+        let pre_configure_task = e
             .submit_commands_async(|mut r| {
                 let _ = r
                     .pipeline_barrier(
@@ -316,7 +316,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     );
                 r
             })
-            .expect("Failed to submit preconfigure commands");
+            .expect("Failed to submit pre-configure commands");
 
         let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
             .expect("Alloc UpdateCB");
@@ -367,9 +367,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             rec.end().expect("Failed to record update commands");
         }
 
-        let outer_layout = e.requesting_backbuffer_layout().0;
+        let outer_layout = e.requesting_back_buffer_layout().0;
         let attdesc =
-            br::AttachmentDescription::new(e.backbuffer_format(), outer_layout, outer_layout)
+            br::AttachmentDescription::new(e.back_buffer_format(), outer_layout, outer_layout)
                 .load_op(br::LoadOp::Clear)
                 .store_op(br::StoreOp::Store);
         let renderpass = br::RenderPassBuilder::new()
@@ -385,7 +385,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .create(e.graphics().device().clone())
             .expect("Create RenderPass");
         let framebuffers = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|b| {
                 e.graphics().device().clone().new_framebuffer(
                     &renderpass,
@@ -482,7 +482,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .expect("Failed to set pipeline name");
         let gp = LayoutedPipeline::combine(gp, pl);
 
-        async_std::task::block_on(preconfigure_task).expect("Failed to preconfigure resources");
+        async_std::task::block_on(pre_configure_task).expect("Failed to pre-configure resources");
 
         let image_view = image
             .create_view(
@@ -518,7 +518,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut render_cb = CommandBundle::new(
             e.graphics(),
             CBSubmissionType::Graphics,
-            e.backbuffer_count(),
+            e.back_buffer_count(),
         )
         .expect("Alloc RenderCB");
         #[allow(unused_variables)]
@@ -600,13 +600,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .expect("Falied to present");
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_back_buffer_resources(&mut self) {
         self.framebuffers.clear();
         self.render_cb.reset().expect("Resetting RenderCB");
     }
     fn on_resize(&mut self, e: &mut peridot::Engine<PL>, _new_size: Vector2<usize>) {
         self.framebuffers = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|b| {
                 e.graphics().device().clone().new_framebuffer(
                     &self.renderpass,
