@@ -1,12 +1,11 @@
-Peridot-Engine	
----	
+## Peridot-Engine
 
-![Integrity Check (Weekly)](https://github.com/Pctg-x8/peridot/workflows/Integrity%20Check%20(Weekly)/badge.svg)
-![Document Continuous Deployment(for dev)](https://github.com/Pctg-x8/peridot/workflows/Document%20Continuous%20Deployment(for%20dev)/badge.svg)
+[![Integrity Check (Weekly)](https://github.com/Pctg-x8/peridot/actions/workflows/weekly-integrity-test.yml/badge.svg?branch=dev)](https://github.com/Pctg-x8/peridot/actions/workflows/weekly-integrity-test.yml)
+[![Document Continuous Deployment (for dev)](https://github.com/Pctg-x8/peridot/actions/workflows/docs-cd.yml/badge.svg?branch=dev)](https://github.com/Pctg-x8/peridot/actions/workflows/docs-cd.yml)
 
-Auto-built Documentation(dev branch): https://peridot.docs.ct2.jp/
+Auto-built Documentation(dev branch): https://docs.ct2.io/peridot/dev/peridot/
 
 For new-generation game/multimedia development with arbitrary programming languages. Written in Rust.
 
-* [Cradle/Game Build Instruction](./build.md)
-  * [Prerequisites for Android building](./cradle/android/build.md)
+- [Cradle/Game Build Instruction](./build.md)
+  - [Prerequisites for Android building](./cradle/android/build.md)
