@@ -36,7 +36,8 @@ pub trait PlatformPresenter {
     fn current_geometry_extent(&self) -> peridot_math::Vector2<usize>;
 }
 
-type SharedSwapchainObject<Device, Surface> = SharedRef<br::SwapchainObject<Device, Surface>>;
+type SharedSwapchainObject<Device, Surface> =
+    SharedRef<br::SurfaceSwapchainObject<Device, Surface>>;
 struct IntegratedSwapchainObject<Device: br::Device, Surface: br::Surface> {
     swapchain: SharedSwapchainObject<Device, Surface>,
     backbuffer_images: Vec<
@@ -78,21 +79,18 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
         } else {
             br::SurfaceTransform::Inherit
         };
-        let mut cb = br::SwapchainBuilder::new(
+        let chain = br::SwapchainBuilder::new(
             surface,
             buffer_count,
-            &surface_info.fmt,
-            &ext,
+            surface_info.fmt.clone(),
+            ext,
             br::ImageUsage::COLOR_ATTACHMENT,
-        );
-        cb.present_mode(surface_info.pres_mode)
-            .composite_alpha(surface_info.available_composite_alpha)
-            .pre_transform(pre_transform);
-        let chain = g
-            .device
-            .clone()
-            .new_swapchain(cb)
-            .expect("Failed to create Swapchain");
+        )
+        .present_mode(surface_info.pres_mode)
+        .composite_alpha(surface_info.available_composite_alpha)
+        .pre_transform(pre_transform)
+        .create(g.device.clone())
+        .expect("Failed to create Swapchain");
         let chain = SharedRef::new(chain);
         #[cfg(feature = "debug")]
         chain
