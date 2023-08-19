@@ -447,11 +447,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 height: screen_size.height,
             },
         }];
-        let pl = e
-            .graphics()
-            .device()
-            .clone()
-            .new_pipeline_layout(&[&descriptor_layout], &[])
+        let pl = br::PipelineLayoutBuilder::new(vec![&descriptor_layout], vec![])
+            .create(e.graphics().device().clone())
             .expect("Create PipelineLayout");
         let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
         let gp = br::GraphicsPipelineBuilder::<
