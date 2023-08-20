@@ -1,5 +1,6 @@
 use super::*;
 use bedrock as br;
+use br::ImageSubresourceSlice;
 use std::ops::{Deref, Range};
 
 mod memory;
@@ -67,30 +68,32 @@ impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
 }
 impl<Image: br::Image> Texture2D<Image> {
     pub fn new(img: Image) -> br::Result<Self> {
-        let (fmt, cmap) = match PixelFormat::from(img.format()) {
-            PixelFormat::RGB24 => (
-                Some(PixelFormat::RGBA32 as _),
-                br::ComponentMapping(
+        let pf = PixelFormat::from(img.format());
+
+        let view_builder = img
+            .subresource_range(br::AspectMask::COLOR, 0, 0)
+            .view_builder();
+        let view_builder = match pf {
+            PixelFormat::RGB24 => view_builder
+                .with_format_mutation(PixelFormat::RGBA32 as _)
+                .with_mapping(br::ComponentMapping(
                     br::ComponentSwizzle::Identity,
                     br::ComponentSwizzle::Identity,
                     br::ComponentSwizzle::Identity,
                     br::ComponentSwizzle::One,
-                ),
-            ),
-            PixelFormat::BGR24 => (
-                Some(PixelFormat::BGRA32 as _),
-                br::ComponentMapping(
+                )),
+            PixelFormat::BGR24 => view_builder
+                .with_format_mutation(PixelFormat::BGRA32 as _)
+                .with_mapping(br::ComponentMapping(
                     br::ComponentSwizzle::Identity,
                     br::ComponentSwizzle::Identity,
                     br::ComponentSwizzle::Identity,
                     br::ComponentSwizzle::One,
-                ),
-            ),
-            _ => (None, br::ComponentMapping::default()),
+                )),
+            _ => view_builder,
         };
 
-        img.create_view(fmt, None, &cmap, &br::ImageSubresourceRange::color(0, 0))
-            .map(Texture2D)
+        view_builder.create().map(Texture2D)
     }
 
     pub fn image(&self) -> &Image {
@@ -495,15 +498,11 @@ impl DeviceWorkingTextureAllocator<'_> {
                 .into_iter()
                 .zip(bound_images.into_iter())
                 .map(|(d, res)| {
-                    use br::Image;
-
                     let res = res.unwrap_image();
-                    let view = res.create_view(
-                        None,
-                        None,
-                        &br::ComponentMapping::default(),
-                        &br::ImageSubresourceRange::color(0..1, 0..1),
-                    )?;
+                    let view = res
+                        .subresource_range(br::AspectMask::COLOR, 0, 0)
+                        .view_builder()
+                        .create()?;
 
                     Ok(DeviceWorkingTexture2D {
                         size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
@@ -517,15 +516,12 @@ impl DeviceWorkingTextureAllocator<'_> {
                 .into_iter()
                 .zip(cs_v3s.into_iter())
                 .map(|(d, res)| {
-                    use br::Image;
-
                     let res = res.unwrap_image();
-                    let view = res.create_view(
-                        None,
-                        Some(br::vk::VK_IMAGE_VIEW_TYPE_CUBE),
-                        &br::ComponentMapping::default(),
-                        &br::ImageSubresourceRange::color(0..1, 0..6),
-                    )?;
+                    let view = res
+                        .subresource_range(br::AspectMask::COLOR, 0, 0)
+                        .view_builder()
+                        .with_dimension(br::vk::VK_IMAGE_VIEW_TYPE_CUBE)
+                        .create()?;
 
                     Ok(DeviceWorkingCubeTexture {
                         size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
@@ -539,15 +535,11 @@ impl DeviceWorkingTextureAllocator<'_> {
                 .into_iter()
                 .zip(v3s.into_iter())
                 .map(|(d, res)| {
-                    use br::Image;
-
                     let res = res.unwrap_image();
-                    let view = res.create_view(
-                        None,
-                        None,
-                        &br::ComponentMapping::default(),
-                        &br::ImageSubresourceRange::color(0..1, 0..1),
-                    )?;
+                    let view = res
+                        .subresource_range(br::AspectMask::COLOR, 0, 0)
+                        .view_builder()
+                        .create()?;
 
                     Ok(DeviceWorkingTexture3D {
                         size: math::Vector3(

@@ -124,10 +124,10 @@ impl Graphics {
             .queue_family_properties()
             .find_matching_index(br::QueueFlags::GRAPHICS)
             .ok_or(GraphicsInitializationError::NoSuitableGraphicsQueue)?;
-        let qci = br::DeviceQueueCreateInfo(gqf_index, vec![0.0]);
         let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
-            db.add_extensions(device_extensions).add_queue(qci);
+            db.add_extensions(device_extensions)
+                .add_queue(br::DeviceQueueCreateInfo::new(gqf_index).add(0.0));
             if validation_layer_available {
                 db.add_layer("VK_LAYER_KHRONOS_validation");
             }
@@ -136,7 +136,9 @@ impl Graphics {
         };
 
         Ok(Self {
-            cp_onetime_submit: device.clone().new_command_pool(gqf_index, true, false)?,
+            cp_onetime_submit: br::CommandPoolBuilder::new(gqf_index)
+                .transient()
+                .create(device.clone())?,
             graphics_queue: QueueSet {
                 q: parking_lot::Mutex::new(device.clone().queue(gqf_index, 0)),
                 family: gqf_index,
@@ -199,11 +201,9 @@ impl Graphics {
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         let mut fence = std::sync::Arc::new(self.device.clone().new_fence(false)?);
 
-        let mut pool = self.device.clone().new_command_pool(
-            self.graphics_queue_family_index(),
-            true,
-            false,
-        )?;
+        let mut pool = br::CommandPoolBuilder::new(self.graphics_queue_family_index())
+            .transient()
+            .create(self.device.clone())?;
         let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
         generator(unsafe { cb[0].begin_once()? }).end()?;
         self.graphics_queue.q.lock().submit(

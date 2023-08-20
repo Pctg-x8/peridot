@@ -3,7 +3,7 @@
 use bedrock as br;
 #[cfg(feature = "debug")]
 use br::VkObject;
-use br::{Device, Image, PhysicalDevice, SubmissionBatch, Swapchain};
+use br::{Device, Image, ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
 
 use crate::{mthelper::SharedRef, DeviceObject};
 
@@ -101,14 +101,15 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             }))
             .expect("Failed to set swapchain name");
 
-        let isr_c0 = br::ImageSubresourceRange::color(0, 0);
         let back_buffer_images: Vec<SharedRef<_>> = chain
             .get_images()
             .expect("Failed to get back-buffer images")
             .into_iter()
             .map(|bb| {
                 bb.clone_parent()
-                    .create_view(None, None, &Default::default(), &isr_c0)
+                    .subresource_range(br::AspectMask::COLOR, 0, 0)
+                    .view_builder()
+                    .create()
                     .expect("Failed to create ImageView for Back-Buffer")
                     .into()
             })
@@ -150,20 +151,14 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, &surface)
             .expect("Failed to gather surface info");
 
-        let rendering_order = g
-            .device
-            .clone()
-            .new_semaphore()
+        let rendering_order = br::SemaphoreBuilder::new()
+            .create(g.device.clone())
             .expect("Failed to create Rendering Order Semaphore");
-        let buffer_ready_order = g
-            .device
-            .clone()
-            .new_semaphore()
+        let buffer_ready_order = br::SemaphoreBuilder::new()
+            .create(g.device.clone())
             .expect("Failed to create BufferReady Order Semaphore");
-        let present_order = g
-            .device
-            .clone()
-            .new_semaphore()
+        let present_order = br::SemaphoreBuilder::new()
+            .create(g.device.clone())
             .expect("Failed to create Present Order Semaphore");
         #[cfg(feature = "debug")]
         {
@@ -238,7 +233,13 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             .map(|v| {
                 br::ImageMemoryBarrier::new(
                     &***v,
-                    br::ImageSubresourceRange::color(0, 0),
+                    br::vk::VkImageSubresourceRange {
+                        aspectMask: br::AspectMask::COLOR.0,
+                        baseMipLevel: 0,
+                        levelCount: 1,
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    },
                     br::ImageLayout::Undefined,
                     br::ImageLayout::PresentSrc,
                 )
