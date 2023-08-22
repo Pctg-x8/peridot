@@ -803,7 +803,7 @@ impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
 }
 impl<T: Into<u32>> From<Vector2<T>> for br::vk::VkExtent2D {
     fn from(v: Vector2<T>) -> Self {
-        br::vk::VkExtent2D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
         }
@@ -811,7 +811,7 @@ impl<T: Into<u32>> From<Vector2<T>> for br::vk::VkExtent2D {
 }
 impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::vk::VkExtent2D {
     fn from(v: &Vector2<T>) -> Self {
-        br::vk::VkExtent2D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
         }
@@ -819,7 +819,7 @@ impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::vk::VkExtent2D {
 }
 impl<T: Into<u32>> From<Vector3<T>> for br::vk::VkExtent3D {
     fn from(v: Vector3<T>) -> Self {
-        br::vk::VkExtent3D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
             depth: v.2.into(),
@@ -828,7 +828,7 @@ impl<T: Into<u32>> From<Vector3<T>> for br::vk::VkExtent3D {
 }
 impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::vk::VkExtent3D {
     fn from(v: &Vector3<T>) -> Self {
-        br::vk::VkExtent3D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
             depth: v.2.into(),
@@ -837,7 +837,7 @@ impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::vk::VkExtent3D {
 }
 impl<T: Into<i32>> From<Vector2<T>> for br::vk::VkOffset2D {
     fn from(v: Vector2<T>) -> Self {
-        br::vk::VkOffset2D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
         }
@@ -845,7 +845,7 @@ impl<T: Into<i32>> From<Vector2<T>> for br::vk::VkOffset2D {
 }
 impl<T: Into<i32> + Copy> From<&'_ Vector2<T>> for br::vk::VkOffset2D {
     fn from(v: &Vector2<T>) -> Self {
-        br::vk::VkOffset2D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
         }
@@ -853,7 +853,7 @@ impl<T: Into<i32> + Copy> From<&'_ Vector2<T>> for br::vk::VkOffset2D {
 }
 impl<T: Into<i32>> From<Vector3<T>> for br::vk::VkOffset3D {
     fn from(v: Vector3<T>) -> Self {
-        br::vk::VkOffset3D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
             z: v.2.into(),
@@ -862,11 +862,32 @@ impl<T: Into<i32>> From<Vector3<T>> for br::vk::VkOffset3D {
 }
 impl<T: Into<i32> + Copy> From<&'_ Vector3<T>> for br::vk::VkOffset3D {
     fn from(v: &Vector3<T>) -> Self {
-        br::vk::VkOffset3D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
             z: v.2.into(),
         }
+    }
+}
+
+impl<T: From<u32>> From<br::vk::VkExtent2D> for Vector2<T> {
+    fn from(value: br::vk::VkExtent2D) -> Self {
+        Self(value.width.into(), value.height.into())
+    }
+}
+impl<T: From<u32>> From<br::vk::VkExtent3D> for Vector3<T> {
+    fn from(value: br::vk::VkExtent3D) -> Self {
+        Self(value.width.into(), value.height.into(), value.depth.into())
+    }
+}
+impl<T: From<i32>> From<br::vk::VkOffset2D> for Vector2<T> {
+    fn from(value: br::vk::VkOffset2D) -> Self {
+        Self(value.x.into(), value.y.into())
+    }
+}
+impl<T: From<i32>> From<br::vk::VkOffset3D> for Vector3<T> {
+    fn from(value: br::vk::VkOffset3D) -> Self {
+        Self(value.x.into(), value.y.into(), value.z.into())
     }
 }
 
