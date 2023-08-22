@@ -740,25 +740,17 @@ where
 }
 
 // Bedrock Interop //
-extern crate bedrock as br;
+use bedrock as br;
 impl<T: Into<u32> + Copy> br::ImageSize for Vector2<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_2D;
-    fn conv(&self) -> br::vk::VkExtent3D {
-        br::vk::VkExtent3D {
-            width: self.0.into(),
-            height: self.1.into(),
-            depth: 1,
-        }
+    fn conv(self) -> br::vk::VkExtent3D {
+        br::vk::VkExtent2D::from(self).with_depth(1)
     }
 }
 impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_3D;
-    fn conv(&self) -> br::vk::VkExtent3D {
-        br::vk::VkExtent3D {
-            width: self.0.into(),
-            height: self.1.into(),
-            depth: self.2.into(),
-        }
+    fn conv(self) -> br::vk::VkExtent3D {
+        br::vk::VkExtent3D::from(self)
     }
 }
 impl<T: Into<u32>> From<Vector2<T>> for br::vk::VkExtent2D {
