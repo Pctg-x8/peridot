@@ -1,6 +1,6 @@
 use super::*;
 use bedrock as br;
-use br::ImageSubresourceSlice;
+use br::{ImageChild, ImageSubresourceSlice};
 use std::ops::{Deref, Range};
 
 mod memory;
@@ -47,12 +47,12 @@ pub struct Texture2D<Image: br::Image>(br::ImageViewObject<Image>);
 impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
     pub fn init(
         g: Device,
-        size: &math::Vector2<u32>,
+        size: math::Vector2<u32>,
         format: PixelFormat,
         prealloc: &mut BufferPrealloc,
     ) -> br::Result<(br::ImageObject<Device>, u64)> {
         let idesc = br::ImageDesc::new(
-            size,
+            size.clone(),
             format as _,
             br::ImageUsage::SAMPLED.transfer_dest(),
             br::ImageLayout::Preinitialized,
@@ -71,7 +71,7 @@ impl<Image: br::Image> Texture2D<Image> {
         let pf = PixelFormat::from(img.format());
 
         let view_builder = img
-            .subresource_range(br::AspectMask::COLOR, 0, 0)
+            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
             .view_builder();
         let view_builder = match pf {
             PixelFormat::RGB24 => view_builder
@@ -157,7 +157,7 @@ impl<Device: br::Device> TextureInitializationGroup<Device> {
             Vec::with_capacity(self.1.len()),
         );
         for pd in self.1 {
-            let (o, offs) = Texture2D::init(self.0.clone(), &pd.size, pd.format, prealloc)?;
+            let (o, offs) = Texture2D::init(self.0.clone(), pd.size.clone(), pd.format, prealloc)?;
             images.push(o);
             stage_info.push((pd, offs));
         }
@@ -413,7 +413,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsage,
     ) -> DeviceWorkingTexture2DRef {
         self.planes.push(br::ImageDesc::new(
-            &size,
+            size,
             format as _,
             usage,
             br::ImageLayout::Preinitialized,
@@ -429,7 +429,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsage,
     ) -> DeviceWorkingTexture3DRef {
         self.volumes.push(br::ImageDesc::new(
-            &size,
+            size,
             format as _,
             usage,
             br::ImageLayout::Preinitialized,
@@ -444,8 +444,9 @@ impl DeviceWorkingTextureAllocator<'_> {
         format: PixelFormat,
         usage: br::ImageUsage,
     ) -> DeviceWorkingCubeTextureRef {
-        let mut id = br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized);
-        id.flags(br::ImageFlags::CUBE_COMPATIBLE).array_layers(6);
+        let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
+            .flags(br::ImageFlags::CUBE_COMPATIBLE)
+            .array_layers(6);
         self.cube.push(id);
 
         DeviceWorkingCubeTextureRef(self.cube.len() - 1)
@@ -459,8 +460,8 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsage,
         mipmaps: u32,
     ) -> DeviceWorkingCubeTextureRef {
-        let mut id = br::ImageDesc::new(&size, format as _, usage, br::ImageLayout::Preinitialized);
-        id.flags(br::ImageFlags::CUBE_COMPATIBLE)
+        let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
+            .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6)
             .mip_levels(mipmaps);
         self.cube.push(id);
@@ -477,9 +478,12 @@ impl DeviceWorkingTextureAllocator<'_> {
             Image<br::ImageObject<DeviceObject>, br::DeviceMemoryObject<DeviceObject>>,
         >,
     > {
-        let images2 = self.planes.iter().map(|d| d.create(g.device.clone()));
-        let images_cube = self.cube.iter().map(|d| d.create(g.device.clone()));
-        let images3 = self.volumes.iter().map(|d| d.create(g.device.clone()));
+        let plane_count = self.planes.len();
+        let cube_count = self.cube.len();
+
+        let images2 = self.planes.into_iter().map(|d| d.create(g.device.clone()));
+        let images_cube = self.cube.into_iter().map(|d| d.create(g.device.clone()));
+        let images3 = self.volumes.into_iter().map(|d| d.create(g.device.clone()));
         let images: Vec<_> = images2
             .chain(images_cube)
             .chain(images3)
@@ -490,64 +494,60 @@ impl DeviceWorkingTextureAllocator<'_> {
         }
         let mut bound_images = mb.alloc()?;
 
-        let mut cs_v3s = bound_images.split_off(self.planes.len());
-        let v3s = cs_v3s.split_off(self.cube.len());
+        let mut cs_v3s = bound_images.split_off(plane_count);
+        let v3s = cs_v3s.split_off(cube_count);
         Ok(DeviceWorkingTextureStore {
-            planes: self
-                .planes
+            planes: bound_images
                 .into_iter()
-                .zip(bound_images.into_iter())
-                .map(|(d, res)| {
+                .map(|res| {
+                    use br::Image;
+
                     let res = res.unwrap_image();
                     let view = res
-                        .subresource_range(br::AspectMask::COLOR, 0, 0)
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                         .view_builder()
                         .create()?;
 
                     Ok(DeviceWorkingTexture2D {
-                        size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
-                        format: unsafe { std::mem::transmute(d.as_ref().format) },
+                        size: view.image().size().wh().into(),
+                        format: unsafe { core::mem::transmute(view.image().format()) },
                         view,
                     })
                 })
                 .collect::<Result<_, _>>()?,
-            cubes: self
-                .cube
+            cubes: cs_v3s
                 .into_iter()
-                .zip(cs_v3s.into_iter())
-                .map(|(d, res)| {
+                .map(|res| {
+                    use br::Image;
+
                     let res = res.unwrap_image();
                     let view = res
-                        .subresource_range(br::AspectMask::COLOR, 0, 0)
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                         .view_builder()
                         .with_dimension(br::vk::VK_IMAGE_VIEW_TYPE_CUBE)
                         .create()?;
 
                     Ok(DeviceWorkingCubeTexture {
-                        size: math::Vector2(d.as_ref().extent.width, d.as_ref().extent.height),
-                        format: unsafe { std::mem::transmute(d.as_ref().format) },
+                        size: view.image().size().wh().into(),
+                        format: unsafe { core::mem::transmute(view.image().format()) },
                         view,
                     })
                 })
                 .collect::<Result<_, _>>()?,
-            volumes: self
-                .volumes
+            volumes: v3s
                 .into_iter()
-                .zip(v3s.into_iter())
-                .map(|(d, res)| {
+                .map(|res| {
+                    use br::Image;
+
                     let res = res.unwrap_image();
                     let view = res
-                        .subresource_range(br::AspectMask::COLOR, 0, 0)
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                         .view_builder()
                         .create()?;
 
                     Ok(DeviceWorkingTexture3D {
-                        size: math::Vector3(
-                            d.as_ref().extent.width,
-                            d.as_ref().extent.height,
-                            d.as_ref().extent.depth,
-                        ),
-                        format: unsafe { std::mem::transmute(d.as_ref().format) },
+                        size: view.image().size().clone().into(),
+                        format: unsafe { std::mem::transmute(view.image().format()) },
                         view,
                     })
                 })

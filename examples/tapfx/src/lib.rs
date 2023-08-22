@@ -2,8 +2,10 @@ use std::convert::TryInto;
 use std::mem::{align_of, size_of};
 
 use bedrock as br;
-use bedrock::VkHandle;
-use br::{CommandBuffer, DescriptorPool, Device, Image, ImageChild, SubmissionBatch};
+use br::{
+    CommandBuffer, DescriptorPool, Device, Image, ImageChild, ImageSubresourceSlice,
+    SubmissionBatch,
+};
 use peridot::mthelper::SharedRef;
 use peridot::ModelData;
 
@@ -48,7 +50,7 @@ pub struct Game<NL: peridot::NativeLinker> {
     framebuffers: Vec<
         br::FramebufferObject<
             peridot::DeviceObject,
-            SharedRef<<NL::Presenter as peridot::PlatformPresenter>::Backbuffer>,
+            SharedRef<<NL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
         >,
     >,
     _smp: br::SamplerObject<peridot::DeviceObject>,
@@ -98,14 +100,14 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .map(peridot::NativeAnalogInput::TouchMoveY(0), INPUT_PLANE_TOP);
 
         let renderpass = peridot::RenderPassTemplates::single_render(
-            e.backbuffer_format(),
-            e.requesting_backbuffer_layout().0,
+            e.back_buffer_format(),
+            e.requesting_back_buffer_layout().0,
         )
         .create(e.graphics().device().clone())
         .expect("Failed to create RenderPass");
-        let framebuffers: Vec<_> = (0..e.backbuffer_count())
+        let framebuffers: Vec<_> = (0..e.back_buffer_count())
             .map(|bb_index| {
-                let b = e.backbuffer(bb_index).expect("no backbuffer?");
+                let b = e.back_buffer(bb_index).expect("no backbuffer?");
                 e.graphics()
                     .device()
                     .clone()
@@ -117,37 +119,26 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let smp = br::SamplerBuilder::default()
             .create(e.graphics().device().clone())
             .expect("Failed to create sampler");
-        let dsl = e
-            .graphics()
-            .device()
-            .clone()
-            .new_descriptor_set_layout(&[br::DescriptorSetLayoutBinding::UniformBuffer(
-                1,
-                br::ShaderStage::VERTEX,
-            )])
+        let dsl =
+            br::DescriptorSetLayoutBuilder::with_bindings(vec![br::DescriptorType::UniformBuffer
+                .make_binding(1)
+                .only_for_vertex()])
+            .create(e.graphics().device().clone())
             .expect("Failed to create DescriptorSetLayout");
-        let dsl2 = e
-            .graphics()
-            .device()
-            .clone()
-            .new_descriptor_set_layout(&[br::DescriptorSetLayoutBinding::CombinedImageSampler(
-                1,
-                br::ShaderStage::FRAGMENT,
-                &[smp.native_ptr()],
-            )])
-            .expect("Failed to create DescriptorSetLayout for FragmentShader");
-        let mut dp = e
-            .graphics()
-            .device()
-            .clone()
-            .new_descriptor_pool(
-                2,
-                &[
-                    br::DescriptorPoolSize(br::DescriptorType::UniformBuffer, 1),
-                    br::DescriptorPoolSize(br::DescriptorType::CombinedImageSampler, 1),
-                ],
-                false,
-            )
+        let dsl2 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
+            br::DescriptorType::CombinedImageSampler
+                .make_binding(1)
+                .only_for_fragment()
+                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&smp)]),
+        ])
+        .create(e.graphics().device().clone())
+        .expect("Failed to create DescriptorSetLayout for FragmentShader");
+        let mut dp = br::DescriptorPoolBuilder::new(2)
+            .with_reservations(vec![
+                br::DescriptorType::UniformBuffer.with_count(1),
+                br::DescriptorType::CombinedImageSampler.with_count(1),
+            ])
+            .create(e.graphics().device().clone())
             .expect("Failed to create DescriptorPool");
         let descriptors = dp
             .alloc(&[&dsl, &dsl2])
@@ -159,22 +150,18 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         )
         .expect("Failed to generate ShaderModules");
         let vps = shaders.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        let pl = e
-            .graphics()
-            .device()
-            .clone()
-            .new_pipeline_layout(&[&dsl, &dsl2], &[])
+        let pl = br::PipelineLayoutBuilder::new(vec![&dsl, &dsl2], vec![])
+            .create(e.graphics().device().clone())
             .expect("Failed to create PipelineLayout");
 
-        let scissors = [AsRef::<br::vk::VkExtent2D>::as_ref(
-            e.backbuffer(0).expect("empty backbuffers").image().size(),
-        )
-        .clone()
-        .into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
-        let viewports = [br::vk::VkViewport::from_rect_with_depth_range(
-            &scissors[0],
-            0.0..1.0,
-        )];
+        let scissors = [e
+            .back_buffer(0)
+            .expect("empty back-buffers")
+            .image()
+            .size()
+            .wh()
+            .into_rect(br::vk::VkOffset2D::ZERO)];
+        let viewports = [scissors[0].make_viewport(0.0..1.0)];
         let pipeline = br::GraphicsPipelineBuilder::<
             _,
             br::PipelineObject<peridot::DeviceObject>,
@@ -221,7 +208,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         ));
         mb.add(peridot::MemoryBadgetEntry::Image(
             br::ImageDesc::new(
-                &main_image_data.0.size,
+                main_image_data.0.size,
                 main_image_data.0.format as _,
                 br::ImageUsage::SAMPLED.transfer_dest(),
                 br::ImageLayout::Preinitialized,
@@ -298,12 +285,13 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                             br::AccessFlags::TRANSFER.read,
                         ),
                     ],
-                    &[br::ImageMemoryBarrier::new(
-                        &main_image,
-                        br::ImageSubresourceRange::color(0..1, 0..1),
-                        br::ImageLayout::Preinitialized,
-                        br::ImageLayout::TransferDestOpt,
-                    )],
+                    &[main_image
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier(
+                            br::ImageLayout::Preinitialized,
+                            br::ImageLayout::TransferDestOpt,
+                        )],
                 )
                 .copy_buffer(
                     &stg_buffer,
@@ -359,51 +347,49 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                             br::AccessFlags::HOST.write,
                         ),
                     ],
-                    &[br::ImageMemoryBarrier::new(
-                        &main_image,
-                        br::ImageSubresourceRange::color(0..1, 0..1),
-                        br::ImageLayout::TransferDestOpt,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )],
+                    &[main_image
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier(
+                            br::ImageLayout::TransferDestOpt,
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )],
                 );
             r
         })
         .expect("Failed to execute init command");
 
         let main_image_view = main_image
-            .create_view(
-                None,
-                None,
-                &br::ComponentMapping::default(),
-                &br::ImageSubresourceRange::color(0..1, 0..1),
-            )
+            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+            .view_builder()
+            .create()
             .expect("Failed to create main image view");
 
-        let mut dsub = peridot::DescriptorSetUpdateBatch::new();
-        dsub.write(
-            descriptors[0],
-            0,
-            br::DescriptorUpdateInfo::UniformBuffer(vec![(
-                buffer.native_ptr(),
-                RangeBuilder::from((dynamic_start + uniform_start_d) as _)
-                    .length(size_of::<UniformValues>()),
-            )]),
+        e.graphics().device().update_descriptor_sets(
+            &[
+                br::DescriptorPointer::new(descriptors[0].into(), 0).write(
+                    br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
+                        &buffer,
+                        RangeBuilder::from(dynamic_start + uniform_start_d)
+                            .length(core::mem::size_of::<UniformValues>() as _),
+                    )]),
+                ),
+                br::DescriptorPointer::new(descriptors[1].into(), 0).write(
+                    br::DescriptorContents::CombinedImageSampler(vec![
+                        br::DescriptorImageRef::new(
+                            &main_image_view,
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        ),
+                    ]),
+                ),
+            ],
+            &[],
         );
-        dsub.write(
-            descriptors[1],
-            0,
-            br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                None,
-                main_image_view.native_ptr(),
-                br::ImageLayout::ShaderReadOnlyOpt,
-            )]),
-        );
-        dsub.submit(e.graphics().device());
 
         let mut main_commands = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
-            e.backbuffer_count(),
+            e.back_buffer_count(),
         )
         .expect("Failed to allocate render commands");
         for (b, fb) in main_commands.iter_mut().zip(&framebuffers) {
@@ -432,7 +418,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             width: bb_width,
             height: bb_height,
             ..
-        } = e.backbuffer(0).expect("empty backbuffers").image().size();
+        } = e.back_buffer(0).expect("empty back-buffers").image().size();
         let update_data = UniformValues {
             mat: peridot::math::Camera {
                 projection: Some(peridot::math::ProjectionMethod::UI {
@@ -531,11 +517,10 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
     fn update(
         &mut self,
         e: &mut peridot::Engine<NL>,
-        on_backbuffer_of: u32,
+        on_back_buffer_of: u32,
         delta_time: std::time::Duration,
     ) {
-        self.update_data.time +=
-            delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1_000_000.0;
+        self.update_data.time += delta_time.as_secs_f32();
 
         let current_mouse_input =
             e.input().button_pressing_time(INPUT_PLANE_DOWN) > std::time::Duration::default();
@@ -557,10 +542,10 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .expect("Failed to map dynamic buffer");
 
         e.do_render(
-            on_backbuffer_of,
+            on_back_buffer_of,
             Some(br::EmptySubmissionBatch.with_command_buffers(&self.update_commands)),
             br::EmptySubmissionBatch.with_command_buffers(
-                &self.main_commands[on_backbuffer_of as usize..=on_backbuffer_of as usize],
+                &self.main_commands[on_back_buffer_of as usize..=on_back_buffer_of as usize],
             ),
         )
         .expect("Failed to present");

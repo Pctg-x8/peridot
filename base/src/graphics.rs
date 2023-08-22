@@ -199,7 +199,7 @@ impl Graphics {
             br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
         ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
-        let mut fence = std::sync::Arc::new(self.device.clone().new_fence(false)?);
+        let mut fence = std::sync::Arc::new(br::FenceBuilder::new().create(self.device.clone())?);
 
         let mut pool = br::CommandPoolBuilder::new(self.graphics_queue_family_index())
             .transient()

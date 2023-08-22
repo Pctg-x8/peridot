@@ -526,7 +526,6 @@ impl RenderPassTemplates {
         format: br::vk::VkFormat,
         outer_requesting_layout: br::ImageLayout,
     ) -> br::RenderPassBuilder {
-        let mut b = br::RenderPassBuilder::new();
         let attachment_desc = br::AttachmentDescription::new(
             format,
             outer_requesting_layout,
@@ -534,17 +533,17 @@ impl RenderPassTemplates {
         )
         .load_op(br::LoadOp::Clear)
         .store_op(br::StoreOp::Store);
-        b.add_attachment(attachment_desc);
-        b.add_subpass(br::SubpassDescription::new().add_color_output(
-            0,
-            br::ImageLayout::ColorAttachmentOpt,
-            None,
-        ));
-        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
-            None, 0, true,
-        ));
 
-        b
+        br::RenderPassBuilder::new()
+            .add_attachment(attachment_desc)
+            .add_subpass(br::SubpassDescription::new().add_color_output(
+                0,
+                br::ImageLayout::ColorAttachmentOpt,
+                None,
+            ))
+            .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            ))
     }
 }
 

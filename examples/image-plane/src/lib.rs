@@ -136,7 +136,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         ));
         mb.add(peridot::MemoryBadgetEntry::Image(
             br::ImageDesc::new(
-                &image_data.0.size,
+                image_data.0.size,
                 image_data.0.format as _,
                 br::ImageUsage::SAMPLED.transfer_dest(),
                 br::ImageLayout::Preinitialized,
@@ -226,7 +226,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                             ),
                         ],
                         &[image
-                            .subresource_range_ref(br::AspectMask::COLOR, 0, 0)
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                             .memory_barrier(
                                 br::ImageLayout::Preinitialized,
                                 br::ImageLayout::TransferDestOpt,
@@ -307,7 +308,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                             ),
                         ],
                         &[image
-                            .subresource_range_ref(br::AspectMask::COLOR, 0, 0)
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                             .memory_barrier(
                                 br::ImageLayout::TransferDestOpt,
                                 br::ImageLayout::ShaderReadOnlyOpt,
@@ -460,7 +462,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         async_std::task::block_on(pre_configure_task).expect("Failed to pre-configure resources");
 
         let image_view = image
-            .subresource_range(br::AspectMask::COLOR, 0, 0)
+            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
             .view_builder()
             .create()
             .expect("Failed to create main image view");
@@ -557,7 +559,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 0..mut_uniform_offset + size_of::<Uniform>() as u64,
                 |m| unsafe {
                     m.get_mut::<Uniform>(mut_uniform_offset as _).object =
-                        Quaternion::new(rot, Vector3F32::UP).into();
+                        Quaternion::new(rot, Vector3::up()).into();
                 },
             )
             .expect("Update DynamicStgBuffer");

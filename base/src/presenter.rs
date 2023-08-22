@@ -107,7 +107,7 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             .into_iter()
             .map(|bb| {
                 bb.clone_parent()
-                    .subresource_range(br::AspectMask::COLOR, 0, 0)
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                     .view_builder()
                     .create()
                     .expect("Failed to create ImageView for Back-Buffer")
