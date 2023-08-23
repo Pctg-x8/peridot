@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use bedrock as br;
+use br::ImageSubresourceSlice;
 
 use crate::{BufferUsage, BufferUsageTransitionBarrier};
 
@@ -85,18 +86,18 @@ impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br
     }
 }
 
-pub struct RangedImage<R: br::Image>(R, br::ImageSubresourceRange);
+pub struct RangedImage<R: br::Image>(br::ImageSubresourceRange<R>);
 impl<R: br::Image> RangedImage<R> {
     pub fn single_color_plane(resource: R) -> Self {
-        Self(resource, br::ImageSubresourceRange::color(0, 0))
+        Self(resource.subresource_range(br::AspectMask::COLOR, 0..1, 0..1))
     }
 
     pub fn single_depth_stencil_plane(resource: R) -> Self {
-        Self(resource, br::ImageSubresourceRange::depth_stencil(0, 0))
+        Self(resource.subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1))
     }
 
     pub fn single_stencil_plane(resource: R) -> Self {
-        Self(resource, br::ImageSubresourceRange::stencil(0, 0))
+        Self(resource.subresource_range(br::AspectMask::STENCIL, 0..1, 0..1))
     }
 
     pub fn barrier(
@@ -104,7 +105,7 @@ impl<R: br::Image> RangedImage<R> {
         from_layout: br::ImageLayout,
         to_layout: br::ImageLayout,
     ) -> br::ImageMemoryBarrier {
-        br::ImageMemoryBarrier::new(&self.0, self.1.clone(), from_layout, to_layout)
+        self.0.memory_barrier(from_layout, to_layout)
     }
 
     pub fn barrier3(

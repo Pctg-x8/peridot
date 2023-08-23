@@ -1,7 +1,5 @@
 use bedrock as br;
 
-mod descriptor_pointer;
-pub use self::descriptor_pointer::*;
 mod ranged_resources;
 pub use self::ranged_resources::*;
 mod graphics_command;
