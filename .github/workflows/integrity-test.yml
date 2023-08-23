@@ -133,8 +133,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Add External PPA
+        run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: install extra packages
-        run: "sudo apt-get update && sudo apt-get install libwayland-dev libpipewire-0.3-dev"
+        run: "sudo apt-get update && sudo apt-get install libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
