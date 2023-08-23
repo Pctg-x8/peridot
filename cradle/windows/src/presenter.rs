@@ -5,12 +5,11 @@ use peridot::mthelper::SharedRef;
 use windows::core::Interface;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
-use windows::Win32::Graphics::Direct3D12::D3D12_FENCE_FLAG_SHARED;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D12::{
     D3D12CreateDevice, D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug, ID3D12Device,
     ID3D12Fence, ID3D12Resource, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
-    D3D12_FENCE_FLAG_NONE,
+    D3D12_FENCE_FLAG_NONE, D3D12_FENCE_FLAG_SHARED,
 };
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::DirectComposition::{
@@ -21,11 +20,10 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
-use windows::Win32::Graphics::Dxgi::DXGI_SWAP_EFFECT_FLIP_DISCARD;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, IDXGIFactory2, IDXGISwapChain3, DXGI_CREATE_FACTORY_DEBUG,
-    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_DISCARD,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_DISCARD,
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 #[cfg(feature = "transparent")]
