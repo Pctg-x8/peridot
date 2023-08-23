@@ -5,19 +5,19 @@ use std::mem::transmute;
 use std::ops::*;
 
 /// 2-dimensional vector
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub struct Vector2<T>(pub T, pub T);
 /// 3-dimensional vector
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub struct Vector3<T>(pub T, pub T, pub T);
 /// 4-dimensional vector
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub struct Vector4<T>(pub T, pub T, pub T, pub T);
 /// Arbitrary rotating
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub struct Quaternion<T>(pub T, pub T, pub T, pub T);
 
@@ -31,23 +31,23 @@ pub type Vector4F32 = Vector4<f32>;
 pub type QuaternionF32 = Quaternion<f32>;
 
 /// 2x2 matrix
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Matrix2<T>(pub [T; 2], pub [T; 2]);
 /// 3x3 matrix
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Matrix3<T>(pub [T; 3], pub [T; 3], pub [T; 3]);
 /// 4x4 matrix
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Matrix4<T>(pub [T; 4], pub [T; 4], pub [T; 4], pub [T; 4]);
 /// 2x3 matrix
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Matrix2x3<T>(pub [T; 3], pub [T; 3]);
 /// 3x4 matrix
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Matrix3x4<T>(pub [T; 4], pub [T; 4], pub [T; 4]);
 
@@ -63,35 +63,41 @@ pub type Matrix2x3F32 = Matrix2x3<f32>;
 pub type Matrix3x4F32 = Matrix3x4<f32>;
 
 impl<T> Vector2<T> {
-    pub fn x(&self) -> &T {
+    pub const fn x(&self) -> &T {
         &self.0
     }
-    pub fn y(&self) -> &T {
+
+    pub const fn y(&self) -> &T {
         &self.1
     }
 }
 impl<T> Vector3<T> {
-    pub fn x(&self) -> &T {
+    pub const fn x(&self) -> &T {
         &self.0
     }
-    pub fn y(&self) -> &T {
+
+    pub const fn y(&self) -> &T {
         &self.1
     }
-    pub fn z(&self) -> &T {
+
+    pub const fn z(&self) -> &T {
         &self.2
     }
 }
 impl<T> Vector4<T> {
-    pub fn x(&self) -> &T {
+    pub const fn x(&self) -> &T {
         &self.0
     }
-    pub fn y(&self) -> &T {
+
+    pub const fn y(&self) -> &T {
         &self.1
     }
-    pub fn z(&self) -> &T {
+
+    pub const fn z(&self) -> &T {
         &self.2
     }
-    pub fn w(&self) -> &T {
+
+    pub const fn w(&self) -> &T {
         &self.3
     }
 }
@@ -115,34 +121,65 @@ impl<T: Zero> Zero for Vector4<T> {
 impl<T: One> One for Vector4<T> {
     const ONE: Self = Vector4(T::ONE, T::ONE, T::ONE, T::ONE);
 }
+
 // Per-Element Identities of Vectors //
-impl<T: Zero + One + Neg<Output = T>> Vector2<T> {
-    pub fn left() -> Self {
-        Vector2(-T::ONE, T::ZERO)
-    }
-    pub fn down() -> Self {
-        Vector2(T::ZERO, -T::ONE)
-    }
-}
 impl<T: Zero + One> Vector2<T> {
-    pub const RIGHT: Self = Vector2(T::ONE, T::ZERO);
-    pub const UP: Self = Vector2(T::ZERO, T::ONE);
+    pub fn left() -> Self
+    where
+        Self: Neg<Output = Self>,
+    {
+        -Self::right()
+    }
+
+    pub fn down() -> Self
+    where
+        Self: Neg<Output = Self>,
+    {
+        -Self::up()
+    }
+
+    pub const fn right() -> Self {
+        Self(T::ONE, T::ZERO)
+    }
+
+    pub const fn up() -> Self {
+        Self(T::ZERO, T::ONE)
+    }
 }
-impl<T: Zero + One + Neg<Output = T>> Vector3<T> {
-    pub fn left() -> Self {
-        Vector3(-T::ONE, T::ZERO, T::ZERO)
-    }
-    pub fn down() -> Self {
-        Vector3(T::ZERO, -T::ONE, T::ZERO)
-    }
-    pub fn back() -> Self {
-        Vector3(T::ZERO, T::ZERO, -T::ONE)
-    }
-}
+
 impl<T: Zero + One> Vector3<T> {
-    pub const RIGHT: Self = Vector3(T::ONE, T::ZERO, T::ZERO);
-    pub const UP: Self = Vector3(T::ZERO, T::ONE, T::ZERO);
-    pub const FORWARD: Self = Vector3(T::ZERO, T::ZERO, T::ONE);
+    pub fn left() -> Self
+    where
+        Self: Neg<Output = Self>,
+    {
+        -Self::right()
+    }
+
+    pub const fn right() -> Self {
+        Self(T::ONE, T::ZERO, T::ZERO)
+    }
+
+    pub fn down() -> Self
+    where
+        Self: Neg<Output = Self>,
+    {
+        -Self::up()
+    }
+
+    pub const fn up() -> Self {
+        Self(T::ZERO, T::ONE, T::ZERO)
+    }
+
+    pub fn back() -> Self
+    where
+        Self: Neg<Output = Self>,
+    {
+        -Self::forward()
+    }
+
+    pub const fn forward() -> Self {
+        Self(T::ZERO, T::ZERO, T::ONE)
+    }
 }
 
 // Extending/Shrinking Vector Types //
@@ -163,6 +200,17 @@ impl<T: One> From<Vector3<T>> for Vector4<T> {
 impl<T: Div<T> + Copy> From<Vector4<T>> for Vector3<<T as Div>::Output> {
     fn from(Vector4(x, y, z, w): Vector4<T>) -> Self {
         Vector3(x / w, y / w, z / w)
+    }
+}
+
+impl<T> Vector2<T> {
+    pub fn with_z(self, z: T) -> Vector3<T> {
+        Vector3(self.0, self.1, z)
+    }
+}
+impl<T> Vector3<T> {
+    pub fn with_w(self, w: T) -> Vector4<T> {
+        Vector4(self.0, self.1, self.2, w)
     }
 }
 
@@ -740,30 +788,22 @@ where
 }
 
 // Bedrock Interop //
-extern crate bedrock as br;
+use bedrock as br;
 impl<T: Into<u32> + Copy> br::ImageSize for Vector2<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_2D;
-    fn conv(&self) -> br::vk::VkExtent3D {
-        br::vk::VkExtent3D {
-            width: self.0.into(),
-            height: self.1.into(),
-            depth: 1,
-        }
+    fn conv(self) -> br::vk::VkExtent3D {
+        br::vk::VkExtent2D::from(self).with_depth(1)
     }
 }
 impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_3D;
-    fn conv(&self) -> br::vk::VkExtent3D {
-        br::vk::VkExtent3D {
-            width: self.0.into(),
-            height: self.1.into(),
-            depth: self.2.into(),
-        }
+    fn conv(self) -> br::vk::VkExtent3D {
+        br::vk::VkExtent3D::from(self)
     }
 }
 impl<T: Into<u32>> From<Vector2<T>> for br::vk::VkExtent2D {
     fn from(v: Vector2<T>) -> Self {
-        br::vk::VkExtent2D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
         }
@@ -771,7 +811,7 @@ impl<T: Into<u32>> From<Vector2<T>> for br::vk::VkExtent2D {
 }
 impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::vk::VkExtent2D {
     fn from(v: &Vector2<T>) -> Self {
-        br::vk::VkExtent2D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
         }
@@ -779,7 +819,7 @@ impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::vk::VkExtent2D {
 }
 impl<T: Into<u32>> From<Vector3<T>> for br::vk::VkExtent3D {
     fn from(v: Vector3<T>) -> Self {
-        br::vk::VkExtent3D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
             depth: v.2.into(),
@@ -788,7 +828,7 @@ impl<T: Into<u32>> From<Vector3<T>> for br::vk::VkExtent3D {
 }
 impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::vk::VkExtent3D {
     fn from(v: &Vector3<T>) -> Self {
-        br::vk::VkExtent3D {
+        Self {
             width: v.0.into(),
             height: v.1.into(),
             depth: v.2.into(),
@@ -797,7 +837,7 @@ impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::vk::VkExtent3D {
 }
 impl<T: Into<i32>> From<Vector2<T>> for br::vk::VkOffset2D {
     fn from(v: Vector2<T>) -> Self {
-        br::vk::VkOffset2D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
         }
@@ -805,7 +845,7 @@ impl<T: Into<i32>> From<Vector2<T>> for br::vk::VkOffset2D {
 }
 impl<T: Into<i32> + Copy> From<&'_ Vector2<T>> for br::vk::VkOffset2D {
     fn from(v: &Vector2<T>) -> Self {
-        br::vk::VkOffset2D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
         }
@@ -813,7 +853,7 @@ impl<T: Into<i32> + Copy> From<&'_ Vector2<T>> for br::vk::VkOffset2D {
 }
 impl<T: Into<i32>> From<Vector3<T>> for br::vk::VkOffset3D {
     fn from(v: Vector3<T>) -> Self {
-        br::vk::VkOffset3D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
             z: v.2.into(),
@@ -822,11 +862,32 @@ impl<T: Into<i32>> From<Vector3<T>> for br::vk::VkOffset3D {
 }
 impl<T: Into<i32> + Copy> From<&'_ Vector3<T>> for br::vk::VkOffset3D {
     fn from(v: &Vector3<T>) -> Self {
-        br::vk::VkOffset3D {
+        Self {
             x: v.0.into(),
             y: v.1.into(),
             z: v.2.into(),
         }
+    }
+}
+
+impl<T: From<u32>> From<br::vk::VkExtent2D> for Vector2<T> {
+    fn from(value: br::vk::VkExtent2D) -> Self {
+        Self(value.width.into(), value.height.into())
+    }
+}
+impl<T: From<u32>> From<br::vk::VkExtent3D> for Vector3<T> {
+    fn from(value: br::vk::VkExtent3D) -> Self {
+        Self(value.width.into(), value.height.into(), value.depth.into())
+    }
+}
+impl<T: From<i32>> From<br::vk::VkOffset2D> for Vector2<T> {
+    fn from(value: br::vk::VkOffset2D) -> Self {
+        Self(value.x.into(), value.y.into())
+    }
+}
+impl<T: From<i32>> From<br::vk::VkOffset3D> for Vector3<T> {
+    fn from(value: br::vk::VkOffset3D) -> Self {
+        Self(value.x.into(), value.y.into(), value.z.into())
     }
 }
 

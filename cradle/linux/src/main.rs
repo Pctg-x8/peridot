@@ -150,7 +150,7 @@ where
 
     fn resize(&mut self, newsize: peridot::math::Vector2<usize>) {
         self.engine
-            .do_resize_backbuffer(newsize, &mut self.usercode);
+            .do_resize_back_buffer(newsize, &mut self.usercode);
     }
 }
 

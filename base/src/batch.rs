@@ -64,7 +64,7 @@ impl<Device: br::Device> Hash for ImageKey<Device> {
 
 pub struct ReadyResourceBarriers<Buffer, Image> {
     buffer: Vec<(Buffer, Range<u64>, br::vk::VkAccessFlags)>,
-    image: Vec<(Image, br::ImageSubresourceRange, br::ImageLayout)>,
+    image: Vec<(Image, br::vk::VkImageSubresourceRange, br::ImageLayout)>,
 }
 impl<Buffer, Image> ReadyResourceBarriers<Buffer, Image> {
     const fn new() -> Self {
@@ -214,7 +214,17 @@ impl<Device: br::Device> TransferBatch<Device> {
             .entry(dest_stage)
             .or_insert_with(ReadyResourceBarriers::new)
             .image
-            .push((res, br::ImageSubresourceRange::color(0, 0), layout));
+            .push((
+                res,
+                br::vk::VkImageSubresourceRange {
+                    aspectMask: br::AspectMask::COLOR.0,
+                    baseMipLevel: 0,
+                    levelCount: 1,
+                    baseArrayLayer: 0,
+                    layerCount: 1,
+                },
+                layout,
+            ));
     }
 
     /// Have add_copying_buffer, add_mirroring_buffer or init_image_from been called?
@@ -259,7 +269,13 @@ impl<Device: br::Device> TransferBatch<Device> {
         let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
                 &b.0,
-                br::ImageSubresourceRange::color(0, 0),
+                br::vk::VkImageSubresourceRange {
+                    aspectMask: br::AspectMask::COLOR.0,
+                    baseMipLevel: 0,
+                    levelCount: 1,
+                    baseArrayLayer: 0,
+                    layerCount: 1,
+                },
                 l0,
                 br::ImageLayout::TransferSrcOpt,
             )
@@ -267,7 +283,13 @@ impl<Device: br::Device> TransferBatch<Device> {
         let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
                 &b.0,
-                br::ImageSubresourceRange::color(0, 0),
+                br::vk::VkImageSubresourceRange {
+                    aspectMask: br::AspectMask::COLOR.0,
+                    baseMipLevel: 0,
+                    levelCount: 1,
+                    baseArrayLayer: 0,
+                    layerCount: 1,
+                },
                 l0,
                 br::ImageLayout::TransferDestOpt,
             )
@@ -358,13 +380,13 @@ impl<Device: br::Device> TransferBatch<Device> {
 }
 
 /// Batching mechanism for Updating Descriptor Sets
-pub struct DescriptorSetUpdateBatch(
-    Vec<br::DescriptorSetWriteInfo>,
+pub struct DescriptorSetUpdateBatch<'r>(
+    Vec<br::DescriptorSetWriteInfo<'r>>,
     Vec<br::DescriptorSetCopyInfo>,
 );
-impl DescriptorSetUpdateBatch {
+impl<'r> DescriptorSetUpdateBatch<'r> {
     /// Create an Empty batch
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         DescriptorSetUpdateBatch(Vec::new(), Vec::new())
     }
 
@@ -374,20 +396,24 @@ impl DescriptorSetUpdateBatch {
         dest: impl Into<br::vk::VkDescriptorSet>,
         bound: u32,
         array: u32,
-        info: br::DescriptorUpdateInfo,
+        contents: br::DescriptorContents<'r>,
     ) -> &mut Self {
-        self.0
-            .push(br::DescriptorSetWriteInfo(dest.into(), bound, array, info));
-        return self;
+        self.0.push(
+            br::DescriptorPointer::new(dest.into(), bound)
+                .array_offset(array)
+                .write(contents),
+        );
+
+        self
     }
     /// Write an information to bound index in destination.
     pub fn write(
         &mut self,
         dest: impl Into<br::vk::VkDescriptorSet>,
         bound: u32,
-        info: br::DescriptorUpdateInfo,
+        contents: br::DescriptorContents<'r>,
     ) -> &mut Self {
-        self.write_index(dest, bound, 0, info)
+        self.write_index(dest, bound, 0, contents)
     }
 
     /// Submit entire batches

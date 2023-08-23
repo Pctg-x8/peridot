@@ -427,6 +427,15 @@ let checkCradleMacos =
               ]
         }
 
+let addPPAStep =
+      λ(ppas : List Text) →
+        let ppasLine = Text/concatSep " " ppas
+
+        in  GithubActions.Step::{
+            , name = "Add External PPA"
+            , run = Some "sudo apt-add-repository -y ${ppasLine}"
+            }
+
 let aptInstallStep =
       λ(packages : List Text) →
         let packagesLine = Text/concatSep " " packages
@@ -450,7 +459,12 @@ let checkCradleLinux =
               [ List/end_map
                   GithubActions.Step.Type
                   (withConditionStep precondition)
-                  [   aptInstallStep [ "libwayland-dev", "libpipewire-0.3-dev" ]
+                  [ addPPAStep [ "ppa:pipewire-debian/pipewire-upstream" ]
+                  ,   aptInstallStep
+                        [ "libwayland-dev"
+                        , "libpipewire-0.3-dev"
+                        , "libspa-0.2-dev"
+                        ]
                     ⫽ { name = "install extra packages" }
                   , checkoutHeadStep
                   , checkoutStep

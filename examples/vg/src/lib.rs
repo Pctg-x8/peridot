@@ -30,11 +30,11 @@ pub struct VgRendererFragmentFixedColor {
 }
 
 pub struct Game<PL: peridot::NativeLinker> {
-    renderpass: br::RenderPassObject<peridot::DeviceObject>,
+    render_pass: br::RenderPassObject<peridot::DeviceObject>,
     framebuffers: Vec<
         br::FramebufferObject<
             peridot::DeviceObject,
-            SharedRef<<PL::Presenter as peridot::PlatformPresenter>::Backbuffer>,
+            SharedRef<<PL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
         >,
     >,
     render_cb: CommandBundle<peridot::DeviceObject>,
@@ -231,18 +231,18 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .expect("ImmResource Initialization");
         }
 
-        let screen_size = e.backbuffer(0).expect("no backbuffer").image().size().wh();
-        let renderpass = RenderPassTemplates::single_render(
-            e.backbuffer_format(),
-            e.requesting_backbuffer_layout().0,
+        let screen_size = e.back_buffer(0).expect("no backbuffer").image().size().wh();
+        let render_pass = RenderPassTemplates::single_render(
+            e.back_buffer_format(),
+            e.requesting_back_buffer_layout().0,
         )
         .create(e.graphics().device().clone())
         .expect("RenderPass Creation");
-        let framebuffers = (0..e.backbuffer_count())
-            .map(|bb_index| {
-                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+        let framebuffers = e
+            .iter_back_buffers()
+            .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
-                    &renderpass,
+                    &render_pass,
                     vec![bb.clone()],
                     screen_size.as_ref(),
                     1,
@@ -251,40 +251,34 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .collect::<Result<Vec<_>, _>>()
             .expect("Framebuffer Creation");
 
-        let dsl = e
-            .graphics()
-            .device()
-            .clone()
-            .new_descriptor_set_layout(&[br::DescriptorSetLayoutBinding::UniformTexelBuffer(
-                1,
-                br::ShaderStage::VERTEX,
-            )])
-            .expect("DescriptorSetLayout Creation");
-        let mut dp = e
-            .graphics()
-            .device()
-            .clone()
-            .new_descriptor_pool(
-                2,
-                &[br::DescriptorPoolSize(
-                    br::DescriptorType::UniformTexelBuffer,
-                    2,
-                )],
-                false,
-            )
+        let dsl = br::DescriptorSetLayoutBuilder::with_bindings(vec![
+            br::DescriptorType::UniformTexelBuffer
+                .make_binding(1)
+                .only_for_vertex(),
+        ])
+        .create(e.graphics().device().clone())
+        .expect("DescriptorSetLayout Creation");
+        let mut dp = br::DescriptorPoolBuilder::new(2)
+            .with_reservations(vec![br::DescriptorType::UniformTexelBuffer.with_count(2)])
+            .create(e.graphics().device().clone())
             .expect("DescriptorPool Creation");
         let descs = dp.alloc(&[&dsl, &dsl]).expect("DescriptorSet Allocation");
 
-        let mut dub = DescriptorSetUpdateBatch::new();
-        DescriptorPointer::new(descs[0]).write(
-            &mut dub,
-            br::DescriptorUpdateInfo::UniformTexelBuffer(vec![bufview.native_ptr()]),
+        e.graphics().device().update_descriptor_sets(
+            &[
+                br::DescriptorPointer::new(descs[0].into(), 0).write(
+                    br::DescriptorContents::UniformTexelBuffer(vec![br::VkHandleRef::new(
+                        &bufview,
+                    )]),
+                ),
+                br::DescriptorPointer::new(descs[1].into(), 0).write(
+                    br::DescriptorContents::UniformTexelBuffer(vec![br::VkHandleRef::new(
+                        &bufview2,
+                    )]),
+                ),
+            ],
+            &[],
         );
-        DescriptorPointer::new(descs[1]).write(
-            &mut dub,
-            br::DescriptorUpdateInfo::UniformTexelBuffer(vec![bufview2.native_ptr()]),
-        );
-        dub.submit(e.graphics().device());
 
         let shader = PvpShaderModules::new(
             e.graphics().device(),
@@ -302,10 +296,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
         let pl = SharedRef::new(
-            e.graphics()
-                .device()
-                .clone()
-                .new_pipeline_layout(&[&dsl], &[(br::ShaderStage::VERTEX, 0..4 * 4)])
+            br::PipelineLayoutBuilder::new(vec![&dsl], vec![(br::ShaderStage::VERTEX, 0..4 * 4)])
+                .create(e.graphics().device().clone())
                 .expect("Create PipelineLayout"),
         );
         let spc_map = &[
@@ -366,7 +358,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             _,
             _,
             _,
-        >::new(&pl, (&renderpass, 0), interior_vertex_processing);
+        >::new(&pl, (&render_pass, 0), interior_vertex_processing);
         gpb.multisample_state(Some(br::MultisampleState::new()));
         gpb.viewport_scissors(
             br::DynamicArrayState::Static(&vp),
@@ -478,7 +470,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         Game {
             ph: PhantomData,
             buffer,
-            renderpass,
+            render_pass,
             framebuffers,
             _bufview: bufview,
             _bufview2: bufview2,
@@ -510,16 +502,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         .expect("Failed to present");
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_back_buffer_resources(&mut self) {
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
     }
     fn on_resize(&mut self, e: &mut peridot::Engine<PL>, _new_size: Vector2<usize>) {
-        self.framebuffers = (0..e.backbuffer_count())
-            .map(|bb_index| {
-                let bb = e.backbuffer(bb_index).expect("no backbuffer");
+        self.framebuffers = e
+            .iter_back_buffers()
+            .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
-                    &self.renderpass,
+                    &self.render_pass,
                     vec![bb.clone()],
                     bb.image().size().as_ref(),
                     1,

@@ -10,7 +10,7 @@ use-freetype = ["freetype2"]
 use-fontconfig = ["fontconfig"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+bedrock = { workspace = true }
 peridot = { path = "../../base" }
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
 lyon_path = "0.12"

@@ -12,3 +12,6 @@ members = [
     "modules/transition",
 	"modules/command-object",
 ]
+
+[workspace.dependencies]
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
