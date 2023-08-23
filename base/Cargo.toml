@@ -24,6 +24,5 @@ peridot-math = { path = "../modules/math" }
 peridot-derive = { path = "../derive", optional = true }
 
 [dependencies.bedrock]
-git = "https://github.com/Pctg-x8/bedrock"
-branch = "peridot"
+workspace = true
 features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "Multithreaded"]

@@ -39,7 +39,7 @@ impl CommandBundle<DeviceObject> {
             CBSubmissionType::Graphics => g.graphics_queue.family,
             CBSubmissionType::Transfer => g.graphics_queue.family,
         };
-        let mut cp = g.device.clone().new_command_pool(qf, false, false)?;
+        let mut cp = br::CommandPoolBuilder::new(qf).create(g.device.clone())?;
 
         Ok(Self(cp.alloc(count as _, true)?, cp))
     }

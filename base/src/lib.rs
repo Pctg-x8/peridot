@@ -67,13 +67,13 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
     fn init(_e: &mut Engine<PL>) -> Self;
 
     /// Updates the game.
-    fn update(&mut self, _e: &mut Engine<PL>, _on_backbuffer_of: u32, _delta_time: Duration) {}
+    fn update(&mut self, _e: &mut Engine<PL>, _on_back_buffer_of: u32, _delta_time: Duration) {}
 
-    /// Discards backbuffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
-    fn discard_backbuffer_resources(&mut self) {}
+    /// Discards back-buffer-dependent resources(i.e. Framebuffers or some of CommandBuffers)
+    fn discard_back_buffer_resources(&mut self) {}
 
-    /// Called when backbuffer has resized
-    /// (called after discard_backbuffer_resources so re-create discarded resources here)
+    /// Called when back-buffer has resized
+    /// (called after discard_back-buffer_resources so re-create discarded resources here)
     fn on_resize(&mut self, _e: &mut Engine<PL>, _new_size: math::Vector2<usize>) {}
 
     // Render Resource Persistency(Recovering) //
@@ -211,12 +211,12 @@ impl<PL: NativeLinker> Engine<PL> {
         .expect("Failed to initialize Graphics Base Driver");
         let presenter = native_link.new_presenter(&g);
         g.submit_commands(|mut r| {
-            presenter.emit_initialize_backbuffer_commands(&mut r);
+            presenter.emit_initialize_back_buffer_commands(&mut r);
             r
         })
-        .expect("Initializing Backbuffers");
+        .expect("Initializing Back Buffers");
 
-        Engine {
+        Self {
             ip: InputProcess::new().into(),
             game_timer: GameTimer::new(),
             last_rendering_completion: StateFence::new(g.device.clone())
@@ -234,44 +234,47 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 }
 impl<NL: NativeLinker> Engine<NL> {
-    pub fn graphics(&self) -> &Graphics {
+    pub const fn graphics(&self) -> &Graphics {
         &self.g
     }
     pub fn graphics_mut(&mut self) -> &mut Graphics {
         &mut self.g
     }
-    pub fn graphics_device(&self) -> &impl br::Device {
+
+    pub const fn graphics_device(&self) -> &impl br::Device {
         &self.g.device
     }
-    pub fn graphics_queue_family_index(&self) -> u32 {
+    pub const fn graphics_queue_family_index(&self) -> u32 {
         self.g.graphics_queue_family_index()
     }
     // 将来的に分かれるかも？
-    pub fn transfer_queue_family_index(&self) -> u32 {
+    pub const fn transfer_queue_family_index(&self) -> u32 {
         self.g.graphics_queue.family
     }
-    pub fn backbuffer_format(&self) -> br::vk::VkFormat {
+
+    pub fn back_buffer_format(&self) -> br::vk::VkFormat {
         self.presenter.format()
     }
-    pub fn backbuffer_count(&self) -> usize {
-        self.presenter.backbuffer_count()
+    pub fn back_buffer_count(&self) -> usize {
+        self.presenter.back_buffer_count()
     }
-    pub fn backbuffer(
+    pub fn back_buffer(
         &self,
         index: usize,
-    ) -> Option<SharedRef<<NL::Presenter as PlatformPresenter>::Backbuffer>> {
-        self.presenter.backbuffer(index)
+    ) -> Option<SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> {
+        self.presenter.back_buffer(index)
     }
-    pub fn iter_backbuffers<'s>(
+    pub fn iter_back_buffers<'s>(
         &'s self,
-    ) -> impl Iterator<Item = SharedRef<<NL::Presenter as PlatformPresenter>::Backbuffer>> + 's
+    ) -> impl Iterator<Item = SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> + 's
     {
-        (0..self.backbuffer_count())
-            .map(move |x| self.backbuffer(x).expect("unreachable while iteration"))
+        (0..self.back_buffer_count())
+            .map(move |x| self.back_buffer(x).expect("unreachable while iteration"))
     }
-    pub fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
-        self.presenter.requesting_backbuffer_layout()
+    pub fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.presenter.requesting_back_buffer_layout()
     }
+
     pub fn input(&self) -> &InputProcess {
         &self.ip
     }
@@ -310,7 +313,7 @@ impl<NL: NativeLinker> Engine<NL> {
     }
 
     #[inline]
-    pub fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> {
+    pub const fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> {
         &self.audio_mixer
     }
 }
@@ -331,27 +334,27 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 }
 impl<PL: NativeLinker> Engine<PL> {
-    pub fn do_update<EH: EngineEvents<PL>>(&mut self, userlib: &mut EH) {
+    pub fn do_update(&mut self, callback: &mut (impl EngineEvents<PL> + ?Sized)) {
         let dt = self.game_timer.delta_time();
 
-        let bb_index = match self.presenter.next_backbuffer_index() {
+        let bb_index = match self.presenter.next_back_buffer_index() {
             Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize and do nothing
-                self.do_resize_backbuffer(self.presenter.current_geometry_extent(), userlib);
+                self.do_resize_back_buffer(self.presenter.current_geometry_extent(), callback);
                 return;
             }
-            e => e.expect("Acquiring available backbuffer index"),
+            e => e.expect("Acquiring available back-buffer index"),
         };
         StateFence::wait(&mut self.last_rendering_completion)
             .expect("Waiting Last command completion");
 
         self.ip.prepare_for_frame(dt);
 
-        userlib.update(self, bb_index, dt);
+        callback.update(self, bb_index, dt);
 
         if self.request_resize {
             self.request_resize = false;
-            self.do_resize_backbuffer(self.presenter.current_geometry_extent(), userlib);
+            self.do_resize_back_buffer(self.presenter.current_geometry_extent(), callback);
         }
     }
 
@@ -383,26 +386,26 @@ impl<PL: NativeLinker> Engine<PL> {
         }
     }
 
-    pub fn do_resize_backbuffer(
+    pub fn do_resize_back_buffer(
         &mut self,
         new_size: math::Vector2<usize>,
-        userlib: &mut (impl EngineEvents<PL> + ?Sized),
+        callback: &mut (impl EngineEvents<PL> + ?Sized),
     ) {
         StateFence::wait(&mut self.last_rendering_completion)
             .expect("Waiting Last command completion");
-        userlib.discard_backbuffer_resources();
-        let needs_re_init_backbuffers = self.presenter.resize(&self.g, new_size.clone());
-        if needs_re_init_backbuffers {
+        callback.discard_back_buffer_resources();
+        let needs_re_init_back_buffers = self.presenter.resize(&self.g, new_size.clone());
+        if needs_re_init_back_buffers {
             let pres = &self.presenter;
 
             self.g
                 .submit_commands(|mut r| {
-                    pres.emit_initialize_backbuffer_commands(&mut r);
+                    pres.emit_initialize_back_buffer_commands(&mut r);
                     r
                 })
-                .expect("Initializing Backbuffers");
+                .expect("Initializing Back Buffers");
         }
-        userlib.on_resize(self, new_size);
+        callback.on_resize(self, new_size);
     }
 
     pub fn sound_backend_callback(&self, output_buffer: &mut [f32]) {
@@ -523,7 +526,6 @@ impl RenderPassTemplates {
         format: br::vk::VkFormat,
         outer_requesting_layout: br::ImageLayout,
     ) -> br::RenderPassBuilder {
-        let mut b = br::RenderPassBuilder::new();
         let attachment_desc = br::AttachmentDescription::new(
             format,
             outer_requesting_layout,
@@ -531,17 +533,17 @@ impl RenderPassTemplates {
         )
         .load_op(br::LoadOp::Clear)
         .store_op(br::StoreOp::Store);
-        b.add_attachment(attachment_desc);
-        b.add_subpass(br::SubpassDescription::new().add_color_output(
-            0,
-            br::ImageLayout::ColorAttachmentOpt,
-            None,
-        ));
-        b.add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
-            None, 0, true,
-        ));
 
-        b
+        br::RenderPassBuilder::new()
+            .add_attachment(attachment_desc)
+            .add_subpass(br::SubpassDescription::new().add_color_output(
+                0,
+                br::ImageLayout::ColorAttachmentOpt,
+                None,
+            ))
+            .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            ))
     }
 }
 

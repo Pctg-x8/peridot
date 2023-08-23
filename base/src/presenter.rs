@@ -3,43 +3,44 @@
 use bedrock as br;
 #[cfg(feature = "debug")]
 use br::VkObject;
-use br::{Device, Image, PhysicalDevice, SubmissionBatch, Swapchain};
+use br::{Device, Image, ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
 
 use crate::{mthelper::SharedRef, DeviceObject};
 
 pub trait PlatformPresenter {
-    type Backbuffer: br::ImageView
+    type BackBuffer: br::ImageView
         + br::ImageChild
         + br::DeviceChild<ConcreteDevice = DeviceObject>
         + 'static;
 
     fn format(&self) -> br::vk::VkFormat;
-    fn backbuffer_count(&self) -> usize;
-    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>>;
+    fn back_buffer_count(&self) -> usize;
+    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>>;
 
-    fn emit_initialize_backbuffer_commands(
+    fn emit_initialize_back_buffer_commands(
         &self,
         recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
     );
-    fn next_backbuffer_index(&mut self) -> br::Result<u32>;
-    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
+    fn next_back_buffer_index(&mut self) -> br::Result<u32>;
+    fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut crate::Graphics,
         last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
-        backbuffer_index: u32,
+        back_buffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()>;
-    /// Returns whether re-initializing is needed for backbuffer resources
+    /// Returns whether re-initializing is needed for back-buffer resources
     fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
     fn current_geometry_extent(&self) -> peridot_math::Vector2<usize>;
 }
 
-type SharedSwapchainObject<Device, Surface> = SharedRef<br::SwapchainObject<Device, Surface>>;
+type SharedSwapchainObject<Device, Surface> =
+    SharedRef<br::SurfaceSwapchainObject<Device, Surface>>;
 struct IntegratedSwapchainObject<Device: br::Device, Surface: br::Surface> {
     swapchain: SharedSwapchainObject<Device, Surface>,
-    backbuffer_images: Vec<
+    back_buffer_images: Vec<
         SharedRef<br::ImageViewObject<br::SwapchainImage<SharedSwapchainObject<Device, Surface>>>>,
     >,
 }
@@ -78,59 +79,57 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
         } else {
             br::SurfaceTransform::Inherit
         };
-        let mut cb = br::SwapchainBuilder::new(
+        let chain = br::SwapchainBuilder::new(
             surface,
             buffer_count,
-            &surface_info.fmt,
-            &ext,
+            surface_info.fmt.clone(),
+            ext,
             br::ImageUsage::COLOR_ATTACHMENT,
-        );
-        cb.present_mode(surface_info.pres_mode)
-            .composite_alpha(surface_info.available_composite_alpha)
-            .pre_transform(pre_transform);
-        let chain = g
-            .device
-            .clone()
-            .new_swapchain(cb)
-            .expect("Failed to create Swapchain");
+        )
+        .present_mode(surface_info.pres_mode)
+        .composite_alpha(surface_info.available_composite_alpha)
+        .pre_transform(pre_transform)
+        .create(g.device.clone())
+        .expect("Failed to create Swapchain");
         let chain = SharedRef::new(chain);
         #[cfg(feature = "debug")]
         chain
             .set_name(Some(unsafe {
                 std::ffi::CStr::from_bytes_with_nul_unchecked(
-                    b"Peridot-Default Presentor-Swapchain\0",
+                    b"Peridot-Default Presenter-Swapchain\0",
                 )
             }))
             .expect("Failed to set swapchain name");
 
-        let isr_c0 = br::ImageSubresourceRange::color(0, 0);
-        let backbuffer_images: Vec<SharedRef<_>> = chain
+        let back_buffer_images: Vec<SharedRef<_>> = chain
             .get_images()
-            .expect("Failed to get backbuffer images")
+            .expect("Failed to get back-buffer images")
             .into_iter()
             .map(|bb| {
                 bb.clone_parent()
-                    .create_view(None, None, &Default::default(), &isr_c0)
-                    .expect("Failed to create ImageView for Backbuffer")
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .view_builder()
+                    .create()
+                    .expect("Failed to create ImageView for Back-Buffer")
                     .into()
             })
             .collect();
 
         #[cfg(feature = "debug")]
-        for (n, v) in backbuffer_images.iter().enumerate() {
+        for (n, v) in back_buffer_images.iter().enumerate() {
             v.set_name(Some(
                 &std::ffi::CString::new(format!(
-                    "Peridot-Default Presentor-Backbuffer View #{}",
+                    "Peridot-Default Presenter-BackBuffer View #{}",
                     n
                 ))
                 .expect("invalid sequence?"),
             ))
-            .expect("Failed to set backbuffer view name");
+            .expect("Failed to set back-buffer view name");
         }
 
         Self {
             swapchain: chain,
-            backbuffer_images,
+            back_buffer_images,
         }
     }
 }
@@ -152,41 +151,35 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, &surface)
             .expect("Failed to gather surface info");
 
-        let rendering_order = g
-            .device
-            .clone()
-            .new_semaphore()
+        let rendering_order = br::SemaphoreBuilder::new()
+            .create(g.device.clone())
             .expect("Failed to create Rendering Order Semaphore");
-        let buffer_ready_order = g
-            .device
-            .clone()
-            .new_semaphore()
+        let buffer_ready_order = br::SemaphoreBuilder::new()
+            .create(g.device.clone())
             .expect("Failed to create BufferReady Order Semaphore");
-        let present_order = g
-            .device
-            .clone()
-            .new_semaphore()
+        let present_order = br::SemaphoreBuilder::new()
+            .create(g.device.clone())
             .expect("Failed to create Present Order Semaphore");
         #[cfg(feature = "debug")]
         {
             rendering_order
                 .set_name(Some(unsafe {
                     std::ffi::CStr::from_bytes_with_nul_unchecked(
-                        b"Peridot-Default Presentor-Rendering Order Semaphore\0",
+                        b"Peridot-Default Presenter-Rendering Order Semaphore\0",
                     )
                 }))
                 .expect("Failed to set Rendering Order Semaphore name");
             buffer_ready_order
                 .set_name(Some(unsafe {
                     std::ffi::CStr::from_bytes_with_nul_unchecked(
-                        b"Peridot-Default Presentor-BufferReady Order Semaphore\0",
+                        b"Peridot-Default Presenter-BufferReady Order Semaphore\0",
                     )
                 }))
                 .expect("Failed to set BufferReady Order Semaphore name");
             present_order
                 .set_name(Some(unsafe {
                     std::ffi::CStr::from_bytes_with_nul_unchecked(
-                        b"Peridot-Default Presentor-Present Order Semaphore\0",
+                        b"Peridot-Default Presenter-Present Order Semaphore\0",
                     )
                 }))
                 .expect("Failed to set Present Order Semaphore name");
@@ -212,12 +205,12 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     }
 
     #[inline]
-    pub fn backbuffer_count(&self) -> usize {
-        self.swapchain.get().backbuffer_images.len()
+    pub fn back_buffer_count(&self) -> usize {
+        self.swapchain.get().back_buffer_images.len()
     }
 
     #[inline]
-    pub fn backbuffer(
+    pub fn back_buffer(
         &self,
         index: usize,
     ) -> Option<
@@ -225,22 +218,28 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             br::ImageViewObject<br::SwapchainImage<SharedSwapchainObject<DeviceObject, Surface>>>,
         >,
     > {
-        self.swapchain.get().backbuffer_images.get(index).cloned()
+        self.swapchain.get().back_buffer_images.get(index).cloned()
     }
 
-    pub fn emit_initialize_backbuffer_commands(
+    pub fn emit_initialize_back_buffer_commands(
         &self,
         recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
     ) {
         let image_barriers = self
             .swapchain
             .get()
-            .backbuffer_images
+            .back_buffer_images
             .iter()
             .map(|v| {
                 br::ImageMemoryBarrier::new(
                     &***v,
-                    br::ImageSubresourceRange::color(0, 0),
+                    br::vk::VkImageSubresourceRange {
+                        aspectMask: br::AspectMask::COLOR.0,
+                        baseMipLevel: 0,
+                        levelCount: 1,
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    },
                     br::ImageLayout::Undefined,
                     br::ImageLayout::PresentSrc,
                 )
@@ -258,7 +257,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     }
 
     #[inline]
-    pub fn acquire_next_backbuffer_index(&mut self) -> br::Result<u32> {
+    pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.swapchain.get_mut_lw().swapchain.acquire_next(
             None,
             br::CompletionHandler::<br::FenceObject<DeviceObject>, _>::Queue(&self.rendering_order),
@@ -266,7 +265,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     }
 
     #[inline]
-    pub const fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+    pub const fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         (
             br::ImageLayout::PresentSrc,
             br::PipelineStageFlags::TOP_OF_PIPE,
@@ -332,7 +331,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {
         if let Some(mut old) = self.swapchain.take_lw() {
-            old.backbuffer_images.clear();
+            old.back_buffer_images.clear();
             let (_, s) = SharedRef::try_unwrap(old.swapchain)
                 .unwrap_or_else(|refs| {
                     panic!(
