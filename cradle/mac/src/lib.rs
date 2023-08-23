@@ -318,7 +318,7 @@ impl GameDriver {
         self.engine.do_update(&mut self.usercode);
     }
     fn resize(&mut self, size: peridot::math::Vector2<usize>) {
-        self.engine.do_resize_backbuffer(size, &mut self.usercode);
+        self.engine.do_resize_back_buffer(size, &mut self.usercode);
     }
 }
 
