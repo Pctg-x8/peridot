@@ -1,10 +1,11 @@
 use bedrock::{self as br, Device, ImageChild, SubmissionBatch};
-use br::Image;
+use br::{Image, ImageSubresourceSlice, Semaphore};
 use peridot::mthelper::SharedRef;
 #[cfg(feature = "transparent")]
 use windows::core::Interface;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
+use windows::Win32::Graphics::Direct3D12::D3D12_FENCE_FLAG_SHARED;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D12::{
     D3D12CreateDevice, D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug, ID3D12Device,
@@ -20,6 +21,7 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
+use windows::Win32::Graphics::Dxgi::DXGI_SWAP_EFFECT_FLIP_DISCARD;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, IDXGIFactory2, IDXGISwapChain3, DXGI_CREATE_FACTORY_DEBUG,
@@ -209,10 +211,10 @@ impl InteropBackbufferResource {
         device: &ID3D12Device,
         resource: &ID3D12Resource,
         name_suffix: u32,
-        size: &br::vk::VkExtent2D,
+        size: br::vk::VkExtent2D,
         format: br::vk::VkFormat,
     ) -> Self {
-        use br::{Chainable, MemoryBound};
+        use br::MemoryBound;
 
         let hname = widestring::WideCString::from_str(format!(
             "LocalPeridotApiInteropHandleCradle{name_suffix}"
@@ -228,51 +230,44 @@ impl InteropBackbufferResource {
                 )
                 .expect("Failed to create SharedHandle from D3D12")
         });
-        let image_ext =
-            br::ExternalMemoryImageCreateInfo::new(br::ExternalMemoryHandleTypes::D3D12_RESOURCE);
+        let vk_shared_handle =
+            br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
         let image = br::ImageDesc::new(
             size,
             format,
             br::ImageUsage::COLOR_ATTACHMENT,
             br::ImageLayout::Preinitialized,
         )
-        .chain(&image_ext)
+        .exportable_as(vk_shared_handle.0.into())
         .create(g.device().clone())
         .expect("Failed to create Interop Image");
         let image_mreq = image.requirements();
-        let handle_import_props = g
-            .get_memory_win32_handle_properties(
-                br::ExternalMemoryHandleTypeWin32::D3D12Resource,
-                shared_handle.handle(),
-            )
-            .expect("Failed to query Handle Memory Properties");
-        let memory = SharedRef::new(
-            g.device()
-                .clone()
-                .import_memory_win32(
-                    image_mreq.size as _,
-                    g.memory_type_manager
-                        .device_local_index(
-                            image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits,
-                        )
-                        .expect("Failed to find matching memory type for importing")
-                        .index(),
-                    br::ExternalMemoryHandleTypeWin32::D3D12Resource,
-                    shared_handle.handle(),
-                    &hname,
+        let handle_import_props = unsafe {
+            vk_shared_handle
+                .properties(
+                    g.device(),
+                    br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
                 )
-                .expect("Failed to import External Memory from D3D12Resource")
+                .expect("Failed to query Handle Memory Properties")
+        };
+        let memory_type_index = g
+            .memory_type_manager
+            .device_local_index(image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits)
+            .expect("Failed to find matching memory type for importing")
+            .index();
+        let memory = SharedRef::new(
+            vk_shared_handle
+                .into_import_request(memory_type_index, &hname)
+                .execute(g.device().clone())
+                .expect("Failed to import memory")
                 .into(),
         );
         let image =
             peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
         let image_view = image
-            .create_view(
-                None,
-                None,
-                &Default::default(),
-                &br::ImageSubresourceRange::color(0..1, 0..1),
-            )
+            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+            .view_builder()
+            .create()
             .expect("Failed to create ImageView for Rendering")
             .into();
 
@@ -333,7 +328,7 @@ pub struct Presenter {
     device12: ID3D12Device,
     q: ID3D12CommandQueue,
     sc: IDXGISwapChain3,
-    backbuffers: Vec<InteropBackbufferResource>,
+    back_buffers: Vec<InteropBackbufferResource>,
     buffer_ready_order: br::SemaphoreObject<peridot::DeviceObject>,
     present_order: br::SemaphoreObject<peridot::DeviceObject>,
     render_completion_fence: ID3D12Fence,
@@ -407,7 +402,7 @@ impl Presenter {
                             Count: 1,
                             Quality: 0,
                         },
-                        SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
+                        SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                         Scaling: DXGI_SCALING_STRETCH,
                         Flags: Default::default(),
                     },
@@ -415,18 +410,17 @@ impl Presenter {
                 )
                 .expect("Failed to create SwapChain")
         };
-        let sc = unsafe {
-            sc.cast::<IDXGISwapChain3>()
-                .expect("Failed to get swapchain 3 interface")
-        };
+        let sc = sc
+            .cast::<IDXGISwapChain3>()
+            .expect("Failed to get swapchain 3 interface");
         let comp = Composition::new(&window, &sc);
         let bb_size = br::vk::VkExtent2D {
             width: (rc.right - rc.left) as _,
             height: (rc.bottom - rc.top) as _,
         };
-        let backbuffers = (0..2)
+        let back_buffers = (0..2)
             .map(|bb_index| {
-                let backbuffer = unsafe {
+                let back_buffer = unsafe {
                     sc.GetBuffer(bb_index)
                         .expect("Failed to get Backbuffer from Swapchain")
                 };
@@ -434,27 +428,23 @@ impl Presenter {
                 InteropBackbufferResource::new(
                     g,
                     &device12,
-                    &backbuffer,
+                    &back_buffer,
                     bb_index as _,
-                    &bb_size,
+                    bb_size.clone(),
                     br::vk::VK_FORMAT_R8G8B8A8_UNORM,
                 )
             })
             .collect();
 
-        let buffer_ready_order = g
-            .device()
-            .clone()
-            .new_semaphore()
+        let buffer_ready_order = br::SemaphoreBuilder::new()
+            .create(g.device().clone())
             .expect("Failed to create Buffer Ready Semaphore");
-        let present_order = g
-            .device()
-            .clone()
-            .new_semaphore()
+        let present_order = br::SemaphoreBuilder::new()
+            .create(g.device().clone())
             .expect("Failed to create Present Order Semaphore");
         let render_completion_fence = unsafe {
             device12
-                .CreateFence(0, D3D12_FENCE_FLAG_NONE)
+                .CreateFence(0, D3D12_FENCE_FLAG_SHARED)
                 .expect("Failed to create Render Completion Fence")
         };
         let present_completion_fence = unsafe {
@@ -475,10 +465,10 @@ impl Presenter {
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence")
         });
-        g.device()
-            .import_semaphore_win32_handle(
-                &present_order,
-                br::ExternalSemaphoreHandleWin32::D3DFence(render_completion_fence_handle.handle()),
+        present_order
+            .import(
+                br::ExternalSemaphoreHandleTypeWin32::D3DFence
+                    .with_handle(render_completion_fence_handle.handle()),
                 &render_completion_fence_name,
             )
             .expect("Failed to import Render Completion Fence");
@@ -491,7 +481,7 @@ impl Presenter {
             device12,
             q,
             sc,
-            backbuffers,
+            back_buffers,
             buffer_ready_order,
             present_order,
             render_completion_fence,
@@ -506,7 +496,7 @@ impl Presenter {
 }
 #[cfg(feature = "transparent")]
 impl peridot::PlatformPresenter for Presenter {
-    type Backbuffer = br::ImageViewObject<
+    type BackBuffer = br::ImageViewObject<
         peridot::Image<
             br::ImageObject<peridot::DeviceObject>,
             br::DeviceMemoryObject<peridot::DeviceObject>,
@@ -516,31 +506,29 @@ impl peridot::PlatformPresenter for Presenter {
     fn format(&self) -> br::vk::VkFormat {
         br::vk::VK_FORMAT_R8G8B8A8_UNORM
     }
-    fn backbuffer_count(&self) -> usize {
+    fn back_buffer_count(&self) -> usize {
         2
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>> {
-        self.backbuffers.get(index).map(|b| b.image_view.clone())
+    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+        self.back_buffers.get(index).map(|b| b.image_view.clone())
     }
 
-    fn emit_initialize_backbuffer_commands(
+    fn emit_initialize_back_buffer_commands(
         &self,
         recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
     ) {
         let barriers = self
-            .backbuffers
+            .back_buffers
             .iter()
             .map(|b| {
-                br::ImageMemoryBarrier::new(
-                    b.image_view.image(),
-                    br::ImageSubresourceRange::color(0, 0),
-                    br::ImageLayout::Preinitialized,
-                    br::ImageLayout::General,
-                )
+                b.image_view
+                    .image()
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
             })
             .collect::<Vec<_>>();
 
-        recorder.pipeline_barrier(
+        let _ = recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::TOP_OF_PIPE,
             true,
@@ -549,10 +537,10 @@ impl peridot::PlatformPresenter for Presenter {
             &barriers,
         );
     }
-    fn next_backbuffer_index(&mut self) -> br::Result<u32> {
+    fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         Ok(unsafe { self.sc.GetCurrentBackBufferIndex() })
     }
-    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+    fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         (
             br::ImageLayout::General,
             br::PipelineStageFlags::TOP_OF_PIPE,
@@ -652,7 +640,7 @@ impl peridot::PlatformPresenter for Presenter {
             self.present_inflight = false;
         }
 
-        self.backbuffers.clear();
+        self.back_buffers.clear();
         unsafe {
             self.sc
                 .ResizeBuffers(
@@ -665,18 +653,18 @@ impl peridot::PlatformPresenter for Presenter {
                 .expect("Failed to resize backbuffers");
         }
         for bb_index in 0..2 {
-            let backbuffer = unsafe {
+            let back_buffer = unsafe {
                 self.sc
                     .GetBuffer(bb_index)
                     .expect("Failed to get Backbuffer from Swapchain")
             };
 
-            self.backbuffers.push(InteropBackbufferResource::new(
+            self.back_buffers.push(InteropBackbufferResource::new(
                 g,
                 &self.device12,
-                &backbuffer,
+                &back_buffer,
                 bb_index as _,
-                &br::vk::VkExtent2D {
+                br::vk::VkExtent2D {
                     width: new_size.0 as _,
                     height: new_size.1 as _,
                 },
