@@ -1,0 +1,88 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.35.1.
+--
+-- see: https://github.com/sol/hpack
+
+name:           generator
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/generator#readme>
+homepage:       https://github.com/githubuser/generator#readme
+bug-reports:    https://github.com/githubuser/generator/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2023 Author name here
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/generator
+
+library
+  exposed-modules:
+      Workflow.GitHub.Actions
+      Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
+      Workflow.GitHub.Actions.Predefined.Checkout
+      Workflow.GitHub.Actions.Predefined.Rust.Toolchain
+  other-modules:
+      Paths_generator
+  hs-source-dirs:
+      src
+  default-extensions:
+      ImportQualifiedPost
+      TupleSections
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-depends:
+      aeson
+    , aeson-yaml
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+  default-language: Haskell2010
+
+executable generator-exe
+  main-is: Main.hs
+  other-modules:
+      CustomAction.CheckBuildSubdirectory
+      CustomAction.CodeFormChecker
+      CustomAction.PostCINotifications
+      Paths_generator
+  hs-source-dirs:
+      app
+  default-extensions:
+      ImportQualifiedPost
+      TupleSections
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson
+    , aeson-yaml
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , generator
+  default-language: Haskell2010
+
+test-suite generator-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_generator
+  hs-source-dirs:
+      test
+  default-extensions:
+      ImportQualifiedPost
+      TupleSections
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson
+    , aeson-yaml
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , generator
+  default-language: Haskell2010
