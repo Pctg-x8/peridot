@@ -90,8 +90,8 @@ impl Context {
             let (adv, size) = (font.advance_h(&g)?, font.bounds(&g)?);
             let mut g0 = Partitioner::new();
             let tf = self.current_transform.post_translate(Vector2D::new(
-                left_offs * font.scale_value() * self.screen_scaling,
-                -font.ascent() * font.scale_value() * self.screen_scaling,
+                left_offs * self.screen_scaling,
+                -font.ascent() * self.screen_scaling,
             ));
             if font.outline(&g, g0.builder_mut()).is_ok() {
                 g0.partition(FillRule::Winding);
