@@ -49,9 +49,10 @@ jobs:
   check-cradle-android:
     name: "Cradle(Android)"
     needs:
+      - check-baselayer
+      - check-examples
       - check-modules
       - check-tools
-      - check-baselayer
       - preconditions
     permissions:
       id-token: write
@@ -120,9 +121,10 @@ jobs:
   check-cradle-linux:
     name: "Cradle(Linux)"
     needs:
+      - check-baselayer
+      - check-examples
       - check-modules
       - check-tools
-      - check-baselayer
       - preconditions
     permissions:
       id-token: write
@@ -194,9 +196,10 @@ jobs:
   check-cradle-macos:
     name: "Cradle(macOS)"
     needs:
+      - check-baselayer
+      - check-examples
       - check-modules
       - check-tools
-      - check-baselayer
       - preconditions
     permissions:
       id-token: write
@@ -258,9 +261,10 @@ jobs:
   check-cradle-windows:
     name: "Cradle(Windows)"
     needs:
+      - check-baselayer
+      - check-examples
       - check-modules
       - check-tools
-      - check-baselayer
       - preconditions
     permissions:
       id-token: write
@@ -285,17 +289,19 @@ jobs:
         run: cargo build
         working-directory: "./tools/cli"
       - env:
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: cargo check
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: cargo check for transparent-back
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v1"
@@ -309,6 +315,54 @@ jobs:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
           failure-step: check-cradle-windows
+          head_sha: "${{ github.event.pull_request.head.sha }}"
+          mode: diff
+          pr_number: "${{ github.event.number }}"
+          pr_title: "${{ github.event.pull_request.title }}"
+          report_name: PR Integrity Check
+          status: failure
+  check-examples:
+    name: Examples
+    needs:
+      - check-modules
+      - check-baselayer
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Checking out
+        uses: "actions/checkout@v3"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Building as Checking
+        uses: "./.github/actions/checkbuild-subdir"
+        with:
+          path: "./examples"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          base_sha: "${{ github.event.pull_request.base.sha }}"
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-examples
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -508,6 +562,7 @@ jobs:
       - check-cradle-linux
       - check-cradle-macos
       - check-cradle-windows
+      - check-examples
       - check-formats
       - check-modules
       - check-tools

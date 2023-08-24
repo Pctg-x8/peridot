@@ -161,6 +161,13 @@ cliBuildStep, archiverBuildStep :: GHA.Step
 cliBuildStep = namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build"
 archiverBuildStep = namedAs "Build archiver" $ GHA.workAt "./tools/archiver" $ GHA.runStep "cargo build"
 
+setupBuilderEnv :: GHA.Step -> GHA.Step
+setupBuilderEnv =
+  applyModifiers
+    [ GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)",
+      GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
+    ]
+
 checkCradleWindows :: SlackNotificationProvider -> String -> GHA.Job
 checkCradleWindows provider precondition =
   applyModifiers [GHA.namedAs "Cradle(Windows)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
@@ -177,20 +184,16 @@ checkCradleWindows provider precondition =
           <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-cradle-windows"))
       )
   where
-    integratedTestStep script =
-      applyModifiers
-        [ GHA.env "VK_SDK_PATH" "",
-          GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)"
-        ]
-        $ GHA.runStep script
+    integratedTestStep = applyModifiers [GHA.env "VK_SDK_PATH" "", setupBuilderEnv] . GHA.runStep
+
     integratedTestNormalScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
-      \pwsh -c 'tools/target/debug/peridot test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
     integratedTestTransparentScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
-      \pwsh -c 'tools/target/debug/peridot test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
 
 checkCradleMacos :: SlackNotificationProvider -> String -> GHA.Job
 checkCradleMacos provider precondition =
@@ -214,8 +217,7 @@ checkCradleMacos provider precondition =
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
           GHA.env "VULKAN_SDK" "/Users",
-          GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)",
-          GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)",
+          setupBuilderEnv,
           GHA.env "PERIDOT_CLI_ARCHIVER_PATH" $ GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
@@ -263,8 +265,7 @@ checkCradleLinux provider precondition =
       applyModifiers
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
-          GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)",
-          GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
+          setupBuilderEnv
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
@@ -299,8 +300,7 @@ checkCradleAndroid provider precondition =
       applyModifiers
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
-          GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)",
-          GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)",
+          setupBuilderEnv,
           GHA.env "NDK_PLATFORM_TARGET" "28"
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
@@ -398,7 +398,10 @@ requireJobsBefore preJobs afterJobs = (depends requiredJobNames <$> afterJobs) <
 (~=>) :: Map String Job -> Map String Job -> Map String Job
 (~=>) = requireJobsBefore
 
-infixr 5 ~=>
+concurrent :: [Map String Job] -> Map String Job
+concurrent = mconcat
+
+infixl 5 ~=>
 
 integrityTest :: GHA.Workflow
 integrityTest =
@@ -415,17 +418,18 @@ integrityTest =
     checkBaseLayer' = M.singleton "check-baselayer" $ checkBaseLayer slackNotifyProvider preconditionOutputHasChanges
     checkTools' = M.singleton "check-tools" $ checkTools slackNotifyProvider preconditionOutputHasChanges
     checkModules' = M.singleton "check-modules" $ checkModules slackNotifyProvider preconditionOutputHasChanges
+    checkExamples' = M.singleton "check-examples" $ checkExamples slackNotifyProvider preconditionOutputHasChanges
     checkCradleWindows' = M.singleton "check-cradle-windows" $ checkCradleWindows slackNotifyProvider preconditionOutputHasChanges
     checkCradleMacos' = M.singleton "check-cradle-macos" $ checkCradleMacos slackNotifyProvider preconditionOutputHasChanges
     checkCradleLinux' = M.singleton "check-cradle-linux" $ checkCradleLinux slackNotifyProvider preconditionOutputHasChanges
     checkCradleAndroid' = M.singleton "check-cradle-android" $ checkCradleAndroid slackNotifyProvider preconditionOutputHasChanges
     reportSuccessJob' = M.singleton "report-success" $ reportSuccessJob slackNotifyProvider
     checkJobs =
-      mconcat
+      concurrent
         [ checkFormats',
           checkBaseLayer'
-            ~=> mconcat [checkTools', checkModules']
-            ~=> mconcat [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
+            ~=> concurrent [checkTools', checkModules' ~=> checkExamples']
+            ~=> concurrent [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
         ]
 
 main :: IO ()
