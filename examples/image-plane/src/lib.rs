@@ -3,7 +3,7 @@ use br::{resources::Image, SubmissionBatch};
 use br::{CommandBuffer, DescriptorPool, Device, ImageChild, ImageSubresourceSlice};
 use log::*;
 use peridot::math::{
-    Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3, Vector3F32,
+    Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3,
 };
 use peridot::mthelper::{DynamicMutabilityProvider, SharedRef};
 use peridot::{
@@ -20,9 +20,9 @@ use std::time::Duration;
 use br::VkObject;
 
 use peridot_command_object::{
-    BeginRenderPass, BindGraphicsDescriptorSets, BufferImageDataDesc, BufferUsage, CopyBuffer,
-    CopyBufferToImage, DescriptorPointer, DescriptorSets, EndRenderPass, GraphicsCommand,
-    ImageResourceRange, Mesh, PipelineBarrier, RangedBuffer, RangedImage,
+    BeginRenderPass, BufferImageDataDesc, BufferUsage, CopyBuffer, CopyBufferToImage,
+    DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh, PipelineBarrier,
+    RangedBuffer, RangedImage,
 };
 
 struct BufferOffsets {
@@ -292,7 +292,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
             copy_uniform
                 .between(in_barriers, out_barriers)
-                .execute_into(unsafe { update_cb.synchronized_nth(0) })
+                .execute_and_finish(unsafe {
+                    update_cb
+                        .synchronized_nth(0)
+                        .begin()
+                        .expect("Failed to begin recording update command")
+                })
                 .expect("Failed to record update commands");
         }
 
@@ -305,7 +310,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             None,
         );
         let renderpass = br::RenderPassBuilder::new()
-            .add_attachment(backbuffer_attachment)
+            .add_attachment(back_buffer_attachment)
             .add_subpass(color_render_subpass)
             .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
                 None, 0, true,
@@ -400,13 +405,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut descriptor_writes = Vec::with_capacity(2);
         descriptor_writes.extend(
             br::DescriptorPointer::new(descriptor_main[0].into(), 0).write_multiple([
-                br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
-                    &buffer,
-                    range_from_length(
-                        mutable_data_offset as _,
-                        std::mem::size_of::<Uniform>() as _,
-                    ),
-                )]),
+                br::DescriptorContents::UniformBuffer(vec![
+                    uniform_buffer.make_descriptor_buffer_ref()
+                ]),
                 br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageRef::new(
                     &image_view,
                     br::ImageLayout::ShaderReadOnlyOpt,

@@ -1,19 +1,17 @@
 use log::*;
 use peridot_command_object::{
-    BeginRenderPass, BufferUsage, CopyBuffer, DescriptorPointer, EndRenderPass, GraphicsCommand,
-    RangedBuffer, RenderBaseModel,
+    BeginRenderPass, BufferUsage, CopyBuffer, EndRenderPass, GraphicsCommand, RangedBuffer,
+    RenderBaseModel,
 };
 use std::convert::TryInto;
 use std::marker::PhantomData;
 extern crate bedrock as br;
-use br::{
-    traits::*, Buffer, CommandBuffer, DescriptorPool, Device, Image, ImageChild, SubmissionBatch,
-};
+use br::{Buffer, CommandBuffer, DescriptorPool, Device, Image, ImageChild, SubmissionBatch};
 use peridot::math::Vector2;
 use peridot::mthelper::SharedRef;
 use peridot::{
-    BufferPrealloc, CBSubmissionType, CommandBundle, DescriptorSetUpdateBatch, LayoutedPipeline,
-    MemoryBadget, ModelData, RenderPassTemplates, SpecConstantStorage,
+    BufferPrealloc, CBSubmissionType, CommandBundle, LayoutedPipeline, MemoryBadget, ModelData,
+    RenderPassTemplates, SpecConstantStorage,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg as pvg;
@@ -444,7 +442,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
             };
 
-            let rp = BeginRenderPass::for_entire_framebuffer(&renderpass, f)
+            let rp = BeginRenderPass::for_entire_framebuffer(&render_pass, f)
                 .with_clear_values(vec![br::ClearValue::color([1.0; 4])]);
             let render_vg = RenderBaseModel {
                 provider: &vg_renderer_params,
@@ -533,7 +531,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 target_pixels: self.target_size.clone(),
             };
 
-            let rp = BeginRenderPass::for_entire_framebuffer(&self.renderpass, f)
+            let rp = BeginRenderPass::for_entire_framebuffer(&self.render_pass, f)
                 .with_clear_values(vec![br::ClearValue::color([1.0; 4])]);
             let render_vg = RenderBaseModel {
                 provider: &self.vg_renderer_params,

@@ -27,11 +27,8 @@ impl<B: br::Buffer> RangedBuffer<B> {
         RangedBuffer(&self.0, self.1.clone())
     }
 
-    pub fn descriptor_uniform_buffer_write_info(&self) -> (br::vk::VkBuffer, Range<usize>) {
-        (
-            self.0.native_ptr(),
-            self.1.start as usize..self.1.end as usize,
-        )
+    pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferRef {
+        br::DescriptorBufferRef::new(&self.0, self.1.clone())
     }
 
     pub fn usage_barrier(
@@ -105,7 +102,7 @@ impl<R: br::Image> RangedImage<R> {
         from_layout: br::ImageLayout,
         to_layout: br::ImageLayout,
     ) -> br::ImageMemoryBarrier {
-        self.0.memory_barrier(from_layout, to_layout)
+        self.0.make_ref().memory_barrier(from_layout, to_layout)
     }
 
     pub fn barrier3(

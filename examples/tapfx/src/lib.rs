@@ -9,8 +9,8 @@ use peridot::mthelper::SharedRef;
 use peridot::ModelData;
 use peridot_command_object::{
     BeginRenderPass, BufferImageDataDesc, BufferUsage, CopyBuffer, CopyBufferToImage,
-    DescriptorPointer, DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh,
-    PipelineBarrier, RangedBuffer, RangedImage,
+    DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh, PipelineBarrier,
+    RangedBuffer, RangedImage,
 };
 
 #[repr(C)]
@@ -85,8 +85,8 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         init_controls(e);
 
         let bb_size = e
-            .backbuffer(0)
-            .expect("empty backbuffers")
+            .back_buffer(0)
+            .expect("empty back-buffers")
             .image()
             .size()
             .wh();
@@ -311,11 +311,9 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         e.graphics().device().update_descriptor_sets(
             &[
                 br::DescriptorPointer::new(descriptors[0].into(), 0).write(
-                    br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
-                        &buffer,
-                        RangeBuilder::from(dynamic_start + uniform_start_d)
-                            .length(core::mem::size_of::<UniformValues>() as _),
-                    )]),
+                    br::DescriptorContents::UniformBuffer(vec![
+                        uniform_buffer.make_descriptor_buffer_ref()
+                    ]),
                 ),
                 br::DescriptorPointer::new(descriptors[1].into(), 0).write(
                     br::DescriptorContents::CombinedImageSampler(vec![
