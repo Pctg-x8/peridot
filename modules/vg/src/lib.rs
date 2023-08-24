@@ -102,7 +102,8 @@ impl Context {
             left_offs += adv;
             max_height = max_height.max(size.size.height);
         }
-        return Ok(self);
+
+        Ok(self)
     }
 }
 /*type V2F32 = euclid::Vector2D<f32>;
