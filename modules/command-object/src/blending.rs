@@ -33,6 +33,11 @@ impl Blending {
     pub const MAX_ALPHA: Self = Self::pure_alpha_op(br::BlendOp::Max);
     pub const MIN_COLOR: Self = Self::pure_color_op(br::BlendOp::Min);
     pub const MIN_ALPHA: Self = Self::pure_color_op(br::BlendOp::Min);
+    pub const FOR_PREMULTIPLIED_ALPHA: Self = Self::new(
+        br::BlendFactor::One,
+        br::BlendOp::Add,
+        br::BlendFactor::OneMinusSourceAlpha,
+    );
 }
 
 pub enum ColorAttachmentBlending {
@@ -57,6 +62,10 @@ impl ColorAttachmentBlending {
 
     pub const MAX: Self = Self::new(Blending::MAX_COLOR, Blending::MAX_ALPHA);
     pub const MIN: Self = Self::new(Blending::MIN_COLOR, Blending::MIN_ALPHA);
+    pub const PREMULTIPLIED_ALPHA: Self = Self::new(
+        Blending::FOR_PREMULTIPLIED_ALPHA,
+        Blending::FOR_PREMULTIPLIED_ALPHA,
+    );
 
     pub const fn with_color_write_mask(self, mask: u32) -> Self {
         match self {

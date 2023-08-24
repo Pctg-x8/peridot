@@ -8,9 +8,9 @@ use br::{
 use peridot::mthelper::SharedRef;
 use peridot::ModelData;
 use peridot_command_object::{
-    BeginRenderPass, BufferImageDataDesc, BufferUsage, CopyBuffer, CopyBufferToImage,
-    DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh, PipelineBarrier,
-    RangedBuffer, RangedImage,
+    BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBuffer,
+    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh,
+    PipelineBarrier, RangedBuffer, RangedImage,
 };
 
 #[repr(C)]
@@ -163,7 +163,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             br::DynamicArrayState::Static(&scissors),
         )
         .multisample_state(br::MultisampleState::new().into())
-        .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
+        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()])
         .create(
             e.graphics().device().clone(),
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,

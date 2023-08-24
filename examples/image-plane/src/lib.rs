@@ -20,9 +20,9 @@ use std::time::Duration;
 use br::VkObject;
 
 use peridot_command_object::{
-    BeginRenderPass, BufferImageDataDesc, BufferUsage, CopyBuffer, CopyBufferToImage,
-    DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh, PipelineBarrier,
-    RangedBuffer, RangedImage,
+    BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBuffer,
+    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh,
+    PipelineBarrier, RangedBuffer, RangedImage,
 };
 
 struct BufferOffsets {
@@ -378,7 +378,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             br::DynamicArrayState::Static(&sc),
         )
         .multisample_state(br::MultisampleState::new().into())
-        .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+        .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()])
         .create(
             e.graphics().device().clone(),
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,

@@ -1,7 +1,7 @@
 use log::*;
 use peridot_command_object::{
-    BeginRenderPass, BufferUsage, CopyBuffer, EndRenderPass, GraphicsCommand, RangedBuffer,
-    RenderBaseModel,
+    BeginRenderPass, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
+    GraphicsCommand, RangedBuffer, RenderBaseModel,
 };
 use std::convert::TryInto;
 use std::marker::PhantomData;
@@ -362,7 +362,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             br::DynamicArrayState::Static(&vp),
             br::DynamicArrayState::Static(&sc),
         )
-        .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
+        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()])
         .multisample_state(Some(br::MultisampleState::new()));
         let gp = LayoutedPipeline::combine(
             gpb.create(
