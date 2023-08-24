@@ -29,6 +29,9 @@ wayland-protocols = { version = "0.30.0", features = [
     "staging",
     "unstable",
 ] }
+pipewire = "0.7.0"
+libspa-sys = "0.7.0"
+parking_lot = "0.12.1"
 
 [dependencies.async-std]
 version = "1.0"

@@ -1,5 +1,5 @@
 use bedrock as br;
-use br::{CommandBuffer, Device, Image, ImageChild, SubmissionBatch};
+use br::{CommandBuffer, Device, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
@@ -172,13 +172,8 @@ impl TwoPassStencilSDFRenderer {
         )
         .expect("Failed to create outline_disdtance shader modules");
         let empty_pl = SharedRef::new(
-            e.graphics()
-                .device()
-                .clone()
-                .new_pipeline_layout(
-                    &[] as &[br::DescriptorSetLayoutObject<peridot::DeviceObject>],
-                    &[],
-                )
+            br::PipelineLayoutBuilder::new(vec![], vec![])
+                .create(e.graphics().device().clone())
                 .expect("Failed to create empty pipeline layout"),
         );
 
@@ -593,10 +588,12 @@ impl<NL: peridot::NativeLinker> Game<NL> {
 impl<NL: peridot::NativeLinker> FeatureRequests for Game<NL> {}
 impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
     fn init(e: &mut Engine<NL>) -> Self {
-        let backbuffer_size = AsRef::<br::vk::VkExtent2D>::as_ref(
-            e.backbuffer(0).expect("no backbuffer?").image().size(),
-        )
-        .clone();
+        let back_buffer_size = e
+            .back_buffer(0)
+            .expect("no back-buffer?")
+            .image()
+            .size()
+            .wh();
 
         let font = peridot_vg::DefaultFontProvider::new()
             .expect("Failed to create font provider")
@@ -648,7 +645,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let buffer = bp.build_transferred().expect("Failed to allocate buffer");
         let buffer_init = bp.build_upload().expect("Failed to allocate init buffer");
         let stencil_buffer = br::ImageDesc::new(
-            &backbuffer_size,
+            back_buffer_size.clone(),
             br::vk::VK_FORMAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
@@ -687,12 +684,9 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
 
         let stencil_buffer_view = SharedRef::new(
             stencil_buffer
-                .create_view(
-                    None,
-                    None,
-                    &Default::default(),
-                    &br::ImageSubresourceRange::stencil(0..1, 0..1),
-                )
+                .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                .view_builder()
+                .create()
                 .expect("Failed to create Stencil Buffer View"),
         );
 
@@ -759,12 +753,13 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 true,
                 &[],
                 &[],
-                &[br::ImageMemoryBarrier::new(
-                    stencil_buffer_view.image(),
-                    br::ImageSubresourceRange::stencil(0, 0),
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::DepthStencilReadOnlyOpt,
-                )],
+                &[stencil_buffer_view
+                    .image()
+                    .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                    .memory_barrier(
+                        br::ImageLayout::Undefined,
+                        br::ImageLayout::DepthStencilReadOnlyOpt,
+                    )],
             );
 
             r
@@ -773,15 +768,15 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
 
         let sdf_renderer = TwoPassStencilSDFRenderer::new(
             e,
-            e.backbuffer_format(),
-            e.requesting_backbuffer_layout().0,
-            e.requesting_backbuffer_layout().1,
-            peridot::math::Vector2(backbuffer_size.width, backbuffer_size.height),
+            e.back_buffer_format(),
+            e.requesting_back_buffer_layout().0,
+            e.requesting_back_buffer_layout().1,
+            back_buffer_size.clone().into(),
             Self::SDF_SIZE,
         );
 
         let fb = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &sdf_renderer.render_pass,
@@ -790,7 +785,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                             as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
                         stencil_buffer_view.clone(),
                     ],
-                    &backbuffer_size,
+                    &back_buffer_size,
                     1,
                 )
             })
@@ -820,7 +815,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let mut cmd = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
-            e.backbuffer_count(),
+            e.back_buffer_count(),
         )
         .expect("Failed to create CommandBundle");
         for (cx, fb) in fb.iter().enumerate() {
@@ -831,7 +826,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             rec.end().expect("Failed to record commands");
         }
 
-        Game {
+        Self {
             buffer,
             stencil_buffer_view,
             sdf_renderer,
@@ -844,20 +839,20 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
     fn update(
         &mut self,
         e: &mut Engine<NL>,
-        on_backbuffer_of: u32,
+        on_back_buffer_of: u32,
         _delta_time: std::time::Duration,
     ) {
         e.do_render(
-            on_backbuffer_of,
+            on_back_buffer_of,
             None::<br::EmptySubmissionBatch>,
             br::EmptySubmissionBatch.with_command_buffers(
-                &self.cmd[on_backbuffer_of as usize..=on_backbuffer_of as usize],
+                &self.cmd[on_back_buffer_of as usize..=on_back_buffer_of as usize],
             ),
         )
         .expect("Failed to present");
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_back_buffer_resources(&mut self) {
         self.fb.clear();
     }
     fn on_resize(&mut self, e: &mut peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
@@ -936,10 +931,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .unwrap_buffer();
 
         let stencil_buffer = br::ImageDesc::new(
-            &br::vk::VkExtent2D {
-                width: new_size.0 as _,
-                height: new_size.1 as _,
-            },
+            peridot::math::Vector2(new_size.0 as u32, new_size.1 as _),
             br::vk::VK_FORMAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
@@ -957,16 +949,13 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .unwrap_image();
         self.stencil_buffer_view = SharedRef::new(
             stencil_buffer
-                .create_view(
-                    None,
-                    None,
-                    &Default::default(),
-                    &br::ImageSubresourceRange::stencil(0..1, 0..1),
-                )
+                .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                .view_builder()
+                .create()
                 .expect("Failed to create Stencil Buffer View"),
         );
         self.fb = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &self.sdf_renderer.render_pass,
@@ -1045,12 +1034,14 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 true,
                 &[],
                 &[],
-                &[br::ImageMemoryBarrier::new(
-                    self.stencil_buffer_view.image(),
-                    br::ImageSubresourceRange::stencil(0, 0),
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::DepthStencilReadOnlyOpt,
-                )],
+                &[self
+                    .stencil_buffer_view
+                    .image()
+                    .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                    .memory_barrier(
+                        br::ImageLayout::Undefined,
+                        br::ImageLayout::DepthStencilReadOnlyOpt,
+                    )],
             );
 
             r
@@ -1086,7 +1077,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let mut cmd = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
-            e.backbuffer_count(),
+            e.back_buffer_count(),
         )
         .expect("Failed to create CommandBundle");
         for (cx, fb) in self.fb.iter().enumerate() {

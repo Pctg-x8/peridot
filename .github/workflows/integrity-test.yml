@@ -133,8 +133,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Add External PPA
+        run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: install extra packages
-        run: "sudo apt-get update && sudo apt-get install libwayland-dev"
+        run: "sudo apt-get update && sudo apt-get install libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
@@ -152,6 +155,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+      - id: llvm-cache
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize LLVM Cache
+        uses: "actions/cache@v3"
+        with:
+          key: "${{ runner.os }}-llvm-11"
+          path: "./llvm"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Install LLVM
+        uses: "KyleMayes/install-llvm-action@v1"
+        with:
+          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
+          version: '11'
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build

@@ -10,25 +10,19 @@ pub enum StateFence<Fence: br::Fence> {
 impl<Device: br::Device> StateFence<br::FenceObject<Device>> {
     /// Create a fence with Unsignaled state
     pub fn new(d: Device) -> br::Result<Self> {
-        d.new_fence(false).map(Self::Unsignaled)
+        br::FenceBuilder::new().create(d).map(Self::Unsignaled)
     }
 }
 impl<Fence: br::Fence + br::VkHandleMut> StateFence<Fence> {
-    #[allow(dead_code)]
-    /// Wrap a unsignaled fence
-    pub const unsafe fn wrap_unsignaled(f: Fence) -> Self {
-        Self::Unsignaled(f)
-    }
-
     /// Set state to Signaled
     ///
     /// # Safety
     /// Internal state must be coherent with background API
     pub unsafe fn signal(&mut self) {
-        let obj = std::ptr::read(match self {
+        let obj = core::ptr::read(match self {
             StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _,
         });
-        std::mem::forget(std::mem::replace(self, StateFence::Signaled(obj)));
+        core::mem::forget(core::mem::replace(self, StateFence::Signaled(obj)));
     }
 
     /// Set state to Unsignaled
@@ -36,10 +30,10 @@ impl<Fence: br::Fence + br::VkHandleMut> StateFence<Fence> {
     /// # Safety
     /// must be coherent with background API
     unsafe fn unsignal(&mut self) {
-        let obj = std::ptr::read(match self {
+        let obj = core::ptr::read(match self {
             StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _,
         });
-        std::mem::forget(std::mem::replace(self, StateFence::Unsignaled(obj)));
+        core::mem::forget(core::mem::replace(self, StateFence::Unsignaled(obj)));
     }
 
     /// Wait for a fence if it is in Signaled state
