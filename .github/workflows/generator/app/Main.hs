@@ -17,11 +17,9 @@ import Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials qualified as 
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
 
-pullRequestHeadHashExpr, pullRequestBaseHashExpr, pullRequestNumberExpr, pullRequestTitleExpr :: String
+pullRequestHeadHashExpr, pullRequestNumberExpr :: String
 pullRequestHeadHashExpr = GHA.mkExpression "github.event.pull_request.head.sha"
-pullRequestBaseHashExpr = GHA.mkExpression "github.event.pull_request.base.sha"
 pullRequestNumberExpr = GHA.mkExpression "github.event.number"
-pullRequestTitleExpr = GHA.mkExpression "github.event.pull_request.title"
 
 repositoryOwnerLoginExpr, repositoryNameExpr :: String
 repositoryOwnerLoginExpr = GHA.mkExpression "github.event.repository.owner.login"
@@ -323,13 +321,7 @@ slackNotifyProvider = SlackNotificationProvider succ' fail'
         { PostCINotificationsAction.status = status,
           PostCINotificationsAction.beginTime = GHA.mkNeedsOutputExpression "preconditions" "begintime",
           PostCINotificationsAction.reportName = "PR Integrity Check",
-          PostCINotificationsAction.mode =
-            PostCINotificationsAction.DiffMode
-              { PostCINotificationsAction.diffHeadSHA = pullRequestHeadHashExpr,
-                PostCINotificationsAction.diffBaseSHA = pullRequestBaseHashExpr,
-                PostCINotificationsAction.diffPRNumber = pullRequestNumberExpr,
-                PostCINotificationsAction.diffPRTitle = pullRequestTitleExpr
-              }
+          PostCINotificationsAction.mode = PostCINotificationsAction.currentPullRequestDiffMode
         }
     fail' jobName =
       GHA.namedAs "Notify as Failure" $
@@ -413,6 +405,14 @@ integrityTest =
     $ GHA.OnEventsDetailed (Just prTrigger) Nothing Nothing
   where
     prTrigger = GHA.filterType "opened" $ GHA.filterType "synchronize" GHA.workflowPullRequestTrigger
+    checkJobs =
+      concurrent
+        [ checkFormats',
+          checkBaseLayer'
+            ~=> concurrent [checkTools', checkModules' ~=> checkExamples']
+            ~=> concurrent [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
+        ]
+
     preconditions' = M.singleton "preconditions" preconditions
     checkFormats' = M.singleton "check-formats" $ checkFormats slackNotifyProvider preconditionOutputHasChanges
     checkBaseLayer' = M.singleton "check-baselayer" $ checkBaseLayer slackNotifyProvider preconditionOutputHasChanges
@@ -424,13 +424,6 @@ integrityTest =
     checkCradleLinux' = M.singleton "check-cradle-linux" $ checkCradleLinux slackNotifyProvider preconditionOutputHasChanges
     checkCradleAndroid' = M.singleton "check-cradle-android" $ checkCradleAndroid slackNotifyProvider preconditionOutputHasChanges
     reportSuccessJob' = M.singleton "report-success" $ reportSuccessJob slackNotifyProvider
-    checkJobs =
-      concurrent
-        [ checkFormats',
-          checkBaseLayer'
-            ~=> concurrent [checkTools', checkModules' ~=> checkExamples']
-            ~=> concurrent [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
-        ]
 
 main :: IO ()
 main = do

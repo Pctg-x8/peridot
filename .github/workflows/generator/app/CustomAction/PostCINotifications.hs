@@ -1,6 +1,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
 
-module CustomAction.PostCINotifications (Status (..), Mode (..), Params (..), step) where
+module CustomAction.PostCINotifications (Status (..), Mode (..), currentPullRequestDiffMode, Params (..), step) where
 
 import Data.Aeson (ToJSON (toJSON))
 import Data.Map qualified as M
@@ -9,6 +9,15 @@ import Workflow.GitHub.Actions qualified as GHA
 data Status = SuccessStatus | FailureStatus String
 
 data Mode = DiffMode {diffHeadSHA :: String, diffBaseSHA :: String, diffPRNumber :: String, diffPRTitle :: String} | BranchMode
+
+currentPullRequestDiffMode :: Mode
+currentPullRequestDiffMode =
+  DiffMode
+    { diffHeadSHA = GHA.mkExpression "github.event.pull_request.head.sha",
+      diffBaseSHA = GHA.mkExpression "github.event.pull_request.base.sha",
+      diffPRNumber = GHA.mkExpression "github.event.number",
+      diffPRTitle = GHA.mkExpression "github.event.pull_request.title"
+    }
 
 data Params = Params {status :: Status, beginTime :: String, reportName :: String, mode :: Mode}
 
