@@ -4,6 +4,8 @@ mod ranged_resources;
 pub use self::ranged_resources::*;
 mod graphics_command;
 pub use self::graphics_command::*;
+mod blending;
+pub use self::blending::*;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

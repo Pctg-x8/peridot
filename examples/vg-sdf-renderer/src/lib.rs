@@ -6,8 +6,9 @@ use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
 use peridot_command_object::{
-    BeginRenderPass, BufferUsage, CopyBuffer, EndRenderPass, GraphicsCommand, IndexedMesh, Mesh,
-    NextSubpass, PipelineBarrier, RangedBuffer, RangedImage, SimpleDrawIndexed,
+    BeginRenderPass, Blending, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
+    GraphicsCommand, IndexedMesh, Mesh, NextSubpass, PipelineBarrier, RangedBuffer, RangedImage,
+    SimpleDrawIndexed,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg::FlatPathBuilder;
@@ -102,101 +103,6 @@ impl StencilState {
 impl From<StencilState> for br::vk::VkStencilOpState {
     fn from(value: StencilState) -> Self {
         value.into_vk()
-    }
-}
-
-pub struct Blending {
-    pub src_factor: br::BlendFactor,
-    pub dst_factor: br::BlendFactor,
-    pub op: br::BlendOp,
-}
-impl Blending {
-    pub const fn new(src: br::BlendFactor, op: br::BlendOp, dst: br::BlendFactor) -> Self {
-        Self {
-            src_factor: src,
-            dst_factor: dst,
-            op,
-        }
-    }
-
-    pub const fn source_only(factor: br::BlendFactor) -> Self {
-        Self::new(factor, br::BlendOp::Add, br::BlendFactor::Zero)
-    }
-
-    pub const fn pure_color_op(op: br::BlendOp) -> Self {
-        Self::new(br::BlendFactor::SourceColor, op, br::BlendFactor::DestColor)
-    }
-
-    pub const fn pure_alpha_op(op: br::BlendOp) -> Self {
-        Self::new(br::BlendFactor::SourceAlpha, op, br::BlendFactor::DestAlpha)
-    }
-
-    pub const MAX_COLOR: Self = Self::pure_color_op(br::BlendOp::Max);
-    pub const MAX_ALPHA: Self = Self::pure_alpha_op(br::BlendOp::Max);
-}
-pub enum ColorAttachmentBlending {
-    Disabled,
-    Color {
-        color: Blending,
-        alpha: Blending,
-        color_write_mask: u32,
-    },
-}
-impl ColorAttachmentBlending {
-    pub const fn new_color(color: Blending, alpha: Blending) -> Self {
-        Self::Color {
-            color,
-            alpha,
-            color_write_mask: br::vk::VK_COLOR_COMPONENT_A_BIT
-                | br::vk::VK_COLOR_COMPONENT_B_BIT
-                | br::vk::VK_COLOR_COMPONENT_G_BIT
-                | br::vk::VK_COLOR_COMPONENT_R_BIT,
-        }
-    }
-
-    pub const MAX: Self = Self::new_color(Blending::MAX_COLOR, Blending::MAX_ALPHA);
-
-    pub const fn with_color_write_mask(self, mask: u32) -> Self {
-        match self {
-            Self::Color { color, alpha, .. } => Self::Color {
-                color,
-                alpha,
-                color_write_mask: mask,
-            },
-            s => s,
-        }
-    }
-
-    pub const fn into_vk(self) -> br::vk::VkPipelineColorBlendAttachmentState {
-        match self {
-            Self::Disabled => br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: false as _,
-                srcColorBlendFactor: br::BlendFactor::One as _,
-                dstColorBlendFactor: br::BlendFactor::One as _,
-                colorBlendOp: br::BlendOp::Add as _,
-                srcAlphaBlendFactor: br::BlendFactor::One as _,
-                dstAlphaBlendFactor: br::BlendFactor::One as _,
-                alphaBlendOp: br::BlendOp::Add as _,
-                colorWriteMask: br::vk::VK_COLOR_COMPONENT_A_BIT
-                    | br::vk::VK_COLOR_COMPONENT_B_BIT
-                    | br::vk::VK_COLOR_COMPONENT_G_BIT
-                    | br::vk::VK_COLOR_COMPONENT_R_BIT,
-            },
-            Self::Color {
-                color,
-                alpha,
-                color_write_mask,
-            } => br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: true as _,
-                srcColorBlendFactor: color.src_factor as _,
-                dstColorBlendFactor: color.dst_factor as _,
-                colorBlendOp: color.op as _,
-                srcAlphaBlendFactor: alpha.src_factor as _,
-                dstAlphaBlendFactor: alpha.dst_factor as _,
-                alphaBlendOp: alpha.op as _,
-                colorWriteMask: color_write_mask,
-            },
-        }
     }
 }
 
@@ -393,7 +299,7 @@ impl TwoPassStencilSDFRenderer {
             .render_pass(&render_pass, 1)
             .vertex_processing(invert_fill_shader)
             .stencil_control(Self::stencil_match())
-            .set_attachment_blends(vec![ColorAttachmentBlending::new_color(
+            .set_attachment_blends(vec![ColorAttachmentBlending::new(
                 Blending::source_only(br::BlendFactor::OneMinusDestColor),
                 Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
             )
@@ -519,7 +425,7 @@ impl TwoPassStencilSDFRenderer {
             .render_pass(&self.render_pass, 1)
             .vertex_processing(invert_fill_shader)
             .stencil_control(Self::stencil_match())
-            .set_attachment_blends(vec![ColorAttachmentBlending::new_color(
+            .set_attachment_blends(vec![ColorAttachmentBlending::new(
                 Blending::source_only(br::BlendFactor::OneMinusDestColor),
                 Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
             )
@@ -733,24 +639,31 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
         let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(buffer)]) =
-            mb.alloc().expect("Failed to allocate memory").try_into() else {
-                unreachable!("unexpected return combination");
-            };
+            mb.alloc().expect("Failed to allocate memory").try_into()
+        else {
+            unreachable!("unexpected return combination");
+        };
         let buffer = SharedRef::new(buffer);
         let mut mb_upload =
             peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb_upload.add(peridot::MemoryBadgetEntry::Buffer(buffer_init));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(mut buffer_init)]) =
-            mb_upload.alloc_upload().expect("Failed to allocate init buffer memory").try_into() else {
-                unreachable!("unexpected return combination");
-            };
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(mut buffer_init)]) = mb_upload
+            .alloc_upload()
+            .expect("Failed to allocate init buffer memory")
+            .try_into()
+        else {
+            unreachable!("unexpected return combination");
+        };
         let mut mb_tex =
             peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
         mb_tex.add(peridot::MemoryBadgetEntry::Image(stencil_buffer));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(stencil_buffer)]) =
-            mb_tex.alloc().expect("Failed to allocate Texture Memory").try_into() else {
-                unreachable!("unexpected return combination");
-            };
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(stencil_buffer)]) = mb_tex
+            .alloc()
+            .expect("Failed to allocate Texture Memory")
+            .try_into()
+        else {
+            unreachable!("unexpected return combination");
+        };
 
         let stencil_buffer_view = SharedRef::new(
             stencil_buffer
