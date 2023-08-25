@@ -573,6 +573,10 @@ jobs:
     steps:
       - name: Checking out
         uses: "actions/checkout@v3"
+      - name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v1"
         with:

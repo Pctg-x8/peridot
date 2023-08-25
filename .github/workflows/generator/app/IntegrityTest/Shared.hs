@@ -274,4 +274,5 @@ reportSuccessJob = do
   reportSteps <- slackNotifySteps ReportSuccess
   pure $
     applyModifiers [GHA.namedAs "Report as Success", GHA.grantWritable GHA.IDTokenPermission] $
-      GHA.job ([checkoutStep] <> reportSteps)
+      -- NotificationでHeadの情報見るっぽくて必要そう
+      GHA.job ([checkoutStep, checkoutHeadStep] <> reportSteps)
