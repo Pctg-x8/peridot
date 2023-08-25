@@ -38,7 +38,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-baselayer
+          failure-step: Base Layer
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -109,7 +109,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-android
+          failure-step: "Cradle(Android)"
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -183,7 +183,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-linux
+          failure-step: "Cradle(Linux)"
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -247,7 +247,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-macos
+          failure-step: "Cradle(macOS)"
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -309,7 +309,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-windows
+          failure-step: "Cradle(Windows)"
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -356,7 +356,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-examples
+          failure-step: Examples
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -405,7 +405,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-formats
+          failure-step: Code Formats
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -451,7 +451,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-modules
+          failure-step: Modules
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -497,7 +497,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-tools
+          failure-step: Tools
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"

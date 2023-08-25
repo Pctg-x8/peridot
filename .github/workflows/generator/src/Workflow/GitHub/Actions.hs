@@ -147,7 +147,7 @@ instance ToJSON Environment where
   toJSON (RemoteEnvironment s url) = object ["name" .= s, "url" .= url]
 
 data Job = Job
-  { name :: Maybe String,
+  { jobName :: Maybe String,
     permissions :: PermissionTable,
     steps :: [Step],
     needs :: Maybe [String],
@@ -162,7 +162,7 @@ data Job = Job
 job :: [Step] -> Job
 job steps =
   Job
-    { name = Nothing,
+    { jobName = Nothing,
       permissions = PermissionTable M.empty,
       needs = Nothing,
       steps = steps,
@@ -175,12 +175,12 @@ job steps =
     }
 
 instance ToJSON Job where
-  toJSON (Job {name, permissions, steps, needs, jobIf, runsOn, environment, concurrency, outputs, jobEnv}) =
+  toJSON (Job {jobName, permissions, steps, needs, jobIf, runsOn, environment, concurrency, outputs, jobEnv}) =
     object $
       catMaybes
         [ Just ("steps" .= steps),
           ("needs" .=) <$> needs,
-          ("name" .=) <$> name,
+          ("name" .=) <$> jobName,
           ("permissions" .=) <$> maybePermissionTable permissions,
           ("if" .=) <$> jobIf,
           Just (if length runsOn == 1 then "runs-on" .= head runsOn else "runs-on" .= runsOn),
@@ -256,6 +256,7 @@ workflowPushTrigger :: WorkflowPushTrigger
 workflowPushTrigger = WorkflowPushTrigger [] [] [] [] [] []
 
 newtype WorkflowScheduleTrigger = WorkflowScheduleTrigger String
+
 instance ToJSON WorkflowScheduleTrigger where
   toJSON (WorkflowScheduleTrigger cron) = object ["cron" .= cron]
 
@@ -468,12 +469,15 @@ instance IdentifiableElement Step where
 
 class NamedElement a where
   namedAs :: String -> a -> a
+  nameOf :: a -> Maybe String
 
 instance NamedElement Step where
   namedAs newName x = x {stepName = Just newName}
+  nameOf = stepName
 
 instance NamedElement Job where
-  namedAs newName x = x {name = Just newName}
+  namedAs newName x = x {jobName = Just newName}
+  nameOf = jobName
 
 instance NamedElement Workflow where
   namedAs = workflowName

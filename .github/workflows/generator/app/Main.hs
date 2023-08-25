@@ -1,5 +1,10 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MonoLocalBinds #-}
+
 module Main (main) where
 
+import Control.Eff
+import Control.Eff.Reader.Strict (Reader, ask, runReader)
 import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
@@ -8,7 +13,8 @@ import Data.Aeson.Yaml (encode)
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.List (intercalate)
 import Data.Map qualified as M
-import Workflow.GitHub.Actions as GHA
+import Data.Maybe (fromMaybe)
+import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.JobGroupComposer ((~=>))
 import Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials qualified as AWSConfigureCredentials
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
@@ -29,8 +35,8 @@ secretGitHubTokenExpr = GHA.mkExpression "secrets.GITHUB_TOKEN"
 applyModifiers :: (Foldable f) => f (a -> a) -> a -> a
 applyModifiers = flip $ foldl (flip ($))
 
-runOnFailure :: (Conditional c) => c -> c
-runOnFailure = withCondition "failure()"
+runOnFailure :: (GHA.Conditional c) => c -> c
+runOnFailure = GHA.withCondition "failure()"
 
 configureSlackNotification :: GHA.Step
 configureSlackNotification =
@@ -81,15 +87,27 @@ data SlackNotification = ReportSuccess | ReportFailure String
 
 data SlackNotificationProvider = SlackNotificationProvider {buildSuccessReportStep :: GHA.Step, buildFailureReportStep :: String -> GHA.Step}
 
-slackNotifySteps :: SlackNotificationProvider -> SlackNotification -> [GHA.Step]
-slackNotifySteps provider ReportSuccess = [configureSlackNotification, buildSuccessReportStep provider]
-slackNotifySteps provider (ReportFailure jobName) = [configureSlackNotification, buildFailureReportStep provider jobName]
+type SlackNotifyContext = Reader SlackNotificationProvider
 
-checkFormats :: SlackNotificationProvider -> String -> GHA.Job
-checkFormats provider precondition =
-  applyModifiers [GHA.namedAs "Code Formats", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+slackNotifySteps :: (Member SlackNotifyContext r) => SlackNotification -> Eff r [GHA.Step]
+slackNotifySteps ReportSuccess = do
+  provider <- ask
+  pure [configureSlackNotification, buildSuccessReportStep provider]
+slackNotifySteps (ReportFailure jobName) = do
+  provider <- ask
+  pure [configureSlackNotification, buildFailureReportStep provider jobName]
+
+reportJobFailure :: (Member SlackNotifyContext r) => GHA.Job -> Eff r GHA.Job
+reportJobFailure job = do
+  reportSteps <- slackNotifySteps $ ReportFailure $ fromMaybe "<unknown job>" $ GHA.nameOf job
+  pure $ GHA.jobModifySteps (<> fmap runOnFailure reportSteps) job
+
+checkFormats :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkFormats precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Code Formats", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   GHA.namedAs "Running Check - Line Width" $ CodeFormCheckerAction.step CodeFormCheckerAction.ScriptCodeFormCheck,
@@ -97,81 +115,82 @@ checkFormats provider precondition =
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $ CodeFormCheckerAction.step CodeFormCheckerAction.ScriptTrailingNewlineChecker
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-formats"))
-      )
 
-checkBaseLayer :: SlackNotificationProvider -> String -> GHA.Job
-checkBaseLayer provider precondition =
-  applyModifiers [GHA.namedAs "Base Layer", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkBaseLayer :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkBaseLayer precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Base Layer", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
                   GHA.namedAs "Building as Checking" $ GHA.actionStep "./.github/actions/checkbuild-baselayer" M.empty
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-baselayer"))
-      )
 
-checkTools :: SlackNotificationProvider -> String -> GHA.Job
-checkTools provider precondition =
-  applyModifiers [GHA.namedAs "Tools", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkTools :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkTools precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Tools", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
                   CheckBuildSubdirAction.step "./tools"
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-tools"))
-      )
 
-checkModules :: SlackNotificationProvider -> String -> GHA.Job
-checkModules provider precondition =
-  applyModifiers [GHA.namedAs "Modules", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkModules :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkModules precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Modules", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
                   CheckBuildSubdirAction.step "./modules"
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-modules"))
-      )
 
-checkExamples :: SlackNotificationProvider -> String -> GHA.Job
-checkExamples provider precondition =
-  applyModifiers [GHA.namedAs "Examples", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkExamples :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkExamples precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Examples", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
                   CheckBuildSubdirAction.step "./examples"
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-examples"))
-      )
 
 cliBuildStep, archiverBuildStep :: GHA.Step
-cliBuildStep = namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build"
-archiverBuildStep = namedAs "Build archiver" $ GHA.workAt "./tools/archiver" $ GHA.runStep "cargo build"
+cliBuildStep =
+  GHA.namedAs "Build CLI" $
+    GHA.workAt "./tools/cli" $
+      GHA.runStep "cargo build"
+archiverBuildStep =
+  GHA.namedAs "Build archiver" $
+    GHA.workAt "./tools/archiver" $
+      GHA.runStep "cargo build"
 
-setupBuilderEnv :: GHA.Step -> GHA.Step
+setupBuilderEnv :: GHA.StepModifier
 setupBuilderEnv =
   applyModifiers
     [ GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)",
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
     ]
 
-checkCradleWindows :: SlackNotificationProvider -> String -> GHA.Job
-checkCradleWindows provider precondition =
-  applyModifiers [GHA.namedAs "Cradle(Windows)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkCradleWindows :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleWindows precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Cradle(Windows)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
@@ -180,8 +199,6 @@ checkCradleWindows provider precondition =
                   GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-cradle-windows"))
-      )
   where
     integratedTestStep = applyModifiers [GHA.env "VK_SDK_PATH" "", setupBuilderEnv] . GHA.runStep
 
@@ -194,11 +211,12 @@ checkCradleWindows provider precondition =
       \$ErrorActionPreference = \"Continue\"\n\
       \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
 
-checkCradleMacos :: SlackNotificationProvider -> String -> GHA.Job
-checkCradleMacos provider precondition =
-  applyModifiers [GHA.namedAs "Cradle(macOS)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkCradleMacos :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleMacos precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Cradle(macOS)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
@@ -208,8 +226,6 @@ checkCradleMacos provider precondition =
                   integratedTestStep
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-cradle-macos"))
-      )
   where
     integratedTestStep =
       applyModifiers
@@ -233,11 +249,12 @@ aptInstallStep packages =
     GHA.runStep $
       "sub apt-get update && sudo apt-get install -y " <> unwords packages
 
-checkCradleLinux :: SlackNotificationProvider -> String -> GHA.Job
-checkCradleLinux provider precondition =
-  applyModifiers [GHA.namedAs "Cradle(Linux)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkCradleLinux :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleLinux precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Cradle(Linux)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
                   GHA.namedAs "Install extra packages" $ aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
                   checkoutHeadStep,
@@ -249,8 +266,6 @@ checkCradleLinux provider precondition =
                   integratedTestStep
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-cradle-linux"))
-      )
   where
     llvmCacheStepId = "llvm-cache"
     llvmInstallStep =
@@ -268,11 +283,12 @@ checkCradleLinux provider precondition =
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
-checkCradleAndroid :: SlackNotificationProvider -> String -> GHA.Job
-checkCradleAndroid provider precondition =
-  applyModifiers [GHA.namedAs "Cradle(Android)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job
-      ( ( withCondition precondition
+checkCradleAndroid :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleAndroid precondition =
+  reportJobFailure $
+    applyModifiers [GHA.namedAs "Cradle(Android)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+      GHA.job
+        ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
@@ -288,8 +304,6 @@ checkCradleAndroid provider precondition =
                   integratedTestStep
                 ]
         )
-          <> (runOnFailure <$> slackNotifySteps provider (ReportFailure "check-cradle-android"))
-      )
   where
     integratedTestStep =
       applyModifiers
@@ -300,11 +314,15 @@ checkCradleAndroid provider precondition =
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
-reportSuccessJob :: SlackNotificationProvider -> GHA.Job
-reportSuccessJob provider =
-  applyModifiers [GHA.namedAs "Report as Success", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
-    GHA.job $
-      [checkoutHeadStep, checkoutStep] <> slackNotifySteps provider ReportSuccess
+reportSuccessJob :: (Member SlackNotifyContext r) => Eff r GHA.Job
+reportSuccessJob = do
+  reportSteps <- slackNotifySteps ReportSuccess
+  pure
+    $ applyModifiers
+      [ GHA.namedAs "Report as Success",
+        GHA.permit GHA.IDTokenPermission GHA.PermWrite
+      ]
+    $ GHA.job ([checkoutHeadStep, checkoutStep] <> reportSteps)
 
 preconditionOutputHasChanges, preconditionOutputHasWorkflowChanges :: String
 preconditionOutputHasChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_code_changes" <> " == 1"
@@ -400,63 +418,63 @@ preconditions =
     apiRequest = "curl -s -H \"Authorization: Bearer " <> secretGitHubTokenExpr <> "\" -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
 
 integrityTest :: GHA.Workflow
-integrityTest =
-  GHA.buildWorkflow
-    [ GHA.namedAs "Integrity Check",
-      GHA.workflowConcurrency $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
-      GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
-    ]
-    $ GHA.onPullRequest prTrigger
-  where
-    prTrigger = GHA.filterType "opened" $ GHA.filterType "synchronize" GHA.workflowPullRequestTrigger
-    checkJobs =
-      [ checkFormats',
-        checkBaseLayer'
-          ~=> [checkTools', checkModules' ~=> checkExamples']
-          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
-      ]
+integrityTest = run $ runReader slackNotifyProvider $ do
+  let preconditions' = M.singleton "preconditions" preconditions
+  checkFormats' <- M.singleton "check-formats" <$> checkFormats preconditionOutputHasChanges
+  checkBaseLayer' <- M.singleton "check-baselayer" <$> checkBaseLayer preconditionOutputHasChanges
+  checkTools' <- M.singleton "check-tools" <$> checkTools preconditionOutputHasChanges
+  checkModules' <- M.singleton "check-modules" <$> checkModules preconditionOutputHasChanges
+  checkExamples' <- M.singleton "check-examples" <$> checkExamples preconditionOutputHasChanges
+  checkCradleWindows' <- M.singleton "check-cradle-windows" <$> checkCradleWindows preconditionOutputHasChanges
+  checkCradleMacos' <- M.singleton "check-cradle-macos" <$> checkCradleMacos preconditionOutputHasChanges
+  checkCradleLinux' <- M.singleton "check-cradle-linux" <$> checkCradleLinux preconditionOutputHasChanges
+  checkCradleAndroid' <- M.singleton "check-cradle-android" <$> checkCradleAndroid preconditionOutputHasChanges
+  reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 
-    preconditions' = M.singleton "preconditions" preconditions
-    checkFormats' = M.singleton "check-formats" $ checkFormats slackNotifyProvider preconditionOutputHasChanges
-    checkBaseLayer' = M.singleton "check-baselayer" $ checkBaseLayer slackNotifyProvider preconditionOutputHasChanges
-    checkTools' = M.singleton "check-tools" $ checkTools slackNotifyProvider preconditionOutputHasChanges
-    checkModules' = M.singleton "check-modules" $ checkModules slackNotifyProvider preconditionOutputHasChanges
-    checkExamples' = M.singleton "check-examples" $ checkExamples slackNotifyProvider preconditionOutputHasChanges
-    checkCradleWindows' = M.singleton "check-cradle-windows" $ checkCradleWindows slackNotifyProvider preconditionOutputHasChanges
-    checkCradleMacos' = M.singleton "check-cradle-macos" $ checkCradleMacos slackNotifyProvider preconditionOutputHasChanges
-    checkCradleLinux' = M.singleton "check-cradle-linux" $ checkCradleLinux slackNotifyProvider preconditionOutputHasChanges
-    checkCradleAndroid' = M.singleton "check-cradle-android" $ checkCradleAndroid slackNotifyProvider preconditionOutputHasChanges
-    reportSuccessJob' = M.singleton "report-success" $ reportSuccessJob slackNotifyProvider
+  let prTrigger = GHA.filterType "opened" $ GHA.filterType "synchronize" GHA.workflowPullRequestTrigger
+      checkJobs =
+        [ checkFormats',
+          checkBaseLayer'
+            ~=> [checkTools', checkModules' ~=> checkExamples']
+            ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
+        ]
+  pure
+    $ GHA.buildWorkflow
+      [ GHA.namedAs "Integrity Check",
+        GHA.workflowConcurrency $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
+        GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
+      ]
+    $ GHA.onPullRequest prTrigger
 
 weeklyIntegrityTest :: GHA.Workflow
-weeklyIntegrityTest =
-  GHA.buildWorkflow
-    [ GHA.namedAs "Integrity Check (Weekly)",
-      GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
-    ]
-    $ GHA.scheduled "0 12 * * wed"
-  where
-    checkJobs =
-      [ checkFormats',
-        checkBaseLayer'
-          ~=> [checkTools', checkModules' ~=> checkExamples']
-          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
-      ]
+weeklyIntegrityTest = run $ runReader weeklySlackNotifyProvider $ do
+  let preconditions' =
+        M.singleton "preconditions" $
+          applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
+            GHA.job [preconditionRecordBeginTimeStamp]
+  checkFormats' <- M.singleton "check-formats" <$> checkFormats "true"
+  checkBaseLayer' <- M.singleton "check-baselayer" <$> checkBaseLayer "true"
+  checkTools' <- M.singleton "check-tools" <$> checkTools "true"
+  checkModules' <- M.singleton "check-modules" <$> checkModules "true"
+  checkExamples' <- M.singleton "check-examples" <$> checkExamples "true"
+  checkCradleWindows' <- M.singleton "check-cradle-windows" <$> checkCradleWindows "true"
+  checkCradleMacos' <- M.singleton "check-cradle-macos" <$> checkCradleMacos "true"
+  checkCradleLinux' <- M.singleton "check-cradle-linux" <$> checkCradleLinux "true"
+  checkCradleAndroid' <- M.singleton "check-cradle-android" <$> checkCradleAndroid "true"
+  reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 
-    preconditions' =
-      M.singleton "preconditions" $
-        applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
-          GHA.job [preconditionRecordBeginTimeStamp]
-    checkFormats' = M.singleton "check-formats" $ checkFormats weeklySlackNotifyProvider "true"
-    checkBaseLayer' = M.singleton "check-baselayer" $ checkBaseLayer weeklySlackNotifyProvider "true"
-    checkTools' = M.singleton "check-tools" $ checkTools weeklySlackNotifyProvider "true"
-    checkModules' = M.singleton "check-modules" $ checkModules weeklySlackNotifyProvider "true"
-    checkExamples' = M.singleton "check-examples" $ checkExamples weeklySlackNotifyProvider "true"
-    checkCradleWindows' = M.singleton "check-cradle-windows" $ checkCradleWindows weeklySlackNotifyProvider "true"
-    checkCradleMacos' = M.singleton "check-cradle-macos" $ checkCradleMacos weeklySlackNotifyProvider "true"
-    checkCradleLinux' = M.singleton "check-cradle-linux" $ checkCradleLinux weeklySlackNotifyProvider "true"
-    checkCradleAndroid' = M.singleton "check-cradle-android" $ checkCradleAndroid weeklySlackNotifyProvider "true"
-    reportSuccessJob' = M.singleton "report-success" $ reportSuccessJob weeklySlackNotifyProvider
+  let checkJobs =
+        [ checkFormats',
+          checkBaseLayer'
+            ~=> [checkTools', checkModules' ~=> checkExamples']
+            ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
+        ]
+  pure
+    $ GHA.buildWorkflow
+      [ GHA.namedAs "Integrity Check (Weekly)",
+        GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
+      ]
+    $ GHA.scheduled "0 12 * * wed"
 
 main :: IO ()
 main = do

@@ -34,7 +34,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-baselayer
+          failure-step: Base Layer
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -101,7 +101,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-android
+          failure-step: "Cradle(Android)"
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -171,7 +171,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-linux
+          failure-step: "Cradle(Linux)"
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -231,7 +231,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-macos
+          failure-step: "Cradle(macOS)"
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -289,7 +289,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-cradle-windows
+          failure-step: "Cradle(Windows)"
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -332,7 +332,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-examples
+          failure-step: Examples
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -377,7 +377,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-formats
+          failure-step: Code Formats
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -419,7 +419,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-modules
+          failure-step: Modules
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -461,7 +461,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure-step: check-tools
+          failure-step: Tools
           mode: branch
           report_name: Weekly Check
           status: failure

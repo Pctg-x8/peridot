@@ -25,6 +25,7 @@ dependencies:
   - aeson-yaml
   - bytestring
   - containers
+  - extensible-effects
 
 ghc-options:
   - -Wall
