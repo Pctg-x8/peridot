@@ -4,7 +4,7 @@
 module Main (main) where
 
 import Control.Eff
-import Control.Eff.Reader.Strict (Reader, ask, runReader)
+import Control.Eff.Reader.Strict (Reader, reader, runReader)
 import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
@@ -90,22 +90,22 @@ data SlackNotificationProvider = SlackNotificationProvider {buildSuccessReportSt
 type SlackNotifyContext = Reader SlackNotificationProvider
 
 slackNotifySteps :: (Member SlackNotifyContext r) => SlackNotification -> Eff r [GHA.Step]
-slackNotifySteps ReportSuccess = do
-  provider <- ask
-  pure [configureSlackNotification, buildSuccessReportStep provider]
-slackNotifySteps (ReportFailure jobName) = do
-  provider <- ask
-  pure [configureSlackNotification, buildFailureReportStep provider jobName]
+slackNotifySteps ReportSuccess = reader $ \provider ->
+  [configureSlackNotification, buildSuccessReportStep provider]
+slackNotifySteps (ReportFailure jobName) = reader $ \provider ->
+  [configureSlackNotification, buildFailureReportStep provider jobName]
 
 reportJobFailure :: (Member SlackNotifyContext r) => GHA.Job -> Eff r GHA.Job
 reportJobFailure job = do
   reportSteps <- slackNotifySteps $ ReportFailure $ fromMaybe "<unknown job>" $ GHA.nameOf job
-  pure $ GHA.jobModifySteps (<> fmap runOnFailure reportSteps) job
+  pure $
+    GHA.grantWritable GHA.IDTokenPermission $
+      GHA.jobModifySteps (<> fmap runOnFailure reportSteps) job
 
 checkFormats :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkFormats precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Code Formats", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Code Formats"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -119,7 +119,7 @@ checkFormats precondition =
 checkBaseLayer :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkBaseLayer precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Base Layer", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Base Layer"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -132,7 +132,7 @@ checkBaseLayer precondition =
 checkTools :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkTools precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Tools", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Tools"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -145,7 +145,7 @@ checkTools precondition =
 checkModules :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkModules precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Modules", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Modules"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -158,7 +158,7 @@ checkModules precondition =
 checkExamples :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkExamples precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Examples", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Examples"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -178,8 +178,8 @@ archiverBuildStep =
     GHA.workAt "./tools/archiver" $
       GHA.runStep "cargo build"
 
-setupBuilderEnv :: GHA.StepModifier
-setupBuilderEnv =
+withBuilderEnv :: GHA.StepModifier
+withBuilderEnv =
   applyModifiers
     [ GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)",
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
@@ -188,7 +188,7 @@ setupBuilderEnv =
 checkCradleWindows :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleWindows precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(Windows)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Cradle(Windows)"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -200,7 +200,7 @@ checkCradleWindows precondition =
                 ]
         )
   where
-    integratedTestStep = applyModifiers [GHA.env "VK_SDK_PATH" "", setupBuilderEnv] . GHA.runStep
+    integratedTestStep = applyModifiers [GHA.env "VK_SDK_PATH" "", withBuilderEnv] . GHA.runStep
 
     integratedTestNormalScript =
       "\
@@ -214,7 +214,7 @@ checkCradleWindows precondition =
 checkCradleMacos :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleMacos precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(macOS)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Cradle(macOS)"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -232,7 +232,7 @@ checkCradleMacos precondition =
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
           GHA.env "VULKAN_SDK" "/Users",
-          setupBuilderEnv,
+          withBuilderEnv,
           GHA.env "PERIDOT_CLI_ARCHIVER_PATH" $ GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
@@ -252,7 +252,7 @@ aptInstallStep packages =
 checkCradleLinux :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleLinux precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(Linux)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Cradle(Linux)"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
@@ -279,14 +279,14 @@ checkCradleLinux precondition =
       applyModifiers
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
-          setupBuilderEnv
+          withBuilderEnv
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleAndroid :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleAndroid precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(Android)", GHA.permit GHA.IDTokenPermission GHA.PermWrite] $
+    applyModifiers [GHA.namedAs "Cradle(Android)"] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -309,7 +309,7 @@ checkCradleAndroid precondition =
       applyModifiers
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
-          setupBuilderEnv,
+          withBuilderEnv,
           GHA.env "NDK_PLATFORM_TARGET" "28"
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
@@ -317,12 +317,9 @@ checkCradleAndroid precondition =
 reportSuccessJob :: (Member SlackNotifyContext r) => Eff r GHA.Job
 reportSuccessJob = do
   reportSteps <- slackNotifySteps ReportSuccess
-  pure
-    $ applyModifiers
-      [ GHA.namedAs "Report as Success",
-        GHA.permit GHA.IDTokenPermission GHA.PermWrite
-      ]
-    $ GHA.job ([checkoutHeadStep, checkoutStep] <> reportSteps)
+  pure $
+    applyModifiers [GHA.namedAs "Report as Success", GHA.grantWritable GHA.IDTokenPermission] $
+      GHA.job ([checkoutStep] <> reportSteps)
 
 preconditionOutputHasChanges, preconditionOutputHasWorkflowChanges :: String
 preconditionOutputHasChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_code_changes" <> " == 1"

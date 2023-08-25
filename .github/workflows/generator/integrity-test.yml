@@ -562,10 +562,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
       - uses: "actions/checkout@v3"
       - name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v1"

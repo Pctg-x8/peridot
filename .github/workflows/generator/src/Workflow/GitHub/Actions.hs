@@ -444,6 +444,11 @@ class PermissionControlledElement e where
   permit :: PermissionKey -> Permission -> e -> e
   grantAll :: Permission -> e -> e
 
+  grantWritable :: PermissionKey -> e -> e
+  grantWritable = flip permit PermWrite
+  grantReadable :: PermissionKey -> e -> e
+  grantReadable = flip permit PermRead
+
 instance PermissionControlledElement Job where
   permit key value self@(Job {permissions}) = self {permissions = PermissionTable $ M.insert key value $ permissionTable permissions}
   grantAll perm self = self {permissions = GrantAll perm}
@@ -481,6 +486,7 @@ instance NamedElement Job where
 
 instance NamedElement Workflow where
   namedAs = workflowName
+  nameOf (Workflow n _ _ _ _ _ _) = n
 
 class HasEnvironmentVariables a where
   env :: String -> String -> a -> a
