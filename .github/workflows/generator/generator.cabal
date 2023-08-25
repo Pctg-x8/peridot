@@ -26,6 +26,7 @@ source-repository head
 library
   exposed-modules:
       Workflow.GitHub.Actions
+      Workflow.GitHub.Actions.JobGroupComposer
       Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
       Workflow.GitHub.Actions.Predefined.Checkout
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain

@@ -22,6 +22,7 @@ module Workflow.GitHub.Actions
     Workflow (..),
     WorkflowTrigger (..),
     onPullRequest,
+    scheduled,
     PermissionTable (..),
     PermissionKey (..),
     Permission (..),
@@ -195,21 +196,25 @@ jobModifySteps f self@(Job {steps}) = self {steps = f steps}
 jobOutput :: String -> String -> Job -> Job
 jobOutput k v self = self {outputs = M.insert k v $ outputs self}
 
-data WorkflowTrigger = OnEvent String | OnEvents [String] | OnEventsDetailed (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPushTrigger)
+data WorkflowTrigger = OnEvent String | OnEvents [String] | OnEventsDetailed (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPushTrigger) (Maybe WorkflowScheduleTrigger)
 
 instance ToJSON WorkflowTrigger where
   toJSON (OnEvent event) = toJSON event
   toJSON (OnEvents events) = toJSON events
-  toJSON (OnEventsDetailed onPullRequest' onPullRequestTarget onPush) =
+  toJSON (OnEventsDetailed onPullRequest' onPullRequestTarget onPush onSchedule) =
     object $
       catMaybes
         [ ("pull_request" .=) <$> onPullRequest',
           ("pull_request_target" .=) <$> onPullRequestTarget,
-          ("push" .=) <$> onPush
+          ("push" .=) <$> onPush,
+          ("schedule" .=) <$> onSchedule
         ]
 
 onPullRequest :: WorkflowPullRequestTrigger -> WorkflowTrigger
-onPullRequest details = OnEventsDetailed (Just details) Nothing Nothing
+onPullRequest details = OnEventsDetailed (Just details) Nothing Nothing Nothing
+
+scheduled :: String -> WorkflowTrigger
+scheduled cron = OnEventsDetailed Nothing Nothing Nothing $ Just $ WorkflowScheduleTrigger cron
 
 data WorkflowPullRequestTrigger = WorkflowPullRequestTrigger
   { prTriggerBranches :: [String],
@@ -249,6 +254,10 @@ instance ToJSON WorkflowPushTrigger where
 
 workflowPushTrigger :: WorkflowPushTrigger
 workflowPushTrigger = WorkflowPushTrigger [] [] [] [] [] []
+
+newtype WorkflowScheduleTrigger = WorkflowScheduleTrigger String
+instance ToJSON WorkflowScheduleTrigger where
+  toJSON (WorkflowScheduleTrigger cron) = object ["cron" .= cron]
 
 class PathFilteredTrigger t where
   filterPath :: String -> t -> t

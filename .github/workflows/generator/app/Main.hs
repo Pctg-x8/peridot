@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Main (main) where
 
 import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
@@ -9,10 +7,9 @@ import Data.Aeson (ToJSON (toJSON))
 import Data.Aeson.Yaml (encode)
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.List (intercalate)
-import Data.Map (Map)
 import Data.Map qualified as M
-import Data.Maybe (fromMaybe)
 import Workflow.GitHub.Actions as GHA
+import Workflow.GitHub.Actions.JobGroupComposer ((~=>))
 import Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials qualified as AWSConfigureCredentials
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
@@ -28,9 +25,6 @@ repositoryNameExpr = GHA.mkExpression "github.event.repository.name"
 
 secretGitHubTokenExpr :: String
 secretGitHubTokenExpr = GHA.mkExpression "secrets.GITHUB_TOKEN"
-
-depends :: [String] -> GHA.Job -> GHA.Job
-depends deps x = x {GHA.needs = Just (fromMaybe [] (GHA.needs x) <> deps)}
 
 applyModifiers :: (Foldable f) => f (a -> a) -> a -> a
 applyModifiers = flip $ foldl (flip ($))
@@ -336,6 +330,26 @@ slackNotifyProvider = SlackNotificationProvider succ' fail'
         PostCINotificationsAction.step $
           mkParams PostCINotificationsAction.SuccessStatus
 
+weeklySlackNotifyProvider :: SlackNotificationProvider
+weeklySlackNotifyProvider = SlackNotificationProvider succ' fail'
+  where
+    mkParams status =
+      PostCINotificationsAction.Params
+        { PostCINotificationsAction.status = status,
+          PostCINotificationsAction.beginTime = GHA.mkNeedsOutputExpression "preconditions" "begintime",
+          PostCINotificationsAction.reportName = "Weekly Check",
+          PostCINotificationsAction.mode = PostCINotificationsAction.BranchMode
+        }
+    fail' jobName =
+      GHA.namedAs "Notify as Failure" $
+        PostCINotificationsAction.step $
+          mkParams $
+            PostCINotificationsAction.FailureStatus jobName
+    succ' =
+      GHA.namedAs "Notify as Success" $
+        PostCINotificationsAction.step $
+          mkParams PostCINotificationsAction.SuccessStatus
+
 preconditions :: GHA.Job
 preconditions =
   applyModifiers
@@ -385,19 +399,6 @@ preconditions =
     queryString = "query($cursor: String) { repository(owner: \"" <> repositoryOwnerLoginExpr <> "\", name: \"" <> repositoryNameExpr <> "\") { pullRequest(number: " <> pullRequestNumberExpr <> ") { files(first: 50, after: $cursor) { nodes { path } pageInfo { hasNextPage endCursor } } } } }"
     apiRequest = "curl -s -H \"Authorization: Bearer " <> secretGitHubTokenExpr <> "\" -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
 
-requireJobsBefore :: Map String Job -> Map String Job -> Map String Job
-requireJobsBefore preJobs afterJobs = (depends requiredJobNames <$> afterJobs) <> preJobs
-  where
-    requiredJobNames = M.keys preJobs
-
-(~=>) :: Map String Job -> Map String Job -> Map String Job
-(~=>) = requireJobsBefore
-
-concurrent :: [Map String Job] -> Map String Job
-concurrent = mconcat
-
-infixl 5 ~=>
-
 integrityTest :: GHA.Workflow
 integrityTest =
   GHA.buildWorkflow
@@ -409,12 +410,11 @@ integrityTest =
   where
     prTrigger = GHA.filterType "opened" $ GHA.filterType "synchronize" GHA.workflowPullRequestTrigger
     checkJobs =
-      concurrent
-        [ checkFormats',
-          checkBaseLayer'
-            ~=> concurrent [checkTools', checkModules' ~=> checkExamples']
-            ~=> concurrent [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
-        ]
+      [ checkFormats',
+        checkBaseLayer'
+          ~=> [checkTools', checkModules' ~=> checkExamples']
+          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
+      ]
 
     preconditions' = M.singleton "preconditions" preconditions
     checkFormats' = M.singleton "check-formats" $ checkFormats slackNotifyProvider preconditionOutputHasChanges
@@ -428,6 +428,37 @@ integrityTest =
     checkCradleAndroid' = M.singleton "check-cradle-android" $ checkCradleAndroid slackNotifyProvider preconditionOutputHasChanges
     reportSuccessJob' = M.singleton "report-success" $ reportSuccessJob slackNotifyProvider
 
+weeklyIntegrityTest :: GHA.Workflow
+weeklyIntegrityTest =
+  GHA.buildWorkflow
+    [ GHA.namedAs "Integrity Check (Weekly)",
+      GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
+    ]
+    $ GHA.scheduled "0 12 * * wed"
+  where
+    checkJobs =
+      [ checkFormats',
+        checkBaseLayer'
+          ~=> [checkTools', checkModules' ~=> checkExamples']
+          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
+      ]
+
+    preconditions' =
+      M.singleton "preconditions" $
+        applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
+          GHA.job [preconditionRecordBeginTimeStamp]
+    checkFormats' = M.singleton "check-formats" $ checkFormats weeklySlackNotifyProvider "true"
+    checkBaseLayer' = M.singleton "check-baselayer" $ checkBaseLayer weeklySlackNotifyProvider "true"
+    checkTools' = M.singleton "check-tools" $ checkTools weeklySlackNotifyProvider "true"
+    checkModules' = M.singleton "check-modules" $ checkModules weeklySlackNotifyProvider "true"
+    checkExamples' = M.singleton "check-examples" $ checkExamples weeklySlackNotifyProvider "true"
+    checkCradleWindows' = M.singleton "check-cradle-windows" $ checkCradleWindows weeklySlackNotifyProvider "true"
+    checkCradleMacos' = M.singleton "check-cradle-macos" $ checkCradleMacos weeklySlackNotifyProvider "true"
+    checkCradleLinux' = M.singleton "check-cradle-linux" $ checkCradleLinux weeklySlackNotifyProvider "true"
+    checkCradleAndroid' = M.singleton "check-cradle-android" $ checkCradleAndroid weeklySlackNotifyProvider "true"
+    reportSuccessJob' = M.singleton "report-success" $ reportSuccessJob weeklySlackNotifyProvider
+
 main :: IO ()
 main = do
   LBS8.writeFile "./integrity-test.yml" $ encode integrityTest
+  LBS8.writeFile "./weekly-integrity-test.yml" $ encode weeklyIntegrityTest

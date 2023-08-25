@@ -1,0 +1,514 @@
+jobs:
+  check-baselayer:
+    name: Base Layer
+    needs:
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Building as Checking
+        uses: "./.github/actions/checkbuild-baselayer"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-baselayer
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-cradle-android:
+    name: "Cradle(Android)"
+    needs:
+      - check-baselayer
+      - check-examples
+      - check-modules
+      - check-tools
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Setup Rust for Android
+        uses: "actions-rs/toolchain@v1"
+        with:
+          target: aarch64-linux-android
+          toolchain: stable
+      - if: 'true'
+        name: Setup Java
+        uses: "actions/setup-java@v3"
+        with:
+          distribution: adopt
+          java-version: '17'
+      - if: 'true'
+        name: install cargo-ndk
+        run: cargo install cargo-ndk
+      - if: 'true'
+        name: Build CLI
+        run: cargo build
+        working-directory: "./tools/cli"
+      - env:
+          NDK_PLATFORM_TARGET: '28'
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+          PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+        if: 'true'
+        name: cargo check
+        run: "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        shell: bash
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-cradle-android
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-cradle-linux:
+    name: "Cradle(Linux)"
+    needs:
+      - check-baselayer
+      - check-examples
+      - check-modules
+      - check-tools
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: Add External PPA
+        run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
+      - if: 'true'
+        name: Install extra packages
+        run: "sub apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - id: llvm-cache
+        if: 'true'
+        name: Initialize LLVM Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-llvm-11"
+          path: "./llvm"
+      - if: 'true'
+        name: Install LLVM
+        uses: "KyleMayes/install-llvm-action@v1"
+        with:
+          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
+          version: '11'
+      - if: 'true'
+        name: Build CLI
+        run: cargo build
+        working-directory: "./tools/cli"
+      - env:
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+          PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+        if: 'true'
+        name: cargo check
+        run: "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        shell: bash
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-cradle-linux
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-cradle-macos:
+    name: "Cradle(macOS)"
+    needs:
+      - check-baselayer
+      - check-examples
+      - check-modules
+      - check-tools
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Build CLI
+        run: cargo build
+        working-directory: "./tools/cli"
+      - if: 'true'
+        name: Build archiver
+        run: cargo build
+        working-directory: "./tools/archiver"
+      - if: 'true'
+        name: Install requirements
+        run: brew install coreutils
+      - env:
+          PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+          PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+          VULKAN_SDK: /Users
+        if: 'true'
+        name: cargo check
+        run: "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        shell: bash
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-cradle-macos
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-cradle-windows:
+    name: "Cradle(Windows)"
+    needs:
+      - check-baselayer
+      - check-examples
+      - check-modules
+      - check-tools
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Build CLI
+        run: cargo build
+        working-directory: "./tools/cli"
+      - env:
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+          PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+          VK_SDK_PATH: ''
+        if: 'true'
+        name: cargo check
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      - env:
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
+          PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
+          VK_SDK_PATH: ''
+        if: 'true'
+        name: cargo check for transparent-back
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-cradle-windows
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-examples:
+    name: Examples
+    needs:
+      - check-modules
+      - check-baselayer
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Building as Checking
+        uses: "./.github/actions/checkbuild-subdir"
+        with:
+          path: "./examples"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-examples
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-formats:
+    name: Code Formats
+    needs:
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - env:
+          RUN_SCRIPT: codeform_check
+        if: 'true'
+        name: Running Check - Line Width
+        uses: "./.github/actions/codeform-checker"
+      - env:
+          RUN_SCRIPT: vulnerabilities_elliminator
+        if: 'true'
+        name: Running Check - Debugging Weaks
+        uses: "./.github/actions/codeform-checker"
+      - env:
+          RUN_SCRIPT: trailing_newline_checker
+        if: 'true'
+        name: Running Check - Trailing Newline for Source Code Files
+        uses: "./.github/actions/codeform-checker"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-formats
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-modules:
+    name: Modules
+    needs:
+      - check-baselayer
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Building as Checking
+        uses: "./.github/actions/checkbuild-subdir"
+        with:
+          path: "./modules"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-modules
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  check-tools:
+    name: Tools
+    needs:
+      - check-baselayer
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: 'true'
+        name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: 'true'
+        uses: "actions/checkout@v3"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v2"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Building as Checking
+        uses: "./.github/actions/checkbuild-subdir"
+        with:
+          path: "./tools"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure-step: check-tools
+          mode: branch
+          report_name: Weekly Check
+          status: failure
+  preconditions:
+    name: Preconditions
+    outputs:
+      begintime: "${{ steps.begintime.outputs.begintime }}"
+    runs-on: ubuntu-latest
+    steps:
+      - id: begintime
+        name: Getting begintime
+        run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
+  report-success:
+    name: Report as Success
+    needs:
+      - check-baselayer
+      - check-cradle-android
+      - check-cradle-linux
+      - check-cradle-macos
+      - check-cradle-windows
+      - check-examples
+      - check-formats
+      - check-modules
+      - check-tools
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checking out (HEAD commit)"
+        uses: "actions/checkout@v3"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - uses: "actions/checkout@v3"
+      - name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v1"
+        with:
+          awsRegion: ap-northeast-1
+          roleToAssume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - name: Notify as Success
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          mode: branch
+          report_name: Weekly Check
+          status: success
+name: "Integrity Check (Weekly)"
+on:
+  schedule:
+    cron: "0 12 * * wed"
