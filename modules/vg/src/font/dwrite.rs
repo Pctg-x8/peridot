@@ -35,7 +35,7 @@ impl Font for DirectWriteFont {
         let mut fm = core::mem::MaybeUninit::uninit();
         unsafe {
             self.0.GetMetrics(fm.as_mut_ptr());
-            fm.assume_init_ref().ascent as _
+            fm.assume_init_ref().ascent as f32 * self.scale_value()
         }
     }
     fn units_per_em(&self) -> u32 {
@@ -54,7 +54,7 @@ impl Font for DirectWriteFont {
         unsafe {
             self.0
                 .GetDesignGlyphMetrics(glyph, 1, gm.as_mut_ptr(), false)?;
-            Ok(gm.assume_init_ref().advanceWidth as _)
+            Ok(gm.assume_init_ref().advanceWidth as f32 * self.scale_value())
         }
     }
     fn bounds(&self, glyph: &Self::GlyphID) -> Result<Rect<f32>, GlyphLoadingError> {
