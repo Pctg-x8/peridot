@@ -4,8 +4,11 @@ import Data.Aeson.Yaml (encode)
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import IntegrityTest.PullRequestTriggered
 import IntegrityTest.Weekly
+import System.Environment (getArgs)
+import System.FilePath ((</>))
 
 main :: IO ()
 main = do
-  LBS8.writeFile "./integrity-test.yml" $ encode integrityTest
-  LBS8.writeFile "./weekly-integrity-test.yml" $ encode weeklyIntegrityTest
+  dest <- head <$> getArgs
+  LBS8.writeFile (dest </> "integrity-test.yml") $ encode integrityTest
+  LBS8.writeFile (dest </> "weekly-integrity-test.yml") $ encode weeklyIntegrityTest

@@ -26,6 +26,7 @@ dependencies:
   - bytestring
   - containers
   - extensible-effects
+  - filepath
 
 ghc-options:
   - -Wall
