@@ -2,6 +2,7 @@ module IntegrityTest.PullRequestTriggered (integrityTest) where
 
 import Control.Eff (run)
 import Control.Eff.Reader.Strict (runReader)
+import Control.Monad (join)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
 import Data.Map qualified as M
 import IntegrityTest.Shared
@@ -41,6 +42,12 @@ slackNotifyProvider = SlackNotificationProvider succ' fail'
         PostCINotificationsAction.step $
           mkParams PostCINotificationsAction.SuccessStatus
 
+escapeDoubleQuote :: String -> String
+escapeDoubleQuote org = org >>= repr
+  where
+    repr '"' = "\\\""
+    repr x = pure x
+
 preconditions :: GHA.Job
 preconditions =
   applyModifiers
@@ -58,7 +65,7 @@ preconditions =
           \HAS_CODE_CHANGES=0\n\
           \HAS_WORKFLOW_CHANGES=0\n\
           \QUERY_STRING='"
-            <> queryString
+            <> escapeDoubleQuote queryString
             <> "'\n\
                \QUERY_CURSOR='null'\n\
                \while :; do\n\

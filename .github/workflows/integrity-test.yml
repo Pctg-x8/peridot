@@ -529,7 +529,7 @@ jobs:
         run: |
           HAS_CODE_CHANGES=0
           HAS_WORKFLOW_CHANGES=0
-          QUERY_STRING='query($cursor: String) { repository(owner: "${{ github.event.repository.owner.login }}", name: "${{ github.event.repository.name }}") { pullRequest(number: ${{ github.event.number }}) { files(first: 50, after: $cursor) { nodes { path } pageInfo { hasNextPage endCursor } } } } }'
+          QUERY_STRING='query($cursor: String) { repository(owner: \"${{ github.event.repository.owner.login }}\", name: \"${{ github.event.repository.name }}\") { pullRequest(number: ${{ github.event.number }}) { files(first: 50, after: $cursor) { nodes { path } pageInfo { hasNextPage endCursor } } } } }'
           QUERY_CURSOR='null'
           while :; do
             POSTDATA="{ \"query\": \"$QUERY_STRING\", \"variables\": { \"cursor\": $QUERY_CURSOR }\" } }"
