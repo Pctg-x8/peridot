@@ -28,6 +28,7 @@ library
       Workflow.GitHub.Actions
       Workflow.GitHub.Actions.JobGroupComposer
       Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
+      Workflow.GitHub.Actions.Predefined.Cache
       Workflow.GitHub.Actions.Predefined.Checkout
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain
       Workflow.GitHub.Actions.Predefined.SetupJava
@@ -39,6 +40,8 @@ library
       ImportQualifiedPost
       TupleSections
       FlexibleInstances
+      FlexibleContexts
+      MonoLocalBinds
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       aeson
@@ -55,6 +58,11 @@ executable generator-exe
       CustomAction.CheckBuildSubdirectory
       CustomAction.CodeFormChecker
       CustomAction.PostCINotifications
+      IntegrityTest.PullRequestTriggered
+      IntegrityTest.Shared
+      IntegrityTest.Weekly
+      SlackNotification
+      Utils
       Paths_generator
   hs-source-dirs:
       app
@@ -62,6 +70,8 @@ executable generator-exe
       ImportQualifiedPost
       TupleSections
       FlexibleInstances
+      FlexibleContexts
+      MonoLocalBinds
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
@@ -84,6 +94,8 @@ test-suite generator-test
       ImportQualifiedPost
       TupleSections
       FlexibleInstances
+      FlexibleContexts
+      MonoLocalBinds
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson

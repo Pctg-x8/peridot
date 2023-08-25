@@ -21,6 +21,7 @@ module Workflow.GitHub.Actions
     jobOutput,
     Workflow (..),
     WorkflowTrigger (..),
+    WorkflowPullRequestTrigger (..),
     onPullRequest,
     scheduled,
     PermissionTable (..),
@@ -236,7 +237,14 @@ instance ToJSON WorkflowPullRequestTrigger where
         ]
 
 workflowPullRequestTrigger :: WorkflowPullRequestTrigger
-workflowPullRequestTrigger = WorkflowPullRequestTrigger [] [] [] [] []
+workflowPullRequestTrigger =
+  WorkflowPullRequestTrigger
+    { prTriggerBranches = [],
+      prTriggerBranchesIgnore = [],
+      prTriggerPaths = [],
+      prTriggerPathsIgnore = [],
+      prTriggerTypes = []
+    }
 
 data WorkflowPushTrigger = WorkflowPushTrigger [String] [String] [String] [String] [String] [String]
 
