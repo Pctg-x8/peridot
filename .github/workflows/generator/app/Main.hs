@@ -16,6 +16,7 @@ import Workflow.GitHub.Actions as GHA
 import Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials qualified as AWSConfigureCredentials
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
+import Workflow.GitHub.Actions.Predefined.SetupJava qualified as SetupJavaAction
 
 pullRequestHeadHashExpr, pullRequestNumberExpr :: String
 pullRequestHeadHashExpr = GHA.mkExpression "github.event.pull_request.head.sha"
@@ -39,12 +40,12 @@ runOnFailure = withCondition "failure()"
 
 configureSlackNotification :: GHA.Step
 configureSlackNotification =
-  namedAs "Configure for Slack Notification" $
-    AWSConfigureCredentials.step $
-      AWSConfigureCredentials.defaultParams
-        { AWSConfigureCredentials.awsRegion = Just "ap-northeast-1",
-          AWSConfigureCredentials.roleToAssume = Just "arn:aws:iam::208140986057:role/GHALambdaInvoker"
-        }
+  applyModifiers
+    [ GHA.namedAs "Configure for Slack Notification",
+      AWSConfigureCredentials.awsRegion "ap-northeast-1",
+      AWSConfigureCredentials.roleToAssume "arn:aws:iam::208140986057:role/GHALambdaInvoker"
+    ]
+    AWSConfigureCredentials.step
 
 preconditionRecordBeginTimeStamp :: GHA.Step
 preconditionRecordBeginTimeStamp =
@@ -55,13 +56,19 @@ preconditionBeginTimestampOutputDef :: GHA.Job -> GHA.Job
 preconditionBeginTimestampOutputDef = GHA.jobOutput "begintime" $ GHA.mkRefStepOutputExpression "begintime" "begintime"
 
 checkoutStep, checkoutHeadStep :: GHA.Step
-checkoutStep = Checkout.step Checkout.defaultParams
-checkoutHeadStep = namedAs "Checking out (HEAD commit)" $ Checkout.step params
-  where
-    params = Checkout.defaultParams {Checkout.ref = Just pullRequestHeadHashExpr}
+checkoutStep = Checkout.step Nothing
+checkoutHeadStep =
+  GHA.namedAs "Checking out (HEAD commit)" $
+    Checkout.step $
+      Just pullRequestHeadHashExpr
 
 cacheStep :: [String] -> String -> GHA.Step
-cacheStep paths key = GHA.step {GHA.uses = Just "actions/cache@v2", GHA.with = M.fromList [("path", toJSON $ intercalate "\n" paths), ("key", toJSON key)]}
+cacheStep paths key =
+  GHA.actionStep "actions/cache@v2" $
+    M.fromList
+      [ ("path", toJSON $ intercalate "\n" paths),
+        ("key", toJSON key)
+      ]
 
 rustCacheStep, llvmCacheStep :: GHA.Step
 rustCacheStep =
@@ -275,17 +282,13 @@ checkCradleAndroid provider precondition =
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
-                  RustToolchainAction.step $
-                    RustToolchainAction.defaultParams
-                      { RustToolchainAction.toolchain = Just "stable",
-                        RustToolchainAction.target = Just "aarch64-linux-android"
-                      },
-                  GHA.namedAs "Setup Java" $
-                    GHA.actionStep "actions/setup-java@v3" $
-                      M.fromList
-                        [ ("distribution", toJSON ("adopt" :: String)),
-                          ("java-version", toJSON ("17" :: String))
-                        ],
+                  applyModifiers
+                    [ GHA.namedAs "Setup Rust for Android",
+                      RustToolchainAction.useStable,
+                      RustToolchainAction.forTarget "aarch64-linux-android"
+                    ]
+                    RustToolchainAction.step,
+                  GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" $ Just "17",
                   GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
                   cliBuildStep,
                   integratedTestStep
@@ -402,7 +405,7 @@ integrityTest =
       GHA.workflowConcurrency $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
       GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
     ]
-    $ GHA.OnEventsDetailed (Just prTrigger) Nothing Nothing
+    $ GHA.onPullRequest prTrigger
   where
     prTrigger = GHA.filterType "opened" $ GHA.filterType "synchronize" GHA.workflowPullRequestTrigger
     checkJobs =

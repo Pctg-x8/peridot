@@ -8,16 +8,20 @@ module Workflow.GitHub.Actions
     mkNeedsOutputPath,
     mkNeedsOutputExpression,
     Step (..),
-    step,
+    emptyStep,
     runStep,
     actionStep,
+    StepModifier,
     stepUseShell,
+    modifyStepWith,
+    stepSetWithParam,
     Job (..),
     job,
     jobModifySteps,
     jobOutput,
     Workflow (..),
     WorkflowTrigger (..),
+    onPullRequest,
     PermissionTable (..),
     PermissionKey (..),
     Permission (..),
@@ -86,8 +90,8 @@ data Step = Step
     stepWorkingDirectory :: Maybe String
   }
 
-step :: Step
-step =
+emptyStep :: Step
+emptyStep =
   Step
     { stepId = Nothing,
       stepIf = Nothing,
@@ -101,15 +105,23 @@ step =
     }
 
 runStep :: String -> Step
-runStep command = step {run = Just command}
+runStep command = emptyStep {run = Just command}
 
 actionStep :: String -> Map String Value -> Step
-actionStep name withArgs = step {uses = Just name, with = withArgs}
+actionStep name withArgs = emptyStep {uses = Just name, with = withArgs}
 
-modifyStepEnv :: (Map String String -> Map String String) -> Step -> Step
+type StepModifier = Step -> Step
+
+modifyStepEnv :: (Map String String -> Map String String) -> StepModifier
 modifyStepEnv f x@(Step {stepEnv}) = x {stepEnv = f stepEnv}
 
-stepUseShell :: String -> Step -> Step
+modifyStepWith :: (Map String Value -> Map String Value) -> StepModifier
+modifyStepWith f x = x {with = f $ with x}
+
+stepSetWithParam :: (ToJSON v) => String -> v -> StepModifier
+stepSetWithParam k v = modifyStepWith $ M.insert k $ toJSON v
+
+stepUseShell :: String -> StepModifier
 stepUseShell name x = x {shell = Just name}
 
 instance ToJSON Step where
@@ -188,13 +200,16 @@ data WorkflowTrigger = OnEvent String | OnEvents [String] | OnEventsDetailed (Ma
 instance ToJSON WorkflowTrigger where
   toJSON (OnEvent event) = toJSON event
   toJSON (OnEvents events) = toJSON events
-  toJSON (OnEventsDetailed onPullRequest onPullRequestTarget onPush) =
+  toJSON (OnEventsDetailed onPullRequest' onPullRequestTarget onPush) =
     object $
       catMaybes
-        [ ("pull_request" .=) <$> onPullRequest,
+        [ ("pull_request" .=) <$> onPullRequest',
           ("pull_request_target" .=) <$> onPullRequestTarget,
           ("push" .=) <$> onPush
         ]
+
+onPullRequest :: WorkflowPullRequestTrigger -> WorkflowTrigger
+onPullRequest details = OnEventsDetailed (Just details) Nothing Nothing
 
 data WorkflowPullRequestTrigger = WorkflowPullRequestTrigger
   { prTriggerBranches :: [String],

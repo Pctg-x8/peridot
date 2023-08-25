@@ -1,42 +1,24 @@
-module Workflow.GitHub.Actions.Predefined.Rust.Toolchain (Params (..), defaultParams, step) where
+module Workflow.GitHub.Actions.Predefined.Rust.Toolchain
+  ( step,
+    useToolchain,
+    useStable,
+    useNightly,
+    forTarget,
+  )
+where
 
-import Data.Aeson (ToJSON (toJSON))
-import Data.List (intercalate)
 import Data.Map qualified as M
-import Data.Maybe (catMaybes)
 import Workflow.GitHub.Actions qualified as GHA
 
-data Params = Params
-  { toolchain :: Maybe String,
-    target :: Maybe String,
-    _default :: Maybe String,
-    override :: Maybe String,
-    profile :: Maybe String,
-    components :: [String]
-  }
+step :: GHA.Step
+step = GHA.actionStep "actions-rs/toolchain@v1" M.empty
 
-defaultParams :: Params
-defaultParams =
-  Params
-    { toolchain = Nothing,
-      target = Nothing,
-      _default = Nothing,
-      override = Nothing,
-      profile = Nothing,
-      components = []
-    }
+useToolchain :: String -> GHA.Step -> GHA.Step
+useToolchain = GHA.stepSetWithParam "toolchain"
 
-step :: Params -> GHA.Step
-step params =
-  GHA.namedAs "Install Rust Toolchain" $
-    GHA.actionStep "actions-rs/toolchain@v1" $
-      M.fromList $
-        catMaybes
-          [ ("toolchain",) . toJSON <$> toolchain params,
-            ("target",) . toJSON <$> target params,
-            ("default",) . toJSON <$> _default params,
-            ("override",) . toJSON <$> override params,
-            ("profile",) . toJSON <$> profile params,
-            ("components",) . toJSON
-              <$> if null $ components params then Nothing else Just $ intercalate "," $ components params
-          ]
+useStable, useNightly :: GHA.Step -> GHA.Step
+useStable = useToolchain "stable"
+useNightly = useToolchain "nightly"
+
+forTarget :: String -> GHA.Step -> GHA.Step
+forTarget = GHA.stepSetWithParam "target"

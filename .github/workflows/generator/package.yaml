@@ -40,6 +40,7 @@ ghc-options:
 default-extensions:
   - ImportQualifiedPost
   - TupleSections
+  - FlexibleInstances
 
 library:
   source-dirs: src
