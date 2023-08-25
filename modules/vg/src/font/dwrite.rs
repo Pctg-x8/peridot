@@ -78,12 +78,13 @@ impl Font for DirectWriteFont {
             ),
         ))
     }
-    fn outline<B: PathBuilder>(
+    fn outline(
         &self,
         glyph: &Self::GlyphID,
-        builder: &mut B,
+        transform: &euclid::Transform2D<f32>,
+        builder: &mut impl PathBuilder,
     ) -> Result<(), GlyphLoadingError> {
-        let sink = ID2D1SimplifiedGeometrySink::from(PathEventReceiver::new());
+        let sink = ID2D1SimplifiedGeometrySink::from(PathEventReceiver::new(transform.clone()));
 
         unsafe {
             self.0.GetGlyphRunOutline(
@@ -107,11 +108,13 @@ impl Font for DirectWriteFont {
 
 #[windows::core::implement(ID2D1SimplifiedGeometrySink)]
 pub struct PathEventReceiver {
+    transform: euclid::Transform2D<f32>,
     paths: RefCell<Vec<PathEvent>>,
 }
-impl PathEventReceiver {
-    pub fn new() -> Self {
+impl<'t> PathEventReceiver {
+    pub const fn new(transform: euclid::Transform2D<f32>) -> Self {
         PathEventReceiver {
+            transform,
             paths: RefCell::new(Vec::new()),
         }
     }
@@ -124,9 +127,9 @@ impl PathEventReceiver {
 impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
     fn AddLines(&self, p: *const D2D_POINT_2F, count: u32) {
         for p in unsafe { from_raw_parts(p, count as _) } {
-            self.paths
-                .borrow_mut()
-                .push(PathEvent::LineTo(point2(p.x, -p.y)));
+            self.paths.borrow_mut().push(PathEvent::LineTo(
+                self.transform.transform_point(&point2(p.x, -p.y)),
+            ));
         }
     }
 
@@ -137,10 +140,14 @@ impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
     ) {
         for p in unsafe { from_raw_parts(beziers, beziers_count as _) } {
             let (p1, p2) = (
-                point2(p.point1.x, -p.point1.y),
-                point2(p.point2.x, -p.point2.y),
+                self.transform
+                    .transform_point(&point2(p.point1.x, -p.point1.y)),
+                self.transform
+                    .transform_point(&point2(p.point2.x, -p.point2.y)),
             );
-            let p3 = point2(p.point3.x, -p.point3.y);
+            let p3 = self
+                .transform
+                .transform_point(&point2(p.point3.x, -p.point3.y));
             self.paths.borrow_mut().push(PathEvent::CubicTo(p1, p2, p3));
         }
     }
@@ -150,7 +157,9 @@ impl ID2D1SimplifiedGeometrySink_Impl for PathEventReceiver {
         start_point: &D2D_POINT_2F,
         _figure_begin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
     ) {
-        let p = point2(start_point.x, -start_point.y);
+        let p = self
+            .transform
+            .transform_point(&point2(start_point.x, -start_point.y));
         self.paths.borrow_mut().push(PathEvent::MoveTo(p));
     }
 
