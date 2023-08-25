@@ -44,7 +44,7 @@ step :: GHA.Step
 step = GHA.actionStep "aws-actions/configure-aws-credentials@v1" M.empty
 
 awsRegion :: String -> GHA.StepModifier
-awsRegion = GHA.stepSetWithParam "awsRegion"
+awsRegion = GHA.stepSetWithParam "aws-region"
 
 roleToAssume :: String -> GHA.StepModifier
-roleToAssume = GHA.stepSetWithParam "roleToAssume"
+roleToAssume = GHA.stepSetWithParam "role-to-assume"

@@ -36,7 +36,7 @@ step params = GHA.namedAs "Notify" $ GHA.actionStep "Pctg-x8/ci-notifications-po
     withArgs =
       let statusFields = M.fromList $ case status params of
             SuccessStatus -> [("status", toJSON "success")]
-            FailureStatus jobName -> [("status", toJSON "failure"), ("failure-step", toJSON jobName)]
+            FailureStatus jobName -> [("status", toJSON "failure"), ("failure_step", toJSON jobName)]
           modeFields = M.fromList $ case mode params of
             DiffMode hashPair pr ->
               [ ("mode", toJSON "diff"),

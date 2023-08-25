@@ -41,7 +41,7 @@ preconditionBeginTimestampOutputDef :: GHA.Job -> GHA.Job
 preconditionBeginTimestampOutputDef = GHA.jobOutput "begintime" $ GHA.mkRefStepOutputExpression "begintime" "begintime"
 
 checkoutStep, checkoutHeadStep :: GHA.Step
-checkoutStep = Checkout.step Nothing
+checkoutStep = GHA.namedAs "Checking out" $ Checkout.step Nothing
 checkoutHeadStep = GHA.namedAs "Checking out (HEAD commit)" $ Checkout.step $ Just pullRequestHeadHashExpr
 
 rustCacheStep, llvmCacheStep :: GHA.Step
@@ -143,7 +143,7 @@ withBuilderEnv =
 checkCradleWindows :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleWindows precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(Windows)"] $
+    applyModifiers [GHA.namedAs "Cradle(Windows)", GHA.jobRunsOn ["windows-latest"]] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -169,7 +169,7 @@ checkCradleWindows precondition =
 checkCradleMacos :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleMacos precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(macOS)"] $
+    applyModifiers [GHA.namedAs "Cradle(macOS)", GHA.jobRunsOn ["macos-latest"]] $
       GHA.job
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
@@ -202,7 +202,7 @@ aptInstallStep :: [String] -> GHA.Step
 aptInstallStep packages =
   GHA.namedAs "install apt packages" $
     GHA.runStep $
-      "sub apt-get update && sudo apt-get install -y " <> unwords packages
+      "sudo apt-get update && sudo apt-get install -y " <> unwords packages
 
 checkCradleLinux :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleLinux precondition =

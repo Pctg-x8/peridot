@@ -19,6 +19,7 @@ module Workflow.GitHub.Actions
     job,
     jobModifySteps,
     jobOutput,
+    jobRunsOn,
     Workflow (..),
     WorkflowTrigger (..),
     WorkflowPullRequestTrigger (..),
@@ -196,6 +197,9 @@ jobModifySteps f self@(Job {steps}) = self {steps = f steps}
 
 jobOutput :: String -> String -> Job -> Job
 jobOutput k v self = self {outputs = M.insert k v $ outputs self}
+
+jobRunsOn :: [String] -> Job -> Job
+jobRunsOn platform self = self {runsOn = platform}
 
 data WorkflowTrigger = OnEvent String | OnEvents [String] | OnEventsDetailed (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPushTrigger) (Maybe WorkflowScheduleTrigger)
 
