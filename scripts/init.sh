@@ -1,7 +1,9 @@
 #!/bin/bash
 
-SCRIPT_ROOT=$(basename $(realpath $BASH_SOURCE))
-PROJECT_ROOT=$(basename $SCRIPT_ROOT)
+set -xe
+
+SCRIPT_ROOT=$(dirname $(realpath $BASH_SOURCE))
+PROJECT_ROOT=$(dirname $SCRIPT_ROOT)
 
 git config core.hooksPath $PROJECT_ROOT/.githooks
 
