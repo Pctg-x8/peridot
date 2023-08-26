@@ -34,17 +34,16 @@ cfg_if! {
         pub use self::dwrite::*;
     }
 }
+#[cfg(feature = "use-freetype")]
 cfg_if! {
-    if #[cfg(feature = "use-freetype")] {
-        if #[cfg(feature = "use-fontconfig")] {
-            // activate FreeType/Fontconfig backend
-            mod fontconfig;
-            pub use self::fontconfig::*;
-        } else {
-            // activate freetype-only backend
-            mod freetype_only;
-            pub use self::freetype_only::*;
-        }
+    if #[cfg(feature = "use-fontconfig")] {
+        // activate FreeType/Fontconfig backend
+        mod fontconfig;
+        pub use self::fontconfig::*;
+    } else {
+        // activate freetype-only backend
+        mod freetype_only;
+        pub use self::freetype_only::*;
     }
 }
 cfg_if! {
@@ -57,11 +56,10 @@ cfg_if! {
 
 cfg_if! {
     if #[cfg(feature = "use-freetype")] {
-        if #[cfg(feature = "use-fontconfig")] {
-            pub type DefaultFontProvider = FontconfigFontProvider;
-        } else {
-            pub type DefaultFontProvider = FreetypeOnlyFontProvider;
-        }
+        #[cfg(feature = "use-fontconfig")]
+        pub type DefaultFontProvider = FontconfigFontProvider;
+        #[cfg(not(feature = "use-fontconfig"))]
+        pub type DefaultFontProvider = FreetypeOnlyFontProvider;
     } else if #[cfg(windows)] {
         pub type DefaultFontProvider = DirectWriteFontProvider;
     } else if #[cfg(targeT_os = "macos")] {
