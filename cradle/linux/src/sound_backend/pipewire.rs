@@ -1,9 +1,9 @@
 //! PipeWire Sound Backend
 
 use libspa_sys::spa_format_audio_raw_parse;
+use parking_lot::RwLock;
 use pw::spa::pod::deserialize::PodDeserializer;
 use std::sync::Arc;
-use std::sync::RwLock as StdRwLock;
 
 use libspa_sys::{
     spa_audio_info_raw, spa_callbacks, spa_format_audio_raw_build, spa_pod_builder,
@@ -17,11 +17,11 @@ use super::Float32Converter;
 use super::SoundBackend;
 
 struct AudioWriter {
-    mixer: Arc<StdRwLock<peridot::audio::Mixer>>,
+    mixer: Arc<RwLock<peridot::audio::Mixer>>,
     converter: Box<dyn AudioBitstreamConverter + Sync + Send>,
 }
 impl AudioWriter {
-    fn new(mixer: Arc<StdRwLock<peridot::audio::Mixer>>) -> Self {
+    fn new(mixer: Arc<RwLock<peridot::audio::Mixer>>) -> Self {
         Self {
             mixer,
             converter: Box::new(Float32Converter),
@@ -35,10 +35,7 @@ impl AudioWriter {
             .sample_count(buf.datas_mut()[0].data().expect("null buffer?").len());
 
         let mut generated = vec![0f32; sample_count];
-        self.mixer
-            .write()
-            .expect("AudioMixer lock failed")
-            .process(&mut generated);
+        self.mixer.write().process(&mut generated);
         self.converter
             .convert(&generated, buf.datas_mut()[0].data().expect("null buffer?"));
     }
@@ -65,7 +62,7 @@ impl NativeAudioEngine {
         ctx.connect(None).is_ok()
     }
 
-    pub fn new(mixer: &Arc<StdRwLock<peridot::audio::Mixer>>) -> Self {
+    pub fn new(mixer: &Arc<RwLock<peridot::audio::Mixer>>) -> Self {
         info!("Starting AudioEngine via PipeWire......");
 
         pw::init();
