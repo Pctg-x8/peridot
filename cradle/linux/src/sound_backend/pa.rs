@@ -1,12 +1,10 @@
 //! PulseAudio Sound Backend
 
+use parking_lot::RwLock;
 use pulseaudio_rs as pa;
 use std::cell::RefCell;
 use std::pin::Pin;
-use std::{
-    mem::ManuallyDrop,
-    sync::{Arc, RwLock},
-};
+use std::{mem::ManuallyDrop, sync::Arc};
 
 use crate::sound_backend::{Float32Converter, SignedInt24LEConverter, SignedInt32LEConverter};
 
@@ -23,10 +21,7 @@ impl pa::stream::WriteRequestHandler for AudioDataWriter {
             let (bufptr, len) = stream.begin_write(rem).expect("BeginWrite failed!");
             let aslice = unsafe { std::slice::from_raw_parts_mut(bufptr as *mut u8, len) };
             let mut buf = vec![0.0f32; self.conv.borrow().sample_count(len)];
-            self.mixer
-                .write()
-                .expect("Mixer Write Failed!")
-                .process(&mut buf);
+            self.mixer.write().process(&mut buf);
             self.conv.borrow().convert(&buf, aslice);
             stream
                 .write_slice(&aslice, None)

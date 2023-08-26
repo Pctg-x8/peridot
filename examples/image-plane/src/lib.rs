@@ -2,6 +2,7 @@ use bedrock as br;
 use br::{resources::Image, SubmissionBatch};
 use br::{CommandBuffer, DescriptorPool, Device, ImageChild, ImageSubresourceSlice};
 use log::*;
+use parking_lot::RwLock;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3, Vector3F32,
 };
@@ -15,7 +16,7 @@ use std::convert::TryInto;
 use std::marker::PhantomData;
 use std::mem::{align_of, size_of};
 use std::ops::Range;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 fn range_from_length<N>(start: N, length: N) -> Range<N>
@@ -93,14 +94,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             e.streaming::<StreamingPlayableWav>("bgm")
                 .expect("Loading BGM"),
         ));
-        e.audio_mixer()
-            .write()
-            .expect("Adding AudioProcess")
-            .add_process(bgm.clone());
-        e.audio_mixer()
-            .write()
-            .expect("Setting MasterVolume")
-            .set_master_volume(0.5);
+        e.audio_mixer().write().add_process(bgm.clone());
+        e.audio_mixer().write().set_master_volume(0.5);
 
         let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
         let mut cam = Camera {
@@ -530,7 +525,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             cr.end().expect("Failed to record render commands");
         }
 
-        bgm.write().expect("Starting BGM").play();
+        bgm.write().play();
 
         Game {
             render_cb,

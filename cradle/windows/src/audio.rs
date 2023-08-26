@@ -1,6 +1,8 @@
 #![allow(non_upper_case_globals)]
 
+use std::ffi::OsString;
 use std::io::Result as IOResult;
+use std::os::windows::ffi::OsStringExt;
 use std::ptr::NonNull;
 use windows::core::PWSTR;
 use windows::Win32::Devices::FunctionDiscovery::{
@@ -194,7 +196,8 @@ impl peridot::audio::Processor for PSGSine {
 }
 */
 
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 use std::thread::{sleep, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 
@@ -239,10 +242,12 @@ impl NativeAudioEngine {
                         wBitsPerSample: bits_per_sample,
                         nBlockAlign: (bits_per_sample >> 3) * 2,
                         nAvgBytesPerSec: samples_per_sec * 2 * (bits_per_sample >> 3) as u32,
-                        cbSize: std::mem::size_of::<WAVEFORMATEXTENSIBLE>() as _,
+                        cbSize: (std::mem::size_of::<WAVEFORMATEXTENSIBLE>()
+                            - std::mem::size_of::<WAVEFORMATEX>())
+                            as _,
                     },
                     Samples: WAVEFORMATEXTENSIBLE_0 {
-                        wSamplesPerBlock: samples_per_sec as _,
+                        wValidBitsPerSample: bits_per_sample as _,
                     },
                     dwChannelMask: SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
                     SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
@@ -252,19 +257,16 @@ impl NativeAudioEngine {
                     .expect("initialize");
 
                 let process_frames = aclient.buffer_size().expect("Getting BufferSize") as u32;
-                log::info!("Processing Buffer Size: {}", process_frames);
+                log::info!("Processing Buffer Size: {process_frames}");
                 let sleep_duration = Duration::from_micros(
                     (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _,
                 );
                 let srv: IAudioRenderClient = aclient.service().expect("No Render Service");
-                mixer
-                    .write()
-                    .expect("Setting SampleRate")
-                    .set_sample_rate(samples_per_sec as _);
+                mixer.write().set_sample_rate(samples_per_sec as _);
 
                 log::info!("Starting AudioRender...");
                 aclient.start().expect("Starting AudioRender");
-                mixer.write().expect("Starting Mixer").start();
+                mixer.write().start();
                 while !exit_state_th.load(Ordering::Acquire) {
                     let pad = aclient.current_padding().expect("Current Padding");
                     let available_frames = process_frames - pad;
@@ -279,7 +281,7 @@ impl NativeAudioEngine {
                         *b = 0.0;
                     }
 
-                    let silence = mixer.write().expect("Processing WriteLock").process(buf);
+                    let silence = mixer.write().process(buf);
 
                     unsafe {
                         srv.ReleaseBuffer(
@@ -297,7 +299,7 @@ impl NativeAudioEngine {
             })?
             .into();
 
-        Ok(NativeAudioEngine {
+        Ok(Self {
             process_thread,
             exit_state,
         })

@@ -188,11 +188,7 @@ where
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
     window_backend.borrow_mut().show();
-    gd.engine
-        .audio_mixer()
-        .write()
-        .expect("Failed to mutate audio mixer")
-        .start();
+    gd.engine.audio_mixer().write().start();
     let mut events = Vec::new();
     let mut last_drawn_geometry = window_backend.borrow().geometry();
     while !window_backend.borrow().has_close_requested() {
@@ -244,11 +240,7 @@ where
             }
         }
     }
-    gd.engine
-        .audio_mixer()
-        .write()
-        .expect("Failed to mutate audio mixer")
-        .stop();
+    gd.engine.audio_mixer().write().stop();
     info!("Terminating Program...");
 }
 

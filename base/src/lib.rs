@@ -6,10 +6,11 @@ use bedrock as br;
 use br::Device;
 #[cfg(feature = "mt")]
 use br::Status;
+use parking_lot::RwLock;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant as InstantTimer};
 
 mod graphics;

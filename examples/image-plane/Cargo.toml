@@ -14,5 +14,6 @@ peridot-math = { path = "../../modules/math" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
 peridot-image = { path = "../../modules/image" }
 async-std = "1.7"
+parking_lot = "0.12"
 
 log = "0.4"

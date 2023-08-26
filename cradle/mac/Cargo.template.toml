@@ -2,7 +2,7 @@
 name = "peridot-cradle-mac"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2021"
 build = "build.rs"
 
 [lib]
@@ -15,6 +15,7 @@ debug = ["peridot/debug"]
 mt = ["peridot/mt"]
 
 [dependencies]
+
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
     "VK_KHR_surface",
     "VK_KHR_swapchain",
@@ -27,3 +28,4 @@ env_logger = "0.5"
 objc = "0.2"
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 libc = "0.2"
+parking_lot = "0.11"
