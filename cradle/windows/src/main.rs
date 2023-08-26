@@ -1,20 +1,3 @@
-use std::io::{Error as IOError, Result as IOResult};
-use winapi::shared::minwindef::{DWORD, HINSTANCE, HIWORD, LOWORD, LPARAM, LRESULT, UINT, WPARAM};
-use winapi::shared::windef::{HWND, POINT, RECT};
-use winapi::shared::winerror::{HRESULT, SUCCEEDED};
-use winapi::um::combaseapi::{CoInitializeEx, CoUninitialize};
-use winapi::um::libloaderapi::GetModuleHandleA;
-use winapi::um::objbase::COINIT_MULTITHREADED;
-use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
-use winapi::um::winuser::{
-    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
-    GetWindowLongPtrA, LoadCursorA, MapWindowPoints, PeekMessageA, PostQuitMessage,
-    RegisterClassExA, SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT,
-    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WM_INPUT, WM_SIZE, WNDCLASSEXA,
-    WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
-};
-use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
-
 use std::mem::MaybeUninit;
 mod audio;
 use audio::NativeAudioEngine;
@@ -23,28 +6,42 @@ mod input;
 mod userlib;
 use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
+use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
+    GetWindowLongPtrA, LoadCursorW, PeekMessageA, PostQuitMessage, RegisterClassExA,
+    SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW,
+    PM_REMOVE, SW_SHOWNORMAL, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW,
+    WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+};
 
 mod presenter;
 use self::presenter::Presenter;
 
-const LPSZCLASSNAME: &'static str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
+const LPSZCLASSNAME: &'static str = "mainWindow\0";
 
+#[inline]
+const fn loword(dw: usize) -> u16 {
+    (dw & 0xffff) as _
+}
+#[inline]
+const fn hiword(dw: usize) -> u16 {
+    ((dw >> 16) & 0xffff) as _
+}
+
+#[inline]
 fn module_handle() -> HINSTANCE {
-    unsafe { GetModuleHandleA(std::ptr::null()) }
+    unsafe { GetModuleHandleA(None).expect("Failed to get module handle") }
 }
-pub(crate) fn hr_into_result(hr: HRESULT) -> IOResult<()> {
-    if SUCCEEDED(hr) {
-        Ok(())
-    } else {
-        Err(IOError::from_raw_os_error(hr))
-    }
-}
+
 struct CoScopeGuard;
 impl CoScopeGuard {
-    fn init(apartment: DWORD) -> IOResult<Self> {
-        unsafe {
-            hr_into_result(CoInitializeEx(std::ptr::null_mut(), apartment)).map(|_| CoScopeGuard)
-        }
+    fn init(apartment: COINIT) -> windows::core::Result<Self> {
+        unsafe { CoInitializeEx(None, apartment).map(|_| Self) }
     }
 }
 impl Drop for CoScopeGuard {
@@ -57,12 +54,14 @@ pub struct ThreadsafeWindowOps(HWND);
 unsafe impl Sync for ThreadsafeWindowOps {}
 unsafe impl Send for ThreadsafeWindowOps {}
 impl ThreadsafeWindowOps {
-    pub fn map_point_from_desktop(&self, p: &mut POINT) {
+    #[inline]
+    pub fn map_points_from_desktop(&self, p: &mut [POINT]) {
         unsafe {
-            MapWindowPoints(std::ptr::null_mut(), self.0, p, 1);
+            MapWindowPoints(None, self.0, p);
         }
     }
 
+    #[inline]
     pub fn get_client_rect(&self) -> RECT {
         let mut rc = std::mem::MaybeUninit::uninit();
         unsafe {
@@ -99,7 +98,7 @@ impl GameDriver {
             .set_nativelink(Box::new(self::input::NativeInputHandler::new(
                 window.clone(),
             )));
-        base.postinit();
+        base.post_init();
         let _snd =
             NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
 
@@ -123,7 +122,7 @@ impl GameDriver {
         self.base.do_update(&mut self.usercode);
     }
     fn resize(&mut self, size: peridot::math::Vector2<usize>) {
-        self.base.do_resize_backbuffer(size, &mut self.usercode);
+        self.base.do_resize_back_buffer(size, &mut self.usercode);
     }
 }
 
@@ -132,15 +131,15 @@ fn main() {
     let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
 
     unsafe {
-        SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE);
+        SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).expect("Failed to set dpi awareness");
     }
 
     let wca = WNDCLASSEXA {
         cbSize: std::mem::size_of::<WNDCLASSEXA>() as _,
         hInstance: module_handle(),
-        lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
+        lpszClassName: windows::core::PCSTR(LPSZCLASSNAME.as_ptr() as *const _),
         lpfnWndProc: Some(window_callback),
-        hCursor: unsafe { LoadCursorA(std::ptr::null_mut(), IDC_ARROW as _) },
+        hCursor: unsafe { LoadCursorW(None, IDC_ARROW).expect("Failed to load default cursor") },
         ..unsafe { MaybeUninit::zeroed().assume_init() }
     };
     let wcatom = unsafe { RegisterClassExA(&wca) };
@@ -151,7 +150,7 @@ fn main() {
     let wname_c =
         std::ffi::CString::new(userlib::APP_TITLE).expect("Unable to generate a c-style string");
     let wsex = if cfg!(feature = "transparent") {
-        WS_EX_APPWINDOW | winapi::um::winuser::WS_EX_NOREDIRECTIONBITMAP
+        WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP
     } else {
         WS_EX_APPWINDOW
     };
@@ -163,25 +162,25 @@ fn main() {
         bottom: 480,
     };
     unsafe {
-        AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW);
+        AdjustWindowRectEx(&mut wrect, style, false, WS_EX_APPWINDOW);
     }
     let w = unsafe {
         CreateWindowExA(
             wsex,
-            wcatom as _,
-            wname_c.as_ptr(),
+            windows::core::PCSTR(std::mem::transmute(wcatom as usize)),
+            windows::core::PCSTR(wname_c.as_ptr() as _),
             style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             wrect.right - wrect.left,
             wrect.bottom - wrect.top,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            None,
+            None,
             wca.hInstance,
-            std::ptr::null_mut(),
+            None,
         )
     };
-    if w.is_null() {
+    if w.0 == 0 {
         panic!("Create Window Failed!");
     }
 
@@ -197,47 +196,53 @@ fn main() {
         driver.update();
     }
 }
-extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_DESTROY => unsafe {
+
+extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_DESTROY {
+        unsafe {
             PostQuitMessage(0);
-            return 0;
-        },
-        WM_SIZE => unsafe {
-            let p = GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver;
-            if let Some(driver) = p.as_mut() {
-                let (w, h) = (LOWORD(lparam as _), HIWORD(lparam as _));
-                let size = peridot::math::Vector2(w as usize, h as usize);
-                if driver.current_size != size {
-                    driver.current_size = size.clone();
-                    driver.resize(size);
-                    driver.update();
-                }
-            }
-            return 0;
-        },
-        WM_INPUT => {
-            let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
-            if let Some(driver) = unsafe { p.as_mut() } {
-                driver
-                    .ri_handler
-                    .handle_wm_input(driver.base.input_mut(), lparam);
-            }
-            0
         }
-        _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) },
+        return LRESULT(0);
     }
+
+    if msg == WM_SIZE {
+        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+        if let Some(driver) = unsafe { p.as_mut() } {
+            let (w, h) = (loword(lparam.0 as _), hiword(lparam.0 as _));
+            let size = peridot::math::Vector2(w as usize, h as usize);
+            if driver.current_size != size {
+                driver.current_size = size.clone();
+                driver.resize(size);
+                driver.update();
+            }
+        }
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_INPUT {
+        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+        if let Some(driver) = unsafe { p.as_mut() } {
+            driver
+                .ri_handler
+                .handle_wm_input(driver.base.input_mut(), lparam);
+        }
+
+        return LRESULT(0);
+    }
+
+    unsafe { DefWindowProcA(w, msg, wparam, lparam) }
 }
 
 fn process_message_all() -> bool {
     let mut msg = MaybeUninit::uninit();
-    while unsafe { PeekMessageA(msg.as_mut_ptr(), std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 } {
+    while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).as_bool() } {
         if unsafe { (*msg.as_ptr()).message } == WM_QUIT {
             return false;
         }
         unsafe {
-            TranslateMessage(msg.as_mut_ptr());
-            DispatchMessageA(msg.as_mut_ptr());
+            TranslateMessage(msg.as_ptr());
+            DispatchMessageA(msg.as_ptr());
         }
     }
 

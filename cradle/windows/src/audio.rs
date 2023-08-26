@@ -3,7 +3,9 @@
 use crate::hr_into_result;
 use std::ffi::OsString;
 use std::io::Result as IOResult;
+use std::io::Result as IOResult;
 use std::os::windows::ffi::OsStringExt;
+use std::ptr::NonNull;
 use std::ptr::NonNull;
 use winapi::shared::guiddef::IID;
 use winapi::shared::ksmedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
@@ -18,61 +20,89 @@ use winapi::um::propidl::*;
 use winapi::um::propsys::IPropertyStore;
 use winapi::um::strmif::REFERENCE_TIME;
 use winapi::Interface;
+use windows::core::PWSTR;
+use windows::Win32::Devices::FunctionDiscovery::{
+    PKEY_DeviceInterface_FriendlyName, PKEY_Device_DeviceDesc, PKEY_Device_FriendlyName,
+};
+use windows::Win32::Media::Audio::{
+    eConsole, eRender, EDataFlow, ERole, IAudioClient, IAudioRenderClient, IMMDevice,
+    IMMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+};
+use windows::Win32::Media::KernelStreaming::{
+    SPEAKER_FRONT_LEFT, SPEAKER_FRONT_RIGHT, WAVE_FORMAT_EXTENSIBLE,
+};
+use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 
-pub struct MMDeviceEnumerator(*mut IMMDeviceEnumerator);
+#[repr(transparent)]
+pub struct MMDeviceEnumerator(IMMDeviceEnumerator);
 impl MMDeviceEnumerator {
-    fn new() -> IOResult<Self> {
-        let mut enumerator: *mut IMMDeviceEnumerator = std::ptr::null_mut();
-        let hr = unsafe {
+    #[inline]
+    fn new() -> windows::core::Result<Self> {
+        unsafe {
             CoCreateInstance(
-                &CLSID_MMDeviceEnumerator,
-                std::ptr::null_mut(),
+                &windows::Win32::Media::Audio::MMDeviceEnumerator,
+                None,
                 CLSCTX_ALL,
-                &IMMDeviceEnumerator::uuidof(),
-                std::mem::transmute(&mut enumerator),
             )
-        };
-
-        hr_into_result(hr).map(|_| MMDeviceEnumerator(enumerator))
-    }
-}
-impl Drop for MMDeviceEnumerator {
-    fn drop(&mut self) {
-        unsafe {
-            (*self.0).Release();
+            .map(Self)
         }
     }
-}
-struct MMDevice(*mut IMMDevice);
-impl MMDeviceEnumerator {
-    fn default_audio_endpoint(&self, dataflow: EDataFlow, role: ERole) -> IOResult<MMDevice> {
-        let mut md = std::ptr::null_mut();
-        let hr = unsafe { (*self.0).GetDefaultAudioEndpoint(dataflow, role, &mut md) };
 
-        hr_into_result(hr).map(|_| MMDevice(md))
-    }
-}
-impl Drop for MMDevice {
-    fn drop(&mut self) {
-        unsafe {
-            (*self.0).Release();
-        }
+    #[inline]
+    fn default_audio_endpoint(
+        &self,
+        dataflow: EDataFlow,
+        role: ERole,
+    ) -> windows::core::Result<MMDevice> {
+        unsafe { self.0.GetDefaultAudioEndpoint(dataflow, role).map(MMDevice) }
     }
 }
 
-pub struct MMDeviceProperties(*mut IPropertyStore);
+#[repr(transparent)]
+struct MMDevice(IMMDevice);
 impl MMDevice {
-    pub fn properties(&self) -> IOResult<MMDeviceProperties> {
-        let mut p = std::ptr::null_mut();
-        let hr = unsafe { (*self.0).OpenPropertyStore(STGM_READ, &mut p) };
+    #[inline]
+    pub fn read_properties(&self) -> windows::core::Result<MMDeviceProperties> {
+        unsafe { self.0.OpenPropertyStore(STGM_READ).map(MMDeviceProperties) }
+    }
 
-        hr_into_result(hr).map(|_| MMDeviceProperties(p))
+    #[inline]
+    pub fn activate(&self) -> windows::core::Result<AudioClient> {
+        unsafe { self.0.Activate(CLSCTX_ALL, None).map(AudioClient) }
     }
 }
-impl Drop for MMDeviceProperties {
-    fn drop(&mut self) {
+
+#[repr(transparent)]
+pub struct MMDeviceProperties(IPropertyStore);
+#[allow(dead_code)]
+impl MMDeviceProperties {
+    #[inline]
+    pub fn interface_friendly_name(&self) -> windows::core::Result<PWSTR> {
         unsafe {
-            (*self.0).Release();
+            self.0
+                .GetValue(&PKEY_DeviceInterface_FriendlyName)
+                .map(|p| p.Anonymous.Anonymous.Anonymous.pwszVal)
+        }
+    }
+
+    #[inline]
+    pub fn desc(&self) -> windows::core::Result<PWSTR> {
+        unsafe {
+            self.0
+                .GetValue(&PKEY_Device_DeviceDesc)
+                .map(|p| p.Anonymous.Anonymous.Anonymous.pwszVal)
+        }
+    }
+
+    #[inline]
+    pub fn friendly_name(&self) -> windows::core::Result<PWSTR> {
+        unsafe {
+            self.0
+                .GetValue(&PKEY_Device_FriendlyName)
+                .map(|p| p.Anonymous.Anonymous.Anonymous.pwszVal)
         }
     }
 }
@@ -97,219 +127,58 @@ impl<T> std::ops::DerefMut for CoBox<T> {
 impl<T> Drop for CoBox<T> {
     fn drop(&mut self) {
         unsafe {
-            CoTaskMemFree(self.0.as_ptr() as *mut _);
+            CoTaskMemFree(Some(self.0.as_ptr() as *const _));
         }
     }
 }
 
-pub struct AudioClient(*mut IAudioClient);
-impl Drop for AudioClient {
-    fn drop(&mut self) {
-        unsafe {
-            (*self.0).Release();
-        }
-    }
-}
-impl MMDevice {
-    pub fn activate(&self) -> IOResult<AudioClient> {
-        let mut p = std::ptr::null_mut();
-        let hr = unsafe {
-            (*self.0).Activate(
-                &IAudioClient::uuidof(),
-                CLSCTX_ALL,
-                std::ptr::null_mut(),
-                &mut p,
-            )
-        };
-
-        hr_into_result(hr).map(|_| AudioClient(p as *mut _))
-    }
-}
+pub struct AudioClient(IAudioClient);
 impl AudioClient {
+    #[inline]
     pub fn initialize_shared(
         &self,
-        buffer_duration: REFERENCE_TIME,
+        buffer_duration: i64,
         wfx: &WAVEFORMATEX,
-    ) -> IOResult<()> {
-        let hr = unsafe {
-            (*self.0).Initialize(
+    ) -> windows::core::Result<()> {
+        unsafe {
+            self.0.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 0,
                 buffer_duration,
                 0,
                 wfx as *const _,
-                std::ptr::null_mut(),
+                None,
             )
-        };
-
-        hr_into_result(hr)
-    }
-    pub fn service<IF: InterfaceWrapper>(&self) -> IOResult<IF> {
-        let mut p = std::ptr::null_mut();
-        let hr = unsafe { (*self.0).GetService(&IF::uuidof(), &mut p) };
-
-        hr_into_result(hr).map(|_| IF::wrap(p as *mut _))
-    }
-    pub fn start(&self) -> IOResult<()> {
-        hr_into_result(unsafe { (*self.0).Start() })
-    }
-
-    pub fn mix_format(&self) -> IOResult<CoBox<WAVEFORMATEX>> {
-        let mut p = std::ptr::null_mut();
-        hr_into_result(unsafe { (*self.0).GetMixFormat(&mut p as *mut _) })?;
-        return Ok(CoBox::new(p).expect("NullPointer Returned"));
-    }
-    pub fn buffer_size(&self) -> IOResult<usize> {
-        let mut us = 0;
-        let hr = unsafe { (*self.0).GetBufferSize(&mut us) };
-
-        hr_into_result(hr).map(|_| us as usize)
-    }
-    pub fn current_padding(&self) -> IOResult<u32> {
-        let mut v = 0;
-        hr_into_result(unsafe { (*self.0).GetCurrentPadding(&mut v) }).map(|_| v)
-    }
-}
-pub struct AudioRenderClient(NonNull<IAudioRenderClient>);
-pub trait InterfaceWrapper {
-    type Interface: Interface;
-    fn uuidof() -> IID {
-        Self::Interface::uuidof()
-    }
-    fn wrap(p: *mut Self::Interface) -> Self;
-}
-impl InterfaceWrapper for AudioRenderClient {
-    type Interface = IAudioRenderClient;
-    fn wrap(p: *mut IAudioRenderClient) -> Self {
-        AudioRenderClient(NonNull::new(p).expect("null"))
-    }
-}
-impl Drop for AudioRenderClient {
-    fn drop(&mut self) {
-        unsafe {
-            self.0.as_ref().Release();
         }
     }
-}
-impl AudioRenderClient {
-    pub fn get_buffer_ptr(&self, req_frames: u32) -> IOResult<*mut u8> {
-        let mut pp = std::ptr::null_mut();
-        let hr = unsafe { self.0.as_ref().GetBuffer(req_frames, &mut pp) };
 
-        hr_into_result(hr).map(|_| pp)
+    #[inline]
+    pub fn service<IF: windows::core::Interface>(&self) -> windows::core::Result<IF> {
+        unsafe { self.0.GetService() }
     }
-    fn release_buffer(&self, written_frames: u32, silence: bool) -> IOResult<()> {
-        hr_into_result(unsafe {
-            self.0.as_ref().ReleaseBuffer(
-                written_frames,
-                if silence {
-                    AUDCLNT_BUFFERFLAGS_SILENT
-                } else {
-                    0
-                },
-            )
-        })
-    }
-}
 
-pub struct PropVariant(PROPVARIANT);
-impl PropVariant {
-    pub fn init() -> Self {
-        unsafe { PropVariant(std::mem::zeroed()) }
+    #[inline]
+    pub fn start(&self) -> windows::core::Result<()> {
+        unsafe { self.0.Start() }
     }
-    pub unsafe fn as_osstr_unchecked(&self) -> OsString {
-        let ptr = *self.0.data.pwszVal();
-        let len = (0..)
-            .find(|&x| *ptr.offset(x) == 0)
-            .expect("Infinite Length");
-        let slice = std::slice::from_raw_parts(ptr, len as _);
 
-        OsString::from_wide(slice)
-    }
-}
-impl Drop for PropVariant {
-    fn drop(&mut self) {
+    #[inline]
+    pub fn mix_format(&self) -> windows::core::Result<CoBox<WAVEFORMATEX>> {
         unsafe {
-            PropVariantClear(&mut self.0);
+            self.0
+                .GetMixFormat()
+                .map(|p| CoBox::new(p).expect("null pointer returned"))
         }
     }
-}
-winapi::DEFINE_PROPERTYKEY!(
-    PKEY_DeviceInterface_FriendlyName,
-    0x026e516e,
-    0xb814,
-    0x414b,
-    0x83,
-    0xcd,
-    0x85,
-    0x6d,
-    0x6f,
-    0xef,
-    0x48,
-    0x22,
-    2
-);
-winapi::DEFINE_PROPERTYKEY!(
-    PKEY_Device_DeviceDesc,
-    0xa45c254e,
-    0xdf1c,
-    0x4efd,
-    0x80,
-    0x20,
-    0x67,
-    0xd1,
-    0x46,
-    0xa8,
-    0x50,
-    0xe0,
-    2
-);
-winapi::DEFINE_PROPERTYKEY!(
-    PKEY_Device_FriendlyName,
-    0xa45c254e,
-    0xdf1c,
-    0x4efd,
-    0x80,
-    0x20,
-    0x67,
-    0xd1,
-    0x46,
-    0xa8,
-    0x50,
-    0xe0,
-    14
-);
-#[allow(dead_code)]
-impl MMDeviceProperties {
-    pub fn interface_friendly_name(&self) -> IOResult<String> {
-        let mut pv = PropVariant::init();
-        let hr = unsafe { (*self.0).GetValue(&PKEY_DeviceInterface_FriendlyName, &mut pv.0) };
 
-        hr_into_result(hr).map(|_| unsafe {
-            pv.as_osstr_unchecked()
-                .into_string()
-                .expect("Decoding FriendlyName")
-        })
+    #[inline]
+    pub fn buffer_size(&self) -> windows::core::Result<usize> {
+        unsafe { self.0.GetBufferSize().map(|x| x as _) }
     }
-    pub fn desc(&self) -> IOResult<String> {
-        let mut pv = PropVariant::init();
-        let hr = unsafe { (*self.0).GetValue(&PKEY_Device_DeviceDesc, &mut pv.0) };
 
-        hr_into_result(hr).map(|_| unsafe {
-            pv.as_osstr_unchecked()
-                .into_string()
-                .expect("Decoding DeviceDesc")
-        })
-    }
-    pub fn friendly_name(&self) -> IOResult<String> {
-        let mut pv = PropVariant::init();
-        let hr = unsafe { (*self.0).GetValue(&PKEY_Device_FriendlyName, &mut pv.0) };
-
-        hr_into_result(hr).map(|_| unsafe {
-            pv.as_osstr_unchecked()
-                .into_string()
-                .expect("Decoding DeviceDesc")
-        })
+    #[inline]
+    pub fn current_padding(&self) -> windows::core::Result<u32> {
+        unsafe { self.0.GetCurrentPadding() }
     }
 }
 
@@ -345,8 +214,12 @@ impl peridot::audio::Processor for PSGSine {
 
 use parking_lot::RwLock;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, RwLock};
+use std::thread::{sleep, Builder as ThreadBuilder, JoinHandle};
 use std::thread::{sleep, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
+use std::time::Duration;
+
 pub struct NativeAudioEngine {
     process_thread: Option<JoinHandle<()>>,
     exit_state: Arc<AtomicBool>,
@@ -364,13 +237,13 @@ impl NativeAudioEngine {
                     .default_audio_endpoint(eRender, eConsole)
                     .expect("Getting Default AudioEP");
 
-                log::info!(
-                    "Audio Output Device: {}",
-                    dev0.properties()
+                log::info!("Audio Output Device: {}", unsafe {
+                    dev0.read_properties()
                         .expect("Getting DeviceProps")
                         .friendly_name()
                         .expect("Getting FriendlyName of the Device")
-                );
+                        .display()
+                });
 
                 let aclient = dev0.activate().expect("activate");
                 let bits_per_sample = 32;
@@ -382,7 +255,7 @@ impl NativeAudioEngine {
                 println!("device mixformat: tag={}", mf.wFormatTag);*/
                 let wfx = WAVEFORMATEXTENSIBLE {
                     Format: WAVEFORMATEX {
-                        wFormatTag: WAVE_FORMAT_EXTENSIBLE,
+                        wFormatTag: WAVE_FORMAT_EXTENSIBLE as _,
                         nChannels: 2,
                         nSamplesPerSec: samples_per_sec,
                         wBitsPerSample: bits_per_sample,
@@ -390,7 +263,9 @@ impl NativeAudioEngine {
                         nAvgBytesPerSec: samples_per_sec * 2 * (bits_per_sample >> 3) as u32,
                         cbSize: std::mem::size_of::<WAVEFORMATEXTENSIBLE>() as _,
                     },
-                    Samples: bits_per_sample,
+                    Samples: WAVEFORMATEXTENSIBLE_0 {
+                        wSamplesPerBlock: samples_per_sec as _,
+                    },
                     dwChannelMask: SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
                     SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
                 };
@@ -403,7 +278,7 @@ impl NativeAudioEngine {
                 let sleep_duration = Duration::from_micros(
                     (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _,
                 );
-                let srv: AudioRenderClient = aclient.service().expect("No Render Service");
+                let srv: IAudioRenderClient = aclient.service().expect("No Render Service");
                 mixer.write().set_sample_rate(samples_per_sec as _);
 
                 log::info!("Starting AudioRender...");
@@ -412,7 +287,7 @@ impl NativeAudioEngine {
                 while !exit_state_th.load(Ordering::Acquire) {
                     let pad = aclient.current_padding().expect("Current Padding");
                     let available_frames = process_frames - pad;
-                    let bufp = srv.get_buffer_ptr(available_frames).expect("Get Buffer");
+                    let bufp = unsafe { srv.GetBuffer(available_frames).expect("Get Buffer") };
                     let buf = unsafe {
                         std::slice::from_raw_parts_mut(
                             bufp as *mut f32,
@@ -425,8 +300,17 @@ impl NativeAudioEngine {
 
                     let silence = mixer.write().process(buf);
 
-                    srv.release_buffer(available_frames, silence)
+                    unsafe {
+                        srv.ReleaseBuffer(
+                            available_frames,
+                            if silence {
+                                AUDCLNT_BUFFERFLAGS_SILENT.0 as _
+                            } else {
+                                0
+                            },
+                        )
                         .expect("Release Buffer");
+                    }
                     sleep(sleep_duration);
                 }
             })?

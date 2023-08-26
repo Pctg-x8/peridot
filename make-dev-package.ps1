@@ -25,7 +25,7 @@ robocopy /MIR $ScriptPath/cradle/android/apkbuild $OutDirectory/cradle/android/a
 # Rewrite manifest peridot path
 function RewriteCargoManifest([String]$filePath) {
     $base = Get-Content $filePath
-    $base = $base.Replace("peridot = { path = `"../..`" }", "peridot = { git = `"https://github.com/Pctg-x8/peridot`", branch = `"$PeridotBranch`" }")
+    $base = $base.Replace("peridot = { path = `"../../base`" }", "peridot = { git = `"https://github.com/Pctg-x8/peridot`", branch = `"$PeridotBranch`" }")
     $base | Out-File $filePath -Encoding UTF8
 }
 Write-Host "Rewriting Cargo Manifests......"

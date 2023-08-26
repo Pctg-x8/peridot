@@ -1,5 +1,5 @@
 use bedrock as br;
-use br::{CommandBuffer, Device, Image, ImageChild, SubmissionBatch};
+use br::{CommandBuffer, Device, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
@@ -9,7 +9,7 @@ use peridot_vg::FlatPathBuilder;
 #[derive(peridot_derive::SpecConstantStorage)]
 #[repr(C)]
 pub struct FillFragmentShaderParameters {
-    enable_color_output: bool,
+    enable_color_output: br::vk::VkBool32,
 }
 
 pub struct TwoPassStencilSDFRenderer {
@@ -48,7 +48,7 @@ impl TwoPassStencilSDFRenderer {
     const STENCIL_MATCH: br::vk::VkStencilOpState = br::vk::VkStencilOpState {
         failOp: br::vk::VK_STENCIL_OP_KEEP,
         depthFailOp: br::vk::VK_STENCIL_OP_KEEP,
-        passOp: br::vk::VK_STENCIL_OP_ZERO,
+        passOp: br::vk::VK_STENCIL_OP_KEEP,
         compareOp: br::vk::VK_COMPARE_OP_EQUAL,
         compareMask: 0x01,
         writeMask: 0x01,
@@ -143,7 +143,7 @@ impl TwoPassStencilSDFRenderer {
             },
         ];
         let fill_fsh_color_output = FillFragmentShaderParameters {
-            enable_color_output: true,
+            enable_color_output: true as _,
         };
 
         let scissors =
@@ -172,13 +172,8 @@ impl TwoPassStencilSDFRenderer {
         )
         .expect("Failed to create outline_disdtance shader modules");
         let empty_pl = SharedRef::new(
-            e.graphics()
-                .device()
-                .clone()
-                .new_pipeline_layout(
-                    &[] as &[br::DescriptorSetLayoutObject<peridot::DeviceObject>],
-                    &[],
-                )
+            br::PipelineLayoutBuilder::new(vec![], vec![])
+                .create(e.graphics().device().clone())
                 .expect("Failed to create empty pipeline layout"),
         );
 
@@ -246,7 +241,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
                 alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let invert_pipeline = pipebuild
             .create(
@@ -273,7 +271,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
                 alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let outline_distance_pipeline = pipebuild
             .create(
@@ -332,7 +333,7 @@ impl TwoPassStencilSDFRenderer {
             },
         ];
         let fill_fsh_color_output = FillFragmentShaderParameters {
-            enable_color_output: true,
+            enable_color_output: true as _,
         };
 
         let scissors = [br::vk::VkRect2D {
@@ -418,7 +419,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
                 alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let invert_pipeline = pipebuild
             .create(
@@ -446,7 +450,10 @@ impl TwoPassStencilSDFRenderer {
                 srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
                 dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_DST_ALPHA,
                 alphaBlendOp: br::vk::VK_BLEND_OP_MAX,
-                ..Default::default()
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
             }]);
         let outline_distance_pipeline = pipebuild
             .create(
@@ -502,12 +509,12 @@ pub struct TwoPassStencilSDFRendererBuffers<'b> {
 impl TwoPassStencilSDFRenderer {
     pub fn populate_commands(
         &self,
-        rec: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        rec: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
         framebuffer: &impl br::Framebuffer,
         buffers: &TwoPassStencilSDFRendererBuffers,
     ) {
         // Stencil Pass
-        rec.begin_render_pass(
+        let _ = rec.begin_render_pass(
             &self.render_pass,
             framebuffer,
             self.render_area(),
@@ -515,26 +522,29 @@ impl TwoPassStencilSDFRenderer {
             true,
         );
         self.triangle_fans_stencil_pipeline.bind(rec);
-        rec.bind_vertex_buffers(
-            0,
-            &[(&buffers.buffer, buffers.fill_triangle_points_offset as _)],
-        )
-        .bind_index_buffer(
-            buffers.buffer,
-            buffers.fill_triangle_indices_offset as _,
-            br::IndexType::U16,
-        );
+        let _ = rec
+            .bind_vertex_buffers(
+                0,
+                &[(&buffers.buffer, buffers.fill_triangle_points_offset as _)],
+            )
+            .bind_index_buffer(
+                buffers.buffer,
+                buffers.fill_triangle_indices_offset as _,
+                br::IndexType::U16,
+            );
         let mut vo = 0;
         for &(vertices, indices) in buffers.fill_triangle_groups.iter() {
-            rec.draw_indexed(indices, 1, 0, vo as i32, 0);
+            let _ = rec.draw_indexed(indices, 1, 0, vo as i32, 0);
             vo += vertices;
         }
-        rec.bind_graphics_pipeline(self.curve_triangles_stencil_pipeline.pipeline())
+        let _ = rec
+            .bind_graphics_pipeline(self.curve_triangles_stencil_pipeline.pipeline())
             .bind_vertex_buffers(0, &[(&buffers.buffer, buffers.curve_triangles_offset as _)])
             .draw(buffers.curve_triangles_count, 1, 0, 0);
 
         // Outline Distance and Invert Pass
-        rec.next_subpass(true)
+        let _ = rec
+            .next_subpass(true)
             .bind_graphics_pipeline(self.outline_distance_pipeline.pipeline())
             .bind_vertex_buffers(0, &[(&buffers.buffer, buffers.outline_rects_offset as _)])
             .draw(buffers.outline_rects_count * 6, 1, 0, 0)
@@ -578,10 +588,12 @@ impl<NL: peridot::NativeLinker> Game<NL> {
 impl<NL: peridot::NativeLinker> FeatureRequests for Game<NL> {}
 impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
     fn init(e: &mut Engine<NL>) -> Self {
-        let backbuffer_size = AsRef::<br::vk::VkExtent2D>::as_ref(
-            e.backbuffer(0).expect("no backbuffer?").image().size(),
-        )
-        .clone();
+        let back_buffer_size = e
+            .back_buffer(0)
+            .expect("no back-buffer?")
+            .image()
+            .size()
+            .wh();
 
         let font = peridot_vg::FontProvider::new()
             .expect("Failed to create font provider")
@@ -633,7 +645,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let buffer = bp.build_transferred().expect("Failed to allocate buffer");
         let buffer_init = bp.build_upload().expect("Failed to allocate init buffer");
         let stencil_buffer = br::ImageDesc::new(
-            &backbuffer_size,
+            back_buffer_size.clone(),
             br::vk::VK_FORMAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
@@ -672,12 +684,9 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
 
         let stencil_buffer_view = SharedRef::new(
             stencil_buffer
-                .create_view(
-                    None,
-                    None,
-                    &Default::default(),
-                    &br::ImageSubresourceRange::stencil(0..1, 0..1),
-                )
+                .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                .view_builder()
+                .create()
                 .expect("Failed to create Stencil Buffer View"),
         );
 
@@ -721,7 +730,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 }
             })
             .expect("Failed to set init data");
-        let mut tfb = peridot::TransferBatch::new();
+        let mut tfb = peridot::TransferBatch::<peridot::DeviceObject>::new();
         tfb.add_mirroring_buffer(
             SharedRef::new(buffer_init),
             buffer.clone(),
@@ -735,36 +744,39 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             br::AccessFlags::VERTEX_ATTRIBUTE_READ,
         );
 
-        e.submit_commands(|r| {
-            tfb.sink_transfer_commands(r);
-            tfb.sink_graphics_ready_commands(r);
-            r.pipeline_barrier(
+        e.submit_commands(|mut r| {
+            tfb.sink_transfer_commands(&mut r);
+            tfb.sink_graphics_ready_commands(&mut r);
+            let _ = r.pipeline_barrier(
                 br::PipelineStageFlags::BOTTOM_OF_PIPE,
                 br::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                 true,
                 &[],
                 &[],
-                &[br::ImageMemoryBarrier::new(
-                    stencil_buffer_view.image(),
-                    br::ImageSubresourceRange::stencil(0, 0),
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::DepthStencilReadOnlyOpt,
-                )],
+                &[stencil_buffer_view
+                    .image()
+                    .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                    .memory_barrier(
+                        br::ImageLayout::Undefined,
+                        br::ImageLayout::DepthStencilReadOnlyOpt,
+                    )],
             );
+
+            r
         })
         .expect("Failed to initialize resources");
 
         let sdf_renderer = TwoPassStencilSDFRenderer::new(
             e,
-            e.backbuffer_format(),
-            e.requesting_backbuffer_layout().0,
-            e.requesting_backbuffer_layout().1,
-            peridot::math::Vector2(backbuffer_size.width, backbuffer_size.height),
+            e.back_buffer_format(),
+            e.requesting_back_buffer_layout().0,
+            e.requesting_back_buffer_layout().1,
+            back_buffer_size.clone().into(),
             Self::SDF_SIZE,
         );
 
         let fb = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &sdf_renderer.render_pass,
@@ -773,7 +785,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                             as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
                         stencil_buffer_view.clone(),
                     ],
-                    &backbuffer_size,
+                    &back_buffer_size,
                     1,
                 )
             })
@@ -803,16 +815,18 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let mut cmd = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
-            e.backbuffer_count(),
+            e.back_buffer_count(),
         )
         .expect("Failed to create CommandBundle");
         for (cx, fb) in fb.iter().enumerate() {
             let mut rec = unsafe { cmd[cx].begin().expect("Failed to begin recording commands") };
             sdf_renderer.populate_commands(&mut rec, fb, &buffers);
-            rec.end_render_pass();
+            let _ = rec.end_render_pass();
+
+            rec.end().expect("Failed to record commands");
         }
 
-        Game {
+        Self {
             buffer,
             stencil_buffer_view,
             sdf_renderer,
@@ -825,20 +839,20 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
     fn update(
         &mut self,
         e: &mut Engine<NL>,
-        on_backbuffer_of: u32,
+        on_back_buffer_of: u32,
         _delta_time: std::time::Duration,
     ) {
         e.do_render(
-            on_backbuffer_of,
+            on_back_buffer_of,
             None::<br::EmptySubmissionBatch>,
             br::EmptySubmissionBatch.with_command_buffers(
-                &self.cmd[on_backbuffer_of as usize..=on_backbuffer_of as usize],
+                &self.cmd[on_back_buffer_of as usize..=on_back_buffer_of as usize],
             ),
         )
         .expect("Failed to present");
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_back_buffer_resources(&mut self) {
         self.fb.clear();
     }
     fn on_resize(&mut self, e: &mut peridot::Engine<NL>, new_size: peridot::math::Vector2<usize>) {
@@ -917,10 +931,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .unwrap_buffer();
 
         let stencil_buffer = br::ImageDesc::new(
-            &br::vk::VkExtent2D {
-                width: new_size.0 as _,
-                height: new_size.1 as _,
-            },
+            peridot::math::Vector2(new_size.0 as u32, new_size.1 as _),
             br::vk::VK_FORMAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
@@ -938,16 +949,13 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .unwrap_image();
         self.stencil_buffer_view = SharedRef::new(
             stencil_buffer
-                .create_view(
-                    None,
-                    None,
-                    &Default::default(),
-                    &br::ImageSubresourceRange::stencil(0..1, 0..1),
-                )
+                .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                .view_builder()
+                .create()
                 .expect("Failed to create Stencil Buffer View"),
         );
         self.fb = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &self.sdf_renderer.render_pass,
@@ -1003,7 +1011,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 }
             })
             .expect("Failed to set init data");
-        let mut tfb = peridot::TransferBatch::new();
+        let mut tfb = peridot::TransferBatch::<peridot::DeviceObject>::new();
         tfb.add_mirroring_buffer(
             SharedRef::new(buffer_init),
             self.buffer.clone(),
@@ -1017,22 +1025,26 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             br::AccessFlags::VERTEX_ATTRIBUTE_READ,
         );
 
-        e.submit_commands(|r| {
-            tfb.sink_transfer_commands(r);
-            tfb.sink_graphics_ready_commands(r);
-            r.pipeline_barrier(
+        e.submit_commands(|mut r| {
+            tfb.sink_transfer_commands(&mut r);
+            tfb.sink_graphics_ready_commands(&mut r);
+            let _ = r.pipeline_barrier(
                 br::PipelineStageFlags::BOTTOM_OF_PIPE,
                 br::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                 true,
                 &[],
                 &[],
-                &[br::ImageMemoryBarrier::new(
-                    self.stencil_buffer_view.image(),
-                    br::ImageSubresourceRange::stencil(0, 0),
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::DepthStencilReadOnlyOpt,
-                )],
+                &[self
+                    .stencil_buffer_view
+                    .image()
+                    .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
+                    .memory_barrier(
+                        br::ImageLayout::Undefined,
+                        br::ImageLayout::DepthStencilReadOnlyOpt,
+                    )],
             );
+
+            r
         })
         .expect("Failed to initialize resources");
 
@@ -1065,13 +1077,15 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let mut cmd = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
-            e.backbuffer_count(),
+            e.back_buffer_count(),
         )
         .expect("Failed to create CommandBundle");
         for (cx, fb) in self.fb.iter().enumerate() {
             let mut rec = unsafe { cmd[cx].begin().expect("Failed to begin recording commands") };
             self.sdf_renderer.populate_commands(&mut rec, fb, &buffers);
-            rec.end_render_pass();
+            let _ = rec.end_render_pass();
+
+            rec.end().expect("Failed to record commands");
         }
     }
 }

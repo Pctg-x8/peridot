@@ -1,0 +1,5 @@
+#!/bin/bash
+
+make -C .github/workflows && make -C .github/workflows/generator
+git add .github/workflows
+

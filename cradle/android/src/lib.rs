@@ -35,7 +35,7 @@ impl Game {
         engine.input_mut().set_nativelink(Box::new(InputNativeLink {
             pos_cache: pos_cache.clone(),
         }));
-        engine.postinit();
+        engine.post_init();
 
         Self {
             userlib: userlib::Game::init(&mut engine),
@@ -82,10 +82,10 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
-    type Backbuffer = br::ImageViewObject<
+    type BackBuffer = br::ImageViewObject<
         br::SwapchainImage<
             SharedRef<
-                br::SwapchainObject<
+                br::SurfaceSwapchainObject<
                     peridot::DeviceObject,
                     br::SurfaceObject<peridot::InstanceObject>,
                 >,
@@ -96,29 +96,29 @@ impl peridot::PlatformPresenter for Presenter {
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
-    fn backbuffer_count(&self) -> usize {
-        self.sc.backbuffer_count()
+    fn back_buffer_count(&self) -> usize {
+        self.sc.back_buffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedRef<Self::Backbuffer>> {
-        self.sc.backbuffer(index)
+    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+        self.sc.back_buffer(index)
     }
 
-    fn emit_initialize_backbuffer_commands(
+    fn emit_initialize_back_buffer_commands(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + ?Sized>,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
     ) {
-        self.sc.emit_initialize_backbuffer_commands(recorder)
+        self.sc.emit_initialize_back_buffer_commands(recorder)
     }
-    fn next_backbuffer_index(&mut self) -> br::Result<u32> {
-        self.sc.acquire_next_backbuffer_index()
+    fn next_back_buffer_index(&mut self) -> br::Result<u32> {
+        self.sc.acquire_next_back_buffer_index()
     }
-    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
-        self.sc.requesting_backbuffer_layout()
+    fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.sc.requesting_back_buffer_layout()
     }
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::Fence,
+        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
