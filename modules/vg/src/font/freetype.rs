@@ -50,13 +50,14 @@ impl Font for FreetypeFont {
             euclid::size2(m.width as f32 / 64.0, m.height as f32 / 64.0),
         ))
     }
-    fn outline<B: PathBuilder>(
+    fn outline(
         &self,
         glyph: &Self::GlyphID,
-        builder: &mut B,
+        transform: &euclid::Transform2D<f32>,
+        builder: &mut impl PathBuilder,
     ) -> Result<(), GlyphLoadingError> {
         self.0.get(glyph.0).load_glyph(glyph.1)?;
-        self.0.get(glyph.0).decompose_outline(builder);
+        self.0.get(glyph.0).decompose_outline(transform, builder);
 
         Ok(())
     }
@@ -255,7 +256,11 @@ impl Face {
         unsafe { &(*(*self.ptr).glyph).metrics }
     }
 
-    pub fn decompose_outline<B: PathBuilder>(&self, builder: &mut B) {
+    pub fn decompose_outline<B: PathBuilder>(
+        &self,
+        transform: &euclid::Transform2D<f32>,
+        builder: &mut B,
+    ) {
         let decomposer = FT_Outline_Funcs {
             move_to: outline_decompose_moveto::<B>,
             line_to: outline_decompose_lineto::<B>,
@@ -264,27 +269,35 @@ impl Face {
             shift: 0,
             delta: 0,
         };
+        let mut ctx = OutlineContext { builder, transform };
 
         unsafe {
             FT_Outline_Decompose(
                 &mut (*(*self.ptr).glyph).outline,
                 &decomposer,
-                builder as *mut B as _,
+                &mut ctx as *mut _ as _,
             );
         }
     }
+}
+
+struct OutlineContext<'t, B: FlatPathBuilder> {
+    builder: &'t mut B,
+    transform: &'t euclid::Transform2D<f32>,
 }
 
 extern "system" fn outline_decompose_moveto<B: FlatPathBuilder>(
     to: *const FT_Vector,
     context: *mut libc::c_void,
 ) -> libc::c_int {
-    let builder = unsafe { &mut *(context as *mut B) };
+    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
+
     let vector = unsafe { &*to };
-    builder.move_to(euclid::point2(
-        vector.x as f32 / 64.0,
-        vector.y as f32 / 64.0,
-    ));
+    ctx.builder
+        .move_to(ctx.transform.transform_point(&euclid::point2(
+            vector.x as f32 / 64.0,
+            vector.y as f32 / 64.0,
+        )));
 
     return 0;
 }
@@ -292,12 +305,14 @@ extern "system" fn outline_decompose_lineto<B: FlatPathBuilder>(
     to: *const FT_Vector,
     context: *mut libc::c_void,
 ) -> libc::c_int {
-    let builder = unsafe { &mut *(context as *mut B) };
+    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
+
     let vector = unsafe { &*to };
-    builder.line_to(euclid::point2(
-        vector.x as f32 / 64.0,
-        vector.y as f32 / 64.0,
-    ));
+    ctx.builder
+        .line_to(ctx.transform.transform_point(&euclid::point2(
+            vector.x as f32 / 64.0,
+            vector.y as f32 / 64.0,
+        )));
 
     return 0;
 }
@@ -306,12 +321,17 @@ extern "system" fn outline_decompose_conicto<B: PathBuilder>(
     to: *const FT_Vector,
     context: *mut libc::c_void,
 ) -> libc::c_int {
-    let builder = unsafe { &mut *(context as *mut B) };
+    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
+
     let cv = unsafe { &*control };
     let vector = unsafe { &*to };
-    builder.quadratic_bezier_to(
-        euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0),
-        euclid::point2(vector.x as f32 / 64.0, vector.y as f32 / 64.0),
+    ctx.builder.quadratic_bezier_to(
+        ctx.transform
+            .transform_point(&euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0)),
+        ctx.transform.transform_point(&euclid::point2(
+            vector.x as f32 / 64.0,
+            vector.y as f32 / 64.0,
+        )),
     );
 
     return 0;
@@ -322,14 +342,20 @@ extern "system" fn outline_decompose_cubicto<B: PathBuilder>(
     to: *const FT_Vector,
     context: *mut libc::c_void,
 ) -> libc::c_int {
-    let builder = unsafe { &mut *(context as *mut B) };
+    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
+
     let cv = unsafe { &*control };
     let cv2 = unsafe { &*control2 };
     let vector = unsafe { &*to };
-    builder.cubic_bezier_to(
-        euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0),
-        euclid::point2(cv2.x as f32 / 64.0, cv2.y as f32 / 64.0),
-        euclid::point2(vector.x as f32 / 64.0, vector.y as f32 / 64.0),
+    ctx.builder.cubic_bezier_to(
+        ctx.transform
+            .transform_point(&euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0)),
+        ctx.transform
+            .transform_point(&euclid::point2(cv2.x as f32 / 64.0, cv2.y as f32 / 64.0)),
+        ctx.transform.transform_point(&euclid::point2(
+            vector.x as f32 / 64.0,
+            vector.y as f32 / 64.0,
+        )),
     );
 
     return 0;
