@@ -203,9 +203,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut image_mb =
             MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
         image_mb.add(peridot::MemoryBadgetEntry::Image(msaa_texture));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(msaa_texture)]) = image_mb.alloc().expect("Failed to allocate msaa texture memory").try_into() else {
-            unreachable!("unexpected return set");
-        };
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(msaa_texture)]) =
+            image_mb.alloc().expect("Failed to allocate msaa texture memory").try_into() else {
+                unreachable!("unexpected return set");
+            };
         let msaa_texture = SharedRef::new(
             msaa_texture
                 .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
@@ -624,9 +625,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut image_mb =
             MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
         image_mb.add(peridot::MemoryBadgetEntry::Image(msaa_texture));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(msaa_texture)]) = image_mb.alloc().expect("Failed to allocate msaa texture memory").try_into() else {
-            unreachable!("unexpected return set");
-        };
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(msaa_texture)]) =
+            image_mb.alloc().expect("Failed to allocate msaa texture memory").try_into() else {
+                unreachable!("unexpected return set");
+            };
         let msaa_texture = SharedRef::new(
             msaa_texture
                 .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
