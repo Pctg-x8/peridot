@@ -19,6 +19,7 @@ module Workflow.GitHub.Actions
     job,
     jobModifySteps,
     jobOutput,
+    jobForwardingStepOutput,
     jobRunsOn,
     Workflow (..),
     WorkflowTrigger (..),
@@ -197,6 +198,9 @@ jobModifySteps f self@(Job {steps}) = self {steps = f steps}
 
 jobOutput :: String -> String -> Job -> Job
 jobOutput k v self = self {outputs = M.insert k v $ outputs self}
+
+jobForwardingStepOutput :: String -> String -> Job -> Job
+jobForwardingStepOutput stepName key = jobOutput key $ mkRefStepOutputExpression stepName key
 
 jobRunsOn :: [String] -> Job -> Job
 jobRunsOn platform self = self {runsOn = platform}

@@ -53,8 +53,8 @@ preconditions =
   applyModifiers
     [ GHA.namedAs "Preconditions",
       preconditionBeginTimestampOutputDef,
-      GHA.jobOutput "has_code_changes" $ GHA.mkRefStepOutputExpression "fileck" "has_code_changes",
-      GHA.jobOutput "has_workflow_changes" $ GHA.mkRefStepOutputExpression "fileck" "has_workflow_changes"
+      GHA.jobForwardingStepOutput "fileck" "has_code_changes",
+      GHA.jobForwardingStepOutput "fileck" "has_workflow_changes"
     ]
     $ GHA.job [preconditionRecordBeginTimeStamp, collectChangesStep]
   where
