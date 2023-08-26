@@ -86,7 +86,7 @@ impl Graphics {
                 l.specVersion, l.implementationVersion
             );
 
-            if dbg!(name_str) == "VK_LAYER_KHRONOS_validation" {
+            if name_str == "VK_LAYER_KHRONOS_validation" {
                 validation_layer_available = true;
             }
         }
