@@ -1,22 +1,26 @@
-use log::*;
-use peridot_command_object::{
-    BeginRenderPass, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
-    GraphicsCommand, RangedBuffer, RenderBaseModel,
+use bedrock as br;
+use br::{
+    Buffer, CommandBuffer, DescriptorPool, Device, Image, ImageChild, ImageSubresourceSlice,
+    SubmissionBatch,
 };
-use std::convert::TryInto;
-use std::marker::PhantomData;
-extern crate bedrock as br;
-use br::{Buffer, CommandBuffer, DescriptorPool, Device, Image, ImageChild, SubmissionBatch};
+use log::*;
 use peridot::math::Vector2;
 use peridot::mthelper::SharedRef;
 use peridot::{
     BufferPrealloc, CBSubmissionType, CommandBundle, LayoutedPipeline, MemoryBadget, ModelData,
-    RenderPassTemplates, SpecConstantStorage,
+    SpecConstantStorage,
+};
+use peridot_command_object::{
+    BeginRenderPass, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
+    GraphicsCommand, PipelineBarrier, RangedBuffer, RangedImage, RenderBaseModel,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
+use pvg::{FontProvider, FontProviderConstruct};
 use std::borrow::Cow;
+use std::convert::TryInto;
+use std::marker::PhantomData;
 
 #[derive(SpecConstantStorage)]
 #[repr(C)]
@@ -32,7 +36,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     framebuffers: Vec<
         br::FramebufferObject<
             peridot::DeviceObject,
-            SharedRef<<PL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
+            SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
         >,
     >,
     render_cb: CommandBundle<peridot::DeviceObject>,
@@ -87,9 +91,10 @@ pub struct Game<PL: peridot::NativeLinker> {
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn init(e: &mut peridot::Engine<PL>) -> Self {
-        let font_provider = pvg::FontProvider::new().expect("FontProvider initialization error");
+        let font_provider =
+            pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
         let font = font_provider
-            .best_match("sans-serif", &pvg::FontProperties::default(), 12.0)
+            .best_match("sans-serif", &pvg::FontProperties::default(), 18.0)
             .expect("No Fonts");
         let mut ctx = pvg::Context::new(1.0);
         ctx.text(&font, "Hello, World!|Opaque")
@@ -178,6 +183,37 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 unreachable!("unexpected return combination");
             };
 
+        let rt_size = e
+            .back_buffer(0)
+            .expect("no back-buffers?")
+            .image()
+            .size()
+            .wh();
+        let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
+        let msaa_texture = br::ImageDesc::new(
+            rt_size.clone(),
+            e.back_buffer_format(),
+            br::ImageUsage::COLOR_ATTACHMENT.transient_attachment(),
+            br::ImageLayout::Undefined,
+        )
+        .sample_counts(msaa_count)
+        .create(e.graphics_device().clone())
+        .expect("Failed to create msaa render target");
+        let mut image_mb =
+            MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
+        image_mb.add(peridot::MemoryBadgetEntry::Image(msaa_texture));
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(msaa_texture)]) =
+            image_mb.alloc().expect("Failed to allocate msaa texture memory").try_into() else {
+                unreachable!("unexpected return set");
+            };
+        let msaa_texture = SharedRef::new(
+            msaa_texture
+                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create msaa render target view"),
+        );
+
         let (vg_renderer_params, vg_renderer_params2) = stg_buffer
             .guard_map(0..bp.total_size(), |m| {
                 let p0 = ctx.stage_data_into(m, vg_offs);
@@ -207,6 +243,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 RangedBuffer::from_offset_length(&stg_buffer, 0, transfer_total_size as _);
             let all_buffer =
                 RangedBuffer::from_offset_length(&*buffer, 0, transfer_total_size as _);
+            let msaa_texture = RangedImage::single_color_plane(msaa_texture.image());
 
             let copy =
                 CopyBuffer::new(&stg_buffer, &*buffer).with_mirroring(0, transfer_total_size as _);
@@ -222,26 +259,76 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 all_stg_buffer.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
                 all_buffer_in_barrier,
             ];
-            let out_barrier = [all_buffer_out_barrier];
+            let out_barrier = PipelineBarrier::new()
+                .with_barrier(all_buffer_out_barrier)
+                .with_barrier(msaa_texture.barrier(
+                    br::ImageLayout::Undefined,
+                    br::ImageLayout::ColorAttachmentOpt,
+                ));
 
             copy.between(in_barrier, out_barrier)
                 .submit(e)
                 .expect("ImmResource Initialization");
         }
 
-        let screen_size = e.back_buffer(0).expect("no backbuffer").image().size().wh();
-        let render_pass = RenderPassTemplates::single_render(
+        let (rt_ext_layout, _) = e.requesting_back_buffer_layout();
+        let rt_attachment =
+            br::AttachmentDescription::new(e.back_buffer_format(), rt_ext_layout, rt_ext_layout)
+                .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store);
+        let msaa_rt_attachment = br::AttachmentDescription::new(
             e.back_buffer_format(),
-            e.requesting_back_buffer_layout().0,
+            br::ImageLayout::ColorAttachmentOpt,
+            br::ImageLayout::ColorAttachmentOpt,
         )
-        .create(e.graphics().device().clone())
-        .expect("RenderPass Creation");
+        .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
+        .samples(msaa_count);
+        let color_subpass = br::SubpassDescription::new().add_color_output(
+            1,
+            br::ImageLayout::ColorAttachmentOpt,
+            Some((0, br::ImageLayout::ColorAttachmentOpt)),
+        );
+        let color_subpass_enter_dep = br::vk::VkSubpassDependency {
+            srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
+            dstSubpass: 0,
+            srcStageMask: br::PipelineStageFlags::BOTTOM_OF_PIPE.0,
+            dstStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
+            srcAccessMask: br::AccessFlags::MEMORY.read,
+            dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
+            dependencyFlags: 0,
+        };
+        let color_subpass_leave_dep = br::vk::VkSubpassDependency {
+            srcSubpass: 0,
+            dstSubpass: br::vk::VK_SUBPASS_EXTERNAL,
+            srcStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
+            dstStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
+            srcAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
+            dstAccessMask: br::AccessFlags::MEMORY.read,
+            dependencyFlags: 0,
+        };
+        let render_pass = br::RenderPassBuilder::new()
+            .add_attachments(vec![rt_attachment, msaa_rt_attachment])
+            .add_subpass(color_subpass)
+            .add_dependencies(vec![color_subpass_enter_dep, color_subpass_leave_dep])
+            .create(e.graphics_device().clone())
+            .expect("Failed to create render pass");
+
+        let screen_size = e.back_buffer(0).expect("no backbuffer").image().size().wh();
+        // let render_pass = RenderPassTemplates::single_render(
+        //     e.back_buffer_format(),
+        //     e.requesting_back_buffer_layout().0,
+        // )
+        // .create(e.graphics().device().clone())
+        // .expect("RenderPass Creation");
         let framebuffers = e
             .iter_back_buffers()
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &render_pass,
-                    vec![bb.clone()],
+                    vec![
+                        bb.clone()
+                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
+                        msaa_texture.clone(),
+                    ],
                     screen_size.as_ref(),
                     1,
                 )
@@ -357,13 +444,17 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             _,
             _,
         >::new(&pl, (&render_pass, 0), interior_vertex_processing);
-        gpb.multisample_state(Some(br::MultisampleState::new()));
-        gpb.viewport_scissors(
+        gpb.multisample_state(Some({
+            let mut state = br::MultisampleState::new();
+            state.rasterization_samples(msaa_count as _);
+
+            state
+        }))
+        .viewport_scissors(
             br::DynamicArrayState::Static(&vp),
             br::DynamicArrayState::Static(&sc),
         )
-        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()])
-        .multisample_state(Some(br::MultisampleState::new()));
+        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()]);
         let gp = LayoutedPipeline::combine(
             gpb.create(
                 e.graphics().device().clone(),
@@ -442,8 +533,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
             };
 
-            let rp = BeginRenderPass::for_entire_framebuffer(&render_pass, f)
-                .with_clear_values(vec![br::ClearValue::color([1.0; 4])]);
+            let rp =
+                BeginRenderPass::for_entire_framebuffer(&render_pass, f).with_clear_values(vec![
+                    br::ClearValue::color([1.0; 4]),
+                    br::ClearValue::color([1.0; 4]),
+                ]);
             let render_vg = RenderBaseModel {
                 provider: &vg_renderer_params,
                 engine: e,
@@ -505,12 +599,67 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.framebuffers.clear();
     }
     fn on_resize(&mut self, e: &mut peridot::Engine<PL>, _new_size: Vector2<usize>) {
+        let rt_size = e
+            .back_buffer(0)
+            .expect("no back-buffers?")
+            .image()
+            .size()
+            .wh();
+        let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
+        let msaa_texture = br::ImageDesc::new(
+            rt_size.clone(),
+            e.back_buffer_format(),
+            br::ImageUsage::COLOR_ATTACHMENT.transient_attachment(),
+            br::ImageLayout::Undefined,
+        )
+        .sample_counts(msaa_count)
+        .create(e.graphics_device().clone())
+        .expect("Failed to create msaa render target");
+        let mut image_mb =
+            MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
+        image_mb.add(peridot::MemoryBadgetEntry::Image(msaa_texture));
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(msaa_texture)]) =
+            image_mb.alloc().expect("Failed to allocate msaa texture memory").try_into() else {
+                unreachable!("unexpected return set");
+            };
+        let msaa_texture = SharedRef::new(
+            msaa_texture
+                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create msaa render target view"),
+        );
+
+        e.submit_commands(|mut rec| {
+            let _ = rec.pipeline_barrier(
+                br::PipelineStageFlags::BOTTOM_OF_PIPE,
+                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                true,
+                &[],
+                &[],
+                &[msaa_texture
+                    .image()
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .memory_barrier(
+                        br::ImageLayout::Undefined,
+                        br::ImageLayout::ColorAttachmentOpt,
+                    )],
+            );
+
+            rec
+        })
+        .expect("Failed to initialize msaa rt");
+
         self.framebuffers = e
             .iter_back_buffers()
             .map(|bb| {
                 e.graphics().device().clone().new_framebuffer(
                     &self.render_pass,
-                    vec![bb.clone()],
+                    vec![
+                        bb.clone()
+                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
+                        msaa_texture.clone(),
+                    ],
                     bb.image().size().as_ref(),
                     1,
                 )
@@ -532,7 +681,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             };
 
             let rp = BeginRenderPass::for_entire_framebuffer(&self.render_pass, f)
-                .with_clear_values(vec![br::ClearValue::color([1.0; 4])]);
+                .with_clear_values(vec![
+                    br::ClearValue::color([1.0; 4]),
+                    br::ClearValue::color([1.0; 4]),
+                ]);
             let render_vg = RenderBaseModel {
                 provider: &self.vg_renderer_params,
                 engine: e,

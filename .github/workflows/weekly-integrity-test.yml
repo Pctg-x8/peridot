@@ -17,13 +17,10 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: 'true'
         name: Building as Checking
         uses: "./.github/actions/checkbuild-baselayer"
@@ -38,15 +35,18 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-baselayer
+          failure_step: Base Layer
           mode: branch
           report_name: Weekly Check
           status: failure
   check-cradle-android:
     name: "Cradle(Android)"
     needs:
-      - preconditions
+      - check-baselayer
+      - check-examples
       - check-modules
+      - check-tools
+      - preconditions
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -61,15 +61,12 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: 'true'
-        name: Install Rust Toolchain
+        name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
         with:
           target: aarch64-linux-android
@@ -81,19 +78,19 @@ jobs:
           distribution: adopt
           java-version: '17'
       - if: 'true'
-        name: Install cargo-ndk
+        name: install cargo-ndk
         run: cargo install cargo-ndk
       - if: 'true'
         name: Build CLI
         run: cargo build
-        working-directory: tools/cli
+        working-directory: "./tools/cli"
       - env:
           NDK_PLATFORM_TARGET: '28'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
         name: cargo check
-        run: "./tools/target/debug/peridot check examples/basic -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         name: Configure for Slack Notification
@@ -106,15 +103,18 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-cradle-android
+          failure_step: "Cradle(Android)"
           mode: branch
           report_name: Weekly Check
           status: failure
   check-cradle-linux:
     name: "Cradle(Linux)"
     needs:
-      - preconditions
+      - check-baselayer
+      - check-examples
       - check-modules
+      - check-tools
+      - preconditions
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -123,8 +123,8 @@ jobs:
         name: Add External PPA
         run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
       - if: 'true'
-        name: install extra packages
-        run: "sudo apt-get update && sudo apt-get install libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
+        name: Install extra packages
+        run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: 'true'
         name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
@@ -135,13 +135,10 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - id: llvm-cache
         if: 'true'
         name: Initialize LLVM Cache
@@ -158,13 +155,13 @@ jobs:
       - if: 'true'
         name: Build CLI
         run: cargo build
-        working-directory: tools/cli
+        working-directory: "./tools/cli"
       - env:
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
         name: cargo check
-        run: "./tools/target/debug/peridot check examples/basic -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         name: Configure for Slack Notification
@@ -177,15 +174,18 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-cradle-linux
+          failure_step: "Cradle(Linux)"
           mode: branch
           report_name: Weekly Check
           status: failure
   check-cradle-macos:
     name: "Cradle(macOS)"
     needs:
-      - preconditions
+      - check-baselayer
+      - check-examples
       - check-modules
+      - check-tools
+      - preconditions
     permissions:
       id-token: write
     runs-on: macos-latest
@@ -200,23 +200,20 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: 'true'
         name: Build CLI
         run: cargo build
-        working-directory: tools/cli
+        working-directory: "./tools/cli"
       - if: 'true'
         name: Build archiver
         run: cargo build
-        working-directory: tools/archiver
+        working-directory: "./tools/archiver"
       - if: 'true'
-        name: install requirements
+        name: Install requirements
         run: brew install coreutils
       - env:
           PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
@@ -225,7 +222,7 @@ jobs:
           VULKAN_SDK: /Users
         if: 'true'
         name: cargo check
-        run: "./tools/target/debug/peridot check examples/basic -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         name: Configure for Slack Notification
@@ -238,15 +235,18 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-cradle-macos
+          failure_step: "Cradle(macOS)"
           mode: branch
           report_name: Weekly Check
           status: failure
   check-cradle-windows:
     name: "Cradle(Windows)"
     needs:
-      - preconditions
+      - check-baselayer
+      - check-examples
       - check-modules
+      - check-tools
+      - preconditions
     permissions:
       id-token: write
     runs-on: windows-latest
@@ -261,33 +261,28 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: 'true'
         name: Build CLI
         run: cargo build
-        working-directory: tools/cli
+        working-directory: "./tools/cli"
       - env:
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
         name: cargo check
-        run: |
-          $ErrorActionPreference = "Continue"
-          pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
+          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
         name: cargo check for transparent-back
-        run: |2
-              $ErrorActionPreference = "Continue"
-              pwsh -c 'tools/target/debug/peridot.exe test examples/basic -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v1"
@@ -299,15 +294,16 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-cradle-windows
+          failure_step: "Cradle(Windows)"
           mode: branch
           report_name: Weekly Check
           status: failure
   check-examples:
     name: Examples
     needs:
-      - preconditions
       - check-modules
+      - check-baselayer
+      - preconditions
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -322,13 +318,10 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - env:
           TARGET_PATH: "./examples"
         if: 'true'
@@ -345,7 +338,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-examples
+          failure_step: Examples
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -391,15 +384,15 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-formats
+          failure_step: Code Formats
           mode: branch
           report_name: Weekly Check
           status: failure
   check-modules:
     name: Modules
     needs:
-      - preconditions
       - check-baselayer
+      - preconditions
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -414,13 +407,10 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - env:
           TARGET_PATH: "./modules"
         if: 'true'
@@ -437,15 +427,15 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-modules
+          failure_step: Modules
           mode: branch
           report_name: Weekly Check
           status: failure
   check-tools:
     name: Tools
     needs:
-      - preconditions
       - check-baselayer
+      - preconditions
     permissions:
       id-token: write
     runs-on: ubuntu-latest
@@ -460,13 +450,10 @@ jobs:
         uses: "actions/checkout@v3"
       - if: 'true'
         name: Initialize Cache
-        uses: "actions/cache@v2"
+        uses: "actions/cache@v3"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - env:
           TARGET_PATH: "./tools"
         if: 'true'
@@ -483,7 +470,7 @@ jobs:
         uses: "Pctg-x8/ci-notifications-post-invoker@master"
         with:
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: check-tools
+          failure_step: Tools
           mode: branch
           report_name: Weekly Check
           status: failure
@@ -495,27 +482,30 @@ jobs:
     steps:
       - id: begintime
         name: Getting begintime
-        run: "echo \"::set-output name=begintime::$(date +%s)\""
+        run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
   report-success:
     name: Report as Success
     needs:
-      - preconditions
+      - check-baselayer
+      - check-cradle-android
+      - check-cradle-linux
+      - check-cradle-macos
+      - check-cradle-windows
       - check-examples
       - check-formats
-      - check-cradle-windows
-      - check-cradle-macos
-      - check-cradle-linux
-      - check-cradle-android
+      - check-modules
+      - check-tools
+      - preconditions
     permissions:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - name: Checking out
+        uses: "actions/checkout@v3"
       - name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v3"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
-      - name: Checking out
-        uses: "actions/checkout@v3"
       - name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v1"
         with:
@@ -531,4 +521,4 @@ jobs:
 name: "Integrity Check (Weekly)"
 on:
   schedule:
-    - cron: "0 12 * * wed"
+    cron: "0 12 * * wed"
