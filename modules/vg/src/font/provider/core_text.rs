@@ -1,6 +1,11 @@
 //! CoreText Font Provider impl
 
-use crate::{Font, FontConstructionError, FontProperties, FontProvider, FontProviderConstruct};
+use objc_ext::ObjcObject;
+
+use crate::{
+    font::core_text::CoreTextFont, FontConstructionError, FontProperties, FontProvider,
+    FontProviderConstruct, TTFBlob,
+};
 
 pub struct CoreTextFontProvider;
 impl FontProviderConstruct for CoreTextFontProvider {
@@ -9,12 +14,14 @@ impl FontProviderConstruct for CoreTextFontProvider {
     }
 }
 impl FontProvider for CoreTextFontProvider {
+    type Font = CoreTextFont;
+
     fn best_match(
         &self,
         family_name: &str,
         properties: &FontProperties,
         size: f32,
-    ) -> Result<Font, FontConstructionError> {
+    ) -> Result<Self::Font, FontConstructionError> {
         let traits = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
             FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity")
         })?;
@@ -40,11 +47,11 @@ impl FontProvider for CoreTextFontProvider {
         let family_name_nsstr = appkit::NSString::from_str(family_name)
             .map_err(|_| FontConstructionError::SysAPICallError("NSString::from_str"))?;
         attrs.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontFamilyNameAttribute }),
+            unsafe { &*appkit::kCTFontFamilyNameAttribute }.as_ref(),
             family_name_nsstr.as_id(),
         );
         attrs.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontTraitsAttribute }),
+            unsafe { &*appkit::kCTFontTraitsAttribute }.as_ref(),
             traits.as_id(),
         );
 
@@ -52,9 +59,9 @@ impl FontProvider for CoreTextFontProvider {
             appkit::CTFontDescriptor::with_attributes(AsRef::as_ref(&**attrs)).map_err(|_| {
                 FontConstructionError::SysAPICallError("CTFontDescriptor::with_attributes")
             })?;
-        appkit::CTFont::from_font_descriptor(&fd, CTFONT_DEFAULT_SIZE as _, None)
+        appkit::CTFont::from_font_descriptor(&fd, size as _, None)
             .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
-            .map(|x| Font(x, size))
+            .map(|x| CoreTextFont(x))
     }
 
     fn load<NL: peridot::NativeLinker>(
@@ -62,7 +69,7 @@ impl FontProvider for CoreTextFontProvider {
         e: &peridot::Engine<NL>,
         asset_path: &str,
         size: f32,
-    ) -> Result<Font, FontConstructionError> {
+    ) -> Result<Self::Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
         let d = appkit::CFData::new(&a.0)
             .ok_or(FontConstructionError::SysAPICallError("CFData::new"))?;
@@ -70,8 +77,8 @@ impl FontProvider for CoreTextFontProvider {
             FontConstructionError::SysAPICallError("CTFontDescriptor::from_data"),
         )?;
 
-        appkit::CTFont::from_font_descriptor(&fd, CTFONT_DEFAULT_SIZE as _, None)
+        appkit::CTFont::from_font_descriptor(&fd, size as _, None)
             .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
-            .map(|x| Font(x, size))
+            .map(|x| CoreTextFont(x))
     }
 }

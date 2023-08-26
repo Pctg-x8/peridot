@@ -3,10 +3,8 @@ use lyon_path::builder::PathBuilder;
 use peridot::math::Vector2;
 
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
-use objc_ext::ObjcObject;
-#[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 mod core_text;
-#[cfg(all(target_os = "windows", not(feature = "use-freetype")))]
+#[cfg(all(windows, not(feature = "use-freetype")))]
 mod dwrite;
 #[cfg(feature = "use-freetype")]
 mod freetype;

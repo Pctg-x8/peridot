@@ -62,7 +62,7 @@ cfg_if! {
         pub type DefaultFontProvider = FreetypeOnlyFontProvider;
     } else if #[cfg(windows)] {
         pub type DefaultFontProvider = DirectWriteFontProvider;
-    } else if #[cfg(targeT_os = "macos")] {
+    } else if #[cfg(target_os = "macos")] {
         pub type DefaultFontProvider = CoreTextFontProvider;
     }
 }
