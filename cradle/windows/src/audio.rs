@@ -1,25 +1,9 @@
 #![allow(non_upper_case_globals)]
 
-use crate::hr_into_result;
 use std::ffi::OsString;
-use std::io::Result as IOResult;
 use std::io::Result as IOResult;
 use std::os::windows::ffi::OsStringExt;
 use std::ptr::NonNull;
-use std::ptr::NonNull;
-use winapi::shared::guiddef::IID;
-use winapi::shared::ksmedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
-use winapi::shared::mmreg::*;
-use winapi::shared::wtypes::PROPERTYKEY;
-use winapi::um::audioclient::*;
-use winapi::um::audiosessiontypes::AUDCLNT_SHAREMODE_SHARED;
-use winapi::um::combaseapi::{CoCreateInstance, CoTaskMemFree, PropVariantClear, CLSCTX_ALL};
-use winapi::um::coml2api::STGM_READ;
-use winapi::um::mmdeviceapi::*;
-use winapi::um::propidl::*;
-use winapi::um::propsys::IPropertyStore;
-use winapi::um::strmif::REFERENCE_TIME;
-use winapi::Interface;
 use windows::core::PWSTR;
 use windows::Win32::Devices::FunctionDiscovery::{
     PKEY_DeviceInterface_FriendlyName, PKEY_Device_DeviceDesc, PKEY_Device_FriendlyName,
@@ -214,10 +198,7 @@ impl peridot::audio::Processor for PSGSine {
 
 use parking_lot::RwLock;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, RwLock};
 use std::thread::{sleep, Builder as ThreadBuilder, JoinHandle};
-use std::thread::{sleep, Builder as ThreadBuilder, JoinHandle};
-use std::time::Duration;
 use std::time::Duration;
 
 pub struct NativeAudioEngine {
@@ -261,10 +242,12 @@ impl NativeAudioEngine {
                         wBitsPerSample: bits_per_sample,
                         nBlockAlign: (bits_per_sample >> 3) * 2,
                         nAvgBytesPerSec: samples_per_sec * 2 * (bits_per_sample >> 3) as u32,
-                        cbSize: std::mem::size_of::<WAVEFORMATEXTENSIBLE>() as _,
+                        cbSize: (std::mem::size_of::<WAVEFORMATEXTENSIBLE>()
+                            - std::mem::size_of::<WAVEFORMATEX>())
+                            as _,
                     },
                     Samples: WAVEFORMATEXTENSIBLE_0 {
-                        wSamplesPerBlock: samples_per_sec as _,
+                        wValidBitsPerSample: bits_per_sample as _,
                     },
                     dwChannelMask: SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
                     SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
@@ -274,7 +257,7 @@ impl NativeAudioEngine {
                     .expect("initialize");
 
                 let process_frames = aclient.buffer_size().expect("Getting BufferSize") as u32;
-                log::info!("Processing Buffer Size: {}", process_frames);
+                log::info!("Processing Buffer Size: {process_frames}");
                 let sleep_duration = Duration::from_micros(
                     (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _,
                 );
@@ -316,7 +299,7 @@ impl NativeAudioEngine {
             })?
             .into();
 
-        Ok(NativeAudioEngine {
+        Ok(Self {
             process_thread,
             exit_state,
         })
