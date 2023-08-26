@@ -241,7 +241,7 @@ impl<NL: NativeLinker> Engine<NL> {
         &mut self.g
     }
 
-    pub const fn graphics_device(&self) -> &impl br::Device {
+    pub const fn graphics_device(&self) -> &DeviceObject {
         &self.g.device
     }
     pub const fn graphics_queue_family_index(&self) -> u32 {

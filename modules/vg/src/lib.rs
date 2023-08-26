@@ -90,8 +90,8 @@ impl Context {
         for g in glyphs {
             let (adv, size) = (font.advance_h(&g)?, font.bounds(&g)?);
             let tf = euclid::Transform2D::create_translation(
-                left_offs * self.screen_scaling,
-                -font.ascent() * self.screen_scaling,
+                left_offs * self.screen_scaling + 0.5,
+                -font.ascent() * self.screen_scaling + 0.5,
             );
             let _ = font.outline(&g, &tf, g0.builder_mut());
             left_offs += adv;
