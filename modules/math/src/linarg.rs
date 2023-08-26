@@ -902,6 +902,26 @@ impl<T> Into<euclid::Vector2D<T>> for Vector2<T> {
         euclid::Vector2D::new(self.0, self.1)
     }
 }
+impl<T> From<euclid::Point2D<T>> for Vector2<T> {
+    fn from(value: euclid::Point2D<T>) -> Self {
+        Self(value.x, value.y)
+    }
+}
+impl<T: Copy> From<&'_ euclid::Point2D<T>> for Vector2<T> {
+    fn from(value: &'_ euclid::Point2D<T>) -> Self {
+        Self(value.x, value.y)
+    }
+}
+impl<T> From<euclid::Vector2D<T>> for Vector2<T> {
+    fn from(value: euclid::Vector2D<T>) -> Self {
+        Self(value.x, value.y)
+    }
+}
+impl<T: Copy> From<&'_ euclid::Vector2D<T>> for Vector2<T> {
+    fn from(value: &'_ euclid::Vector2D<T>) -> Self {
+        Self(value.x, value.y)
+    }
+}
 
 #[cfg(test)]
 mod tests {
