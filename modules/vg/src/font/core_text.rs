@@ -19,9 +19,6 @@ impl Font for CoreTextFont {
         self.0.size() as _
     }
 
-    fn scale_value(&self) -> f32 {
-        1.0
-    }
     fn ascent(&self) -> f32 {
         self.0.ascent() as _
     }

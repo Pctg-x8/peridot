@@ -112,7 +112,6 @@ pub trait Font {
     fn set_em_size(&mut self, size: f32);
     fn size(&self) -> f32;
 
-    fn scale_value(&self) -> f32;
     fn ascent(&self) -> f32;
     fn units_per_em(&self) -> u32;
 

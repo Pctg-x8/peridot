@@ -17,6 +17,11 @@ use windows::{
 use crate::{Font, GlyphLoadingError};
 
 pub struct DirectWriteFont(pub(crate) IDWriteFontFace, pub(crate) f32);
+impl DirectWriteFont {
+    fn scale_value(&self) -> f32 {
+        (96.0 * self.1 / 72.0) / self.units_per_em() as f32
+    }
+}
 impl Font for DirectWriteFont {
     type GlyphID = u16;
 
@@ -27,9 +32,6 @@ impl Font for DirectWriteFont {
         self.1
     }
 
-    fn scale_value(&self) -> f32 {
-        (96.0 * self.1 / 72.0) / self.units_per_em() as f32
-    }
     /// Returns a scaled ascent metric value
     fn ascent(&self) -> f32 {
         let mut fm = core::mem::MaybeUninit::uninit();

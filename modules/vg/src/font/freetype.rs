@@ -22,11 +22,8 @@ impl Font for FreetypeFont {
         self.1
     }
 
-    fn scale_value(&self) -> f32 {
-        self.1 / self.units_per_em() as f32
-    }
     fn ascent(&self) -> f32 {
-        self.0.ascender() as f32 * self.scale_value()
+        self.0.ascender() as f32 * self.1 / self.units_per_em() as f32
     }
     fn units_per_em(&self) -> u32 {
         self.0.units_per_em() as _
