@@ -21,8 +21,8 @@ use br::VkObject;
 
 use peridot_command_object::{
     BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBuffer,
-    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh,
-    PipelineBarrier, RangedBuffer, RangedImage,
+    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner,
+    ImageResourceRange, PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
 };
 
 struct BufferOffsets {
@@ -47,22 +47,13 @@ pub struct Game<PL: peridot::NativeLinker> {
             SharedRef<<PL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
         >,
     >,
-    gp_main: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        br::PipelineLayoutObject<peridot::DeviceObject>,
-    >,
     descriptor: (
         br::DescriptorSetLayoutObject<peridot::DeviceObject>,
         br::DescriptorPoolObject<peridot::DeviceObject>,
         Vec<br::DescriptorSet>,
     ),
     _sampler: br::SamplerObject<peridot::DeviceObject>,
-    plane_mesh: Mesh<
-        peridot::Buffer<
-            br::BufferObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >,
+    color_renders: Box<dyn GraphicsCommand>,
     mutable_uniform_buffer: RangedBuffer<
         peridot::Buffer<
             br::BufferObject<peridot::DeviceObject>,
@@ -266,7 +257,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 );
                 let copies = (staging_copy, mutable_copy, tex_copy);
 
-                copies.between(in_barriers, out_barriers).execute(&mut r);
+                copies
+                    .between(in_barriers, out_barriers)
+                    .execute(&mut r.as_dyn_ref());
                 r
             })
             .expect("Failed to submit pre-configure commands");
@@ -297,6 +290,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                         .synchronized_nth(0)
                         .begin()
                         .expect("Failed to begin recording update command")
+                        .as_dyn_ref()
                 })
                 .expect("Failed to record update commands");
         }
@@ -419,10 +413,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .update_descriptor_sets(&descriptor_writes, &[]);
 
         let RangedBuffer(_, vertex_buffer_range) = vertex_buffer;
-        let plane_mesh = Mesh {
+        let plane_mesh = StandardMesh {
             vertex_buffers: vec![RangedBuffer(buffer, vertex_buffer_range)],
             vertex_count: 4,
         };
+
+        let descriptor_sets = DescriptorSets(vec![*descriptor_main[0]]);
+        let render_image_plane = plane_mesh
+            .draw(1)
+            .after_of(descriptor_sets.into_bind_graphics());
+        let color_renders = (gp, render_image_plane);
 
         let mut render_cb = CommandBundle::new(
             e.graphics(),
@@ -445,13 +445,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
             let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
                 .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
-            let descriptor_sets = DescriptorSets(vec![*descriptor_main[0]]);
-            let render_image_plane = plane_mesh.draw(1).after_of(descriptor_sets.bind_graphics());
 
-            (&gp, render_image_plane)
+            (&color_renders)
                 .between(begin_main_rp, EndRenderPass)
                 .execute_and_finish(unsafe {
-                    cb.begin().expect("Failed to begin command recording")
+                    cb.begin()
+                        .expect("Failed to begin command recording")
+                        .as_dyn_ref()
                 })
                 .expect("Failed to record render commands");
         }
@@ -464,9 +464,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             renderpass,
             framebuffers,
             descriptor: (descriptor_layout, descriptor_pool, descriptor_main),
-            gp_main: gp,
             rot: 0.0,
-            plane_mesh,
+            color_renders: color_renders.boxed(),
             mutable_uniform_buffer: RangedBuffer(mut_buffer, mutable_uniform_range),
             _sampler: smp,
             _image_view: image_view,
@@ -520,17 +519,14 @@ impl<PL: peridot::NativeLinker> Game<PL> {
         for (cb, fb) in self.render_cb.iter_mut().zip(&self.framebuffers) {
             let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&self.renderpass, fb)
                 .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
-            let descriptor_sets = DescriptorSets(vec![*self.descriptor.2[0]]);
-            let render_image_plane = self
-                .plane_mesh
-                .draw(1)
-                .after_of(descriptor_sets.bind_graphics());
 
-            let commands =
-                (&self.gp_main, render_image_plane).between(begin_main_rp, EndRenderPass);
-            commands
+            self.color_renders
+                .as_ref()
+                .between(begin_main_rp, EndRenderPass)
                 .execute_and_finish(unsafe {
-                    cb.begin().expect("Failed to begin command recording")
+                    cb.begin()
+                        .expect("Failed to begin command recording")
+                        .as_dyn_ref()
                 })
                 .expect("Failed to record render commands");
         }

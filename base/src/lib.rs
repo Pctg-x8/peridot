@@ -570,7 +570,10 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self.1
     }
 
-    pub fn bind(&self, rec: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>) {
+    pub fn bind(
+        &self,
+        rec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
+    ) {
         let _ = rec.bind_graphics_pipeline_pair(&self.0, &self.1);
     }
 }
