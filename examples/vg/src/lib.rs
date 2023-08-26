@@ -12,12 +12,13 @@ use peridot::{
 };
 use peridot_command_object::{
     BeginRenderPass, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
-    GraphicsCommand, PipelineBarrier, RangedBuffer, RangedImage, RenderBaseModel,
+    GraphicsCommand, GraphicsCommandCombiner, GraphicsCommandSubmission, PipelineBarrier,
+    RangedBuffer, RangedImage,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
-use pvg::{FontProvider, FontProviderConstruct};
+use pvg::{FontProvider, FontProviderConstruct, RenderVG};
 use std::borrow::Cow;
 use std::convert::TryInto;
 use std::marker::PhantomData;
@@ -513,6 +514,30 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             pl.clone(),
         );
 
+        let render_vg = RenderVG {
+            params: &vg_renderer_params,
+            buffer: &buffer,
+            extras: pvg::RendererExternalInstances {
+                interior_pipeline: &gp,
+                curve_pipeline: &gp_curve,
+                transform_buffer_descriptor_set: descs[0],
+                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+            },
+            rendering_precision: e.rendering_precision(),
+        };
+        let render_vg2 = RenderVG {
+            params: &vg_renderer_params2,
+            buffer: &buffer,
+            extras: pvg::RendererExternalInstances {
+                interior_pipeline: &gp2,
+                curve_pipeline: &gp2_curve,
+                transform_buffer_descriptor_set: descs[1],
+                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+            },
+            rendering_precision: e.rendering_precision(),
+        };
+        let color_renders = (render_vg2, render_vg);
+
         let mut render_cb = CommandBundle::new(
             &e.graphics(),
             CBSubmissionType::Graphics,
@@ -520,41 +545,18 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         )
         .expect("Creating RenderCB");
         for (r, f) in render_cb.iter_mut().zip(&framebuffers) {
-            let vg_renderer_exinst = pvg::RendererExternalInstances {
-                interior_pipeline: &gp,
-                curve_pipeline: &gp_curve,
-                transform_buffer_descriptor_set: descs[0],
-                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-            };
-            let vg_renderer_exinst2 = pvg::RendererExternalInstances {
-                interior_pipeline: &gp2,
-                curve_pipeline: &gp2_curve,
-                transform_buffer_descriptor_set: descs[1],
-                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-            };
-
             let rp =
                 BeginRenderPass::for_entire_framebuffer(&render_pass, f).with_clear_values(vec![
                     br::ClearValue::color([1.0; 4]),
                     br::ClearValue::color([1.0; 4]),
                 ]);
-            let render_vg = RenderBaseModel {
-                provider: &vg_renderer_params,
-                engine: e,
-                buffer: &buffer,
-                extras: vg_renderer_exinst,
-            };
-            let render_vg2 = RenderBaseModel {
-                provider: &vg_renderer_params2,
-                engine: e,
-                buffer: &buffer,
-                extras: vg_renderer_exinst2,
-            };
 
-            (render_vg2, render_vg)
+            (&color_renders)
                 .between(rp, EndRenderPass)
                 .execute_and_finish(unsafe {
-                    r.begin().expect("Failed to begin render command recording")
+                    r.begin()
+                        .expect("Failed to begin render command recording")
+                        .as_dyn_ref()
                 })
                 .expect("Failed to finish render commands");
         }
@@ -666,41 +668,41 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
-        for (r, f) in self.render_cb.iter_mut().zip(&self.framebuffers) {
-            let vg_renderer_exinst = pvg::RendererExternalInstances {
+
+        let render_vg = RenderVG {
+            params: &self.vg_renderer_params,
+            buffer: &self.buffer,
+            extras: pvg::RendererExternalInstances {
                 interior_pipeline: &self.gp1,
                 curve_pipeline: &self.gp1_curve,
                 transform_buffer_descriptor_set: self.descriptors.2[0],
                 target_pixels: self.target_size.clone(),
-            };
-            let vg_renderer_exinst2 = pvg::RendererExternalInstances {
+            },
+            rendering_precision: e.rendering_precision(),
+        };
+        let render_vg2 = RenderVG {
+            params: &self.vg_renderer_params2,
+            buffer: &self.buffer,
+            extras: pvg::RendererExternalInstances {
                 interior_pipeline: &self.gp2,
                 curve_pipeline: &self.gp2_curve,
                 transform_buffer_descriptor_set: self.descriptors.2[1],
                 target_pixels: self.target_size.clone(),
-            };
+            },
+            rendering_precision: e.rendering_precision(),
+        };
+        let color_renders = (render_vg2, render_vg);
 
+        for (r, f) in self.render_cb.iter_mut().zip(&self.framebuffers) {
             let rp = BeginRenderPass::for_entire_framebuffer(&self.render_pass, f)
                 .with_clear_values(vec![
                     br::ClearValue::color([1.0; 4]),
                     br::ClearValue::color([1.0; 4]),
                 ]);
-            let render_vg = RenderBaseModel {
-                provider: &self.vg_renderer_params,
-                engine: e,
-                buffer: &self.buffer,
-                extras: vg_renderer_exinst,
-            };
-            let render_vg2 = RenderBaseModel {
-                provider: &self.vg_renderer_params2,
-                engine: e,
-                buffer: &self.buffer,
-                extras: vg_renderer_exinst2,
-            };
 
-            (render_vg2, render_vg)
+            (&color_renders)
                 .between(rp, EndRenderPass)
-                .execute_and_finish(unsafe { r.begin().expect("Start Recording CB") })
+                .execute_and_finish(unsafe { r.begin().expect("Start Recording CB").as_dyn_ref() })
                 .expect("Failed to finish render commands");
         }
     }

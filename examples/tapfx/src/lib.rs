@@ -9,8 +9,9 @@ use peridot::mthelper::SharedRef;
 use peridot::ModelData;
 use peridot_command_object::{
     BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBuffer,
-    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, ImageResourceRange, Mesh,
-    PipelineBarrier, RangedBuffer, RangedImage,
+    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner,
+    GraphicsCommandSubmission, ImageResourceRange, Mesh, PipelineBarrier, RangedBuffer,
+    RangedImage, StandardMesh,
 };
 
 #[repr(C)]
@@ -48,19 +49,12 @@ pub struct Game<NL: peridot::NativeLinker> {
             SharedRef<<NL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
         >,
     >,
+    color_renders: Box<dyn GraphicsCommand>,
     _smp: br::SamplerObject<peridot::DeviceObject>,
     _dsl: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
     _dsl2: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
     _descriptor_pool: br::DescriptorPoolObject<peridot::DeviceObject>,
     descriptors: Vec<br::DescriptorSet>,
-    pipeline: peridot::LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        br::PipelineLayoutObject<peridot::DeviceObject>,
-    >,
-    buffer: peridot::Buffer<
-        br::BufferObject<peridot::DeviceObject>,
-        br::DeviceMemoryObject<peridot::DeviceObject>,
-    >,
     dynamic_buffer: RangedBuffer<
         peridot::Buffer<
             br::BufferObject<peridot::DeviceObject>,
@@ -327,32 +321,6 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             &[],
         );
 
-        let mut main_commands = peridot::CommandBundle::new(
-            e.graphics(),
-            peridot::CBSubmissionType::Graphics,
-            e.back_buffer_count(),
-        )
-        .expect("Failed to allocate render commands");
-        for (b, fb) in main_commands.iter_mut().zip(&framebuffers) {
-            let rp = BeginRenderPass::new(&renderpass, fb, scissors[0].clone())
-                .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
-            let descriptor_sets =
-                DescriptorSets(vec![descriptors[0].into(), descriptors[1].into()]);
-            let mesh = Mesh {
-                vertex_buffers: vec![vertex_buffer.make_ref()],
-                vertex_count: 4,
-            };
-            let setup = (&pipeline, descriptor_sets.bind_graphics());
-
-            mesh.draw(1)
-                .after_of(setup)
-                .between(rp, EndRenderPass)
-                .execute_and_finish(unsafe {
-                    b.begin().expect("Failed to begin recording main commands")
-                })
-                .expect("Failed to record commands");
-        }
-
         let update_data = UniformValues {
             mat: peridot::math::Camera {
                 projection: Some(peridot::math::ProjectionMethod::UI {
@@ -390,6 +358,36 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                     update_commands[0]
                         .begin()
                         .expect("Failed to begin recording update commands")
+                        .as_dyn_ref()
+                })
+                .expect("Failed to record commands");
+        }
+
+        let vertex_buffer_range = vertex_buffer.1;
+        let descriptor_sets = DescriptorSets(vec![descriptors[0].into(), descriptors[1].into()]);
+        let mesh = StandardMesh {
+            vertex_buffers: vec![RangedBuffer(buffer, vertex_buffer_range)],
+            vertex_count: 4,
+        };
+        let setup = (pipeline, descriptor_sets.into_bind_graphics());
+        let color_renders = mesh.draw(1).after_of(setup);
+
+        let mut main_commands = peridot::CommandBundle::new(
+            e.graphics(),
+            peridot::CBSubmissionType::Graphics,
+            e.back_buffer_count(),
+        )
+        .expect("Failed to allocate render commands");
+        for (b, fb) in main_commands.iter_mut().zip(&framebuffers) {
+            let rp = BeginRenderPass::new(&renderpass, fb, scissors[0].clone())
+                .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+
+            (&color_renders)
+                .between(rp, EndRenderPass)
+                .execute_and_finish(unsafe {
+                    b.begin()
+                        .expect("Failed to begin recording main commands")
+                        .as_dyn_ref()
                 })
                 .expect("Failed to record commands");
         }
@@ -397,13 +395,12 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         Self {
             renderpass,
             framebuffers,
+            color_renders: color_renders.boxed(),
             _smp: smp,
             _dsl: dsl,
             _dsl2: dsl2,
             _descriptor_pool: dp,
             descriptors,
-            pipeline,
-            buffer,
             dynamic_buffer,
             main_commands,
             _main_image_view: main_image_view,

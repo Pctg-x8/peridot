@@ -437,14 +437,22 @@ where
 }
 
 pub struct PushConstant<T> {
-    shader_stage: br::ShaderStage,
-    offset: u32,
-    value: T,
+    pub shader_stage: br::ShaderStage,
+    pub offset: u32,
+    pub value: T,
 }
 impl<T> PushConstant<T> {
     pub const fn for_fragment(offset: u32, value: T) -> Self {
         Self {
             shader_stage: br::ShaderStage::FRAGMENT,
+            offset,
+            value,
+        }
+    }
+
+    pub const fn for_vertex(offset: u32, value: T) -> Self {
+        Self {
+            shader_stage: br::ShaderStage::VERTEX,
             offset,
             value,
         }
@@ -595,6 +603,13 @@ impl SimpleDrawIndexed {
     pub const fn with_vertex_offset(self, vertex_offset: i32) -> Self {
         Self {
             vertex_offset,
+            ..self
+        }
+    }
+
+    pub const fn from_index(self, first_index: u32) -> Self {
+        Self {
+            first_index,
             ..self
         }
     }

@@ -7,8 +7,9 @@ use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
 use peridot_command_object::{
     BeginRenderPass, Blending, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
-    GraphicsCommand, IndexedMesh, Mesh, NextSubpass, PipelineBarrier, RangedBuffer, RangedImage,
-    SimpleDrawIndexed,
+    GraphicsCommand, GraphicsCommandCombiner, GraphicsCommandSubmission, NextSubpass,
+    PipelineBarrier, RangedBuffer, RangedImage, SimpleDrawIndexed, StandardIndexedMesh,
+    StandardMesh,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg::{FlatPathBuilder, Font, FontProvider, FontProviderConstruct};
@@ -186,7 +187,8 @@ impl TwoPassStencilSDFRenderer {
             dstSubpass: 0,
             srcStageMask: target_layout_transition_stage.0,
             dstStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                .late_fragment_tests()
+                // Note: LoadOpがClearだとLoad時にWriteが走るらしいのでearlyステージで遷移できてないといけない
+                .early_fragment_tests()
                 .0,
             srcAccessMask: 0,
             dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write
@@ -484,14 +486,14 @@ impl TwoPassStencilSDFRenderer {
     ];
 }
 pub struct TwoPassStencilSDFRendererBuffers<'b> {
-    fill_triangle_mesh: IndexedMesh<
+    fill_triangle_mesh: StandardIndexedMesh<
         &'b br::BufferObject<peridot::DeviceObject>,
         &'b br::BufferObject<peridot::DeviceObject>,
     >,
     fill_triangle_groups: &'b [(u32, u32)],
-    curve_triangles_mesh: Mesh<&'b br::BufferObject<peridot::DeviceObject>>,
-    outline_rects_mesh: Mesh<&'b br::BufferObject<peridot::DeviceObject>>,
-    invert_fill_rect_mesh: Mesh<&'b br::BufferObject<peridot::DeviceObject>>,
+    curve_triangles_mesh: StandardMesh<&'b br::BufferObject<peridot::DeviceObject>>,
+    outline_rects_mesh: StandardMesh<&'b br::BufferObject<peridot::DeviceObject>>,
+    invert_fill_rect_mesh: StandardMesh<&'b br::BufferObject<peridot::DeviceObject>>,
 }
 impl TwoPassStencilSDFRenderer {
     pub fn commands<'s>(
@@ -512,21 +514,21 @@ impl TwoPassStencilSDFRenderer {
             .0;
         let stencil_pass = (
             stencil_fill_triangles_render
-                .after_of(buffers.fill_triangle_mesh.pre_configure_for_draw())
+                .after_of(buffers.fill_triangle_mesh.ref_pre_configure_for_draw())
                 .after_of(&self.triangle_fans_stencil_pipeline),
             buffers
                 .curve_triangles_mesh
-                .draw(1)
+                .ref_draw(1)
                 .after_of(&self.curve_triangles_stencil_pipeline),
         );
         let outline_distance_pass = (
             buffers
                 .outline_rects_mesh
-                .draw(1)
+                .ref_draw(1)
                 .after_of(&self.outline_distance_pipeline),
             buffers
                 .invert_fill_rect_mesh
-                .draw(1)
+                .ref_draw(1)
                 .after_of(&self.invert_pipeline),
         );
 
@@ -784,7 +786,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             })
             .collect();
         let buffers = TwoPassStencilSDFRendererBuffers {
-            fill_triangle_mesh: IndexedMesh {
+            fill_triangle_mesh: StandardIndexedMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(
                     &buffer,
                     figures_fill_triangle_points_offset,
@@ -799,7 +801,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 vertex_count: 0, // ignored value
             },
             fill_triangle_groups: &fill_triangle_groups,
-            curve_triangles_mesh: Mesh {
+            curve_triangles_mesh: StandardMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(
                     &buffer,
                     figure_curve_triangles_offset,
@@ -807,7 +809,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 )],
                 vertex_count: figure_curve_triangles_count as _,
             },
-            outline_rects_mesh: Mesh {
+            outline_rects_mesh: StandardMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(
                     &buffer,
                     outline_rects_offset,
@@ -815,7 +817,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 )],
                 vertex_count: (outline_rects_count * 6) as _,
             },
-            invert_fill_rect_mesh: Mesh {
+            invert_fill_rect_mesh: StandardMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(&buffer, flip_fill_rect, 1)],
                 vertex_count: 4,
             },
@@ -830,7 +832,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             sdf_renderer
                 .commands(fb, &buffers)
                 .execute_and_finish(unsafe {
-                    cmd[cx].begin().expect("Failed to begin recording commands")
+                    cmd[cx]
+                        .begin()
+                        .expect("Failed to begin recording commands")
+                        .as_dyn_ref()
                 })
                 .expect("Failed to record commands");
         }
@@ -1073,7 +1078,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             })
             .collect();
         let buffers = TwoPassStencilSDFRendererBuffers {
-            fill_triangle_mesh: IndexedMesh {
+            fill_triangle_mesh: StandardIndexedMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(
                     &self.buffer,
                     figures_fill_triangle_points_offset,
@@ -1088,7 +1093,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 vertex_count: 0, // ignored value
             },
             fill_triangle_groups: &fill_triangle_groups,
-            curve_triangles_mesh: Mesh {
+            curve_triangles_mesh: StandardMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(
                     &self.buffer,
                     figure_curve_triangles_offset,
@@ -1096,7 +1101,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 )],
                 vertex_count: figure_curve_triangles_count as _,
             },
-            outline_rects_mesh: Mesh {
+            outline_rects_mesh: StandardMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(
                     &self.buffer,
                     outline_rects_offset,
@@ -1104,7 +1109,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 )],
                 vertex_count: (outline_rects_count * 6) as _,
             },
-            invert_fill_rect_mesh: Mesh {
+            invert_fill_rect_mesh: StandardMesh {
                 vertex_buffers: vec![RangedBuffer::from_offset_length(
                     &self.buffer,
                     flip_fill_rect,
@@ -1123,7 +1128,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             self.sdf_renderer
                 .commands(fb, &buffers)
                 .execute_and_finish(unsafe {
-                    cmd[cx].begin().expect("Failed to begin recording commands")
+                    cmd[cx]
+                        .begin()
+                        .expect("Failed to begin recording commands")
+                        .as_dyn_ref()
                 })
                 .expect("Failed to record commands");
         }

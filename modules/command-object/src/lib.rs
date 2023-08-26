@@ -177,11 +177,33 @@ pub trait Mesh {
     fn vertex_buffers(&self) -> &[RangedBuffer<Self::VertexBuffer>];
     fn vertex_count(&self) -> u32;
 }
+impl<M: Mesh> Mesh for &'_ M {
+    type VertexBuffer = M::VertexBuffer;
+
+    fn vertex_buffers(&self) -> &[RangedBuffer<Self::VertexBuffer>] {
+        M::vertex_buffers(&**self)
+    }
+
+    fn vertex_count(&self) -> u32 {
+        M::vertex_count(&**self)
+    }
+}
 pub trait IndexedMesh: Mesh {
     type IndexBuffer: br::Buffer;
 
     fn index_buffer(&self) -> &RangedBuffer<Self::IndexBuffer>;
     fn index_type(&self) -> br::IndexType;
+}
+impl<M: IndexedMesh> IndexedMesh for &'_ M {
+    type IndexBuffer = M::IndexBuffer;
+
+    fn index_buffer(&self) -> &RangedBuffer<Self::IndexBuffer> {
+        M::index_buffer(&**self)
+    }
+
+    fn index_type(&self) -> br::IndexType {
+        M::index_type(&**self)
+    }
 }
 
 pub struct StandardMesh<B: br::Buffer> {
@@ -189,10 +211,6 @@ pub struct StandardMesh<B: br::Buffer> {
     pub vertex_count: u32,
 }
 impl<B: br::Buffer> StandardMesh<B> {
-    pub const fn by_ref(&self) -> &Self {
-        self
-    }
-
     pub const fn draw(self, instance_count: u32) -> DrawMesh<Self> {
         DrawMesh {
             mesh: self,
@@ -205,19 +223,21 @@ impl<B: br::Buffer> StandardMesh<B> {
     pub const fn pre_configure_for_draw(self) -> PreConfigureDraw<Self> {
         PreConfigureDraw(self)
     }
+
+    pub const fn ref_draw(&self, instance_count: u32) -> DrawMesh<&Self> {
+        DrawMesh {
+            mesh: self,
+            instance_count,
+            vertex_start: 0,
+            instance_start: 0,
+        }
+    }
+
+    pub const fn ref_pre_configure_for_draw(&self) -> PreConfigureDraw<&Self> {
+        PreConfigureDraw(self)
+    }
 }
 impl<B: br::Buffer> Mesh for StandardMesh<B> {
-    type VertexBuffer = B;
-
-    fn vertex_buffers(&self) -> &[RangedBuffer<B>] {
-        &self.vertex_buffers
-    }
-
-    fn vertex_count(&self) -> u32 {
-        self.vertex_count
-    }
-}
-impl<B: br::Buffer> Mesh for &'_ StandardMesh<B> {
     type VertexBuffer = B;
 
     fn vertex_buffers(&self) -> &[RangedBuffer<B>] {
@@ -236,10 +256,6 @@ pub struct StandardIndexedMesh<B: br::Buffer, IB: br::Buffer> {
     pub vertex_count: u32,
 }
 impl<B: br::Buffer, IB: br::Buffer> StandardIndexedMesh<B, IB> {
-    pub const fn by_ref(&self) -> &Self {
-        self
-    }
-
     pub const fn draw(self, instance_count: u32) -> DrawIndexedMesh<Self> {
         DrawIndexedMesh {
             mesh: self,
@@ -251,6 +267,20 @@ impl<B: br::Buffer, IB: br::Buffer> StandardIndexedMesh<B, IB> {
     }
 
     pub const fn pre_configure_for_draw(self) -> PreConfigureDrawIndexed<Self> {
+        PreConfigureDrawIndexed(self)
+    }
+
+    pub const fn ref_draw(&self, instance_count: u32) -> DrawIndexedMesh<&Self> {
+        DrawIndexedMesh {
+            mesh: self,
+            instance_count,
+            vertex_start: 0,
+            index_offset: 0,
+            instance_start: 0,
+        }
+    }
+
+    pub const fn ref_pre_configure_for_draw(&self) -> PreConfigureDrawIndexed<&Self> {
         PreConfigureDrawIndexed(self)
     }
 }
@@ -266,28 +296,6 @@ impl<B: br::Buffer, IB: br::Buffer> Mesh for StandardIndexedMesh<B, IB> {
     }
 }
 impl<B: br::Buffer, IB: br::Buffer> IndexedMesh for StandardIndexedMesh<B, IB> {
-    type IndexBuffer = IB;
-
-    fn index_buffer(&self) -> &RangedBuffer<IB> {
-        &self.index_buffer
-    }
-
-    fn index_type(&self) -> br::IndexType {
-        self.index_type
-    }
-}
-impl<B: br::Buffer, IB: br::Buffer> Mesh for &'_ StandardIndexedMesh<B, IB> {
-    type VertexBuffer = B;
-
-    fn vertex_buffers(&self) -> &[RangedBuffer<B>] {
-        &self.vertex_buffers
-    }
-
-    fn vertex_count(&self) -> u32 {
-        self.vertex_count
-    }
-}
-impl<B: br::Buffer, IB: br::Buffer> IndexedMesh for &'_ StandardIndexedMesh<B, IB> {
     type IndexBuffer = IB;
 
     fn index_buffer(&self) -> &RangedBuffer<IB> {

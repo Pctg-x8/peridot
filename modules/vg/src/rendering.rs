@@ -9,6 +9,10 @@ use peridot::{
     BufferContent, BufferPrealloc, DefaultRenderCommands, Engine, LayoutedPipeline, ModelData,
     NativeLinker,
 };
+use peridot_command_object::{
+    DescriptorSets, GraphicsCommand, GraphicsCommandCombiner, PreConfigureDrawIndexed,
+    PushConstant, RangedBuffer, SimpleDrawIndexed, StandardIndexedMesh,
+};
 use std::mem::size_of;
 use std::ops::Range;
 
@@ -273,5 +277,104 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                 .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
                 .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
         }
+    }
+}
+
+pub struct RenderVG<'e, Device: br::Device + 'e, Buffer: br::Buffer<ConcreteDevice = Device>> {
+    pub params: &'e RendererParams,
+    pub extras: RendererExternalInstances<'e, Device>,
+    pub buffer: Buffer,
+    pub rendering_precision: f32,
+}
+impl<'e, Device: br::Device + 'e, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCommand
+    for RenderVG<'e, Device, Buffer>
+{
+    fn execute(
+        &self,
+        cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
+    ) {
+        let renderscale = self.extras.target_pixels.clone() * self.rendering_precision.recip();
+
+        let common_configs = (
+            PushConstant::for_vertex(0, renderscale),
+            PushConstant::for_vertex(4 * 3, 0u32),
+            DescriptorSets(vec![self.extras.transform_buffer_descriptor_set.into()])
+                .into_bind_graphics(),
+        );
+
+        let interior_mesh = StandardIndexedMesh {
+            vertex_buffers: vec![RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.interior_positions as _,
+                1,
+            )],
+            index_buffer: RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.interior_indices as _,
+                1,
+            ),
+            index_type: br::IndexType::U32,
+            vertex_count: 0,
+        };
+        let curve_mesh = StandardIndexedMesh {
+            vertex_buffers: vec![
+                RangedBuffer::from_offset_length(
+                    &self.buffer,
+                    self.params.buffer_offsets.curve_positions as _,
+                    1,
+                ),
+                RangedBuffer::from_offset_length(
+                    &self.buffer,
+                    self.params.buffer_offsets.curve_helper_coords as _,
+                    1,
+                ),
+            ],
+            index_buffer: RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.curve_indices as _,
+                1,
+            ),
+            index_type: br::IndexType::U32,
+            vertex_count: 0,
+        };
+
+        let interior_render = interior_mesh.ref_pre_configure_for_draw().then(
+            self.params
+                .render_info
+                .interior_index_range_per_mesh
+                .iter()
+                .enumerate()
+                // skip if there is no indices
+                .filter(|(_, ir)| ir.end != ir.start)
+                .map(|(n, ir)| {
+                    (
+                        PushConstant::for_vertex(4 * 2, n as u32),
+                        SimpleDrawIndexed::new(ir.end - ir.start, 1).from_index(ir.start),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        let curve_render = curve_mesh.ref_pre_configure_for_draw().then(
+            self.params
+                .render_info
+                .curve_index_range_per_mesh
+                .iter()
+                .enumerate()
+                // skip if there is no indices
+                .filter(|(_, ir)| ir.end != ir.start)
+                .map(|(n, ir)| {
+                    (
+                        PushConstant::for_vertex(4 * 2, n as u32),
+                        SimpleDrawIndexed::new(ir.end - ir.start, 1).from_index(ir.start),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        (
+            interior_render.after_of((&self.extras.interior_pipeline).then(common_configs)),
+            curve_render.after_of(&self.extras.curve_pipeline),
+        )
+            .execute(cb);
     }
 }
