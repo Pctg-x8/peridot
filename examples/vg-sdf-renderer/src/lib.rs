@@ -4,7 +4,7 @@ use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
 use peridot_vertex_processing_pack::PvpShaderModules;
-use peridot_vg::{FlatPathBuilder, FontProviderConstruct, FontProvider, Font};
+use peridot_vg::{FlatPathBuilder, Font, FontProvider, FontProviderConstruct};
 
 #[derive(peridot_derive::SpecConstantStorage)]
 #[repr(C)]
@@ -602,12 +602,15 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let gid = font.glyph_id('A').expect("no glyph contained");
         let mut gen = peridot_vg::SDFGenerator::new(1.0, Self::SDF_SIZE);
         let glyph_metrics = font.bounds(&gid).expect("Failed to get glyph bounds");
-        gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(
-            -glyph_metrics.origin.x + Self::SDF_SIZE,
-            -glyph_metrics.origin.y - Self::SDF_SIZE,
-        ));
-        font.outline(&gid, &mut gen)
-            .expect("Failed to render glyph outline");
+        font.outline(
+            &gid,
+            &peridot_vg::sdf_generator::Transform2D::create_translation(
+                -glyph_metrics.origin.x + Self::SDF_SIZE,
+                -glyph_metrics.origin.y - Self::SDF_SIZE,
+            ),
+            &mut gen,
+        )
+        .expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
         let (
             figure_fill_triangle_points_count,
@@ -868,12 +871,15 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let gid = font.glyph_id('A').expect("no glyph contained");
         let mut gen = peridot_vg::SDFGenerator::new(1.0, Self::SDF_SIZE);
         let glyph_metrics = font.bounds(&gid).expect("Failed to get glyph bounds");
-        gen.set_transform(peridot_vg::sdf_generator::Transform2D::create_translation(
-            -glyph_metrics.origin.x + Self::SDF_SIZE,
-            -glyph_metrics.origin.y - Self::SDF_SIZE,
-        ));
-        font.outline(&gid, &mut gen)
-            .expect("Failed to render glyph outline");
+        font.outline(
+            &gid,
+            &peridot_vg::sdf_generator::Transform2D::create_translation(
+                -glyph_metrics.origin.x + Self::SDF_SIZE,
+                -glyph_metrics.origin.y - Self::SDF_SIZE,
+            ),
+            &mut gen,
+        )
+        .expect("Failed to render glyph outline");
         let figure_vertices = gen.build();
         let (
             figure_fill_triangle_points_count,
