@@ -30,6 +30,7 @@ library
       Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
       Workflow.GitHub.Actions.Predefined.Cache
       Workflow.GitHub.Actions.Predefined.Checkout
+      Workflow.GitHub.Actions.Predefined.Google.Auth
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain
       Workflow.GitHub.Actions.Predefined.SetupJava
   other-modules:
@@ -59,6 +60,7 @@ executable generator-exe
       CustomAction.CheckBuildSubdirectory
       CustomAction.CodeFormChecker
       CustomAction.PostCINotifications
+      DocumentDeployment
       IntegrityTest.PullRequestTriggered
       IntegrityTest.Shared
       IntegrityTest.Weekly
