@@ -106,6 +106,9 @@ impl From<windows::core::Error> for GlyphLoadingError {
     }
 }
 
+/// Represents a font(layered on DirectWrite FontFace / FreeType Face)
+///
+/// For default implementation type, use `DefaultFont` type in some platforms.
 pub trait Font {
     type GlyphID;
 
@@ -127,6 +130,7 @@ pub trait Font {
     ) -> Result<(), GlyphLoadingError>;
 }
 
+#[cfg(not(doc))]
 pub type DefaultFont = <DefaultFontProvider as FontProvider>::Font;
 
 /// An asset represents ttf blob

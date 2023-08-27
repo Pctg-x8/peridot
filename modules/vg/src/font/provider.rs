@@ -2,10 +2,15 @@ use cfg_if::cfg_if;
 
 use crate::{FontConstructionError, FontProperties};
 
+#[doc(hidden)]
 pub trait FontProviderConstruct: Sized + FontProvider {
     /// Creates font provider
     fn new() -> Result<Self, FontConstructionError>;
 }
+
+/// Represents Font Provider(layered on DirectWrite FontCollection / Fontconfig).
+///
+/// To use this functionality, `DefaultFontProvider` is exported for some platforms.
 pub trait FontProvider {
     /// Associated font type for this provider
     type Font: crate::Font;
