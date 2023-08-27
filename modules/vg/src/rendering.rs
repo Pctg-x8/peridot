@@ -295,6 +295,10 @@ impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> RenderVG<D
     pub fn set_target_pixels(&mut self, new_target_pixels: Vector2<f32>) {
         self.target_pixels = new_target_pixels;
     }
+
+    pub fn replace_buffer(&mut self, new_buffer: Buffer) -> Buffer {
+        core::mem::replace(&mut self.buffer, new_buffer)
+    }
 }
 impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCommand
     for RenderVG<Device, Buffer>
