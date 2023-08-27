@@ -280,26 +280,35 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
     }
 }
 
-pub struct RenderVG<'e, Device: br::Device + 'e, Buffer: br::Buffer<ConcreteDevice = Device>> {
-    pub params: &'e RendererParams,
-    pub extras: RendererExternalInstances<'e, Device>,
+pub struct RenderVG<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> {
+    pub params: RendererParams,
+    pub interior_pipeline:
+        LayoutedPipeline<br::PipelineObject<Device>, SharedRef<br::PipelineLayoutObject<Device>>>,
+    pub curve_pipeline:
+        LayoutedPipeline<br::PipelineObject<Device>, SharedRef<br::PipelineLayoutObject<Device>>>,
+    pub transform_buffer_descriptor_set: br::DescriptorSet,
+    pub target_pixels: Vector2<f32>,
     pub buffer: Buffer,
     pub rendering_precision: f32,
 }
-impl<'e, Device: br::Device + 'e, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCommand
-    for RenderVG<'e, Device, Buffer>
+impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> RenderVG<Device, Buffer> {
+    pub fn set_target_pixels(&mut self, new_target_pixels: Vector2<f32>) {
+        self.target_pixels = new_target_pixels;
+    }
+}
+impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCommand
+    for RenderVG<Device, Buffer>
 {
     fn execute(
         &self,
         cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
     ) {
-        let renderscale = self.extras.target_pixels.clone() * self.rendering_precision.recip();
+        let render_scale = self.target_pixels.clone() * self.rendering_precision.recip();
 
         let common_configs = (
-            PushConstant::for_vertex(0, renderscale),
+            PushConstant::for_vertex(0, render_scale),
             PushConstant::for_vertex(4 * 3, 0u32),
-            DescriptorSets(vec![self.extras.transform_buffer_descriptor_set.into()])
-                .into_bind_graphics(),
+            DescriptorSets(vec![self.transform_buffer_descriptor_set.into()]).into_bind_graphics(),
         );
 
         let interior_mesh = StandardIndexedMesh {
@@ -372,8 +381,8 @@ impl<'e, Device: br::Device + 'e, Buffer: br::Buffer<ConcreteDevice = Device>> G
         );
 
         (
-            interior_render.after_of((&self.extras.interior_pipeline).then(common_configs)),
-            curve_render.after_of(&self.extras.curve_pipeline),
+            interior_render.after_of((&self.interior_pipeline).then(common_configs)),
+            curve_render.after_of(&self.curve_pipeline),
         )
             .execute(cb);
     }

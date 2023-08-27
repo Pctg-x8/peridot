@@ -41,12 +41,6 @@ pub struct Game<PL: peridot::NativeLinker> {
         >,
     >,
     render_cb: CommandBundle<peridot::DeviceObject>,
-    buffer: SharedRef<
-        peridot::Buffer<
-            br::BufferObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >,
     _bufview: br::BufferViewObject<
         SharedRef<
             peridot::Buffer<
@@ -68,24 +62,15 @@ pub struct Game<PL: peridot::NativeLinker> {
         br::DescriptorPoolObject<peridot::DeviceObject>,
         Vec<br::DescriptorSet>,
     ),
-    vg_renderer_params: pvg::RendererParams,
-    vg_renderer_params2: pvg::RendererParams,
-    gp1: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
-    gp2: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
-    gp1_curve: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
-    gp2_curve: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
+    render_vgs: [pvg::RenderVG<
+        peridot::DeviceObject,
+        SharedRef<
+            peridot::Buffer<
+                br::BufferObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
+    >; 2],
     target_size: peridot::math::Vector2F32,
     ph: PhantomData<*const PL>,
 }
@@ -515,28 +500,25 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         );
 
         let render_vg = RenderVG {
-            params: &vg_renderer_params,
-            buffer: &buffer,
-            extras: pvg::RendererExternalInstances {
-                interior_pipeline: &gp,
-                curve_pipeline: &gp_curve,
-                transform_buffer_descriptor_set: descs[0],
-                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-            },
+            params: vg_renderer_params,
+            buffer: buffer.clone(),
+            interior_pipeline: gp,
+            curve_pipeline: gp_curve,
+            transform_buffer_descriptor_set: descs[0],
+            target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
             rendering_precision: e.rendering_precision(),
         };
         let render_vg2 = RenderVG {
-            params: &vg_renderer_params2,
-            buffer: &buffer,
-            extras: pvg::RendererExternalInstances {
-                interior_pipeline: &gp2,
-                curve_pipeline: &gp2_curve,
-                transform_buffer_descriptor_set: descs[1],
-                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-            },
+            params: vg_renderer_params2,
+            buffer,
+            interior_pipeline: gp2,
+            curve_pipeline: gp2_curve,
+            transform_buffer_descriptor_set: descs[1],
+            target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+
             rendering_precision: e.rendering_precision(),
         };
-        let color_renders = (render_vg2, render_vg);
+        let color_renders = [render_vg2, render_vg];
 
         let mut render_cb = CommandBundle::new(
             &e.graphics(),
@@ -561,21 +543,15 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .expect("Failed to finish render commands");
         }
 
-        Game {
+        Self {
             ph: PhantomData,
-            buffer,
             render_pass,
             framebuffers,
             _bufview: bufview,
             _bufview2: bufview2,
             descriptors: (dsl, dp, descs),
             render_cb,
-            vg_renderer_params,
-            vg_renderer_params2,
-            gp1: gp,
-            gp2,
-            gp1_curve: gp_curve,
-            gp2_curve,
+            render_vgs: color_renders,
             target_size: peridot::math::Vector2(screen_size.width as _, screen_size.height as _),
         }
     }
@@ -669,29 +645,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
 
-        let render_vg = RenderVG {
-            params: &self.vg_renderer_params,
-            buffer: &self.buffer,
-            extras: pvg::RendererExternalInstances {
-                interior_pipeline: &self.gp1,
-                curve_pipeline: &self.gp1_curve,
-                transform_buffer_descriptor_set: self.descriptors.2[0],
-                target_pixels: self.target_size.clone(),
-            },
-            rendering_precision: e.rendering_precision(),
-        };
-        let render_vg2 = RenderVG {
-            params: &self.vg_renderer_params2,
-            buffer: &self.buffer,
-            extras: pvg::RendererExternalInstances {
-                interior_pipeline: &self.gp2,
-                curve_pipeline: &self.gp2_curve,
-                transform_buffer_descriptor_set: self.descriptors.2[1],
-                target_pixels: self.target_size.clone(),
-            },
-            rendering_precision: e.rendering_precision(),
-        };
-        let color_renders = (render_vg2, render_vg);
+        for r in self.render_vgs.iter_mut() {
+            r.set_target_pixels(self.target_size.clone());
+        }
 
         for (r, f) in self.render_cb.iter_mut().zip(&self.framebuffers) {
             let rp = BeginRenderPass::for_entire_framebuffer(&self.render_pass, f)
@@ -700,7 +656,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     br::ClearValue::color([1.0; 4]),
                 ]);
 
-            (&color_renders)
+            (&self.render_vgs)
                 .between(rp, EndRenderPass)
                 .execute_and_finish(unsafe { r.begin().expect("Start Recording CB").as_dyn_ref() })
                 .expect("Failed to finish render commands");

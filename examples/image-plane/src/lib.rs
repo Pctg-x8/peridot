@@ -511,11 +511,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffers");
-        self.populate_render_commands();
-    }
-}
-impl<PL: peridot::NativeLinker> Game<PL> {
-    fn populate_render_commands(&mut self) {
+
         for (cb, fb) in self.render_cb.iter_mut().zip(&self.framebuffers) {
             let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&self.renderpass, fb)
                 .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
