@@ -61,4 +61,4 @@ weeklyIntegrityTest = run $ runReader weeklySlackNotifyProvider $ do
       [ GHA.namedAs "Integrity Check (Weekly)",
         GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
       ]
-    $ GHA.scheduled "0 12 * * wed"
+    $ GHA.scheduled [GHA.CronTimer "0 12 * * wed"]
