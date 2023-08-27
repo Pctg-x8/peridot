@@ -24,9 +24,11 @@ module Workflow.GitHub.Actions
     Workflow (..),
     WorkflowTrigger (..),
     WorkflowPullRequestTrigger (..),
+    WorkflowPushTrigger (..),
     WorkflowScheduleTrigger (..),
     WorkflowScheduleTimer (..),
     onPullRequest,
+    onPush,
     scheduled,
     PermissionTable (..),
     PermissionKey (..),
@@ -207,25 +209,40 @@ jobForwardingStepOutput stepName key = jobOutput key $ mkRefStepOutputExpression
 jobRunsOn :: [String] -> Job -> Job
 jobRunsOn platform self = self {runsOn = platform}
 
-data WorkflowTrigger = OnEvent String | OnEvents [String] | OnEventsDetailed (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPullRequestTrigger) (Maybe WorkflowPushTrigger) (Maybe WorkflowScheduleTrigger)
+data WorkflowTrigger = WorkflowTrigger
+  { workflowTriggerOnPullRequest :: Maybe WorkflowPullRequestTrigger,
+    workflowTriggerOnPullRequestTarget :: Maybe WorkflowPullRequestTrigger,
+    workflowTriggerOnPush :: Maybe WorkflowPushTrigger,
+    workflowTriggerOnSchedule :: Maybe WorkflowScheduleTrigger
+  }
 
 instance ToJSON WorkflowTrigger where
-  toJSON (OnEvent event) = toJSON event
-  toJSON (OnEvents events) = toJSON events
-  toJSON (OnEventsDetailed onPullRequest' onPullRequestTarget onPush onSchedule) =
+  toJSON t =
     object $
       catMaybes
-        [ ("pull_request" .=) <$> onPullRequest',
-          ("pull_request_target" .=) <$> onPullRequestTarget,
-          ("push" .=) <$> onPush,
-          ("schedule" .=) <$> onSchedule
+        [ ("pull_request" .=) <$> workflowTriggerOnPullRequest t,
+          ("pull_request_target" .=) <$> workflowTriggerOnPullRequestTarget t,
+          ("push" .=) <$> workflowTriggerOnPush t,
+          ("schedule" .=) <$> workflowTriggerOnSchedule t
         ]
 
+_emptyWorkflowTrigger :: WorkflowTrigger
+_emptyWorkflowTrigger =
+  WorkflowTrigger
+    { workflowTriggerOnPullRequest = Nothing,
+      workflowTriggerOnPullRequestTarget = Nothing,
+      workflowTriggerOnPush = Nothing,
+      workflowTriggerOnSchedule = Nothing
+    }
+
 onPullRequest :: WorkflowPullRequestTrigger -> WorkflowTrigger
-onPullRequest details = OnEventsDetailed (Just details) Nothing Nothing Nothing
+onPullRequest details = _emptyWorkflowTrigger {workflowTriggerOnPullRequest = Just details}
+
+onPush :: WorkflowPushTrigger -> WorkflowTrigger
+onPush details = _emptyWorkflowTrigger {workflowTriggerOnPush = Just details}
 
 scheduled :: [WorkflowScheduleTimer] -> WorkflowTrigger
-scheduled timers = OnEventsDetailed Nothing Nothing Nothing $ Just $ WorkflowScheduleTrigger timers
+scheduled timers = _emptyWorkflowTrigger {workflowTriggerOnSchedule = Just $ WorkflowScheduleTrigger timers}
 
 data WorkflowPullRequestTrigger = WorkflowPullRequestTrigger
   { prTriggerBranches :: [String],
