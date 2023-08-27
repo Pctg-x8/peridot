@@ -13,6 +13,7 @@ peridot = { path = "../../base", features = ["mt"] }
 peridot-math = { path = "../../modules/math" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
 peridot-image = { path = "../../modules/image" }
+peridot-command-object = { path = "../../modules/command-object" }
 async-std = "1.7"
 
 log = "0.4"

@@ -9,6 +9,10 @@ use peridot::{
     BufferContent, BufferPrealloc, DefaultRenderCommands, Engine, LayoutedPipeline, ModelData,
     NativeLinker,
 };
+use peridot_command_object::{
+    DescriptorSets, GraphicsCommand, GraphicsCommandCombiner, PreConfigureDrawIndexed,
+    PushConstant, RangedBuffer, SimpleDrawIndexed, StandardIndexedMesh,
+};
 use std::mem::size_of;
 use std::ops::Range;
 
@@ -208,7 +212,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
+        cmd: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
         buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     ) {
@@ -273,5 +277,117 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                 .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
                 .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
         }
+    }
+}
+
+pub struct RenderVG<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> {
+    pub params: RendererParams,
+    pub interior_pipeline:
+        LayoutedPipeline<br::PipelineObject<Device>, SharedRef<br::PipelineLayoutObject<Device>>>,
+    pub curve_pipeline:
+        LayoutedPipeline<br::PipelineObject<Device>, SharedRef<br::PipelineLayoutObject<Device>>>,
+    pub transform_buffer_descriptor_set: br::DescriptorSet,
+    pub target_pixels: Vector2<f32>,
+    pub buffer: Buffer,
+    pub rendering_precision: f32,
+}
+impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> RenderVG<Device, Buffer> {
+    pub fn set_target_pixels(&mut self, new_target_pixels: Vector2<f32>) {
+        self.target_pixels = new_target_pixels;
+    }
+
+    pub fn replace_buffer(&mut self, new_buffer: Buffer) -> Buffer {
+        core::mem::replace(&mut self.buffer, new_buffer)
+    }
+}
+impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCommand
+    for RenderVG<Device, Buffer>
+{
+    fn execute(
+        &self,
+        cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
+    ) {
+        let render_scale = self.target_pixels.clone() * self.rendering_precision.recip();
+
+        let common_configs = (
+            PushConstant::for_vertex(0, render_scale),
+            PushConstant::for_vertex(4 * 3, 0u32),
+            DescriptorSets(vec![self.transform_buffer_descriptor_set.into()]).into_bind_graphics(),
+        );
+
+        let interior_mesh = StandardIndexedMesh {
+            vertex_buffers: vec![RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.interior_positions as _,
+                1,
+            )],
+            index_buffer: RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.interior_indices as _,
+                1,
+            ),
+            index_type: br::IndexType::U32,
+            vertex_count: 0,
+        };
+        let curve_mesh = StandardIndexedMesh {
+            vertex_buffers: vec![
+                RangedBuffer::from_offset_length(
+                    &self.buffer,
+                    self.params.buffer_offsets.curve_positions as _,
+                    1,
+                ),
+                RangedBuffer::from_offset_length(
+                    &self.buffer,
+                    self.params.buffer_offsets.curve_helper_coords as _,
+                    1,
+                ),
+            ],
+            index_buffer: RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.curve_indices as _,
+                1,
+            ),
+            index_type: br::IndexType::U32,
+            vertex_count: 0,
+        };
+
+        let interior_render = interior_mesh.ref_pre_configure_for_draw().then(
+            self.params
+                .render_info
+                .interior_index_range_per_mesh
+                .iter()
+                .enumerate()
+                // skip if there is no indices
+                .filter(|(_, ir)| ir.end != ir.start)
+                .map(|(n, ir)| {
+                    (
+                        PushConstant::for_vertex(4 * 2, n as u32),
+                        SimpleDrawIndexed::new(ir.end - ir.start, 1).from_index(ir.start),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        let curve_render = curve_mesh.ref_pre_configure_for_draw().then(
+            self.params
+                .render_info
+                .curve_index_range_per_mesh
+                .iter()
+                .enumerate()
+                // skip if there is no indices
+                .filter(|(_, ir)| ir.end != ir.start)
+                .map(|(n, ir)| {
+                    (
+                        PushConstant::for_vertex(4 * 2, n as u32),
+                        SimpleDrawIndexed::new(ir.end - ir.start, 1).from_index(ir.start),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        (
+            interior_render.after_of((&self.interior_pipeline).then(common_configs)),
+            curve_render.after_of(&self.curve_pipeline),
+        )
+            .execute(cb);
     }
 }

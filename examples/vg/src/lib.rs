@@ -1,23 +1,27 @@
-use log::*;
-use pvg::{FontProvider, FontProviderConstruct};
-use std::convert::TryInto;
-use std::marker::PhantomData;
-extern crate bedrock as br;
+use bedrock as br;
 use br::{
-    traits::*, Buffer, CommandBuffer, DescriptorPool, Device, Image, ImageChild,
-    ImageSubresourceSlice, SubmissionBatch,
+    Buffer, CommandBuffer, DescriptorPool, Device, Image, ImageChild, ImageSubresourceSlice,
+    SubmissionBatch,
 };
+use log::*;
 use peridot::math::Vector2;
 use peridot::mthelper::SharedRef;
 use peridot::{
-    BufferPrealloc, CBSubmissionType, CommandBundle, DefaultRenderCommands,
-    DescriptorSetUpdateBatch, LayoutedPipeline, MemoryBadget, ModelData, RenderPassTemplates,
-    SpecConstantStorage, TransferBatch,
+    BufferPrealloc, CBSubmissionType, CommandBundle, LayoutedPipeline, MemoryBadget, ModelData,
+    SpecConstantStorage,
+};
+use peridot_command_object::{
+    BeginRenderPass, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
+    GraphicsCommand, GraphicsCommandCombiner, GraphicsCommandSubmission, PipelineBarrier,
+    RangedBuffer, RangedImage,
 };
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
+use pvg::{FontProvider, FontProviderConstruct, RenderVG};
 use std::borrow::Cow;
+use std::convert::TryInto;
+use std::marker::PhantomData;
 
 #[derive(SpecConstantStorage)]
 #[repr(C)]
@@ -37,12 +41,6 @@ pub struct Game<PL: peridot::NativeLinker> {
         >,
     >,
     render_cb: CommandBundle<peridot::DeviceObject>,
-    buffer: SharedRef<
-        peridot::Buffer<
-            br::BufferObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >,
     _bufview: br::BufferViewObject<
         SharedRef<
             peridot::Buffer<
@@ -64,24 +62,15 @@ pub struct Game<PL: peridot::NativeLinker> {
         br::DescriptorPoolObject<peridot::DeviceObject>,
         Vec<br::DescriptorSet>,
     ),
-    vg_renderer_params: pvg::RendererParams,
-    vg_renderer_params2: pvg::RendererParams,
-    gp1: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
-    gp2: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
-    gp1_curve: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
-    gp2_curve: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        SharedRef<br::PipelineLayoutObject<peridot::DeviceObject>>,
-    >,
+    render_vgs: [pvg::RenderVG<
+        peridot::DeviceObject,
+        SharedRef<
+            peridot::Buffer<
+                br::BufferObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
+    >; 2],
     target_size: peridot::math::Vector2F32,
     ph: PhantomData<*const PL>,
 }
@@ -169,20 +158,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut mb_stg =
             MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(buffer)]) =
+            mb.alloc().expect("Mem Allocation").try_into() else {
+                unreachable!("unexpected return combination");
+            };
+        let buffer = SharedRef::new(buffer);
         mb_stg.add(peridot::MemoryBadgetEntry::Buffer(stg_buffer));
-        let buffer = SharedRef::new(
-            mb.alloc()
-                .expect("Mem Allocation")
-                .pop()
-                .expect("no objects?")
-                .unwrap_buffer(),
-        );
-        let mut stg_buffer = mb_stg
-            .alloc_upload()
-            .expect("StgMem Allocation")
-            .pop()
-            .expect("no objects?")
-            .unwrap_buffer();
+        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(mut stg_buffer)]) =
+            mb_stg.alloc_upload().expect("StgMem Allocation").try_into() else {
+                unreachable!("unexpected return combination");
+            };
 
         let rt_size = e
             .back_buffer(0)
@@ -240,43 +225,36 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let transfer_total_size = bp.total_size();
         {
-            let mut tfb = TransferBatch::<peridot::DeviceObject>::new();
-            tfb.add_mirroring_buffer(
-                SharedRef::new(stg_buffer),
-                buffer.clone(),
-                0,
-                transfer_total_size as _,
-            );
-            tfb.add_buffer_graphics_ready(
-                br::PipelineStageFlags::VERTEX_SHADER.vertex_input(),
-                buffer.clone(),
-                0..transfer_total_size as _,
-                br::AccessFlags::SHADER.read
-                    | br::AccessFlags::VERTEX_ATTRIBUTE_READ
-                    | br::AccessFlags::INDEX_READ,
-            );
-            e.submit_commands(|mut rec| {
-                tfb.sink_transfer_commands(&mut rec);
-                tfb.sink_graphics_ready_commands(&mut rec);
+            let all_stg_buffer =
+                RangedBuffer::from_offset_length(&stg_buffer, 0, transfer_total_size as _);
+            let all_buffer =
+                RangedBuffer::from_offset_length(&*buffer, 0, transfer_total_size as _);
+            let msaa_texture = RangedImage::single_color_plane(msaa_texture.image());
 
-                let _ = rec.pipeline_barrier(
-                    br::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                    true,
-                    &[],
-                    &[],
-                    &[msaa_texture
-                        .image()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier(
-                            br::ImageLayout::Undefined,
-                            br::ImageLayout::ColorAttachmentOpt,
-                        )],
-                );
+            let copy =
+                CopyBuffer::new(&stg_buffer, &*buffer).with_mirroring(0, transfer_total_size as _);
 
-                rec
-            })
-            .expect("ImmResource Initialization");
+            let [all_buffer_in_barrier, all_buffer_out_barrier] = all_buffer.usage_barrier3(
+                BufferUsage::UNUSED,
+                BufferUsage::TRANSFER_DST,
+                BufferUsage::VERTEX_BUFFER
+                    | BufferUsage::INDEX_BUFFER
+                    | BufferUsage::VERTEX_STORAGE_RO,
+            );
+            let in_barrier = [
+                all_stg_buffer.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                all_buffer_in_barrier,
+            ];
+            let out_barrier = PipelineBarrier::new()
+                .with_barrier(all_buffer_out_barrier)
+                .with_barrier(msaa_texture.barrier(
+                    br::ImageLayout::Undefined,
+                    br::ImageLayout::ColorAttachmentOpt,
+                ));
+
+            copy.between(in_barrier, out_barrier)
+                .submit(e)
+                .expect("ImmResource Initialization");
         }
 
         let (rt_ext_layout, _) = e.requesting_back_buffer_layout();
@@ -385,14 +363,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .expect("Loading CurveShader"),
         )
         .expect("Creating CurveShader");
-        let sc = [AsRef::<br::vk::VkExtent2D>::as_ref(&screen_size)
-            .clone()
-            .into_rect(br::vk::VkOffset2D { x: 0, y: 0 })];
-        let vp = [br::vk::VkViewport::from_rect_with_depth_range(
-            &sc[0],
-            0.0..1.0,
-        )];
-        debug!("ScreenSize: {:?}", screen_size);
+        debug!("ScreenSize: {screen_size:?}");
+        let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
+        let vp = [sc[0].make_viewport(0.0..1.0)];
         let pl = SharedRef::new(
             br::PipelineLayoutBuilder::new(vec![&dsl], vec![(br::ShaderStage::VERTEX, 0..4 * 4)])
                 .create(e.graphics().device().clone())
@@ -467,7 +440,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             br::DynamicArrayState::Static(&vp),
             br::DynamicArrayState::Static(&sc),
         )
-        .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
+        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()]);
         let gp = LayoutedPipeline::combine(
             gpb.create(
                 e.graphics().device().clone(),
@@ -526,6 +499,27 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             pl.clone(),
         );
 
+        let render_vg = RenderVG {
+            params: vg_renderer_params,
+            buffer: buffer.clone(),
+            interior_pipeline: gp,
+            curve_pipeline: gp_curve,
+            transform_buffer_descriptor_set: descs[0],
+            target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+            rendering_precision: e.rendering_precision(),
+        };
+        let render_vg2 = RenderVG {
+            params: vg_renderer_params2,
+            buffer,
+            interior_pipeline: gp2,
+            curve_pipeline: gp2_curve,
+            transform_buffer_descriptor_set: descs[1],
+            target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+
+            rendering_precision: e.rendering_precision(),
+        };
+        let color_renders = [render_vg2, render_vg];
+
         let mut render_cb = CommandBundle::new(
             &e.graphics(),
             CBSubmissionType::Graphics,
@@ -533,54 +527,31 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         )
         .expect("Creating RenderCB");
         for (r, f) in render_cb.iter_mut().zip(&framebuffers) {
-            let vg_renderer_exinst = pvg::RendererExternalInstances {
-                interior_pipeline: &gp,
-                curve_pipeline: &gp_curve,
-                transform_buffer_descriptor_set: descs[0],
-                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-            };
-            let vg_renderer_exinst2 = pvg::RendererExternalInstances {
-                interior_pipeline: &gp2,
-                curve_pipeline: &gp2_curve,
-                transform_buffer_descriptor_set: descs[1],
-                target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-            };
-
-            let mut cbr = unsafe { r.begin().expect("Start Recoding CB") };
-            let _ = cbr.begin_render_pass(
-                &render_pass,
-                f,
-                f.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[
+            let rp =
+                BeginRenderPass::for_entire_framebuffer(&render_pass, f).with_clear_values(vec![
                     br::ClearValue::color([1.0; 4]),
                     br::ClearValue::color([1.0; 4]),
-                ],
-                true,
-            );
-            vg_renderer_params2.default_render_commands(e, &mut cbr, &buffer, vg_renderer_exinst2);
-            vg_renderer_params.default_render_commands(e, &mut cbr, &buffer, vg_renderer_exinst);
-            let _ = cbr.end_render_pass();
+                ]);
 
-            cbr.end().expect("Failed to close rendering commands");
+            (&color_renders)
+                .between(rp, EndRenderPass)
+                .execute_and_finish(unsafe {
+                    r.begin()
+                        .expect("Failed to begin render command recording")
+                        .as_dyn_ref()
+                })
+                .expect("Failed to finish render commands");
         }
 
-        Game {
+        Self {
             ph: PhantomData,
-            buffer,
             render_pass,
             framebuffers,
             _bufview: bufview,
             _bufview2: bufview2,
             descriptors: (dsl, dp, descs),
             render_cb,
-            vg_renderer_params,
-            vg_renderer_params2,
-            gp1: gp,
-            gp2,
-            gp1_curve: gp_curve,
-            gp2_curve,
+            render_vgs: color_renders,
             target_size: peridot::math::Vector2(screen_size.width as _, screen_size.height as _),
         }
     }
@@ -673,49 +644,22 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
+
+        for r in self.render_vgs.iter_mut() {
+            r.set_target_pixels(self.target_size.clone());
+        }
+
         for (r, f) in self.render_cb.iter_mut().zip(&self.framebuffers) {
-            let mut cbr = unsafe { r.begin().expect("Start Recording CB") };
-
-            let vg_renderer_exinst = pvg::RendererExternalInstances {
-                interior_pipeline: &self.gp1,
-                curve_pipeline: &self.gp1_curve,
-                transform_buffer_descriptor_set: self.descriptors.2[0],
-                target_pixels: self.target_size.clone(),
-            };
-            let vg_renderer_exinst2 = pvg::RendererExternalInstances {
-                interior_pipeline: &self.gp2,
-                curve_pipeline: &self.gp2_curve,
-                transform_buffer_descriptor_set: self.descriptors.2[1],
-                target_pixels: self.target_size.clone(),
-            };
-
-            let _ = cbr.begin_render_pass(
-                &self.render_pass,
-                f,
-                f.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[
+            let rp = BeginRenderPass::for_entire_framebuffer(&self.render_pass, f)
+                .with_clear_values(vec![
                     br::ClearValue::color([1.0; 4]),
                     br::ClearValue::color([1.0; 4]),
-                ],
-                true,
-            );
-            self.vg_renderer_params2.default_render_commands(
-                e,
-                &mut cbr,
-                &self.buffer,
-                vg_renderer_exinst2,
-            );
-            self.vg_renderer_params.default_render_commands(
-                e,
-                &mut cbr,
-                &self.buffer,
-                vg_renderer_exinst,
-            );
-            let _ = cbr.end_render_pass();
+                ]);
 
-            cbr.end().expect("Failed to close rendering commands");
+            (&self.render_vgs)
+                .between(rp, EndRenderPass)
+                .execute_and_finish(unsafe { r.begin().expect("Start Recording CB").as_dyn_ref() })
+                .expect("Failed to finish render commands");
         }
     }
 }

@@ -49,7 +49,13 @@ impl Font for DirectWriteFont {
     }
 
     fn glyph_id(&self, c: char) -> Option<Self::GlyphID> {
-        unsafe { self.0.GetGlyphIndices(&(c as u32), 1).ok() }
+        unsafe {
+            let mut indices = 0;
+            self.0
+                .GetGlyphIndices(&(c as u32), 1, &mut indices)
+                .ok()
+                .map(|_| indices)
+        }
     }
     fn advance_h(&self, glyph: &Self::GlyphID) -> Result<f32, GlyphLoadingError> {
         let mut gm = core::mem::MaybeUninit::uninit();

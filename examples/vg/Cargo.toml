@@ -19,3 +19,4 @@ log = "0.4"
 
 peridot-vg = { path = "../../modules/vg" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
+peridot-command-object = { path = "../../modules/command-object" }

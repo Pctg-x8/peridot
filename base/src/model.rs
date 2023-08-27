@@ -21,7 +21,7 @@ pub trait DefaultRenderCommands<'e, Device: br::Device> {
     fn default_render_commands<NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
+        cmd: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
         buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     );
@@ -78,11 +78,25 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
     }
 }
 impl<VT> Primitive<VT> {
+    pub fn byte_length(&self) -> usize {
+        core::mem::size_of::<VT>() * self.vertices.len()
+    }
+
     pub fn with_indices(self, indices: Vec<u16>) -> IndexedPrimitive<VT> {
         IndexedPrimitive {
             vertices: self.vertices,
             indices,
         }
+    }
+}
+
+impl<VT> IndexedPrimitive<VT> {
+    pub fn vertices_byte_length(&self) -> usize {
+        core::mem::size_of::<VT>() * self.vertices.len()
+    }
+
+    pub fn indices_byte_length(&self) -> usize {
+        core::mem::size_of::<u16>() * self.indices.len()
     }
 }
 

@@ -274,6 +274,11 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.presenter.requesting_back_buffer_layout()
     }
+    pub fn back_buffer_attachment_desc(&self) -> br::AttachmentDescription {
+        let (ol, _) = self.requesting_back_buffer_layout();
+
+        br::AttachmentDescription::new(self.back_buffer_format(), ol, ol)
+    }
 
     pub fn input(&self) -> &InputProcess {
         &self.ip
@@ -565,7 +570,10 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self.1
     }
 
-    pub fn bind(&self, rec: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>) {
+    pub fn bind(
+        &self,
+        rec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
+    ) {
         let _ = rec.bind_graphics_pipeline_pair(&self.0, &self.1);
     }
 }

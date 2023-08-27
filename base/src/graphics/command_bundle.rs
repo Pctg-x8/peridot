@@ -1,5 +1,5 @@
 use bedrock as br;
-use br::{CommandPool, Device};
+use br::{CommandBuffer, CommandPool, Device};
 use std::ops::{Deref, DerefMut};
 
 use super::{DeviceObject, Graphics};
@@ -48,6 +48,15 @@ impl<Device: br::Device> CommandBundle<Device> {
     #[inline]
     pub fn reset(&mut self) -> br::Result<()> {
         self.1.reset(true)
+    }
+
+    #[inline]
+    pub unsafe fn synchronized_nth(
+        &mut self,
+        n: usize,
+    ) -> br::SynchronizedCommandBuffer<br::CommandPoolObject<Device>, br::CommandBufferObject<Device>>
+    {
+        self.0[n].synchronize_with(&mut self.1)
     }
 }
 
