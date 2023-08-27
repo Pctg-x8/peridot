@@ -24,6 +24,8 @@ module Workflow.GitHub.Actions
     Workflow (..),
     WorkflowTrigger (..),
     WorkflowPullRequestTrigger (..),
+    WorkflowScheduleTrigger (..),
+    WorkflowScheduleTimer (..),
     onPullRequest,
     scheduled,
     PermissionTable (..),
@@ -222,8 +224,8 @@ instance ToJSON WorkflowTrigger where
 onPullRequest :: WorkflowPullRequestTrigger -> WorkflowTrigger
 onPullRequest details = OnEventsDetailed (Just details) Nothing Nothing Nothing
 
-scheduled :: String -> WorkflowTrigger
-scheduled cron = OnEventsDetailed Nothing Nothing Nothing $ Just $ WorkflowScheduleTrigger cron
+scheduled :: [WorkflowScheduleTimer] -> WorkflowTrigger
+scheduled timers = OnEventsDetailed Nothing Nothing Nothing $ Just $ WorkflowScheduleTrigger timers
 
 data WorkflowPullRequestTrigger = WorkflowPullRequestTrigger
   { prTriggerBranches :: [String],
@@ -271,10 +273,15 @@ instance ToJSON WorkflowPushTrigger where
 workflowPushTrigger :: WorkflowPushTrigger
 workflowPushTrigger = WorkflowPushTrigger [] [] [] [] [] []
 
-newtype WorkflowScheduleTrigger = WorkflowScheduleTrigger String
+newtype WorkflowScheduleTrigger = WorkflowScheduleTrigger [WorkflowScheduleTimer]
 
 instance ToJSON WorkflowScheduleTrigger where
-  toJSON (WorkflowScheduleTrigger cron) = object ["cron" .= cron]
+  toJSON (WorkflowScheduleTrigger timers) = toJSON timers
+
+newtype WorkflowScheduleTimer = CronTimer String
+
+instance ToJSON WorkflowScheduleTimer where
+  toJSON (CronTimer timer) = object ["cron" .= timer]
 
 class PathFilteredTrigger t where
   filterPath :: String -> t -> t
