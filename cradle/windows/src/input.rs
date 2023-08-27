@@ -3,8 +3,8 @@ use parking_lot::RwLock;
 use peridot::{NativeAnalogInput, NativeButtonInput};
 use windows::Win32::Foundation::{GetLastError, ERROR_DEVICE_NOT_CONNECTED, HWND, LPARAM, POINT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MapVirtualKeyA, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F1, VK_F24,
-    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD9,
+    MapVirtualKeyA, MAPVK_VK_TO_CHAR, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F1,
+    VK_F24, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD9,
     VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::Input::XboxController::{
@@ -19,7 +19,7 @@ use windows::Win32::UI::Input::{
     RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RIDEV_NOLEGACY, RID_INPUT, RIM_TYPEKEYBOARD,
     RIM_TYPEMOUSE,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, MAPVK_VK_TO_CHAR, RI_KEY_BREAK};
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, RI_KEY_BREAK};
 
 use crate::ThreadsafeWindowOps;
 
@@ -44,13 +44,10 @@ impl RawInputHandler {
                 hwndTarget: HWND(0),
             },
         ];
-        let r = unsafe {
+        unsafe {
             RegisterRawInputDevices(&ri_devices, std::mem::size_of::<RAWINPUTDEVICE>() as _)
+                .expect("RegisterRawInputDevices failed!")
         };
-        if !r.as_bool() {
-            let ec = unsafe { GetLastError() };
-            error!("RegisterRawInputDevices failed! GetLastError={:?}", ec.ok());
-        }
 
         RawInputHandler {}
     }

@@ -2,7 +2,9 @@ use bedrock::{self as br, Device, ImageChild, SubmissionBatch};
 use br::{Image, ImageSubresourceSlice, Semaphore};
 use peridot::mthelper::SharedRef;
 #[cfg(feature = "transparent")]
-use windows::core::Interface;
+use windows::core::ComInterface;
+#[cfg(feature = "transparent")]
+use windows::Win32::Foundation::GENERIC_ALL;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 #[cfg(feature = "transparent")]
@@ -26,8 +28,6 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_DISCARD,
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
-#[cfg(feature = "transparent")]
-use windows::Win32::System::SystemServices::GENERIC_ALL;
 
 use crate::ThreadsafeWindowOps;
 
@@ -223,7 +223,7 @@ impl InteropBackbufferResource {
                 .CreateSharedHandle(
                     resource,
                     None,
-                    GENERIC_ALL,
+                    GENERIC_ALL.0,
                     windows::core::PCWSTR(hname.as_ptr()),
                 )
                 .expect("Failed to create SharedHandle from D3D12")
@@ -285,12 +285,9 @@ struct Composition {
 #[cfg(feature = "transparent")]
 impl Composition {
     fn new(w: &ThreadsafeWindowOps, swapchain: &IDXGISwapChain3) -> Self {
-        let mut dh = std::ptr::null_mut();
-        unsafe {
-            DCompositionCreateDevice3(None, &IDCompositionDesktopDevice::IID, &mut dh)
-                .expect("Failed to create DirectComposition Device")
+        let device: IDCompositionDesktopDevice = unsafe {
+            DCompositionCreateDevice3(None).expect("Failed to create DirectComposition Device")
         };
-        let device = unsafe { std::mem::transmute::<_, IDCompositionDesktopDevice>(dh) };
         let target = unsafe {
             device
                 .CreateTargetForHwnd(w.0, true)
@@ -311,7 +308,7 @@ impl Composition {
             device.Commit().expect("Failed to commit composition");
         }
 
-        Composition {
+        Self {
             device,
             target,
             root,
@@ -458,7 +455,7 @@ impl Presenter {
                 .CreateSharedHandle(
                     &render_completion_fence,
                     None,
-                    GENERIC_ALL,
+                    GENERIC_ALL.0,
                     windows::core::PCWSTR(render_completion_fence_name.as_ptr()),
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence")
@@ -473,7 +470,7 @@ impl Presenter {
         let present_completion_event =
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
 
-        Presenter {
+        Self {
             _window: window,
             _comp: comp,
             device12,
@@ -599,7 +596,7 @@ impl peridot::PlatformPresenter for Presenter {
 
         if self.present_inflight {
             self.present_completion_event
-                .wait(windows::Win32::System::WindowsProgramming::INFINITE);
+                .wait(windows::Win32::System::Threading::INFINITE);
             self.present_inflight = false;
         }
 
@@ -634,7 +631,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
         if self.present_inflight {
             self.present_completion_event
-                .wait(windows::Win32::System::WindowsProgramming::INFINITE);
+                .wait(windows::Win32::System::Threading::INFINITE);
             self.present_inflight = false;
         }
 
@@ -680,6 +677,6 @@ impl peridot::PlatformPresenter for Presenter {
 impl Drop for Presenter {
     fn drop(&mut self) {
         self.present_completion_event
-            .wait(windows::Win32::System::WindowsProgramming::INFINITE);
+            .wait(windows::Win32::System::Threading::INFINITE);
     }
 }

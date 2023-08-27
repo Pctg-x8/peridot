@@ -2,7 +2,7 @@
 
 use std::io::Result as IOResult;
 use std::ptr::NonNull;
-use windows::core::PWSTR;
+use windows::core::{ComInterface, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::{
     PKEY_DeviceInterface_FriendlyName, PKEY_Device_DeviceDesc, PKEY_Device_FriendlyName,
 };
@@ -135,7 +135,7 @@ impl AudioClient {
     }
 
     #[inline]
-    pub fn service<IF: windows::core::Interface>(&self) -> windows::core::Result<IF> {
+    pub fn service<IF: ComInterface>(&self) -> windows::core::Result<IF> {
         unsafe { self.0.GetService() }
     }
 
