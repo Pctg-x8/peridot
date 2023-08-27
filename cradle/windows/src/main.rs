@@ -35,7 +35,7 @@ const fn hiword(dw: usize) -> u16 {
 
 #[inline]
 fn module_handle() -> HINSTANCE {
-    unsafe { GetModuleHandleA(None).expect("Failed to get module handle") }
+    unsafe { core::mem::transmute(GetModuleHandleA(None).expect("Failed to get module handle")) }
 }
 
 struct CoScopeGuard;
@@ -109,7 +109,7 @@ impl GameDriver {
         ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
         e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap2)));*/
 
-        GameDriver {
+        Self {
             base,
             usercode,
             _snd,
