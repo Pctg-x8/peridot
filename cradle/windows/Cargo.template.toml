@@ -51,6 +51,7 @@ features = [
     "Win32_Security",
     'Win32_System_Com_StructuredStorage',
     'Win32_System_Threading',
+    "Win32_System_Variant",
     'Win32_Devices_FunctionDiscovery',
     'Win32_Media_KernelStreaming',
     'Win32_Media_Multimedia',
