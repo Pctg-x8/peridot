@@ -2,7 +2,7 @@
 name = "peridot-cradle-windows"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2021"
 build = "build.rs"
 
 [features]
@@ -38,7 +38,7 @@ widestring = { version = "0.4", optional = true }
 parking_lot = "0.11"
 
 [dependencies.windows]
-version = "0.43"
+version = "0.48"
 features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
