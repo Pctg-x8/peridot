@@ -21,6 +21,8 @@ module Workflow.GitHub.Actions
     jobOutput,
     jobForwardingStepOutput,
     jobRunsOn,
+    jobUseEnvironment,
+    Environment (..),
     Workflow (..),
     WorkflowTrigger (..),
     WorkflowPullRequestTrigger (..),
@@ -208,6 +210,9 @@ jobForwardingStepOutput stepName key = jobOutput key $ mkRefStepOutputExpression
 
 jobRunsOn :: [String] -> Job -> Job
 jobRunsOn platform self = self {runsOn = platform}
+
+jobUseEnvironment :: Environment -> Job -> Job
+jobUseEnvironment e self = self {environment = Just e}
 
 data WorkflowTrigger = WorkflowTrigger
   { workflowTriggerOnPullRequest :: Maybe WorkflowPullRequestTrigger,

@@ -1,5 +1,6 @@
 jobs:
   doc-gen-deploy:
+    environment: dev-document
     name: Doc Generate and Deploy
     permissions:
       contents: read

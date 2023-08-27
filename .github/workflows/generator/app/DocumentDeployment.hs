@@ -42,7 +42,8 @@ workflow =
       applyModifiers
         [ GHA.namedAs "Doc Generate and Deploy",
           GHA.grantWritable GHA.IDTokenPermission,
-          GHA.grantReadable GHA.ContentsPermission
+          GHA.grantReadable GHA.ContentsPermission,
+          GHA.jobUseEnvironment $ GHA.LocalEnvironment "dev-document"
         ]
         $ GHA.job
           [ Checkout.step $ Just "dev",
