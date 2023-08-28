@@ -132,13 +132,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .into();
         vertex_buffer_stg
             .0
-            .guard_map(|p| unsafe {
-                core::slice::from_raw_parts_mut(
-                    p as *mut peridot::VertexUV,
-                    plane_mesh.vertices.len(),
-                )
-                .clone_from_slice(&plane_mesh.vertices);
-            })
+            .clone_content_from_slice(&plane_mesh.vertices)
             .expect("Failed to set upload content");
 
         let uniform_buffer: RangedBuffer<_> = memory_manager
@@ -163,11 +157,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .into();
         uniform_mut_buffer
             .0
-            .guard_map(|ptr| unsafe {
-                *(ptr as *mut Uniform) = Uniform {
-                    camera: cam.view_projection_matrix(screen_aspect),
-                    object: Matrix4::ONE,
-                };
+            .write_content(Uniform {
+                camera: cam.view_projection_matrix(screen_aspect),
+                object: Matrix4::ONE,
             })
             .expect("Failed to set initial data of uniform buffer");
 

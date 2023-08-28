@@ -527,6 +527,35 @@ impl Buffer {
             }
         }
     }
+
+    /// Writes value as buffer content. checked whether value size and buffer size are equal.
+    pub fn write_content<T>(&mut self, value: T) -> br::Result<()> {
+        assert_eq!(self.size, core::mem::size_of::<T>());
+
+        unsafe { self.write_content_unchecked(value) }
+    }
+
+    pub unsafe fn write_content_unchecked<T>(&mut self, value: T) -> br::Result<()> {
+        self.guard_map(|ptr| {
+            (*(ptr as *mut T)) = value;
+        })
+    }
+
+    pub fn clone_content_from_slice<T: Clone>(&mut self, values: &[T]) -> br::Result<()> {
+        assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
+
+        self.guard_map(|ptr| unsafe {
+            core::slice::from_raw_parts_mut(ptr as *mut T, values.len()).clone_from_slice(values);
+        })
+    }
+
+    pub fn copy_content_from_slice<T: Copy>(&mut self, values: &[T]) -> br::Result<()> {
+        assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
+
+        self.guard_map(|ptr| unsafe {
+            core::slice::from_raw_parts_mut(ptr as *mut T, values.len()).copy_from_slice(values);
+        })
+    }
 }
 impl Drop for Buffer {
     fn drop(&mut self) {
