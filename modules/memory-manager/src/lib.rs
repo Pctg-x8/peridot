@@ -494,6 +494,10 @@ pub struct Buffer {
     size: usize,
 }
 impl Buffer {
+    pub const fn byte_length(&self) -> usize {
+        self.size
+    }
+
     pub fn guard_map<R>(&mut self, op: impl FnOnce(*mut ()) -> R) -> br::Result<R> {
         match self.memory_block {
             BackingMemory::Managed(ref m) => {

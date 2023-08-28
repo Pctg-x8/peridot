@@ -3,6 +3,9 @@ use std::ops::Range;
 use bedrock as br;
 use br::ImageSubresourceSlice;
 
+#[cfg(feature = "memory_manager_interop")]
+use peridot_memory_manager as pmm;
+
 use crate::{BufferUsage, BufferUsageTransitionBarrier, CopyBuffer, GraphicsCommand};
 
 pub struct RangedBuffer<B: br::Buffer>(pub B, pub Range<u64>);
@@ -102,6 +105,14 @@ impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br
         action: impl FnOnce(&br::MappedMemoryRange<M>) -> R,
     ) -> br::Result<R> {
         self.0.guard_map(self.1.clone(), action)
+    }
+}
+#[cfg(feature = "memory_manager_interop")]
+impl From<pmm::Buffer> for RangedBuffer<pmm::Buffer> {
+    fn from(value: pmm::Buffer) -> Self {
+        let length = value.byte_length();
+
+        Self::from_offset_length(value, 0, length)
     }
 }
 
