@@ -4,6 +4,7 @@ use br::{
     CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Queue,
     SubmissionBatch,
 };
+use cfg_if::cfg_if;
 use log::{debug, info, warn};
 use std::ops::Deref;
 
@@ -49,6 +50,29 @@ impl std::fmt::Display for GraphicsInitializationError {
 }
 impl std::error::Error for GraphicsInitializationError {}
 
+cfg_if! {
+    if #[cfg(feature = "mt")] {
+        use std::sync::OnceLock as OnceValue;
+    } else {
+        use std::once::OnceCell as OnceValue;
+    }
+}
+
+struct CachedAdapterProperties {
+    pub available_features: OnceValue<br::vk::VkPhysicalDeviceFeatures>,
+    pub properties: OnceValue<br::vk::VkPhysicalDeviceProperties>,
+    pub memory_properties: OnceValue<br::MemoryProperties>,
+}
+impl CachedAdapterProperties {
+    const fn new() -> Self {
+        Self {
+            available_features: OnceValue::new(),
+            properties: OnceValue::new(),
+            memory_properties: OnceValue::new(),
+        }
+    }
+}
+
 /// Graphics manager
 pub struct Graphics {
     pub(crate) adapter: br::PhysicalDeviceObject<InstanceObject>,
@@ -56,6 +80,7 @@ pub struct Graphics {
     pub(crate) graphics_queue: QueueSet<DeviceObject>,
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
+    adapter_properties: CachedAdapterProperties,
     #[cfg(feature = "mt")]
     fence_reactor: FenceReactorThread<DeviceObject>,
     #[cfg(feature = "debug")]
@@ -145,6 +170,7 @@ impl Graphics {
             },
             adapter: adapter.clone_parent(),
             device,
+            adapter_properties: CachedAdapterProperties::new(),
             memory_type_manager,
             #[cfg(feature = "mt")]
             fence_reactor: FenceReactorThread::new(),
@@ -250,6 +276,28 @@ impl Graphics {
 
     pub const fn graphics_queue_family_index(&self) -> u32 {
         self.graphics_queue.family
+    }
+}
+/// Adapter Property exports
+impl Graphics {
+    pub fn adapter_available_features(&self) -> &br::vk::VkPhysicalDeviceFeatures {
+        self.adapter_properties
+            .available_features
+            .get_or_init(|| self.adapter.features())
+    }
+
+    pub fn adapter_limits(&self) -> &br::vk::VkPhysicalDeviceLimits {
+        &self
+            .adapter_properties
+            .properties
+            .get_or_init(|| self.adapter.properties())
+            .limits
+    }
+
+    pub fn adapter_memory_properties(&self) -> &br::MemoryProperties {
+        self.adapter_properties
+            .memory_properties
+            .get_or_init(|| self.adapter.memory_properties())
     }
 }
 impl Deref for Graphics {
