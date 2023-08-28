@@ -10,6 +10,7 @@ use peridot::{
     audio::StreamingPlayableWav, BufferContent, BufferPrealloc, CBSubmissionType, CommandBundle,
     LayoutedPipeline, SubpassDependencyTemplates,
 };
+use peridot_memory_manager::MemoryManager;
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::convert::TryInto;
 use std::marker::PhantomData;
@@ -54,12 +55,8 @@ pub struct Game<PL: peridot::NativeLinker> {
     ),
     _sampler: br::SamplerObject<peridot::DeviceObject>,
     color_renders: Box<dyn GraphicsCommand>,
-    mutable_uniform_buffer: RangedBuffer<
-        peridot::Buffer<
-            br::BufferObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >,
+    mutable_uniform_buffer: RangedBuffer<peridot_memory_manager::Buffer>,
+    _uniform_buffer: RangedBuffer<peridot_memory_manager::Buffer>,
     _image_view: br::ImageViewObject<
         peridot::Image<
             br::ImageObject<peridot::DeviceObject>,
@@ -96,6 +93,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Setting MasterVolume")
             .set_master_volume(0.5);
 
+        let mut memory_manager = MemoryManager::new(e.graphics());
+
         let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
         let mut cam = Camera {
             projection: Some(ProjectionMethod::Perspective {
@@ -107,29 +106,92 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
 
-        let mut bp = BufferPrealloc::new(e.graphics());
-        let buffer_offsets = BufferOffsets {
-            plane_vertices: bp.add(BufferContent::vertices_for(&plane_mesh.vertices)),
-        };
+        let vertex_buffer = RangedBuffer::from_offset_length(
+            memory_manager
+                .allocate_device_local_buffer(
+                    e.graphics(),
+                    br::BufferDesc::new(
+                        plane_mesh.byte_length(),
+                        br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
+                    ),
+                )
+                .expect("Failed to allocate vertex buffer"),
+            0,
+            plane_mesh.byte_length(),
+        );
+        #[cfg(feature = "debug")]
+        vertex_buffer
+            .0
+            .set_name(Some(unsafe {
+                core::ffi::CStr::from_bytes_with_nul_unchecked(b"Vertex Buffer\0")
+            }))
+            .expect("Failed to set object name");
+        let mut vertex_buffer_stg = RangedBuffer::from_offset_length(
+            memory_manager
+                .allocate_upload_buffer(
+                    e.graphics(),
+                    br::BufferDesc::new(plane_mesh.byte_length(), br::BufferUsage::TRANSFER_SRC),
+                )
+                .expect("Failed to allocate staging vertex buffer"),
+            0,
+            plane_mesh.byte_length(),
+        );
+        vertex_buffer_stg
+            .0
+            .guard_map(|p| unsafe {
+                core::slice::from_raw_parts_mut(
+                    p as *mut peridot::VertexUV,
+                    plane_mesh.vertices.len(),
+                )
+                .clone_from_slice(&plane_mesh.vertices);
+            })
+            .expect("Failed to set upload content");
+
+        let uniform_buffer = RangedBuffer::for_type::<Uniform>(
+            memory_manager
+                .allocate_device_local_buffer(
+                    e.graphics(),
+                    br::BufferDesc::new(
+                        core::mem::size_of::<Uniform>(),
+                        br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+                    ),
+                )
+                .expect("Failed to allocate uniform buffer"),
+            0,
+        );
+        let mut uniform_mut_buffer = RangedBuffer::for_type::<Uniform>(
+            memory_manager
+                .allocate_upload_buffer(
+                    e.graphics(),
+                    br::BufferDesc::new(
+                        core::mem::size_of::<Uniform>(),
+                        br::BufferUsage::TRANSFER_SRC,
+                    ),
+                )
+                .expect("Failed to allocate mutable uniform buffer"),
+            0,
+        );
+        uniform_mut_buffer
+            .0
+            .guard_map(|ptr| unsafe {
+                *(ptr as *mut Uniform) = Uniform {
+                    camera: cam.view_projection_matrix(screen_aspect),
+                    object: Matrix4::ONE,
+                };
+            })
+            .expect("Failed to set initial data of uniform buffer");
+
+        let bp = BufferPrealloc::new(e.graphics());
 
         let mut bp_stg = bp.clone();
-        let copy_buffer_data_length = bp_stg.total_size();
         let staging_buffer_offsets = StagingBufferOffsets {
             image: bp_stg.add(BufferContent::raw_dynarray::<u32>(
                 image_data.0.u8_pixels().len() >> 2,
             )),
         };
 
-        let mut bp_mut = BufferPrealloc::new(e.graphics());
-        let mutable_buffer_offsets = MutableBufferOffsets {
-            uniform: bp_mut.add(BufferContent::uniform::<Uniform>()),
-        };
-        let mutable_data_start = bp.merge(&bp_mut);
-
-        let mut mb = peridot::MemoryBadget::new(e.graphics());
-        mb.add(peridot::MemoryBadgetEntry::Buffer(
-            bp.build_transferred().expect("Failed to create buffer"),
-        ));
+        let mut mb =
+            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
         mb.add(peridot::MemoryBadgetEntry::Image(
             br::ImageDesc::new(
                 image_data.0.size,
@@ -140,22 +202,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .create(e.graphics().device().clone())
             .expect("Failed to create main image object"),
         ));
-        let Ok::<[_; 2], _>([
-            peridot::MemoryBoundResource::Buffer(buffer),
+        let Ok::<[_; 1], _>([
             peridot::MemoryBoundResource::Image(image)
         ]) = mb.alloc().expect("Failed to allocate memory").try_into() else {
-            unreachable!("invalid return combination");
-        };
-        let mut mb =
-            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
-        mb.add(peridot::MemoryBadgetEntry::Buffer(
-            bp_mut
-                .build_upload()
-                .expect("Failed to create mutable data buffer"),
-        ));
-        let Ok::<[_; 1], _>([
-            peridot::MemoryBoundResource::Buffer(mut mut_buffer)
-        ]) = mb.alloc_upload().expect("Failed to allocate mutable data memory").try_into() else {
             unreachable!("invalid return combination");
         };
 
@@ -180,39 +229,18 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         buffer_staging
             .guard_map(0..bp_stg.total_size(), |r| unsafe {
-                r.clone_from_slice_at(buffer_offsets.plane_vertices as _, &plane_mesh.vertices);
                 r.clone_from_slice_at(staging_buffer_offsets.image as _, image_data.0.u8_pixels());
             })
             .expect("Failed to setup staging data");
-        mut_buffer
-            .guard_map(0..bp_mut.total_size(), |r| unsafe {
-                *r.get_mut(mutable_buffer_offsets.uniform as _) = Uniform {
-                    camera: cam.view_projection_matrix(screen_aspect),
-                    object: Matrix4::ONE,
-                };
-            })
-            .expect("Failed to setup mutable data");
-
-        let vertex_buffer = RangedBuffer::from_offset_length(
-            &buffer,
-            buffer_offsets.plane_vertices,
-            std::mem::size_of::<peridot::VertexUV>() * plane_mesh.vertices.len(),
-        );
-        let uniform_buffer = RangedBuffer::for_type::<Uniform>(
-            &buffer,
-            mutable_data_start + mutable_buffer_offsets.uniform,
-        );
-        let mut_uniform_buffer =
-            RangedBuffer::for_type::<Uniform>(&mut_buffer, mutable_buffer_offsets.uniform);
 
         let pre_configure_awaiter = e
             .submit_commands_async(|mut r| {
-                let all_buffer = RangedBuffer::from_offset_length(&buffer, 0, bp.total_size() as _);
                 let staging_init =
                     RangedBuffer::from_offset_length(&buffer_staging, 0, bp_stg.total_size() as _);
                 let texture = RangedImage::single_color_plane(&image);
+                let uniform_mut_buffer_ref = uniform_mut_buffer.make_ref();
 
-                let [mut_uniform_in_barrier, mut_uniform_out_barrier] = mut_uniform_buffer
+                let [mut_uniform_in_barrier, mut_uniform_out_barrier] = uniform_mut_buffer_ref
                     .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
                 let [tex_init_barrier, tex_ready_barrier] = texture.barrier3(
                     br::ImageLayout::Preinitialized,
@@ -221,30 +249,37 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 );
 
                 let in_barriers = PipelineBarrier::new()
-                    .with_barriers([
-                        all_buffer.usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
-                        mut_uniform_in_barrier,
+                    .with_barrier(
                         staging_init.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                    )
+                    .with_barriers([
+                        mut_uniform_in_barrier,
+                        uniform_buffer
+                            .make_ref()
+                            .usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
+                        vertex_buffer_stg
+                            .make_ref()
+                            .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                        vertex_buffer
+                            .make_ref()
+                            .usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
                     ])
                     .with_barrier(tex_init_barrier)
                     .by_region();
                 let out_barriers = PipelineBarrier::new()
                     .with_barriers([
                         vertex_buffer
+                            .make_ref()
                             .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_BUFFER),
-                        uniform_buffer
-                            .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_UNIFORM),
                         mut_uniform_out_barrier,
+                        uniform_buffer
+                            .make_ref()
+                            .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_UNIFORM),
                     ])
                     .with_barrier(tex_ready_barrier)
                     .by_region();
-                let staging_copy = CopyBuffer::new(&buffer_staging, &buffer)
-                    .with_mirroring(0, copy_buffer_data_length as _);
-                let mutable_copy = CopyBuffer::new(mut_uniform_buffer.inner_ref(), &buffer)
-                    .with_range_for_type::<Uniform>(
-                        mutable_buffer_offsets.uniform,
-                        mutable_data_start + mutable_buffer_offsets.uniform,
-                    );
+                let init_vertex = vertex_buffer.mirror_from(&vertex_buffer_stg);
+                let init_uniform = uniform_buffer.mirror_from(&uniform_mut_buffer);
                 let tex_copy = CopyBufferToImage::new(&buffer_staging, &image).with_range(
                     BufferImageDataDesc::new(
                         staging_buffer_offsets.image,
@@ -255,7 +290,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                             .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
                     ),
                 );
-                let copies = (staging_copy, mutable_copy, tex_copy);
+                let copies = (init_vertex, init_uniform, tex_copy);
 
                 copies
                     .between(in_barriers, out_barriers)
@@ -267,21 +302,17 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
             .expect("Alloc UpdateCB");
         {
-            let staging_uniform_buffer =
-                RangedBuffer::for_type::<Uniform>(&mut_buffer, mutable_buffer_offsets.uniform);
+            let uniform_buffer_ref = uniform_buffer.make_ref();
+            let uniform_mut_buffer_ref = uniform_mut_buffer.make_ref();
 
-            let [uniform_in_barrier, uniform_out_barrier] = uniform_buffer
+            let [uniform_in_barrier, uniform_out_barrier] = uniform_buffer_ref
                 .usage_barrier3_switching(BufferUsage::VERTEX_UNIFORM, BufferUsage::TRANSFER_DST);
-            let [staging_uniform_in_barrier, staging_uniform_out_barrier] = staging_uniform_buffer
+            let [staging_uniform_in_barrier, staging_uniform_out_barrier] = uniform_mut_buffer_ref
                 .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
 
             let in_barriers = [uniform_in_barrier, staging_uniform_in_barrier];
             let out_barriers = [uniform_out_barrier, staging_uniform_out_barrier];
-            let copy_uniform = CopyBuffer::new(&mut_buffer, &buffer)
-                .with_range_for_type::<Uniform>(
-                    mutable_buffer_offsets.uniform,
-                    uniform_buffer.offset(),
-                );
+            let copy_uniform = uniform_buffer.mirror_from(&uniform_mut_buffer);
 
             copy_uniform
                 .between(in_barriers, out_barriers)
@@ -412,9 +443,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .device()
             .update_descriptor_sets(&descriptor_writes, &[]);
 
-        let RangedBuffer(_, vertex_buffer_range) = vertex_buffer;
         let plane_mesh = StandardMesh {
-            vertex_buffers: vec![RangedBuffer(buffer, vertex_buffer_range)],
+            vertex_buffers: vec![vertex_buffer],
             vertex_count: 4,
         };
 
@@ -457,16 +487,16 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         }
 
         bgm.write().expect("Starting BGM").play();
-        let RangedBuffer(_, mutable_uniform_range) = mut_uniform_buffer;
 
-        Game {
+        Self {
             render_cb,
             renderpass,
             framebuffers,
             descriptor: (descriptor_layout, descriptor_pool, descriptor_main),
             rot: 0.0,
             color_renders: color_renders.boxed(),
-            mutable_uniform_buffer: RangedBuffer(mut_buffer, mutable_uniform_range),
+            mutable_uniform_buffer: uniform_mut_buffer,
+            _uniform_buffer: uniform_buffer,
             _sampler: smp,
             _image_view: image_view,
             update_cb,
@@ -479,8 +509,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.rot += dtsec * 15.0;
         let rot = self.rot;
         self.mutable_uniform_buffer
-            .guard_map(|m| unsafe {
-                m.get_mut::<Uniform>(0).object = Quaternion::new(rot, Vector3::up()).into();
+            .0
+            .guard_map(|ptr| unsafe {
+                (*(ptr as *mut Uniform)).object = Quaternion::new(rot, Vector3::up()).into();
             })
             .expect("Update DynamicStgBuffer");
 

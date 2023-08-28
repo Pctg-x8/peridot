@@ -3,7 +3,7 @@ use std::ops::Range;
 use bedrock as br;
 use br::ImageSubresourceSlice;
 
-use crate::{BufferUsage, BufferUsageTransitionBarrier};
+use crate::{BufferUsage, BufferUsageTransitionBarrier, CopyBuffer, GraphicsCommand};
 
 pub struct RangedBuffer<B: br::Buffer>(pub B, pub Range<u64>);
 impl<B: br::Buffer> RangedBuffer<B> {
@@ -65,6 +65,28 @@ impl<B: br::Buffer> RangedBuffer<B> {
 
     pub fn inner_ref(&self) -> &B {
         &self.0
+    }
+
+    /// generates mirroring command from self to dest.
+    ///
+    /// both buffer length must be equal.
+    pub fn mirror_to<'s>(
+        &'s self,
+        dest: &'s RangedBuffer<impl br::Buffer>,
+    ) -> impl GraphicsCommand + 's {
+        assert_eq!(self.byte_length(), dest.byte_length());
+
+        CopyBuffer::new(&self.0, &dest.0).with_mirroring(0, self.byte_length() as _)
+    }
+
+    /// generates mirroring command from src to self. (reversing mirror_to arguments)
+    ///
+    /// both buffer length must be equal.
+    pub fn mirror_from<'s>(
+        &'s self,
+        src: &'s RangedBuffer<impl br::Buffer>,
+    ) -> impl GraphicsCommand + 's {
+        src.mirror_to(self)
     }
 }
 impl<B: br::Buffer + Clone> RangedBuffer<&'_ B> {

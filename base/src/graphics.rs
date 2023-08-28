@@ -54,7 +54,7 @@ cfg_if! {
     if #[cfg(feature = "mt")] {
         use std::sync::OnceLock as OnceValue;
     } else {
-        use std::once::OnceCell as OnceValue;
+        use std::cell::OnceCell as OnceValue;
     }
 }
 

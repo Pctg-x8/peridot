@@ -10,8 +10,10 @@ members = [
     "modules/image",
     "modules/vg",
     "modules/transition",
-	"modules/command-object",
+    "modules/command-object",
+    "modules/memory-manager",
 ]
 
 [workspace.dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+tracing = "0.1"
