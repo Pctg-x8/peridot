@@ -57,12 +57,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     color_renders: Box<dyn GraphicsCommand>,
     mutable_uniform_buffer: RangedBuffer<peridot_memory_manager::Buffer>,
     _uniform_buffer: RangedBuffer<peridot_memory_manager::Buffer>,
-    _image_view: br::ImageViewObject<
-        peridot::Image<
-            br::ImageObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >,
+    _image_view: br::ImageViewObject<peridot_memory_manager::Image>,
 }
 impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
 impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
@@ -163,6 +158,17 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             })
             .expect("Failed to set initial data of uniform buffer");
 
+        let image = memory_manager
+            .allocate_device_local_image(
+                e.graphics(),
+                br::ImageDesc::new(
+                    image_data.0.size,
+                    image_data.0.format as _,
+                    br::ImageUsage::SAMPLED.transfer_dest(),
+                    br::ImageLayout::Preinitialized,
+                ),
+            )
+            .expect("Failed to allocate main image");
         let mut image_data_stg_buffer = memory_manager
             .allocate_upload_linear_image_buffer(
                 e.graphics(),
@@ -175,24 +181,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         image_data_stg_buffer
             .copy_content_from_slice(image_data.0.u8_pixels())
             .expect("Failed to set image data");
-
-        let mut mb =
-            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
-        mb.add(peridot::MemoryBadgetEntry::Image(
-            br::ImageDesc::new(
-                image_data.0.size,
-                image_data.0.format as _,
-                br::ImageUsage::SAMPLED.transfer_dest(),
-                br::ImageLayout::Preinitialized,
-            )
-            .create(e.graphics().device().clone())
-            .expect("Failed to create main image object"),
-        ));
-        let Ok::<[_; 1], _>([
-            peridot::MemoryBoundResource::Image(image)
-        ]) = mb.alloc().expect("Failed to allocate memory").try_into() else {
-            unreachable!("invalid return combination");
-        };
 
         let pre_configure_awaiter = e
             .submit_commands_async(|mut r| {
@@ -243,8 +231,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     .with_range(
                         BufferImageDataDesc::new(0, image_data_stg_buffer.row_texels),
                         ImageResourceRange::for_single_color_from_rect2d(
-                            br::vk::VkExtent2D::from(image_data.0.size)
-                                .into_rect(br::vk::VkOffset2D::ZERO),
+                            image.size().wh().into_rect(br::vk::VkOffset2D::ZERO),
                         ),
                     );
                 let copies = (init_vertex, init_uniform, init_tex);
