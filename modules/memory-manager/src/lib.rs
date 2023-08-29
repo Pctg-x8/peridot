@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use bedrock as br;
 use br::{DeviceMemory, MemoryBound};
+use num_integer::Integer;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 
 pub struct MemoryType {
@@ -960,6 +961,19 @@ impl MemoryManager {
         })
     }
 
+    pub fn allocate_device_local_buffer_with_contents(
+        &mut self,
+        e: &peridot::Graphics,
+        contents: impl IntoIterator<Item = peridot::BufferContent>,
+        add_usage: br::BufferUsage,
+    ) -> br::Result<(Buffer, Vec<u64>)> {
+        let mut bp = peridot::BufferPrealloc::new(e);
+        let offsets = contents.into_iter().map(|c| bp.add(c)).collect::<Vec<_>>();
+        let obj = self.allocate_device_local_buffer(e, bp.build_desc().and_usage(add_usage))?;
+
+        Ok((obj, offsets))
+    }
+
     pub fn allocate_upload_buffer(
         &mut self,
         e: &peridot::Graphics,
@@ -999,6 +1013,19 @@ impl MemoryManager {
         })
     }
 
+    pub fn allocate_upload_buffer_with_contents(
+        &mut self,
+        e: &peridot::Graphics,
+        contents: impl IntoIterator<Item = peridot::BufferContent>,
+        add_usage: br::BufferUsage,
+    ) -> br::Result<(Buffer, Vec<u64>)> {
+        let mut bp = peridot::BufferPrealloc::new(e);
+        let offsets = contents.into_iter().map(|c| bp.add(c)).collect::<Vec<_>>();
+        let obj = self.allocate_upload_buffer(e, bp.build_desc().and_usage(add_usage))?;
+
+        Ok((obj, offsets))
+    }
+
     pub fn allocate_upload_linear_image_buffer(
         &mut self,
         e: &peridot::Graphics,
@@ -1007,20 +1034,38 @@ impl MemoryManager {
         format: peridot::PixelFormat,
         usage: br::BufferUsage,
     ) -> br::Result<LinearImageBuffer> {
-        let row_byte_length = align2(
-            width as usize * (format.bpp() >> 3),
-            self.optimal_buffer_linear_image_placement_info
-                .row_pitch_alignment as usize,
-        );
-
-        let desc = br::BufferDesc::new(row_byte_length * height as usize, usage);
-        let object = self.allocate_upload_buffer(e, desc)?;
+        let (byte_length, _alignment, row_texels) =
+            self.compute_optimal_linear_image_buffer_layout(width, height, format);
+        let object =
+            self.allocate_upload_buffer(e, br::BufferDesc::new(byte_length as _, usage))?;
 
         Ok(LinearImageBuffer {
             inner: object,
-            row_texels: (row_byte_length / (format.bpp() >> 3)) as _,
+            row_texels,
             height,
         })
+    }
+
+    /// returns: (byte length, alignment, row texel count)
+    pub fn compute_optimal_linear_image_buffer_layout(
+        &self,
+        width: u32,
+        height: u32,
+        format: peridot::PixelFormat,
+    ) -> (u64, u64, u32) {
+        let row_texels = align2(
+            width as usize * (format.bpp() >> 3),
+            self.optimal_buffer_linear_image_placement_info
+                .row_pitch_alignment as usize,
+        ) / (format.bpp() >> 3);
+
+        (
+            row_texels as u64 * height as u64 * (format.bpp() as u64 >> 3),
+            self.optimal_buffer_linear_image_placement_info
+                .alignment
+                .lcm(&(format.alignment() as u64)),
+            row_texels as u32,
+        )
     }
 
     pub fn allocate_device_local_image(

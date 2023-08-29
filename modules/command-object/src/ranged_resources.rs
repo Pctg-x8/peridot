@@ -8,6 +8,7 @@ use peridot_memory_manager as pmm;
 
 use crate::{BufferUsage, BufferUsageTransitionBarrier, CopyBuffer, GraphicsCommand};
 
+#[derive(Clone)]
 pub struct RangedBuffer<B: br::Buffer>(pub B, pub Range<u64>);
 impl<B: br::Buffer> RangedBuffer<B> {
     pub const fn from_offset_length(buffer: B, offset: u64, length: usize) -> Self {
@@ -35,34 +36,40 @@ impl<B: br::Buffer> RangedBuffer<B> {
     }
 
     pub fn usage_barrier(
-        &self,
+        self,
         from_usage: BufferUsage,
         to_usage: BufferUsage,
     ) -> BufferUsageTransitionBarrier<B> {
         BufferUsageTransitionBarrier {
-            buffer: &self,
+            buffer: self,
             from_usage,
             to_usage,
         }
     }
 
     pub fn usage_barrier3(
-        &self,
+        self,
         first_usage: BufferUsage,
         intermedial_usage: BufferUsage,
         last_usage: BufferUsage,
-    ) -> [BufferUsageTransitionBarrier<B>; 2] {
+    ) -> [BufferUsageTransitionBarrier<B>; 2]
+    where
+        Self: Clone,
+    {
         [
-            self.usage_barrier(first_usage, intermedial_usage),
+            self.clone().usage_barrier(first_usage, intermedial_usage),
             self.usage_barrier(intermedial_usage, last_usage),
         ]
     }
 
     pub fn usage_barrier3_switching(
-        &self,
+        self,
         first_usage: BufferUsage,
         intermedial_usage: BufferUsage,
-    ) -> [BufferUsageTransitionBarrier<B>; 2] {
+    ) -> [BufferUsageTransitionBarrier<B>; 2]
+    where
+        Self: Clone,
+    {
         self.usage_barrier3(first_usage, intermedial_usage, first_usage)
     }
 

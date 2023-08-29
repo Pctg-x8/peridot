@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 bedrock = { workspace = true }
+num-integer = "0.1.45"
 peridot = { path = "../../base" }
 tracing = { workspace = true }

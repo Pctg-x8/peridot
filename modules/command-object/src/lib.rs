@@ -132,12 +132,12 @@ pub(crate) fn vk_pipeline_stage_mask_requirements_for_image_layout(
 }
 
 #[derive(Clone)]
-pub struct BufferUsageTransitionBarrier<'r, B: br::Buffer> {
-    pub buffer: &'r RangedBuffer<B>,
+pub struct BufferUsageTransitionBarrier<B: br::Buffer> {
+    pub buffer: RangedBuffer<B>,
     pub from_usage: BufferUsage,
     pub to_usage: BufferUsage,
 }
-impl<B: br::Buffer> BufferUsageTransitionBarrier<'_, B> {
+impl<B: br::Buffer> BufferUsageTransitionBarrier<B> {
     pub fn make_vk_barrier(&self) -> br::BufferMemoryBarrier {
         br::BufferMemoryBarrier::new(
             &self.buffer.0,
@@ -147,7 +147,7 @@ impl<B: br::Buffer> BufferUsageTransitionBarrier<'_, B> {
         )
     }
 }
-impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<'_, B> {
+impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<B> {
     fn add_into(self, barrier: &mut PipelineBarrier) {
         barrier.buffer_barriers.push(self.make_vk_barrier());
         barrier.src_stage_mask |= self.from_usage.vk_pipeline_stage_mask_requirements();
@@ -159,7 +159,7 @@ impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<'_, B>
     }
 }
 impl<const N: usize, B: br::Buffer + Clone> GraphicsCommand
-    for [BufferUsageTransitionBarrier<'_, B>; N]
+    for [BufferUsageTransitionBarrier<B>; N]
 {
     fn execute(
         &self,
