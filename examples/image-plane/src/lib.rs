@@ -163,12 +163,18 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             })
             .expect("Failed to set initial data of uniform buffer");
 
-        let mut bp_stg = BufferPrealloc::new(e.graphics());
-        let staging_buffer_offsets = StagingBufferOffsets {
-            image: bp_stg.add(BufferContent::raw_dynarray::<u32>(
-                image_data.0.u8_pixels().len() >> 2,
-            )),
-        };
+        let mut image_data_stg_buffer = memory_manager
+            .allocate_upload_linear_image_buffer(
+                e.graphics(),
+                *image_data.0.size.x(),
+                *image_data.0.size.y(),
+                image_data.0.format,
+                br::BufferUsage::TRANSFER_SRC,
+            )
+            .expect("Failed to allocate linear image buffer");
+        image_data_stg_buffer
+            .copy_content_from_slice(image_data.0.u8_pixels())
+            .expect("Failed to set image data");
 
         let mut mb =
             peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
@@ -188,37 +194,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             unreachable!("invalid return combination");
         };
 
-        let (mut buffer_staging, stg_requires_flushing) = {
-            let mut mb = peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(
-                e.graphics(),
-            );
-            mb.add(peridot::MemoryBadgetEntry::Buffer(
-                bp_stg
-                    .build_upload()
-                    .expect("Failed to create staging buffer"),
-            ));
-            let Ok::<[_; 1], _>([
-                peridot::MemoryBoundResource::Buffer(b)
-            ]) = mb.alloc_upload().expect("Failed to allocate staging memory").try_into() else {
-                unreachable!("invalid return combination")
-            };
-
-            // TODO: requires flushing?
-            (b, false)
-        };
-
-        buffer_staging
-            .guard_map(0..bp_stg.total_size(), |r| unsafe {
-                r.clone_from_slice_at(staging_buffer_offsets.image as _, image_data.0.u8_pixels());
-            })
-            .expect("Failed to setup staging data");
-
         let pre_configure_awaiter = e
             .submit_commands_async(|mut r| {
-                let staging_init =
-                    RangedBuffer::from_offset_length(&buffer_staging, 0, bp_stg.total_size() as _);
                 let texture = RangedImage::single_color_plane(&image);
                 let uniform_mut_buffer_ref = uniform_mut_buffer.make_ref();
+                let image_data_stg_buffer_ranged = RangedBuffer::from(&image_data_stg_buffer.inner);
 
                 let [mut_uniform_in_barrier, mut_uniform_out_barrier] = uniform_mut_buffer_ref
                     .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
@@ -229,9 +209,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 );
 
                 let in_barriers = PipelineBarrier::new()
-                    .with_barrier(
-                        staging_init.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
-                    )
                     .with_barriers([
                         mut_uniform_in_barrier,
                         uniform_buffer
@@ -243,6 +220,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                         vertex_buffer
                             .make_ref()
                             .usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
+                        image_data_stg_buffer_ranged
+                            .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
                     ])
                     .with_barrier(tex_init_barrier)
                     .by_region();
@@ -260,17 +239,15 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     .by_region();
                 let init_vertex = vertex_buffer.mirror_from(&vertex_buffer_stg);
                 let init_uniform = uniform_buffer.mirror_from(&uniform_mut_buffer);
-                let tex_copy = CopyBufferToImage::new(&buffer_staging, &image).with_range(
-                    BufferImageDataDesc::new(
-                        staging_buffer_offsets.image,
-                        (image_data.0.stride / (image_data.0.format.bpp() >> 3)) as _,
-                    ),
-                    ImageResourceRange::for_single_color_from_rect2d(
-                        br::vk::VkExtent2D::from(image_data.0.size)
-                            .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                    ),
-                );
-                let copies = (init_vertex, init_uniform, tex_copy);
+                let init_tex = CopyBufferToImage::new(&image_data_stg_buffer.inner, &image)
+                    .with_range(
+                        BufferImageDataDesc::new(0, image_data_stg_buffer.row_texels),
+                        ImageResourceRange::for_single_color_from_rect2d(
+                            br::vk::VkExtent2D::from(image_data.0.size)
+                                .into_rect(br::vk::VkOffset2D::ZERO),
+                        ),
+                    );
+                let copies = (init_vertex, init_uniform, init_tex);
 
                 copies
                     .between(in_barriers, out_barriers)

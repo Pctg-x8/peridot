@@ -115,6 +115,14 @@ impl From<pmm::Buffer> for RangedBuffer<pmm::Buffer> {
         Self::from_offset_length(value, 0, length)
     }
 }
+#[cfg(feature = "memory_manager_interop")]
+impl<'s> From<&'s pmm::Buffer> for RangedBuffer<&'s pmm::Buffer> {
+    fn from(value: &'s pmm::Buffer) -> Self {
+        let length = value.byte_length();
+
+        Self::from_offset_length(value, 0, length)
+    }
+}
 
 pub struct RangedImage<R: br::Image>(br::ImageSubresourceRange<R>);
 impl<R: br::Image> RangedImage<R> {

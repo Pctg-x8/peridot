@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use bedrock as br;
-use br::{DeviceChild, DeviceMemory, MemoryBound, VkHandle};
+use br::{DeviceChild, DeviceMemory, MemoryBound};
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 
 pub struct MemoryType {
@@ -41,19 +41,21 @@ const SLAB_ALLOC_BASE_SIZE: usize = 64;
 pub struct MemoryBlockSlab {
     offset: u64,
     free_bits: u32,
+    max: u32,
     next: Option<Box<MemoryBlockSlab>>,
 }
 impl MemoryBlockSlab {
-    pub const fn new(offset: u64) -> Self {
+    pub const fn new(offset: u64, max: u32) -> Self {
         Self {
             offset,
             free_bits: 0,
+            max,
             next: None,
         }
     }
 
     pub const fn is_filled(&self) -> bool {
-        self.free_bits.count_zeros() == 0
+        self.free_bits.count_ones() == self.max
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -61,17 +63,17 @@ impl MemoryBlockSlab {
     }
 
     pub const fn get_first_free(&self) -> Option<usize> {
-        let x = self.free_bits.trailing_ones() as usize;
+        let x = self.free_bits.trailing_ones();
 
-        if x < 32 {
-            Some(x)
+        if x < self.max {
+            Some(x as _)
         } else {
             None
         }
     }
 
     pub fn contains_object(&self, object_size: usize, offset: u64) -> bool {
-        (self.offset..self.offset + (object_size * 32) as u64).contains(&offset)
+        (self.offset..self.offset + (object_size * self.max as usize) as u64).contains(&offset)
     }
 
     pub fn try_compute_object_index(&self, object_size: usize, offset: u64) -> Option<usize> {
@@ -118,10 +120,10 @@ impl MemoryBlockSlabCache {
         self.filled_slabs_head = None;
     }
 
-    pub fn append_empty_slab(&mut self, offset: u64) {
+    pub fn append_empty_slab(&mut self, offset: u64, max: u32) {
         Self::append_slab_chain(
             &mut self.empty_slabs_head,
-            Box::new(MemoryBlockSlab::new(offset)),
+            Box::new(MemoryBlockSlab::new(offset, max)),
         );
     }
 
@@ -290,25 +292,46 @@ impl MemoryBlockSlabCache {
 
 const SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE: usize = SLAB_ALLOC_BASE_SIZE * 32;
 
+pub enum MemoryBlockSlabCacheFreeAreaAcquisitionFailure {
+    TooLarge,
+    NoBlocksLeft,
+}
+
 /// Slab Allocatorが管理する用の一定サイズのメモリブロックを切り出す（Buddy Systemの簡易実装）
 pub struct MemoryBlockSlabCacheFreeAreaManager {
     free_block_index_by_chains: Vec<Vec<u64>>,
 }
 impl MemoryBlockSlabCacheFreeAreaManager {
     pub fn new(block_count: u32) -> Self {
-        // power of 2に切り上げ
-        let aligned_block_count = 1 << ((32 - block_count.leading_zeros()) - 1);
-        let mut n = 1;
+        let aligned_block_count = round_up_to_next_power_of_two(block_count as _);
 
         Self {
-            free_block_index_by_chains: core::iter::from_fn(|| {
-                n <<= 1;
-                Some(n >> 1)
-            })
-            .take_while(|&n| n < aligned_block_count)
-            .map(|_| Vec::new())
-            .chain(core::iter::once(vec![0]))
-            .collect(),
+            free_block_index_by_chains: power_of_2_series_from_u64(1)
+                .take_while(|&n| n <= aligned_block_count)
+                .map(|_| Vec::new())
+                .chain(core::iter::once(vec![0]))
+                .collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.free_block_index_by_chains
+            .last()
+            .is_some_and(|r| r.len() == 1 && r.first() == Some(&0))
+    }
+
+    pub fn try_fill(&mut self) -> bool {
+        if self.is_empty() {
+            // 最後の要素しかないのでそれをclearすれば全部使ってることになる
+            unsafe {
+                self.free_block_index_by_chains
+                    .last_mut()
+                    .unwrap_unchecked()
+                    .clear()
+            };
+            true
+        } else {
+            false
         }
     }
 
@@ -317,14 +340,23 @@ impl MemoryBlockSlabCacheFreeAreaManager {
     }
 
     /// returns block number(not global byte offset)
-    pub fn acquire(&mut self, block_count: u32) -> Option<u64> {
-        // power of 2に切り上げ
-        let aligned_block_count = 1u32 << ((32 - block_count.leading_zeros()) - 1);
+    pub fn acquire(
+        &mut self,
+        block_count: u32,
+    ) -> Result<u64, MemoryBlockSlabCacheFreeAreaAcquisitionFailure> {
+        let aligned_block_count = round_up_to_next_power_of_two(block_count as _) as u32;
         let base_level = Self::block_count_to_level(aligned_block_count);
+
+        tracing::debug!("acquiring blocks {block_count} aligned {aligned_block_count}");
+
+        if base_level >= self.free_block_index_by_chains.len() {
+            // too large
+            return Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge);
+        }
 
         let exact_match_block = self.free_block_index_by_chains[base_level as usize].pop();
         if let Some(b) = exact_match_block {
-            return Some(b);
+            return Ok(b);
         }
 
         // divide large blocks
@@ -350,10 +382,10 @@ impl MemoryBlockSlabCacheFreeAreaManager {
                 }
             }
 
-            return Some(b);
+            return Ok(b);
         }
 
-        None
+        Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::NoBlocksLeft)
     }
 
     pub fn release_power_of_two_block(&mut self, block_number: u32, mut block_count: u32) {
@@ -415,8 +447,30 @@ fn power_of_2_series_from(mut base: usize) -> impl Iterator<Item = usize> {
     })
 }
 
+/// 切り上げ a(アラインメント)は2の累乗数
+const fn align2(x: usize, a: usize) -> usize {
+    (x + (a - 1)) & !(a - 1)
+}
+
+/// 最上位ビットのみが立っている状態にする
+/// # Example
+/// ```
+/// assert_eq!(only_top_bit(0b0100_0000), 0b0100_0000);
+/// assert_eq!(only_top_bit(0b0110_1101), 0b0100_0000);
+/// ```
+const fn only_top_bit(x: u64) -> u64 {
+    1u64 << (64 - x.leading_zeros() - 1)
+}
+
+const fn round_up_to_next_power_of_two(value: u64) -> u64 {
+    // Note: 最上位ビット以下のみ立っている状態（= 最上位ビットのみ立っている状態 - 1）を足すと
+    // 純粋な2の累乗数以外は繰り上がるので、その状態で再び最上位ビットのみの状態にすると切り上げになる
+    only_top_bit(value + only_top_bit(value) - 1) as _
+}
+
 pub struct MemoryBlock<Device: br::Device> {
     pub object: br::DeviceMemoryObject<Device>,
+    pub total_size: u64,
     /// 64*2^n where n is index of the vec
     pub slab_cache_by_object_size: Vec<MemoryBlockSlabCache>,
     pub slab_cache_free_area_manager: MemoryBlockSlabCacheFreeAreaManager,
@@ -427,8 +481,9 @@ impl<Device: br::Device> MemoryBlock<Device> {
 
         Self {
             object,
+            total_size,
             slab_cache_by_object_size: power_of_2_series_from(SLAB_ALLOC_BASE_SIZE)
-                .take_while(|&x| x <= MemoryManager::SMALL_ALLOCATION_THRESHOLD as usize)
+                .take_while(|&x| x <= total_size as usize)
                 .map(MemoryBlockSlabCache::new)
                 .collect(),
             slab_cache_free_area_manager: MemoryBlockSlabCacheFreeAreaManager::new(
@@ -439,7 +494,7 @@ impl<Device: br::Device> MemoryBlock<Device> {
 
     /// SLAB_ALLOC_BASE_SIZE以上 2の累乗数に切り上げ
     fn aligned_object_size(size: usize) -> usize {
-        1usize << (64 - size.max(SLAB_ALLOC_BASE_SIZE).leading_zeros() - 1)
+        round_up_to_next_power_of_two(size.max(SLAB_ALLOC_BASE_SIZE) as _) as _
     }
 
     /// slab_cache_by_object_sizeのキーを計算
@@ -451,6 +506,8 @@ impl<Device: br::Device> MemoryBlock<Device> {
         let slab_object_size = Self::aligned_object_size(size);
         let slab_allocator_key = Self::slab_allocator_key(slab_object_size);
 
+        tracing::debug!("requested {size} bytes, aligned to {slab_object_size}, using allocator #{slab_allocator_key}");
+
         if let Some(o) =
             self.slab_cache_by_object_size[slab_allocator_key as usize].find_free_object_offset()
         {
@@ -458,11 +515,27 @@ impl<Device: br::Device> MemoryBlock<Device> {
         }
 
         // 既存のslab cache内ではみつからなかった 新しく登録して試す
-        let new_slab_cache_offset_block = self
+        let (new_slab_cache_offset_block, max_objects) = match self
             .slab_cache_free_area_manager
-            .acquire(1 << (slab_allocator_key + 1))?;
+            .acquire(1 << slab_allocator_key)
+        {
+            Ok(b) => (b, 32),
+            Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
+                if self.slab_cache_free_area_manager.try_fill() {
+                    // 部分的に確保されてなかったのでまるごと全部使える
+                    tracing::trace!(
+                        "object too large! managing only {} objects",
+                        self.total_size / slab_object_size as u64
+                    );
+                    (0, self.total_size / slab_object_size as u64)
+                } else {
+                    return None;
+                }
+            }
+            Err(_) => return None,
+        };
         self.slab_cache_by_object_size[slab_allocator_key as usize]
-            .append_empty_slab(new_slab_cache_offset_block);
+            .append_empty_slab(new_slab_cache_offset_block, max_objects as _);
         self.slab_cache_by_object_size[slab_allocator_key as usize].find_free_object_offset()
     }
 
@@ -590,6 +663,28 @@ impl br::DeviceChild for Buffer {
 }
 impl br::Buffer for Buffer {}
 
+pub struct LinearImageBuffer {
+    pub inner: Buffer,
+    pub row_texels: u32,
+}
+impl std::ops::Deref for LinearImageBuffer {
+    type Target = Buffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for LinearImageBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+pub struct OptimalBufferLinearImagePlacementInfo {
+    pub alignment: u64,
+    pub row_pitch_alignment: u64,
+}
+
 pub struct MemoryManager {
     /// Device Local only
     pub device_local_memory_types: Vec<MemoryType>,
@@ -598,12 +693,14 @@ pub struct MemoryManager {
     /// Both Device Local and Host Visible (this memory can be directly mapped)
     pub direct_memory_types: Vec<MemoryType>,
     pub heap_stats: Vec<HeapStats>,
+    pub optimal_buffer_linear_image_placement_info: OptimalBufferLinearImagePlacementInfo,
     pub managed_blocks_per_type:
         BTreeMap<u32, Vec<SharedMutableRef<MemoryBlock<peridot::DeviceObject>>>>,
 }
 impl MemoryManager {
     /// 1MB以下はSmall Allocationとして判定する
     const SMALL_ALLOCATION_THRESHOLD: u64 = 1024 * 1024;
+    const NEW_MANAGED_ALLOCATION_SIZE: u64 = 4 * Self::SMALL_ALLOCATION_THRESHOLD;
 
     pub fn new(e: &peridot::Graphics) -> Self {
         let features = e.adapter_available_features();
@@ -705,6 +802,10 @@ impl MemoryManager {
             host_visible_memory_types,
             direct_memory_types,
             heap_stats,
+            optimal_buffer_linear_image_placement_info: OptimalBufferLinearImagePlacementInfo {
+                alignment: limits.optimalBufferCopyOffsetAlignment,
+                row_pitch_alignment: limits.optimalBufferCopyRowPitchAlignment,
+            },
             managed_blocks_per_type: BTreeMap::new(),
         }
     }
@@ -772,12 +873,12 @@ impl MemoryManager {
         // 既存のものにはもう入らないので新規で確保
         tracing::debug!(
             "allocating new device memory block: {} bytes on type #{memory_index}",
-            Self::SMALL_ALLOCATION_THRESHOLD
+            Self::NEW_MANAGED_ALLOCATION_SIZE
         );
         let mut new_block = MemoryBlock::new(
-            br::DeviceMemoryRequest::allocate(Self::SMALL_ALLOCATION_THRESHOLD as _, memory_index)
+            br::DeviceMemoryRequest::allocate(Self::NEW_MANAGED_ALLOCATION_SIZE as _, memory_index)
                 .execute(object.device().clone())?,
-            Self::SMALL_ALLOCATION_THRESHOLD,
+            Self::NEW_MANAGED_ALLOCATION_SIZE,
         );
         // 絶対確保できるはず
         let new_offset = unsafe {
@@ -844,5 +945,28 @@ impl MemoryManager {
         }
 
         self.allocate_buffer_internal(o, req, memory_type.index)
+    }
+
+    pub fn allocate_upload_linear_image_buffer(
+        &mut self,
+        e: &peridot::Graphics,
+        width: u32,
+        height: u32,
+        format: peridot::PixelFormat,
+        usage: br::BufferUsage,
+    ) -> br::Result<LinearImageBuffer> {
+        let row_byte_length = align2(
+            width as usize * (format.bpp() >> 3),
+            self.optimal_buffer_linear_image_placement_info
+                .row_pitch_alignment as usize,
+        );
+
+        let desc = br::BufferDesc::new(row_byte_length * height as usize, usage);
+        let object = self.allocate_upload_buffer(e, desc)?;
+
+        Ok(LinearImageBuffer {
+            inner: object,
+            row_texels: (row_byte_length / (format.bpp() >> 3)) as _,
+        })
     }
 }

@@ -260,7 +260,7 @@ impl<S: br::Buffer, D: br::Image> CopyBufferToImage<S, D> {
     ) -> Self {
         self.regions.push(br::vk::VkBufferImageCopy {
             bufferOffset: buffer_data_desc.offset,
-            bufferRowLength: buffer_data_desc.row_bytes,
+            bufferRowLength: buffer_data_desc.row_texels,
             bufferImageHeight: buffer_data_desc.image_height,
             imageSubresource: image_range.layers,
             imageOffset: image_range.offset,
@@ -696,14 +696,14 @@ impl GraphicsCommand for Vec<br::vk::VkCommandBuffer> {
 
 pub struct BufferImageDataDesc {
     offset: u64,
-    row_bytes: u32,
+    row_texels: u32,
     image_height: u32,
 }
 impl BufferImageDataDesc {
-    pub const fn new(offset: u64, row_bytes: u32) -> Self {
+    pub const fn new(offset: u64, row_texels: u32) -> Self {
         Self {
             offset,
-            row_bytes,
+            row_texels,
             image_height: 0,
         }
     }
