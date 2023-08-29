@@ -348,6 +348,7 @@ impl MemoryBlockSlabCacheFreeAreaManager {
         count.trailing_zeros() as _
     }
 
+    #[tracing::instrument(skip(self))]
     /// returns block number(not global byte offset)
     pub fn acquire(
         &mut self,
@@ -355,8 +356,6 @@ impl MemoryBlockSlabCacheFreeAreaManager {
     ) -> Result<u64, MemoryBlockSlabCacheFreeAreaAcquisitionFailure> {
         let aligned_block_count = round_up_to_next_power_of_two(block_count as _) as u32;
         let base_level = Self::block_count_to_level(aligned_block_count);
-
-        tracing::debug!("acquiring blocks {block_count} aligned {aligned_block_count}");
 
         if base_level >= self.free_block_index_by_chains.len() {
             // too large
@@ -397,9 +396,8 @@ impl MemoryBlockSlabCacheFreeAreaManager {
         Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::NoBlocksLeft)
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn release_power_of_two_block(&mut self, block_number: u64, mut block_count: u32) {
-        tracing::trace!("release slab cache block: starting {block_number} count {block_count}");
-
         let base_level = Self::block_count_to_level(block_count);
         let mut level = self.free_block_index_by_chains.len() - 1;
         for l in base_level..self.free_block_index_by_chains.len() {
@@ -424,6 +422,7 @@ impl MemoryBlockSlabCacheFreeAreaManager {
         self.free_block_index_by_chains[level].push(block_number as _);
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn release(&mut self, mut block_number: u64, mut block_count: u32) {
         // power of 2に切り上げ(こいつが最大レベル)
         let aligned_block_count = 1u32 << ((32 - block_count.leading_zeros()) - 1);
@@ -509,62 +508,56 @@ impl<Device: br::Device> MemoryBlock<Device> {
     }
 
     /// slab_cache_by_object_sizeのキーを計算
-    const fn slab_allocator_key(aligned_size: usize) -> usize {
+    const fn slab_level(aligned_size: usize) -> usize {
         (aligned_size.trailing_zeros() - SLAB_ALLOC_BASE_SIZE.trailing_zeros()) as usize
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn suballocate(&mut self, size: usize) -> Option<u64> {
         let slab_object_size = Self::aligned_object_size(size);
-        let slab_allocator_key = Self::slab_allocator_key(slab_object_size);
+        let slab_level = Self::slab_level(slab_object_size);
+        let allocator = &mut self.slab_cache_by_object_size[slab_level as usize];
 
-        tracing::debug!("requested {size} bytes, aligned to {slab_object_size}, using allocator #{slab_allocator_key}");
+        tracing::debug!("size aligned to {slab_object_size}, using level #{slab_level}");
 
-        if let Some(o) =
-            self.slab_cache_by_object_size[slab_allocator_key as usize].find_free_object_offset()
-        {
+        if let Some(o) = allocator.find_free_object_offset() {
             return Some(o);
         }
 
         // 既存のslab cache内ではみつからなかった 新しく登録して試す
-        let (new_slab_cache_offset_block, max_objects, block_count) = match self
-            .slab_cache_free_area_manager
-            .acquire(1 << slab_allocator_key)
-        {
-            Ok(b) => (b, 32, 1 << slab_allocator_key),
-            Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
-                if let Some(block_count) = self.slab_cache_free_area_manager.try_fill() {
-                    // 部分的に確保されてなかったのでまるごと全部使える
-                    tracing::trace!(
-                        "object too large! managing only {} objects",
-                        self.total_size / slab_object_size as u64
-                    );
-                    (0, self.total_size / slab_object_size as u64, block_count)
-                } else {
-                    return None;
+        let (new_slab_cache_offset_block, max_objects, block_count) =
+            match self.slab_cache_free_area_manager.acquire(1 << slab_level) {
+                Ok(b) => (b, 32, 1 << slab_level),
+                Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
+                    if let Some(block_count) = self.slab_cache_free_area_manager.try_fill() {
+                        // 部分的に確保されてなかったのでまるごと全部使える
+                        tracing::trace!(
+                            "object too large! managing only {} objects",
+                            self.total_size / slab_object_size as u64
+                        );
+                        (0, self.total_size / slab_object_size as u64, block_count)
+                    } else {
+                        return None;
+                    }
                 }
-            }
-            Err(_) => return None,
-        };
-        self.slab_cache_by_object_size[slab_allocator_key as usize].append_empty_slab(
+                Err(_) => return None,
+            };
+        allocator.append_empty_slab(
             (new_slab_cache_offset_block, block_count),
             new_slab_cache_offset_block * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64,
             max_objects as _,
         );
-        self.slab_cache_by_object_size[slab_allocator_key as usize].find_free_object_offset()
+        allocator.find_free_object_offset()
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn free(&mut self, size: usize, offset: u64) {
         let slab_object_size = Self::aligned_object_size(size);
-        let slab_allocator_key = Self::slab_allocator_key(slab_object_size);
+        let slab_level = Self::slab_level(slab_object_size);
 
-        tracing::trace!(
-            "releasing suballocated block size:{}(aligned:{}) from offset {}",
-            size,
-            slab_object_size,
-            offset
-        );
+        tracing::debug!("size aligned:{slab_object_size}, using level #{slab_level}");
 
-        self.slab_cache_by_object_size[slab_allocator_key as usize].free_object(offset, |empty| {
+        self.slab_cache_by_object_size[slab_level as usize].free_object(offset, |empty| {
             self.slab_cache_free_area_manager
                 .release_power_of_two_block(empty.block_info.0, empty.block_info.1);
         });
@@ -878,24 +871,15 @@ impl MemoryManager {
         }
     }
 
+    #[tracing::instrument(skip(self, object))]
     fn allocate_buffer_internal(
         &mut self,
         mut object: br::BufferObject<peridot::DeviceObject>,
         memory_requirements: br::vk::VkMemoryRequirements,
         memory_index: u32,
     ) -> br::Result<Buffer> {
-        tracing::debug!(
-            "allocate {} bytes a:{} bytes type_mask:{:08x} in type #{memory_index}",
-            memory_requirements.size,
-            memory_requirements.alignment,
-            memory_requirements.memoryTypeBits
-        );
-
         if memory_requirements.size >= Self::SMALL_ALLOCATION_THRESHOLD {
-            tracing::trace!(
-                "requested resource(size:{}) is enough big for 1:1 allocation",
-                memory_requirements.size
-            );
+            tracing::trace!("requested resource is enough big for 1:1 allocation");
 
             let memory =
                 br::DeviceMemoryRequest::allocate(memory_requirements.size as _, memory_index)
@@ -923,11 +907,7 @@ impl MemoryManager {
             })
             .next()
         {
-            tracing::debug!(
-                "suballocation ok! buffer (size {}) will be placed at {}",
-                memory_requirements.size,
-                offset
-            );
+            tracing::trace!("suballocation ok! buffer will be placed at {offset}");
 
             object.bind(&t.borrow().object, offset as _)?;
             return Ok(Buffer {
@@ -939,8 +919,8 @@ impl MemoryManager {
         }
 
         // 既存のものにはもう入らないので新規で確保
-        tracing::debug!(
-            "allocating new device memory block: {} bytes on type #{memory_index}",
+        tracing::trace!(
+            "allocating new device memory block: {} bytes",
             Self::NEW_MANAGED_ALLOCATION_SIZE
         );
         let mut new_block = MemoryBlock::new(
@@ -954,11 +934,7 @@ impl MemoryManager {
                 .suballocate(memory_requirements.size as _)
                 .unwrap_unchecked()
         };
-        tracing::debug!(
-            "first buffer (size {}) will be placed at {}",
-            memory_requirements.size,
-            new_offset
-        );
+        tracing::trace!("first buffer will be placed at {new_offset}");
         object.bind(&new_block.object, new_offset as _)?;
         let new_block = make_shared_mutable_ref(new_block);
         blocks.push(new_block.clone());
@@ -970,24 +946,15 @@ impl MemoryManager {
         })
     }
 
+    #[tracing::instrument(skip(self, object))]
     fn allocate_image_internal(
         &mut self,
         mut object: br::ImageObject<peridot::DeviceObject>,
         memory_requirements: br::vk::VkMemoryRequirements,
         memory_index: u32,
     ) -> br::Result<Image> {
-        tracing::debug!(
-            "allocate {} bytes a:{} bytes type_mask:{:08x} in type #{memory_index}",
-            memory_requirements.size,
-            memory_requirements.alignment,
-            memory_requirements.memoryTypeBits
-        );
-
         if memory_requirements.size >= Self::SMALL_ALLOCATION_THRESHOLD {
-            tracing::trace!(
-                "requested resource(size:{}) is enough big for 1:1 allocation",
-                memory_requirements.size
-            );
+            tracing::trace!("requested resource is enough big for 1:1 allocation");
 
             let memory =
                 br::DeviceMemoryRequest::allocate(memory_requirements.size as _, memory_index)
@@ -1015,11 +982,7 @@ impl MemoryManager {
             })
             .next()
         {
-            tracing::debug!(
-                "suballocation ok! buffer (size {}) will be placed at {}",
-                memory_requirements.size,
-                offset
-            );
+            tracing::trace!("suballocation ok! buffer will be placed at {offset}");
 
             object.bind(&t.borrow().object, offset as _)?;
             return Ok(Image {
@@ -1031,8 +994,8 @@ impl MemoryManager {
         }
 
         // 既存のものにはもう入らないので新規で確保
-        tracing::debug!(
-            "allocating new device memory block: {} bytes on type #{memory_index}",
+        tracing::trace!(
+            "allocating new device memory block: {} bytes",
             Self::NEW_MANAGED_ALLOCATION_SIZE
         );
         let mut new_block = MemoryBlock::new(
@@ -1046,11 +1009,7 @@ impl MemoryManager {
                 .suballocate(memory_requirements.size as _)
                 .unwrap_unchecked()
         };
-        tracing::debug!(
-            "first buffer (size {}) will be placed at {}",
-            memory_requirements.size,
-            new_offset
-        );
+        tracing::trace!("first image will be placed at {new_offset}");
         object.bind(&new_block.object, new_offset as _)?;
         let new_block = make_shared_mutable_ref(new_block);
         blocks.push(new_block.clone());
