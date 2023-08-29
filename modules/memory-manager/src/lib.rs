@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use bedrock as br;
-use br::{DeviceChild, DeviceMemory, MemoryBound};
+use br::{DeviceMemory, MemoryBound};
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 
 pub struct MemoryType {
@@ -315,7 +315,7 @@ impl MemoryBlockSlabCacheFreeAreaManager {
 
         Self {
             free_block_index_by_chains: power_of_2_series_from_u64(1)
-                .take_while(|&n| n <= aligned_block_count)
+                .take_while(|&n| n < aligned_block_count)
                 .map(|_| Vec::new())
                 .chain(core::iter::once(vec![0]))
                 .collect(),
@@ -354,6 +354,8 @@ impl MemoryBlockSlabCacheFreeAreaManager {
         &mut self,
         block_count: u32,
     ) -> Result<u64, MemoryBlockSlabCacheFreeAreaAcquisitionFailure> {
+        tracing::trace!("acquire");
+
         let aligned_block_count = round_up_to_next_power_of_two(block_count as _) as u32;
         let base_level = Self::block_count_to_level(aligned_block_count);
 
@@ -398,6 +400,8 @@ impl MemoryBlockSlabCacheFreeAreaManager {
 
     #[tracing::instrument(skip(self))]
     pub fn release_power_of_two_block(&mut self, block_number: u64, mut block_count: u32) {
+        tracing::trace!("release");
+
         let base_level = Self::block_count_to_level(block_count);
         let mut level = self.free_block_index_by_chains.len() - 1;
         for l in base_level..self.free_block_index_by_chains.len() {
