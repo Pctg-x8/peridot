@@ -520,34 +520,33 @@ impl<Device: br::Device> MemoryBlock<Device> {
 
         tracing::debug!("size aligned to {slab_object_size}, using level #{slab_level}");
 
-        if let Some(o) = allocator.find_free_object_offset() {
-            return Some(o);
-        }
-
-        // 既存のslab cache内ではみつからなかった 新しく登録して試す
-        let (new_slab_cache_offset_block, max_objects, block_count) =
-            match self.slab_cache_free_area_manager.acquire(1 << slab_level) {
-                Ok(b) => (b, 32, 1 << slab_level),
-                Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
-                    if let Some(block_count) = self.slab_cache_free_area_manager.try_fill() {
-                        // 部分的に確保されてなかったのでまるごと全部使える
-                        tracing::trace!(
-                            "object too large! managing only {} objects",
-                            self.total_size / slab_object_size as u64
-                        );
-                        (0, self.total_size / slab_object_size as u64, block_count)
-                    } else {
-                        return None;
+        allocator.find_free_object_offset().or_else(|| {
+            // 既存のslab cache内ではみつからなかった 新しく登録して試す
+            let (new_slab_cache_offset_block, max_objects, block_count) =
+                match self.slab_cache_free_area_manager.acquire(1 << slab_level) {
+                    Ok(b) => (b, 32, 1 << slab_level),
+                    Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
+                        if let Some(block_count) = self.slab_cache_free_area_manager.try_fill() {
+                            // 部分的に確保されてなかったのでまるごと全部使える
+                            tracing::trace!(
+                                "object too large! managing only {} objects",
+                                self.total_size / slab_object_size as u64
+                            );
+                            (0, self.total_size / slab_object_size as u64, block_count)
+                        } else {
+                            return None;
+                        }
                     }
-                }
-                Err(_) => return None,
-            };
-        allocator.append_empty_slab(
-            (new_slab_cache_offset_block, block_count),
-            new_slab_cache_offset_block * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64,
-            max_objects as _,
-        );
-        allocator.find_free_object_offset()
+                    Err(_) => return None,
+                };
+            allocator.append_empty_slab(
+                (new_slab_cache_offset_block, block_count),
+                new_slab_cache_offset_block * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64,
+                max_objects as _,
+            );
+
+            allocator.find_free_object_offset()
+        })
     }
 
     #[tracing::instrument(skip(self))]
@@ -871,26 +870,20 @@ impl MemoryManager {
         }
     }
 
-    #[tracing::instrument(skip(self, object))]
-    fn allocate_buffer_internal(
+    #[tracing::instrument(skip(self, device))]
+    fn allocate_internal(
         &mut self,
-        mut object: br::BufferObject<peridot::DeviceObject>,
-        memory_requirements: br::vk::VkMemoryRequirements,
+        device: &peridot::DeviceObject,
+        memory_requirements: &br::vk::VkMemoryRequirements,
         memory_index: u32,
-    ) -> br::Result<Buffer> {
+    ) -> br::Result<(BackingMemory, u64)> {
         if memory_requirements.size >= Self::SMALL_ALLOCATION_THRESHOLD {
             tracing::trace!("requested resource is enough big for 1:1 allocation");
 
             let memory =
                 br::DeviceMemoryRequest::allocate(memory_requirements.size as _, memory_index)
-                    .execute(object.device().clone())?;
-            object.bind(&memory, 0)?;
-            return Ok(Buffer {
-                object,
-                memory_block: BackingMemory::Native(memory),
-                offset: 0,
-                size: memory_requirements.size as _,
-            });
+                    .execute(device.clone())?;
+            return Ok((BackingMemory::Native(memory), 0));
         }
 
         let blocks = self
@@ -907,15 +900,9 @@ impl MemoryManager {
             })
             .next()
         {
-            tracing::trace!("suballocation ok! buffer will be placed at {offset}");
+            tracing::trace!("suballocation ok! resource will be placed at {offset}");
 
-            object.bind(&t.borrow().object, offset as _)?;
-            return Ok(Buffer {
-                object,
-                memory_block: BackingMemory::Managed(t.clone()),
-                offset: offset as _,
-                size: memory_requirements.size as _,
-            });
+            return Ok((BackingMemory::Managed(t.clone()), offset));
         }
 
         // 既存のものにはもう入らないので新規で確保
@@ -925,7 +912,7 @@ impl MemoryManager {
         );
         let mut new_block = MemoryBlock::new(
             br::DeviceMemoryRequest::allocate(Self::NEW_MANAGED_ALLOCATION_SIZE as _, memory_index)
-                .execute(object.device().clone())?,
+                .execute(device.clone())?,
             Self::NEW_MANAGED_ALLOCATION_SIZE,
         );
         // 絶対確保できるはず
@@ -935,90 +922,10 @@ impl MemoryManager {
                 .unwrap_unchecked()
         };
         tracing::trace!("first buffer will be placed at {new_offset}");
-        object.bind(&new_block.object, new_offset as _)?;
         let new_block = make_shared_mutable_ref(new_block);
         blocks.push(new_block.clone());
-        Ok(Buffer {
-            object,
-            memory_block: BackingMemory::Managed(new_block),
-            offset: new_offset as _,
-            size: memory_requirements.size as _,
-        })
-    }
 
-    #[tracing::instrument(skip(self, object))]
-    fn allocate_image_internal(
-        &mut self,
-        mut object: br::ImageObject<peridot::DeviceObject>,
-        memory_requirements: br::vk::VkMemoryRequirements,
-        memory_index: u32,
-    ) -> br::Result<Image> {
-        if memory_requirements.size >= Self::SMALL_ALLOCATION_THRESHOLD {
-            tracing::trace!("requested resource is enough big for 1:1 allocation");
-
-            let memory =
-                br::DeviceMemoryRequest::allocate(memory_requirements.size as _, memory_index)
-                    .execute(object.device().clone())?;
-            object.bind(&memory, 0)?;
-            return Ok(Image {
-                object,
-                memory_block: BackingMemory::Native(memory),
-                offset: 0,
-                byte_length: memory_requirements.size as _,
-            });
-        }
-
-        let blocks = self
-            .managed_blocks_per_type
-            .entry(memory_index)
-            .or_insert_with(Vec::new);
-
-        if let Some((t, offset)) = blocks
-            .iter()
-            .filter_map(|t| {
-                t.borrow_mut()
-                    .suballocate(memory_requirements.size as _)
-                    .map(|o| (t, o))
-            })
-            .next()
-        {
-            tracing::trace!("suballocation ok! buffer will be placed at {offset}");
-
-            object.bind(&t.borrow().object, offset as _)?;
-            return Ok(Image {
-                object,
-                memory_block: BackingMemory::Managed(t.clone()),
-                offset: offset as _,
-                byte_length: memory_requirements.size as _,
-            });
-        }
-
-        // 既存のものにはもう入らないので新規で確保
-        tracing::trace!(
-            "allocating new device memory block: {} bytes",
-            Self::NEW_MANAGED_ALLOCATION_SIZE
-        );
-        let mut new_block = MemoryBlock::new(
-            br::DeviceMemoryRequest::allocate(Self::NEW_MANAGED_ALLOCATION_SIZE as _, memory_index)
-                .execute(object.device().clone())?,
-            Self::NEW_MANAGED_ALLOCATION_SIZE,
-        );
-        // 絶対確保できるはず
-        let new_offset = unsafe {
-            new_block
-                .suballocate(memory_requirements.size as _)
-                .unwrap_unchecked()
-        };
-        tracing::trace!("first image will be placed at {new_offset}");
-        object.bind(&new_block.object, new_offset as _)?;
-        let new_block = make_shared_mutable_ref(new_block);
-        blocks.push(new_block.clone());
-        Ok(Image {
-            object,
-            memory_block: BackingMemory::Managed(new_block),
-            offset: new_offset as _,
-            byte_length: memory_requirements.size as _,
-        })
+        Ok((BackingMemory::Managed(new_block), new_offset))
     }
 
     pub fn allocate_device_local_buffer(
@@ -1026,7 +933,7 @@ impl MemoryManager {
         e: &peridot::Graphics,
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
-        let o = desc.create(e.device().clone())?;
+        let mut o = desc.create(e.device().clone())?;
         let req = o.requirements();
         let memory_index = self
             .device_local_memory_types
@@ -1035,7 +942,18 @@ impl MemoryManager {
             .expect("no memory type index")
             .index;
 
-        self.allocate_buffer_internal(o, req, memory_index)
+        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index)?;
+        match memory {
+            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
+            BackingMemory::Native(ref m) => o.bind(m, offset as _),
+        }?;
+
+        Ok(Buffer {
+            object: o,
+            memory_block: memory,
+            offset,
+            size: req.size as _,
+        })
     }
 
     pub fn allocate_upload_buffer(
@@ -1043,7 +961,7 @@ impl MemoryManager {
         e: &peridot::Graphics,
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
-        let o = desc.create(e.device().clone())?;
+        let mut o = desc.create(e.device().clone())?;
         let req = o.requirements();
         // prefer host coherent(for less operations)
         // TODO: coherentじゃないmemory typeが選択されたときどうしよう（Flush/Invalidateが必要なのでなんとか情報を利用側で取れる必要がある）
@@ -1063,7 +981,18 @@ impl MemoryManager {
             );
         }
 
-        self.allocate_buffer_internal(o, req, memory_type.index)
+        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_type.index)?;
+        match memory {
+            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
+            BackingMemory::Native(ref m) => o.bind(m, offset as _),
+        }?;
+
+        Ok(Buffer {
+            object: o,
+            memory_block: memory,
+            offset,
+            size: req.size as _,
+        })
     }
 
     pub fn allocate_upload_linear_image_buffer(
@@ -1095,7 +1024,7 @@ impl MemoryManager {
         e: &peridot::Graphics,
         desc: br::ImageDesc,
     ) -> br::Result<Image> {
-        let o = desc.create(e.device().clone())?;
+        let mut o = desc.create(e.device().clone())?;
         let req = o.requirements();
         let memory_index = self
             .device_local_memory_types
@@ -1104,6 +1033,17 @@ impl MemoryManager {
             .expect("no memory type index")
             .index;
 
-        self.allocate_image_internal(o, req, memory_index)
+        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index)?;
+        match memory {
+            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
+            BackingMemory::Native(ref m) => o.bind(m, offset as _),
+        }?;
+
+        Ok(Image {
+            object: o,
+            memory_block: memory,
+            offset,
+            byte_length: req.size as _,
+        })
     }
 }
