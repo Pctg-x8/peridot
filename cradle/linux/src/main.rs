@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate log;
-
 use input::PointerPositionProvider;
 use peridot::{
     mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef},
@@ -11,6 +8,7 @@ use sound_backend::SoundBackend;
 use std::path::PathBuf;
 use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
+use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 mod sound_backend;
 
@@ -39,7 +37,7 @@ impl PlatformAssetLoader {
             binloc
         };
 
-        trace!("Using Assets in {}", basedir.display());
+        tracing::trace!("Using Assets in {}", basedir.display());
         PlatformAssetLoader {
             basedir,
             #[cfg(feature = "IterationBuild")]
@@ -249,11 +247,16 @@ where
         .write()
         .expect("Failed to mutate audio mixer")
         .stop();
-    info!("Terminating Program...");
+    tracing::trace!("Terminating Program...");
 }
 
 fn main() {
-    env_logger::init();
+    let fmt = tracing_subscriber::fmt::layer().pretty();
+    let env_filter = tracing_subscriber::filter::EnvFilter::from_default_env();
+    tracing_subscriber::registry()
+        .with(fmt)
+        .with(env_filter)
+        .init();
 
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
@@ -269,7 +272,10 @@ fn main() {
             return;
         }
 
-        warn!("unknown backend specified({backend_name}), ignoring");
+        tracing::warn!(
+            { backend = backend_name },
+            "unknown backend specified, ignoring"
+        );
     }
 
     if let Some(x) = Wayland::try_init() {
