@@ -67,7 +67,7 @@ impl ThreadsafeWindowOps {
     pub fn get_client_rect(&self) -> RECT {
         let mut rc = std::mem::MaybeUninit::uninit();
         unsafe {
-            GetClientRect(self.0, rc.as_mut_ptr());
+            GetClientRect(self.0, rc.as_mut_ptr()).expect("Failed to get client rect");
             rc.assume_init()
         }
     }
@@ -167,7 +167,8 @@ fn main() {
         bottom: 480,
     };
     unsafe {
-        AdjustWindowRectEx(&mut wrect, style, false, WS_EX_APPWINDOW);
+        AdjustWindowRectEx(&mut wrect, style, false, WS_EX_APPWINDOW)
+            .expect("Failed to calculate window geometry");
     }
     let w = unsafe {
         CreateWindowExA(
