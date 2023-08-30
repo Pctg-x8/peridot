@@ -1,7 +1,7 @@
 use log::*;
 use parking_lot::RwLock;
 use peridot::{NativeAnalogInput, NativeButtonInput};
-use windows::Win32::Foundation::{GetLastError, ERROR_DEVICE_NOT_CONNECTED, HWND, LPARAM, POINT};
+use windows::Win32::Foundation::{ERROR_DEVICE_NOT_CONNECTED, HWND, LPARAM, POINT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyA, MAPVK_VK_TO_CHAR, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F1,
     VK_F24, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD9,
@@ -207,12 +207,12 @@ impl peridot::NativeInput for NativeInputHandler {
             return None;
         }
 
-        let mut p0 = POINT { x: 0, y: 0 };
+        let mut p0 = [POINT { x: 0, y: 0 }];
         unsafe {
-            GetCursorPos(&mut p0);
-            self.target_hw.map_points_from_desktop(&mut [p0]);
+            GetCursorPos(&mut p0[0]).expect("Failed to get cursor pos");
+            self.target_hw.map_points_from_desktop(&mut p0);
         }
-        Some((p0.x as _, p0.y as _))
+        Some((p0[0].x as _, p0[0].y as _))
     }
 
     fn pull(&mut self, p: peridot::NativeEventReceiver) {
