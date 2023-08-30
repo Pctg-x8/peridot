@@ -6,7 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bedrock = { workspace = true }
+bedrock = { workspace = true, features = [
+    "VK_KHR_dedicated_allocation",
+    "VK_KHR_get_memory_requirements2",
+] }
 num-integer = "0.1.45"
 peridot = { path = "../../base" }
 tracing = { workspace = true }

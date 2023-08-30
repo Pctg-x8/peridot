@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use bedrock as br;
-use br::{DeviceMemory, MemoryBound};
+use br::{DeviceMemory, MemoryBound, StructureChainQuery};
 use num_integer::Integer;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 
@@ -925,19 +925,35 @@ impl MemoryManager {
         }
     }
 
-    #[tracing::instrument(skip(self, device))]
+    #[tracing::instrument(skip(self, device, dedicated_allocate_additional_ops))]
     fn allocate_internal(
         &mut self,
         device: &peridot::DeviceObject,
-        memory_requirements: &br::vk::VkMemoryRequirements,
+        memory_requirements: &br::vk::VkMemoryRequirements2KHR,
         memory_index: u32,
+        dedicated_allocate_additional_ops: impl FnOnce(
+            br::DeviceMemoryRequest,
+        ) -> br::DeviceMemoryRequest,
     ) -> br::Result<(BackingMemory, u64)> {
-        if memory_requirements.size >= Self::SMALL_ALLOCATION_THRESHOLD {
+        let (require_dedicated, prefer_dedicated) = memory_requirements
+            .query_structure::<br::vk::VkMemoryDedicatedRequirementsKHR>()
+            .map_or((false, true), |x| {
+                (
+                    x.requiresDedicatedAllocation != 0,
+                    x.prefersDedicatedAllocation != 0,
+                )
+            });
+        if require_dedicated
+            || (prefer_dedicated
+                && memory_requirements.memoryRequirements.size >= Self::SMALL_ALLOCATION_THRESHOLD)
+        {
             tracing::trace!("requested resource is enough big for 1:1 allocation");
 
-            let memory =
-                br::DeviceMemoryRequest::allocate(memory_requirements.size as _, memory_index)
-                    .execute(device.clone())?;
+            let memory = dedicated_allocate_additional_ops(br::DeviceMemoryRequest::allocate(
+                memory_requirements.memoryRequirements.size as _,
+                memory_index,
+            ))
+            .execute(device.clone())?;
             return Ok((BackingMemory::Native(memory), 0));
         }
 
@@ -948,7 +964,7 @@ impl MemoryManager {
 
         if let Some((t, offset)) = blocks.iter().find_map(|t| {
             t.borrow_mut()
-                .suballocate(memory_requirements.size as _)
+                .suballocate(memory_requirements.memoryRequirements.size as _)
                 .map(|o| (t, o))
         }) {
             tracing::trace!("suballocation ok! resource will be placed at {offset}");
@@ -969,7 +985,7 @@ impl MemoryManager {
         // 絶対確保できるはず
         let new_offset = unsafe {
             new_block
-                .suballocate(memory_requirements.size as _)
+                .suballocate(memory_requirements.memoryRequirements.size as _)
                 .unwrap_unchecked()
         };
         tracing::trace!("first buffer will be placed at {new_offset}");
@@ -985,15 +1001,37 @@ impl MemoryManager {
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
         let mut o = desc.create(e.device().clone())?;
-        let req = o.requirements();
+
+        let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+        let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+        if e.can_request_extended_memory_requirements() {
+            unsafe {
+                (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
+            }
+            o.requirements2().query(&mut req);
+        } else {
+            unsafe {
+                (*req.as_mut_ptr()).memoryRequirements = o.requirements();
+            }
+        }
+        let req = unsafe { req.assume_init() };
+
         let memory_index = self
             .device_local_memory_types
             .iter()
-            .find(|t| (req.memoryTypeBits & t.index_mask()) != 0)
+            .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
             .expect("no memory type index")
             .index;
 
-        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index)?;
+        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
+            if e.dedicated_allocation_available() {
+                tracing::info!("using dedicated allocation");
+
+                unsafe { r.for_dedicated_buffer_allocation(&o) }
+            } else {
+                r
+            }
+        })?;
         match memory {
             BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
             BackingMemory::Native(ref m) => o.bind(m, offset as _),
@@ -1003,7 +1041,7 @@ impl MemoryManager {
             object: o,
             memory_block: memory,
             offset,
-            size: req.size as _,
+            size: req.memoryRequirements.size as _,
         })
     }
 
@@ -1026,17 +1064,33 @@ impl MemoryManager {
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
         let mut o = desc.create(e.device().clone())?;
-        let req = o.requirements();
+
+        let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+        let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+        if e.can_request_extended_memory_requirements() {
+            unsafe {
+                (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
+            }
+            o.requirements2().query(&mut req);
+        } else {
+            unsafe {
+                (*req.as_mut_ptr()).memoryRequirements = o.requirements();
+            }
+        }
+        let req = unsafe { req.assume_init() };
+
         // prefer host coherent(for less operations)
         // TODO: coherentじゃないmemory typeが選択されたときどうしよう（Flush/Invalidateが必要なのでなんとか情報を利用側で取れる必要がある）
         let memory_type = self
             .host_visible_memory_types
             .iter()
-            .find(|t| (req.memoryTypeBits & t.index_mask()) != 0 && t.is_coherent)
+            .find(|t| {
+                (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0 && t.is_coherent
+            })
             .or_else(|| {
                 self.host_visible_memory_types
                     .iter()
-                    .find(|t| (req.memoryTypeBits & t.index_mask()) != 0)
+                    .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
             })
             .expect("no memory type index");
         if !memory_type.is_coherent {
@@ -1045,7 +1099,16 @@ impl MemoryManager {
             );
         }
 
-        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_type.index)?;
+        let (memory, offset) =
+            self.allocate_internal(e.device(), &req, memory_type.index, |r| {
+                if e.dedicated_allocation_available() {
+                    tracing::info!("using dedicated allocation");
+
+                    unsafe { r.for_dedicated_buffer_allocation(&o) }
+                } else {
+                    r
+                }
+            })?;
         match memory {
             BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
             BackingMemory::Native(ref m) => o.bind(m, offset as _),
@@ -1055,7 +1118,7 @@ impl MemoryManager {
             object: o,
             memory_block: memory,
             offset,
-            size: req.size as _,
+            size: req.memoryRequirements.size as _,
         })
     }
 
@@ -1120,15 +1183,37 @@ impl MemoryManager {
         desc: br::ImageDesc,
     ) -> br::Result<Image> {
         let mut o = desc.create(e.device().clone())?;
-        let req = o.requirements();
+
+        let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+        let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+        if e.can_request_extended_memory_requirements() {
+            unsafe {
+                (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
+            }
+            o.requirements2().query(&mut req);
+        } else {
+            unsafe {
+                (*req.as_mut_ptr()).memoryRequirements = o.requirements();
+            }
+        }
+        let req = unsafe { req.assume_init() };
+
         let memory_index = self
             .device_local_memory_types
             .iter()
-            .find(|t| (req.memoryTypeBits & t.index_mask()) != 0)
+            .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
             .expect("no memory type index")
             .index;
 
-        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index)?;
+        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
+            if e.dedicated_allocation_available() {
+                tracing::info!("using dedicated allocation");
+
+                unsafe { r.for_dedicated_image_allocation(&o) }
+            } else {
+                r
+            }
+        })?;
         match memory {
             BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
             BackingMemory::Native(ref m) => o.bind(m, offset as _),
@@ -1138,7 +1223,7 @@ impl MemoryManager {
             object: o,
             memory_block: memory,
             offset,
-            byte_length: req.size as _,
+            byte_length: req.memoryRequirements.size as _,
         })
     }
 }

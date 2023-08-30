@@ -6,7 +6,7 @@ use br::{
 };
 use cfg_if::cfg_if;
 use log::{debug, info, warn};
-use std::ops::Deref;
+use std::{collections::HashSet, iter::FromIterator, ops::Deref};
 
 pub type InstanceObject = SharedRef<br::InstanceObject>;
 pub type DeviceObject = SharedRef<br::DeviceObject<InstanceObject>>;
@@ -27,6 +27,7 @@ pub use self::async_fence_driver::*;
 #[derive(Debug)]
 pub enum GraphicsInitializationError {
     LayerEnumerationFailed(br::VkResultBox),
+    ExtensionEnumerationFailed(br::VkResultBox),
     VulkanError(br::VkResultBox),
     NoPhysicalDevices,
     NoSuitableGraphicsQueue,
@@ -40,6 +41,9 @@ impl std::fmt::Display for GraphicsInitializationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::LayerEnumerationFailed(r) => write!(f, "vk layer enumeration failed: {r}"),
+            Self::ExtensionEnumerationFailed(r) => {
+                write!(f, "vk extension enumeration failed: {r}")
+            }
             Self::VulkanError(r) => std::fmt::Display::fmt(r, f),
             Self::NoPhysicalDevices => write!(f, "no physical devices available on this machine"),
             Self::NoSuitableGraphicsQueue => {
@@ -80,6 +84,7 @@ pub struct Graphics {
     pub(crate) graphics_queue: QueueSet<DeviceObject>,
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
+    enabled_vk_extensions: HashSet<String>,
     adapter_properties: CachedAdapterProperties,
     #[cfg(feature = "mt")]
     fence_reactor: FenceReactorThread<DeviceObject>,
@@ -91,12 +96,11 @@ impl Graphics {
         app_name: &str,
         app_version: (u32, u32, u32),
         instance_extensions: Vec<&str>,
-        device_extensions: Vec<&str>,
+        mut device_extensions: Vec<&str>,
         features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Result<Self, GraphicsInitializationError> {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
-        #[cfg(debug_assertions)]
         for l in br::enumerate_layer_properties()
             .map_err(GraphicsInitializationError::LayerEnumerationFailed)?
         {
@@ -111,20 +115,23 @@ impl Graphics {
                 l.specVersion, l.implementationVersion
             );
 
+            #[cfg(debug_assertions)]
             if name_str == "VK_LAYER_KHRONOS_validation" {
                 validation_layer_available = true;
             }
         }
 
+        if !validation_layer_available {
+            warn!("Validation Layer is not found!");
+        }
+
         let mut ib =
             br::InstanceBuilder::new(app_name, app_version, "Interlude2:Peridot", (0, 1, 0));
-        ib.add_extensions(instance_extensions);
+        ib.add_extensions(instance_extensions.iter().copied());
         #[cfg(debug_assertions)]
         ib.add_extension("VK_EXT_debug_report");
         if validation_layer_available {
             ib.add_layer("VK_LAYER_KHRONOS_validation");
-        } else {
-            warn!("Validation Layer is not found!");
         }
         #[cfg(feature = "debug")]
         {
@@ -142,6 +149,26 @@ impl Graphics {
             .iter_physical_devices()?
             .next()
             .ok_or(GraphicsInitializationError::NoPhysicalDevices)?;
+
+        let mut auto_device_extensions = Vec::new();
+        info!("Device Extensions: ");
+        for d in adapter
+            .enumerate_extension_properties(None)
+            .map_err(GraphicsInitializationError::ExtensionEnumerationFailed)?
+        {
+            let name = d
+                .extensionName
+                .as_cstr()
+                .expect("Failed to decode")
+                .to_str()
+                .expect("invalid sequence");
+            info!("* {name}: {}", d.specVersion);
+
+            if name == "VK_KHR_dedicated_allocation" || name == "VK_KHR_get_memory_requirements2" {
+                auto_device_extensions.push(name.to_owned());
+            }
+        }
+
         let memory_type_manager = MemoryTypeManager::new(&adapter);
         MemoryTypeManager::diagnose_heaps(&adapter);
         memory_type_manager.diagnose_types();
@@ -151,7 +178,8 @@ impl Graphics {
             .ok_or(GraphicsInitializationError::NoSuitableGraphicsQueue)?;
         let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
-            db.add_extensions(device_extensions)
+            db.add_extensions(device_extensions.iter().copied())
+                .add_extensions(auto_device_extensions.iter().map(|x| x as _))
                 .add_queue(br::DeviceQueueCreateInfo::new(gqf_index).add(0.0));
             if validation_layer_available {
                 db.add_layer("VK_LAYER_KHRONOS_validation");
@@ -171,6 +199,15 @@ impl Graphics {
             adapter: adapter.clone_parent(),
             device,
             adapter_properties: CachedAdapterProperties::new(),
+            enabled_vk_extensions: auto_device_extensions
+                .into_iter()
+                .chain(
+                    instance_extensions
+                        .into_iter()
+                        .chain(device_extensions.into_iter())
+                        .map(ToOwned::to_owned),
+                )
+                .collect(),
             memory_type_manager,
             #[cfg(feature = "mt")]
             fence_reactor: FenceReactorThread::new(),
@@ -276,6 +313,18 @@ impl Graphics {
 
     pub const fn graphics_queue_family_index(&self) -> u32 {
         self.graphics_queue.family
+    }
+
+    pub fn vk_extension_is_available(&self, name: &str) -> bool {
+        self.enabled_vk_extensions.contains(name)
+    }
+
+    pub fn dedicated_allocation_available(&self) -> bool {
+        self.vk_extension_is_available("VK_KHR_dedicated_allocation")
+    }
+
+    pub fn can_request_extended_memory_requirements(&self) -> bool {
+        self.vk_extension_is_available("VK_KHR_get_memory_requirements2")
     }
 }
 /// Adapter Property exports
