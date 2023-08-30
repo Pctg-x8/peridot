@@ -311,8 +311,10 @@ pub struct MemoryBlockSlabCacheFreeAreaManager {
     free_block_index_by_chains: Vec<Vec<u64>>,
 }
 impl MemoryBlockSlabCacheFreeAreaManager {
+    #[tracing::instrument]
     pub fn new(block_count: u32) -> Self {
         let aligned_block_count = round_up_to_next_power_of_two(block_count as _);
+        tracing::info!({ aligned_block_count }, "Initializing FreeBlockManager");
 
         Self {
             free_block_index_by_chains: power_of_2_series_from_u64(1)
@@ -339,10 +341,54 @@ impl MemoryBlockSlabCacheFreeAreaManager {
                     .clear()
             };
 
-            Some(1 << self.free_block_index_by_chains.len())
+            Some(1 << (self.free_block_index_by_chains.len() - 1))
         } else {
             None
         }
+    }
+
+    /// returns: (start block number, block count)
+    pub fn max_unallocated_memory_block_length(&self) -> (u64, u64) {
+        let largest = self
+            .free_block_index_by_chains
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, v)| !v.is_empty())
+            .map(|(level, v)| {
+                (
+                    unsafe { v.first().copied().unwrap_unchecked() },
+                    1 << level,
+                    level,
+                )
+            });
+        let Some((mut starting_number, mut block_count, largest_level)) = largest else {
+            return (0, 0);
+        };
+
+        // find descendant levels for chainable block
+        for (level, v) in self.free_block_index_by_chains[..largest_level]
+            .iter()
+            .enumerate()
+            .rev()
+        {
+            let level_block_count = 1 << level;
+
+            let chainable_before = v
+                .iter()
+                .find(|&&n| n + level_block_count == starting_number);
+            if let Some(&chainable_start) = chainable_before {
+                block_count += level_block_count;
+                starting_number = chainable_start;
+            }
+
+            let chainable_after = v.iter().find(|&&n| starting_number + block_count == n);
+            if chainable_after.is_some() {
+                block_count += level_block_count;
+            }
+        }
+
+        (starting_number, block_count)
     }
 
     fn block_count_to_level(count: u32) -> usize {
@@ -531,16 +577,20 @@ impl<Device: br::Device> MemoryBlock<Device> {
                 match self.slab_cache_free_area_manager.acquire(1 << slab_level) {
                     Ok(b) => (b, 32, 1 << slab_level),
                     Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
-                        if let Some(block_count) = self.slab_cache_free_area_manager.try_fill() {
-                            // 部分的に確保されてなかったのでまるごと全部使える
-                            tracing::trace!(
-                                "object too large! managing only {} objects",
-                                self.total_size / slab_object_size as u64
-                            );
-                            (0, self.total_size / slab_object_size as u64, block_count)
-                        } else {
+                        let (max_available_block_start, max_available_block_count) = self.slab_cache_free_area_manager.max_unallocated_memory_block_length();
+                        tracing::debug!("unavailable blocks: {max_available_block_start} {max_available_block_count}");
+                        let max_available_block_size = max_available_block_count * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64;
+                        if max_available_block_size < slab_object_size as u64 {
+                            // no enough blocks left
                             return None;
                         }
+
+                        let new_slab_object_count = ((max_available_block_size / slab_object_size as u64) >> 1).max(1);
+                        let new_slab_object_block_count = ((new_slab_object_count * slab_object_size as u64) / SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64) as u32;
+                        let new_block_start = self.slab_cache_free_area_manager.acquire(new_slab_object_block_count).ok()?;
+
+                        tracing::trace!("object too large! managing only {new_slab_object_count} objects");
+                        (new_block_start, new_slab_object_count, new_slab_object_block_count)
                     }
                     Err(_) => return None,
                 };
@@ -896,15 +946,11 @@ impl MemoryManager {
             .entry(memory_index)
             .or_insert_with(Vec::new);
 
-        if let Some((t, offset)) = blocks
-            .iter()
-            .filter_map(|t| {
-                t.borrow_mut()
-                    .suballocate(memory_requirements.size as _)
-                    .map(|o| (t, o))
-            })
-            .next()
-        {
+        if let Some((t, offset)) = blocks.iter().find_map(|t| {
+            t.borrow_mut()
+                .suballocate(memory_requirements.size as _)
+                .map(|o| (t, o))
+        }) {
             tracing::trace!("suballocation ok! resource will be placed at {offset}");
 
             return Ok((BackingMemory::Managed(t.clone()), offset));
