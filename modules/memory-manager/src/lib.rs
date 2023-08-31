@@ -656,11 +656,12 @@ pub struct Image {
     memory_block: BackingMemory,
     offset: u64,
     byte_length: usize,
+    malloc_offset: u64,
 }
 impl Drop for Image {
     fn drop(&mut self) {
         if let BackingMemory::Managed(ref b) = self.memory_block {
-            b.borrow_mut().free(self.byte_length, self.offset);
+            b.borrow_mut().free(self.byte_length, self.malloc_offset);
         }
     }
 }
@@ -750,6 +751,8 @@ pub struct Buffer {
     memory_block: BackingMemory,
     offset: u64,
     size: usize,
+    // (size, offset)
+    malloc: (u64, u64),
 }
 impl Buffer {
     pub const fn byte_length(&self) -> usize {
@@ -830,7 +833,7 @@ impl Buffer {
 impl Drop for Buffer {
     fn drop(&mut self) {
         if let BackingMemory::Managed(ref b) = self.memory_block {
-            b.borrow_mut().free(self.size, self.offset);
+            b.borrow_mut().free(self.malloc.0 as _, self.malloc.1);
         }
     }
 }
@@ -1083,6 +1086,7 @@ impl MemoryManager {
         e: &peridot::Graphics,
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
+        let exact_size = desc.size();
         let mut o = desc.create(e.device().clone())?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
@@ -1115,17 +1119,21 @@ impl MemoryManager {
                 r
             }
         })?;
+        // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
+        // この前提が崩れることがあったら考え直す)
+        let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
         match memory {
-            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
-            BackingMemory::Native(ref m) => o.bind(m, offset as _),
-            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), offset as _),
+            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, aligned_offset as _),
+            BackingMemory::Native(ref m) => o.bind(m, aligned_offset as _),
+            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), aligned_offset as _),
         }?;
 
         Ok(Buffer {
             object: o,
             memory_block: memory,
-            offset,
-            size: req.memoryRequirements.size as _,
+            offset: aligned_offset,
+            size: exact_size as _,
+            malloc: (req.memoryRequirements.size, offset),
         })
     }
 
@@ -1147,6 +1155,7 @@ impl MemoryManager {
         e: &peridot::Graphics,
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
+        let exact_size = desc.size();
         let mut o = desc.create(e.device().clone())?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
@@ -1193,17 +1202,21 @@ impl MemoryManager {
                     r
                 }
             })?;
+        // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
+        // この前提が崩れることがあったら考え直す)
+        let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
         match memory {
-            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
-            BackingMemory::Native(ref m) => o.bind(m, offset as _),
-            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), offset as _),
+            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, aligned_offset as _),
+            BackingMemory::Native(ref m) => o.bind(m, aligned_offset as _),
+            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), aligned_offset as _),
         }?;
 
         Ok(Buffer {
             object: o,
             memory_block: memory,
-            offset,
-            size: req.memoryRequirements.size as _,
+            offset: aligned_offset,
+            size: exact_size as _,
+            malloc: (req.memoryRequirements.size, offset),
         })
     }
 
@@ -1299,17 +1312,21 @@ impl MemoryManager {
                 r
             }
         })?;
+        // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
+        // この前提が崩れることがあったら考え直す)
+        let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
         match memory {
-            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
-            BackingMemory::Native(ref m) => o.bind(m, offset as _),
-            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), offset as _),
+            BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, aligned_offset as _),
+            BackingMemory::Native(ref m) => o.bind(m, aligned_offset as _),
+            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), aligned_offset as _),
         }?;
 
         Ok(Image {
             object: o,
             memory_block: memory,
-            offset,
+            offset: aligned_offset,
             byte_length: req.memoryRequirements.size as _,
+            malloc_offset: offset,
         })
     }
 
@@ -1421,6 +1438,7 @@ impl MemoryManager {
                         memory_block: BackingMemory::Native(memory),
                         offset: 0,
                         byte_length: req.memoryRequirements.size as _,
+                        malloc_offset: 0,
                     })
                 }
                 ObjectAllocationMode::Small(offset) => {
@@ -1432,6 +1450,7 @@ impl MemoryManager {
                             memory_block: BackingMemory::NativeShared(combined.clone()),
                             offset,
                             byte_length: req.memoryRequirements.size as _,
+                            malloc_offset: offset,
                         })
                     } else {
                         // normal small allocation
@@ -1439,21 +1458,25 @@ impl MemoryManager {
                             self.allocate_internal(e.device(), &req, memory_index, |_| {
                                 unreachable!("no dedicated allocation must occurs!")
                             })?;
+                        // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
+                        // この前提が崩れることがあったら考え直す)
+                        let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
                         match memory {
                             BackingMemory::Managed(ref m) => {
-                                object.bind(&m.borrow().object, offset as _)
+                                object.bind(&m.borrow().object, aligned_offset as _)
                             }
-                            BackingMemory::Native(ref m) => object.bind(m, offset as _),
+                            BackingMemory::Native(ref m) => object.bind(m, aligned_offset as _),
                             BackingMemory::NativeShared(ref m) => {
-                                object.bind(&m.borrow(), offset as _)
+                                object.bind(&m.borrow(), aligned_offset as _)
                             }
                         }?;
 
                         Ok(Image {
                             object,
                             memory_block: memory,
-                            offset,
+                            offset: aligned_offset,
                             byte_length: req.memoryRequirements.size as _,
+                            malloc_offset: offset,
                         })
                     }
                 }
