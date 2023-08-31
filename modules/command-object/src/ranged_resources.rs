@@ -3,7 +3,7 @@ use std::ops::Range;
 use bedrock as br;
 use br::ImageSubresourceSlice;
 
-#[cfg(feature = "memory_manager_interop")]
+#[cfg(feature = "memory-manager-interop")]
 use peridot_memory_manager as pmm;
 
 use crate::{BufferUsage, BufferUsageTransitionBarrier, CopyBuffer, GraphicsCommand};
@@ -33,6 +33,21 @@ impl<B: br::Buffer> RangedBuffer<B> {
 
     pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferRef {
         br::DescriptorBufferRef::new(&self.0, self.1.clone())
+    }
+
+    pub fn subslice(self, range: Range<u64>) -> Self {
+        assert!((range.end - range.start) <= (self.1.end - (range.start + self.1.start)));
+
+        Self(self.0, self.1.start + range.start..self.1.start + range.end)
+    }
+
+    pub fn subslice_ref(&self, range: Range<u64>) -> RangedBuffer<&B> {
+        assert!((range.end - range.start) <= (self.1.end - (range.start + self.1.start)));
+
+        RangedBuffer(
+            &self.0,
+            self.1.start + range.start..self.1.start + range.end,
+        )
     }
 
     pub fn usage_barrier(
@@ -80,7 +95,24 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// generates mirroring command from self to dest.
     ///
     /// both buffer length must be equal.
-    pub fn mirror_to<'s>(
+    pub fn mirror_to(self, dest: RangedBuffer<impl br::Buffer>) -> impl GraphicsCommand {
+        assert_eq!(self.byte_length(), dest.byte_length());
+
+        let len = self.byte_length();
+        CopyBuffer::new(self.0, dest.0).with_mirroring(0, len as _)
+    }
+
+    /// generates mirroring command from src to self. (reversing mirror_to arguments)
+    ///
+    /// both buffer length must be equal.
+    pub fn mirror_from(self, src: RangedBuffer<impl br::Buffer>) -> impl GraphicsCommand {
+        src.mirror_to(self)
+    }
+
+    /// generates mirroring command from self to dest.
+    ///
+    /// both buffer length must be equal.
+    pub fn byref_mirror_to<'s>(
         &'s self,
         dest: &'s RangedBuffer<impl br::Buffer>,
     ) -> impl GraphicsCommand + 's {
@@ -92,11 +124,11 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// generates mirroring command from src to self. (reversing mirror_to arguments)
     ///
     /// both buffer length must be equal.
-    pub fn mirror_from<'s>(
+    pub fn byref_mirror_from<'s>(
         &'s self,
         src: &'s RangedBuffer<impl br::Buffer>,
     ) -> impl GraphicsCommand + 's {
-        src.mirror_to(self)
+        src.byref_mirror_to(self)
     }
 }
 impl<B: br::Buffer + Clone> RangedBuffer<&'_ B> {
@@ -114,7 +146,7 @@ impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br
         self.0.guard_map(self.1.clone(), action)
     }
 }
-#[cfg(feature = "memory_manager_interop")]
+#[cfg(feature = "memory-manager-interop")]
 impl From<pmm::Buffer> for RangedBuffer<pmm::Buffer> {
     fn from(value: pmm::Buffer) -> Self {
         let length = value.byte_length();
@@ -122,7 +154,7 @@ impl From<pmm::Buffer> for RangedBuffer<pmm::Buffer> {
         Self::from_offset_length(value, 0, length)
     }
 }
-#[cfg(feature = "memory_manager_interop")]
+#[cfg(feature = "memory-manager-interop")]
 impl<'s> From<&'s pmm::Buffer> for RangedBuffer<&'s pmm::Buffer> {
     fn from(value: &'s pmm::Buffer) -> Self {
         let length = value.byte_length();

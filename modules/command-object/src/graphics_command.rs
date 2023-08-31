@@ -1,7 +1,10 @@
 use bedrock as br;
 use br::vk::VkCommandBuffer;
 
-use crate::{vk_pipeline_stage_mask_requirements_for_image_layout, IndexedMesh, Mesh};
+use crate::{
+    vk_pipeline_stage_mask_requirements_for_image_layout, BufferUsageTransitionBarrier,
+    IndexedMesh, Mesh,
+};
 
 pub trait GraphicsCommand {
     fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>);
@@ -195,6 +198,16 @@ impl GraphicsCommand for PipelineBarrier {
             &self.buffer_barriers,
             &self.image_barriers,
         );
+    }
+}
+impl From<br::ImageMemoryBarrier> for PipelineBarrier {
+    fn from(value: br::ImageMemoryBarrier) -> Self {
+        Self::new().with_barrier(value)
+    }
+}
+impl<B: br::Buffer> From<BufferUsageTransitionBarrier<B>> for PipelineBarrier {
+    fn from(value: BufferUsageTransitionBarrier<B>) -> Self {
+        Self::new().with_barrier(value)
     }
 }
 
