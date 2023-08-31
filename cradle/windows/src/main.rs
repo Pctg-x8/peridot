@@ -129,7 +129,7 @@ impl GameDriver {
 }
 
 fn main() {
-    let fmt = tracing_subscriber::fmt::layer();
+    let fmt = tracing_subscriber::fmt::layer().pretty();
     let filter = tracing_subscriber::filter::EnvFilter::from_default_env();
     tracing_subscriber::registry().with(fmt).with(filter).init();
 

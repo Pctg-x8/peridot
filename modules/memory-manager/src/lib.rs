@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use bedrock as br;
 use br::{DeviceMemory, MemoryBound, StructureChainQuery};
 use num_integer::Integer;
-use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
+#[allow(unused_imports)]
+use peridot::mthelper::DynamicMutabilityProvider;
+use peridot::mthelper::{make_shared_mutable_ref, SharedMutableRef};
 
 pub struct MemoryType {
     pub index: u32,
@@ -482,7 +484,7 @@ impl MemoryBlockSlabCacheFreeAreaManager {
         // 下からpower of 2に切り出しながら返却
         for l in (0..max_level).rev() {
             if block_count >= (1 << l) {
-                // subdiv
+                // subdivide
                 self.release_power_of_two_block(block_number, 1 << l);
                 block_number += 1 << l;
                 block_count -= 1 << l;
@@ -510,6 +512,11 @@ fn power_of_2_series_from(mut base: usize) -> impl Iterator<Item = usize> {
 
 /// 切り上げ a(アラインメント)は2の累乗数
 const fn align2(x: usize, a: usize) -> usize {
+    (x + (a - 1)) & !(a - 1)
+}
+
+/// 切り上げ a(アラインメント)は2の累乗数
+const fn align2_u64(x: u64, a: u64) -> u64 {
     (x + (a - 1)) & !(a - 1)
 }
 
@@ -621,6 +628,7 @@ impl<Device: br::Device> MemoryBlock<Device> {
 enum BackingMemory {
     Managed(SharedMutableRef<MemoryBlock<peridot::DeviceObject>>),
     Native(br::DeviceMemoryObject<peridot::DeviceObject>),
+    NativeShared(SharedMutableRef<br::DeviceMemoryObject<peridot::DeviceObject>>),
 }
 
 pub struct Image {
@@ -708,6 +716,18 @@ impl Buffer {
                 let r = op(ptr as _);
                 unsafe {
                     m.unmap();
+                }
+
+                Ok(r)
+            }
+            BackingMemory::NativeShared(ref m) => {
+                let mut locked = m.borrow_mut();
+                let ptr = unsafe {
+                    locked.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
+                };
+                let r = op(ptr as _);
+                unsafe {
+                    locked.unmap();
                 }
 
                 Ok(r)
@@ -1035,6 +1055,7 @@ impl MemoryManager {
         match memory {
             BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
             BackingMemory::Native(ref m) => o.bind(m, offset as _),
+            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), offset as _),
         }?;
 
         Ok(Buffer {
@@ -1112,6 +1133,7 @@ impl MemoryManager {
         match memory {
             BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
             BackingMemory::Native(ref m) => o.bind(m, offset as _),
+            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), offset as _),
         }?;
 
         Ok(Buffer {
@@ -1217,6 +1239,7 @@ impl MemoryManager {
         match memory {
             BackingMemory::Managed(ref m) => o.bind(&m.borrow().object, offset as _),
             BackingMemory::Native(ref m) => o.bind(m, offset as _),
+            BackingMemory::NativeShared(ref m) => o.bind(&m.borrow(), offset as _),
         }?;
 
         Ok(Image {
@@ -1225,5 +1248,153 @@ impl MemoryManager {
             offset,
             byte_length: req.memoryRequirements.size as _,
         })
+    }
+
+    pub fn allocate_multiple_device_local_images<'r>(
+        &mut self,
+        e: &peridot::Graphics,
+        descriptions: impl IntoIterator<Item = br::ImageDesc<'r>>,
+    ) -> br::Result<Vec<Image>> {
+        let objects = descriptions
+            .into_iter()
+            .map(|x| x.create(e.device().clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let requirements = objects
+            .iter()
+            .map(|o| {
+                let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+                let mut sink_dedicated_alloc =
+                    br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+                if e.can_request_extended_memory_requirements() {
+                    unsafe {
+                        (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
+                    }
+                    o.requirements2().query(&mut req);
+
+                    let (req, dedicated_alloc_req) =
+                        unsafe { (req.assume_init(), sink_dedicated_alloc.assume_init()) };
+                    (
+                        req,
+                        dedicated_alloc_req.requiresDedicatedAllocation != 0,
+                        dedicated_alloc_req.prefersDedicatedAllocation != 0,
+                    )
+                } else {
+                    unsafe {
+                        (*req.as_mut_ptr()).memoryRequirements = o.requirements();
+
+                        (req.assume_init(), false, false)
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        enum ObjectAllocationMode {
+            Small(u64),
+            Dedicated,
+        }
+
+        let (mut total, mut native_memory_index_mask, mut object_allocation_marks) =
+            (0, u32::MAX, Vec::with_capacity(objects.len()));
+        for &(ref r, require_dedicated, prefer_dedicated) in requirements.iter() {
+            if require_dedicated || prefer_dedicated {
+                // use dedicated allocation for this resource
+                object_allocation_marks.push(ObjectAllocationMode::Dedicated);
+            } else {
+                let offset = align2_u64(total, r.memoryRequirements.alignment);
+                total = offset + r.memoryRequirements.size;
+                native_memory_index_mask &= r.memoryRequirements.memoryTypeBits;
+                object_allocation_marks.push(ObjectAllocationMode::Small(offset));
+            }
+        }
+
+        let memory_index = self
+            .device_local_memory_types
+            .iter()
+            .find(|t| (native_memory_index_mask & t.index_mask()) != 0)
+            .expect("no memory type index")
+            .index;
+
+        let combined_native_memory = if total >= Self::SMALL_ALLOCATION_THRESHOLD {
+            // SMALL_ALLOCATION_THRESHOLD以上の場合はひとつのNativeを確保して配置する
+            tracing::trace!(
+                { total_size = total },
+                "multiple request is enough big to sharing one native memory"
+            );
+
+            Some(make_shared_mutable_ref(
+                br::DeviceMemoryRequest::allocate(total as _, memory_index)
+                    .execute(e.device().clone())?,
+            ))
+        } else {
+            None
+        };
+
+        objects
+            .into_iter()
+            .zip(object_allocation_marks.into_iter())
+            .zip(requirements.into_iter())
+            .map(|((mut object, mark), (req, _, _))| match mark {
+                ObjectAllocationMode::Dedicated => {
+                    tracing::trace!("requested resource is enough big for 1:1 allocation");
+
+                    let memory_index = self
+                        .device_local_memory_types
+                        .iter()
+                        .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
+                        .expect("no memory type index")
+                        .index;
+
+                    let mut memory_req = br::DeviceMemoryRequest::allocate(
+                        req.memoryRequirements.size as _,
+                        memory_index,
+                    );
+                    if e.dedicated_allocation_available() {
+                        memory_req = unsafe { memory_req.for_dedicated_image_allocation(&object) };
+                    }
+                    let memory = memory_req.execute(e.device().clone())?;
+                    object.bind(&memory, 0)?;
+                    Ok(Image {
+                        object,
+                        memory_block: BackingMemory::Native(memory),
+                        offset: 0,
+                        byte_length: req.memoryRequirements.size as _,
+                    })
+                }
+                ObjectAllocationMode::Small(offset) => {
+                    if let Some(ref combined) = combined_native_memory {
+                        // placement into combined native memory
+                        object.bind(&combined.borrow(), offset as _)?;
+                        Ok(Image {
+                            object,
+                            memory_block: BackingMemory::NativeShared(combined.clone()),
+                            offset,
+                            byte_length: req.memoryRequirements.size as _,
+                        })
+                    } else {
+                        // normal small allocation
+                        let (memory, offset) =
+                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                                unreachable!("no dedicated allocation must occurs!")
+                            })?;
+                        match memory {
+                            BackingMemory::Managed(ref m) => {
+                                object.bind(&m.borrow().object, offset as _)
+                            }
+                            BackingMemory::Native(ref m) => object.bind(m, offset as _),
+                            BackingMemory::NativeShared(ref m) => {
+                                object.bind(&m.borrow(), offset as _)
+                            }
+                        }?;
+
+                        Ok(Image {
+                            object,
+                            memory_block: memory,
+                            offset,
+                            byte_length: req.memoryRequirements.size as _,
+                        })
+                    }
+                }
+            })
+            .collect()
     }
 }
