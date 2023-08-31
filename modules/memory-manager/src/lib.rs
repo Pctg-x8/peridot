@@ -702,6 +702,49 @@ impl br::Image for Image {
     }
 }
 
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
+pub struct AnyPointer(pub *mut u8);
+impl AnyPointer {
+    pub const fn ptr(self) -> *mut u8 {
+        self.0
+    }
+
+    pub unsafe fn get_at<T>(&self, byte_offset: usize) -> &T {
+        (self.0.add(byte_offset) as *const T)
+            .as_ref()
+            .unwrap_unchecked()
+    }
+
+    pub unsafe fn get_mut_at<T>(&self, byte_offset: usize) -> &mut T {
+        (self.0.add(byte_offset) as *mut T)
+            .as_mut()
+            .unwrap_unchecked()
+    }
+
+    pub const unsafe fn slice<T>(&self, byte_offset: usize, len: usize) -> &[T] {
+        core::slice::from_raw_parts(self.0.add(byte_offset) as _, len)
+    }
+
+    pub unsafe fn slice_mut<T>(&self, byte_offset: usize, len: usize) -> &mut [T] {
+        core::slice::from_raw_parts_mut(self.0.add(byte_offset) as _, len)
+    }
+
+    pub unsafe fn clone_to<T: Clone>(&self, byte_offset: usize, value: &T) {
+        self.get_mut_at::<T>(byte_offset).clone_from(value)
+    }
+
+    pub unsafe fn clone_slice_to<T: Clone>(&self, byte_offset: usize, values: &[T]) {
+        self.slice_mut(byte_offset, values.len())
+            .clone_from_slice(values)
+    }
+
+    pub unsafe fn copy_slice_to<T: Copy>(&self, byte_offset: usize, values: &[T]) {
+        self.slice_mut(byte_offset, values.len())
+            .copy_from_slice(values)
+    }
+}
+
 pub struct Buffer {
     object: br::BufferObject<peridot::DeviceObject>,
     memory_block: BackingMemory,
@@ -713,7 +756,7 @@ impl Buffer {
         self.size
     }
 
-    pub fn guard_map<R>(&mut self, op: impl FnOnce(*mut ()) -> R) -> br::Result<R> {
+    pub fn guard_map<R>(&mut self, op: impl FnOnce(AnyPointer) -> R) -> br::Result<R> {
         match self.memory_block {
             BackingMemory::Managed(ref m) => {
                 let mut locked = m.borrow_mut();
@@ -722,7 +765,7 @@ impl Buffer {
                         .object
                         .map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
                 };
-                let r = op(ptr as _);
+                let r = op(AnyPointer(ptr as _));
                 unsafe {
                     locked.object.unmap();
                 }
@@ -733,7 +776,7 @@ impl Buffer {
                 let ptr = unsafe {
                     m.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
                 };
-                let r = op(ptr as _);
+                let r = op(AnyPointer(ptr as _));
                 unsafe {
                     m.unmap();
                 }
@@ -745,7 +788,7 @@ impl Buffer {
                 let ptr = unsafe {
                     locked.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
                 };
-                let r = op(ptr as _);
+                let r = op(AnyPointer(ptr as _));
                 unsafe {
                     locked.unmap();
                 }
@@ -764,7 +807,7 @@ impl Buffer {
 
     pub unsafe fn write_content_unchecked<T>(&mut self, value: T) -> br::Result<()> {
         self.guard_map(|ptr| {
-            (*(ptr as *mut T)) = value;
+            *ptr.get_mut_at(0) = value;
         })
     }
 
@@ -772,7 +815,7 @@ impl Buffer {
         assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
 
         self.guard_map(|ptr| unsafe {
-            core::slice::from_raw_parts_mut(ptr as *mut T, values.len()).clone_from_slice(values);
+            ptr.clone_slice_to(0, values);
         })
     }
 
@@ -780,7 +823,7 @@ impl Buffer {
         assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
 
         self.guard_map(|ptr| unsafe {
-            core::slice::from_raw_parts_mut(ptr as *mut T, values.len()).copy_from_slice(values);
+            ptr.copy_slice_to(0, values);
         })
     }
 }
@@ -1168,11 +1211,11 @@ impl MemoryManager {
         &mut self,
         e: &peridot::Graphics,
         contents: impl IntoIterator<Item = peridot::BufferContent>,
-        add_usage: br::BufferUsage,
+        usage: br::BufferUsage,
     ) -> br::Result<(Buffer, Vec<u64>)> {
         let mut bp = peridot::BufferPrealloc::new(e);
         let offsets = contents.into_iter().map(|c| bp.add(c)).collect::<Vec<_>>();
-        let obj = self.allocate_upload_buffer(e, bp.build_desc().and_usage(add_usage))?;
+        let obj = self.allocate_upload_buffer(e, bp.build_desc_custom_usage(usage))?;
 
         Ok((obj, offsets))
     }

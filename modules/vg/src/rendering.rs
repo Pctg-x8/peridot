@@ -130,7 +130,17 @@ impl ModelData for Context {
         mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
-        let transforms_stg = unsafe { mem.slice_mut(offsets.transforms, self.meshes().len()) };
+        unsafe { self.write_data_into(mem.get_mut(0) as _, offsets) }
+    }
+}
+impl Context {
+    pub unsafe fn write_data_into(
+        &self,
+        ptr: *mut u8,
+        offsets: ContextPreallocOffsets,
+    ) -> RendererParams {
+        let transforms_stg =
+            core::slice::from_raw_parts_mut(ptr.add(offsets.transforms) as _, self.meshes.len());
         let mut vofs = offsets.interior_positions;
         let (mut cpofs, mut chofs) = (offsets.curve_positions, offsets.curve_helper_coords);
         let mut interior_index_range_per_mesh = Vec::new();
@@ -146,50 +156,54 @@ impl ModelData for Context {
             let ii_start = interior_index_offset;
             interior_index_offset += v.b_quad_vertex_interior_indices.len() as u32;
             interior_index_range_per_mesh.push(ii_start..interior_index_offset);
-            unsafe {
-                mem.slice_mut(vofs, v.b_quad_vertex_positions.len())
-                    .clone_from_slice(&v.b_quad_vertex_positions);
-                mem.slice_mut(cpofs, v.b_vertex_positions.len())
-                    .clone_from_slice(&v.b_vertex_positions);
-                mem.slice_mut(chofs, v.b_vertex_loop_blinn_data.len())
-                    .clone_from_slice(&v.b_vertex_loop_blinn_data);
 
-                let idxslice = mem.slice_mut(
-                    offsets.interior_indices + ii_start as usize * size_of::<u32>(),
-                    v.b_quad_vertex_interior_indices.len(),
-                );
-                for (i, ib) in v
-                    .b_quad_vertex_interior_indices
-                    .iter()
-                    .zip(idxslice.iter_mut())
-                {
-                    *ib = i + vindex_offset;
-                }
-                let ci_start = curve_index_offset;
-                for bq in &v.b_quads {
-                    if bq.upper_control_point_vertex_index != 0xffff_ffff {
-                        let idx = mem.slice_mut(
-                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
-                            3,
-                        );
-                        idx[0] = curve_vindex_offset + bq.upper_control_point_vertex_index;
-                        idx[1] = curve_vindex_offset + bq.upper_right_vertex_index;
-                        idx[2] = curve_vindex_offset + bq.upper_left_vertex_index;
-                        curve_index_offset += 3;
-                    }
-                    if bq.lower_control_point_vertex_index != 0xffff_ffff {
-                        let idx = mem.slice_mut(
-                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
-                            3,
-                        );
-                        idx[0] = curve_vindex_offset + bq.lower_control_point_vertex_index;
-                        idx[1] = curve_vindex_offset + bq.lower_right_vertex_index;
-                        idx[2] = curve_vindex_offset + bq.lower_left_vertex_index;
-                        curve_index_offset += 3;
-                    }
-                }
-                curve_index_range_per_mesh.push(ci_start..curve_index_offset);
+            core::slice::from_raw_parts_mut(ptr.add(vofs) as _, v.b_quad_vertex_positions.len())
+                .clone_from_slice(&v.b_quad_vertex_positions);
+            core::slice::from_raw_parts_mut(ptr.add(cpofs) as _, v.b_vertex_positions.len())
+                .clone_from_slice(&v.b_vertex_positions);
+            core::slice::from_raw_parts_mut(ptr.add(chofs) as _, v.b_vertex_loop_blinn_data.len())
+                .clone_from_slice(&v.b_vertex_loop_blinn_data);
+
+            let idxslice = core::slice::from_raw_parts_mut(
+                ptr.add(offsets.interior_indices + ii_start as usize * size_of::<u32>()) as _,
+                v.b_quad_vertex_interior_indices.len(),
+            );
+            for (i, ib) in v
+                .b_quad_vertex_interior_indices
+                .iter()
+                .zip(idxslice.iter_mut())
+            {
+                *ib = i + vindex_offset;
             }
+            let ci_start = curve_index_offset;
+            for bq in &v.b_quads {
+                if bq.upper_control_point_vertex_index != 0xffff_ffff {
+                    let idx = core::slice::from_raw_parts_mut(
+                        ptr.add(
+                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
+                        ) as _,
+                        3,
+                    );
+                    idx[0] = curve_vindex_offset + bq.upper_control_point_vertex_index;
+                    idx[1] = curve_vindex_offset + bq.upper_right_vertex_index;
+                    idx[2] = curve_vindex_offset + bq.upper_left_vertex_index;
+                    curve_index_offset += 3;
+                }
+                if bq.lower_control_point_vertex_index != 0xffff_ffff {
+                    let idx = core::slice::from_raw_parts_mut(
+                        ptr.add(
+                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
+                        ) as _,
+                        3,
+                    );
+                    idx[0] = curve_vindex_offset + bq.lower_control_point_vertex_index;
+                    idx[1] = curve_vindex_offset + bq.lower_right_vertex_index;
+                    idx[2] = curve_vindex_offset + bq.lower_left_vertex_index;
+                    curve_index_offset += 3;
+                }
+            }
+            curve_index_range_per_mesh.push(ci_start..curve_index_offset);
+
             vofs += v.b_quad_vertex_positions.len() * size_of::<BQuadVertexPositions>();
             cpofs += v.b_vertex_positions.len() * size_of::<[f32; 2]>();
             chofs += v.b_vertex_loop_blinn_data.len() * size_of::<BVertexLoopBlinnData>();

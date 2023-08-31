@@ -1,16 +1,15 @@
-use std::convert::TryInto;
-
 use bedrock as br;
 use br::{CommandBuffer, Device, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
 use peridot_command_object::{
-    BeginRenderPass, Blending, BufferUsage, ColorAttachmentBlending, CopyBuffer, EndRenderPass,
+    BeginRenderPass, Blending, BufferUsage, ColorAttachmentBlending, EndRenderPass,
     GraphicsCommand, GraphicsCommandCombiner, GraphicsCommandSubmission, NextSubpass,
     PipelineBarrier, RangedBuffer, RangedImage, SimpleDrawIndexed, StandardIndexedMesh,
     StandardMesh,
 };
+use peridot_memory_manager::MemoryManager;
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg::{FlatPathBuilder, Font, FontProvider, FontProviderConstruct};
 
@@ -168,20 +167,23 @@ impl TwoPassStencilSDFRenderer {
         init_target_size: peridot::math::Vector2<u32>,
         sdf_max_distance: f32,
     ) -> Self {
-        let ad_main =
+        let attachments = [
             br::AttachmentDescription::new(color_format, target_final_layout, target_final_layout)
-                .color_memory_op(br::LoadOp::Load, br::StoreOp::Store);
-        let ad_stencil = br::AttachmentDescription::new(
-            br::vk::VK_FORMAT_S8_UINT,
-            br::ImageLayout::DepthStencilReadOnlyOpt,
-            br::ImageLayout::DepthStencilReadOnlyOpt,
-        )
-        .stencil_load_op(br::LoadOp::Clear);
-        let sp_stencil = br::SubpassDescription::new()
-            .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt);
-        let sp_main = br::SubpassDescription::new()
-            .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
-            .depth_stencil(1, br::ImageLayout::DepthStencilReadOnlyOpt);
+                .color_memory_op(br::LoadOp::Load, br::StoreOp::Store),
+            br::AttachmentDescription::new(
+                br::vk::VK_FORMAT_S8_UINT,
+                br::ImageLayout::DepthStencilReadOnlyOpt,
+                br::ImageLayout::DepthStencilReadOnlyOpt,
+            )
+            .stencil_load_op(br::LoadOp::Clear),
+        ];
+        let subpasses = [
+            br::SubpassDescription::new()
+                .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt),
+            br::SubpassDescription::new()
+                .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
+                .depth_stencil(1, br::ImageLayout::DepthStencilReadOnlyOpt),
+        ];
         let spdep_color = br::vk::VkSubpassDependency {
             srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
             dstSubpass: 0,
@@ -205,9 +207,9 @@ impl TwoPassStencilSDFRenderer {
             dependencyFlags: br::vk::VK_DEPENDENCY_BY_REGION_BIT,
         };
         let render_pass = br::RenderPassBuilder::new()
-            .add_attachments(vec![ad_main, ad_stencil])
-            .add_subpasses(vec![sp_stencil, sp_main])
-            .add_dependencies(vec![spdep_color, spdep_stencil])
+            .add_attachments(attachments)
+            .add_subpasses(subpasses)
+            .add_dependencies([spdep_color, spdep_stencil])
             .create(e.graphics().device().clone())
             .expect("Failed to create RenderPass");
 
@@ -480,20 +482,21 @@ impl TwoPassStencilSDFRenderer {
         }
         .into_rect(br::vk::VkOffset2D::ZERO)
     }
+
     pub const CLEAR_VALUES: &'static [br::ClearValue] = &[
         br::ClearValue::color_f32([0.0; 4]), // ignored
         br::ClearValue::depth_stencil(0.0, 0),
     ];
 }
-pub struct TwoPassStencilSDFRendererBuffers<'b> {
+pub struct TwoPassStencilSDFRendererBuffers {
     fill_triangle_mesh: StandardIndexedMesh<
-        &'b br::BufferObject<peridot::DeviceObject>,
-        &'b br::BufferObject<peridot::DeviceObject>,
+        SharedRef<peridot_memory_manager::Buffer>,
+        SharedRef<peridot_memory_manager::Buffer>,
     >,
-    fill_triangle_groups: &'b [(u32, u32)],
-    curve_triangles_mesh: StandardMesh<&'b br::BufferObject<peridot::DeviceObject>>,
-    outline_rects_mesh: StandardMesh<&'b br::BufferObject<peridot::DeviceObject>>,
-    invert_fill_rect_mesh: StandardMesh<&'b br::BufferObject<peridot::DeviceObject>>,
+    fill_triangle_groups: Vec<(u32, u32)>,
+    curve_triangles_mesh: StandardMesh<SharedRef<peridot_memory_manager::Buffer>>,
+    outline_rects_mesh: StandardMesh<SharedRef<peridot_memory_manager::Buffer>>,
+    invert_fill_rect_mesh: StandardMesh<SharedRef<peridot_memory_manager::Buffer>>,
 }
 impl TwoPassStencilSDFRenderer {
     pub fn commands<'s>(
@@ -542,20 +545,9 @@ impl TwoPassStencilSDFRenderer {
 }
 
 pub struct Game<NL: peridot::NativeLinker> {
-    buffer: SharedRef<
-        peridot::Buffer<
-            br::BufferObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >,
-    stencil_buffer_view: SharedRef<
-        br::ImageViewObject<
-            peridot::Image<
-                br::ImageObject<peridot::DeviceObject>,
-                br::DeviceMemoryObject<peridot::DeviceObject>,
-            >,
-        >,
-    >,
+    memory_manager: MemoryManager,
+    buffers: TwoPassStencilSDFRendererBuffers,
+    stencil_buffer_view: SharedRef<br::ImageViewObject<peridot_memory_manager::Image>>,
     fb: Vec<
         br::FramebufferObject<
             peridot::DeviceObject,
@@ -612,6 +604,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 )
             });
 
+        let mut memory_manager = MemoryManager::new(e.graphics());
+
         let mut bp = peridot::BufferPrealloc::new(e.graphics());
         let flip_fill_rect = bp.add(peridot::BufferContent::vertex::<
             [peridot::math::Vector2<f32>; 4],
@@ -629,47 +623,33 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let outline_rects_offset = bp.add(peridot::BufferContent::vertices::<
             peridot_vg::sdf_generator::ParabolaRectVertex,
         >(outline_rects_count * 6));
-        let buffer = bp.build_transferred().expect("Failed to allocate buffer");
-        let buffer_init = bp.build_upload().expect("Failed to allocate init buffer");
-        let stencil_buffer = br::ImageDesc::new(
-            back_buffer_size.clone(),
-            br::vk::VK_FORMAT_S8_UINT,
-            br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-            br::ImageLayout::Undefined,
-        )
-        .create(e.graphics().device().clone())
-        .expect("Failed to create stencil buffer");
 
-        let mut mb =
-            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
-        mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(buffer)]) =
-            mb.alloc().expect("Failed to allocate memory").try_into()
-        else {
-            unreachable!("unexpected return combination");
-        };
-        let buffer = SharedRef::new(buffer);
-        let mut mb_upload =
-            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
-        mb_upload.add(peridot::MemoryBadgetEntry::Buffer(buffer_init));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Buffer(mut buffer_init)]) = mb_upload
-            .alloc_upload()
-            .expect("Failed to allocate init buffer memory")
-            .try_into()
-        else {
-            unreachable!("unexpected return combination");
-        };
-        let mut mb_tex =
-            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
-        mb_tex.add(peridot::MemoryBadgetEntry::Image(stencil_buffer));
-        let Ok::<[_; 1], _>([peridot::MemoryBoundResource::Image(stencil_buffer)]) = mb_tex
-            .alloc()
-            .expect("Failed to allocate Texture Memory")
-            .try_into()
-        else {
-            unreachable!("unexpected return combination");
-        };
-
+        let buffer = SharedRef::new(
+            memory_manager
+                .allocate_device_local_buffer(
+                    e.graphics(),
+                    bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
+                )
+                .expect("Failed to allocate buffer"),
+        );
+        let mut buffer_init: RangedBuffer<_> = memory_manager
+            .allocate_upload_buffer(
+                e.graphics(),
+                bp.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC),
+            )
+            .expect("Failed to allocate init buffer")
+            .into();
+        let stencil_buffer = memory_manager
+            .allocate_device_local_image(
+                e.graphics(),
+                br::ImageDesc::new(
+                    back_buffer_size.clone(),
+                    br::vk::VK_FORMAT_S8_UINT,
+                    br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                    br::ImageLayout::Undefined,
+                ),
+            )
+            .expect("Failed to allocate stencil buffer");
         let stencil_buffer_view = SharedRef::new(
             stencil_buffer
                 .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
@@ -679,13 +659,17 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         );
 
         buffer_init
-            .guard_map(0..bp.total_size(), |m| unsafe {
-                m.slice_mut(flip_fill_rect as _, 4).clone_from_slice(&[
-                    peridot::math::Vector2(0.0f32, 0.0),
-                    peridot::math::Vector2(1.0, 0.0),
-                    peridot::math::Vector2(0.0, -1.0),
-                    peridot::math::Vector2(1.0, -1.0),
-                ]);
+            .0
+            .guard_map(|m| unsafe {
+                m.clone_slice_to(
+                    flip_fill_rect as _,
+                    &[
+                        peridot::math::Vector2(0.0f32, 0.0),
+                        peridot::math::Vector2(1.0, 0.0),
+                        peridot::math::Vector2(0.0, -1.0),
+                        peridot::math::Vector2(1.0, -1.0),
+                    ],
+                );
 
                 let s = m.slice_mut(
                     figures_fill_triangle_points_offset as _,
@@ -720,21 +704,22 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .expect("Failed to set init data");
 
         {
-            let all_stg_buffer =
-                RangedBuffer::from_offset_length(&buffer_init, 0, bp.total_size() as _);
+            let stg_copied_buffer = buffer_init.subslice_ref(0..bp.total_size() as _);
             let all_buffer = RangedBuffer::from_offset_length(&*buffer, 0, bp.total_size() as _);
             let stencil_buffer = RangedImage::single_stencil_plane(stencil_buffer_view.image());
 
-            let copy =
-                CopyBuffer::new(&buffer_init, &*buffer).with_mirroring(0, bp.total_size() as _);
+            let copy = all_buffer.byref_mirror_from(&stg_copied_buffer);
 
-            let [all_buffer_in_barrier, all_buffer_out_barrier] = all_buffer.usage_barrier3(
-                BufferUsage::UNUSED,
-                BufferUsage::TRANSFER_DST,
-                BufferUsage::VERTEX_BUFFER,
-            );
+            let [all_buffer_in_barrier, all_buffer_out_barrier] =
+                all_buffer.make_ref().usage_barrier3(
+                    BufferUsage::UNUSED,
+                    BufferUsage::TRANSFER_DST,
+                    BufferUsage::VERTEX_BUFFER | BufferUsage::INDEX_BUFFER,
+                );
             let in_barriers = [
-                all_stg_buffer.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                stg_copied_buffer
+                    .make_ref()
+                    .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
                 all_buffer_in_barrier,
             ];
             let out_barriers = PipelineBarrier::new()
@@ -749,6 +734,30 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 .submit(e)
                 .expect("Failed to initialize resources");
         }
+
+        let figures_fill_triangle_points_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            figures_fill_triangle_points_offset,
+            core::mem::size_of::<peridot::math::Vector2<f32>>() * figure_fill_triangle_points_count,
+        );
+        let figures_fill_triangle_indices_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            figures_fill_triangle_indices_offset,
+            core::mem::size_of::<u16>() * figure_fill_triangle_indices_count,
+        );
+        let figures_curve_triangles_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            figure_curve_triangles_offset,
+            core::mem::size_of::<peridot::VertexUV2D>() * figure_curve_triangles_count,
+        );
+        let outline_rects_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            outline_rects_offset,
+            core::mem::size_of::<peridot_vg::sdf_generator::ParabolaRectVertex>()
+                * outline_rects_count,
+        );
+        let flip_fill_rect_buffer =
+            RangedBuffer::for_type::<[peridot::math::Vector2<f32>; 4]>(buffer, flip_fill_rect as _);
 
         let sdf_renderer = TwoPassStencilSDFRenderer::new(
             e,
@@ -787,38 +796,22 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .collect();
         let buffers = TwoPassStencilSDFRendererBuffers {
             fill_triangle_mesh: StandardIndexedMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(
-                    &buffer,
-                    figures_fill_triangle_points_offset,
-                    1,
-                )],
-                index_buffer: RangedBuffer::from_offset_length(
-                    &buffer,
-                    figures_fill_triangle_indices_offset,
-                    1,
-                ),
+                vertex_buffers: vec![figures_fill_triangle_points_buffer],
+                index_buffer: figures_fill_triangle_indices_buffer,
                 index_type: br::IndexType::U16,
                 vertex_count: 0, // ignored value
             },
-            fill_triangle_groups: &fill_triangle_groups,
+            fill_triangle_groups,
             curve_triangles_mesh: StandardMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(
-                    &buffer,
-                    figure_curve_triangles_offset,
-                    1,
-                )],
+                vertex_buffers: vec![figures_curve_triangles_buffer],
                 vertex_count: figure_curve_triangles_count as _,
             },
             outline_rects_mesh: StandardMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(
-                    &buffer,
-                    outline_rects_offset,
-                    1,
-                )],
+                vertex_buffers: vec![outline_rects_buffer],
                 vertex_count: (outline_rects_count * 6) as _,
             },
             invert_fill_rect_mesh: StandardMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(&buffer, flip_fill_rect, 1)],
+                vertex_buffers: vec![flip_fill_rect_buffer],
                 vertex_count: 4,
             },
         };
@@ -841,7 +834,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         }
 
         Self {
-            buffer,
+            memory_manager,
+            buffers,
             stencil_buffer_view,
             sdf_renderer,
             fb,
@@ -925,45 +919,35 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let outline_rects_offset = bp.add(peridot::BufferContent::vertices::<
             peridot_vg::sdf_generator::ParabolaRectVertex,
         >(outline_rects_count * 6));
-        let buffer = bp.build_transferred().expect("Failed to allocate buffer");
-        let buffer_init = bp.build_upload().expect("Failed to allocate init buffer");
-        let mut mb =
-            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
-        mb.add(peridot::MemoryBadgetEntry::Buffer(buffer));
-        self.buffer = SharedRef::new(
-            mb.alloc()
-                .expect("Failed to allocate memory")
-                .pop()
-                .expect("no objects?")
-                .unwrap_buffer(),
-        );
-        let mut mb_upload =
-            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
-        mb_upload.add(peridot::MemoryBadgetEntry::Buffer(buffer_init));
-        let mut buffer_init = mb_upload
-            .alloc_upload()
-            .expect("Failed to allocate init buffer memory")
-            .pop()
-            .expect("no objects?")
-            .unwrap_buffer();
 
-        let stencil_buffer = br::ImageDesc::new(
-            peridot::math::Vector2(new_size.0 as u32, new_size.1 as _),
-            br::vk::VK_FORMAT_S8_UINT,
-            br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-            br::ImageLayout::Undefined,
-        )
-        .create(e.graphics().device().clone())
-        .expect("Failed to create stencil buffer");
-        let mut mb_tex =
-            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
-        mb_tex.add(peridot::MemoryBadgetEntry::Image(stencil_buffer));
-        let stencil_buffer = mb_tex
-            .alloc()
-            .expect("Failed to allocate Texture Memory")
-            .pop()
-            .expect("no objects?")
-            .unwrap_image();
+        let buffer = SharedRef::new(
+            self.memory_manager
+                .allocate_device_local_buffer(
+                    e.graphics(),
+                    bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
+                )
+                .expect("Failed to allocate buffer"),
+        );
+        let mut buffer_init: RangedBuffer<_> = self
+            .memory_manager
+            .allocate_upload_buffer(
+                e.graphics(),
+                bp.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC),
+            )
+            .expect("Failed to allocate init buffer")
+            .into();
+        let stencil_buffer = self
+            .memory_manager
+            .allocate_device_local_image(
+                e.graphics(),
+                br::ImageDesc::new(
+                    peridot::math::Vector2(new_size.0 as u32, new_size.1 as u32),
+                    br::vk::VK_FORMAT_S8_UINT,
+                    br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                    br::ImageLayout::Undefined,
+                ),
+            )
+            .expect("Failed to allocate stencil buffer");
         self.stencil_buffer_view = SharedRef::new(
             stencil_buffer
                 .subresource_range(br::AspectMask::STENCIL, 0..1, 0..1)
@@ -971,31 +955,19 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 .create()
                 .expect("Failed to create Stencil Buffer View"),
         );
-        self.fb = e
-            .iter_back_buffers()
-            .map(|bb| {
-                e.graphics().device().clone().new_framebuffer(
-                    &self.sdf_renderer.render_pass,
-                    vec![
-                        bb.clone()
-                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
-                        self.stencil_buffer_view.clone(),
-                    ],
-                    bb.image().size().as_ref(),
-                    1,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .expect("Failed to create Framebuffers");
 
         buffer_init
-            .guard_map(0..bp.total_size(), |m| unsafe {
-                m.slice_mut(flip_fill_rect as _, 4).clone_from_slice(&[
-                    peridot::math::Vector2(0.0f32, 0.0),
-                    peridot::math::Vector2(1.0, 0.0),
-                    peridot::math::Vector2(0.0, -1.0),
-                    peridot::math::Vector2(1.0, -1.0),
-                ]);
+            .0
+            .guard_map(|m| unsafe {
+                m.clone_slice_to(
+                    flip_fill_rect as _,
+                    &[
+                        peridot::math::Vector2(0.0f32, 0.0),
+                        peridot::math::Vector2(1.0, 0.0),
+                        peridot::math::Vector2(0.0, -1.0),
+                        peridot::math::Vector2(1.0, -1.0),
+                    ],
+                );
 
                 let s = m.slice_mut(
                     figures_fill_triangle_points_offset as _,
@@ -1029,24 +1001,41 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             })
             .expect("Failed to set init data");
 
+        self.fb = e
+            .iter_back_buffers()
+            .map(|bb| {
+                e.graphics().device().clone().new_framebuffer(
+                    &self.sdf_renderer.render_pass,
+                    vec![
+                        bb.clone()
+                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
+                        self.stencil_buffer_view.clone(),
+                    ],
+                    bb.image().size().as_ref(),
+                    1,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Failed to create Framebuffers");
+
         {
-            let all_stg_buffer =
-                RangedBuffer::from_offset_length(&buffer_init, 0, bp.total_size() as _);
-            let all_buffer =
-                RangedBuffer::from_offset_length(&*self.buffer, 0, bp.total_size() as _);
+            let stg_copied_buffer = buffer_init.subslice_ref(0..bp.total_size() as _);
+            let all_buffer = RangedBuffer::from_offset_length(&*buffer, 0, bp.total_size() as _);
             let stencil_buffer =
                 RangedImage::single_stencil_plane(self.stencil_buffer_view.image());
 
-            let copy = CopyBuffer::new(&buffer_init, &*self.buffer)
-                .with_mirroring(0, bp.total_size() as _);
+            let copy = all_buffer.byref_mirror_from(&stg_copied_buffer);
 
-            let [all_buffer_in_barrier, all_buffer_out_barrier] = all_buffer.usage_barrier3(
-                BufferUsage::UNUSED,
-                BufferUsage::TRANSFER_DST,
-                BufferUsage::VERTEX_BUFFER,
-            );
+            let [all_buffer_in_barrier, all_buffer_out_barrier] =
+                all_buffer.make_ref().usage_barrier3(
+                    BufferUsage::UNUSED,
+                    BufferUsage::TRANSFER_DST,
+                    BufferUsage::VERTEX_BUFFER | BufferUsage::INDEX_BUFFER,
+                );
             let in_barriers = [
-                all_stg_buffer.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                stg_copied_buffer
+                    .make_ref()
+                    .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
                 all_buffer_in_barrier,
             ];
             let out_barriers = PipelineBarrier::new()
@@ -1061,6 +1050,30 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 .submit(e)
                 .expect("Failed to initialize resources");
         }
+
+        let figures_fill_triangle_points_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            figures_fill_triangle_points_offset,
+            core::mem::size_of::<peridot::math::Vector2<f32>>() * figure_fill_triangle_points_count,
+        );
+        let figures_fill_triangle_indices_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            figures_fill_triangle_indices_offset,
+            core::mem::size_of::<u16>() * figure_fill_triangle_indices_count,
+        );
+        let figures_curve_triangles_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            figure_curve_triangles_offset,
+            core::mem::size_of::<peridot::VertexUV2D>() * figure_curve_triangles_count,
+        );
+        let outline_rects_buffer = RangedBuffer::from_offset_length(
+            buffer.clone(),
+            outline_rects_offset,
+            core::mem::size_of::<peridot_vg::sdf_generator::ParabolaRectVertex>()
+                * outline_rects_count,
+        );
+        let flip_fill_rect_buffer =
+            RangedBuffer::for_type::<[peridot::math::Vector2<f32>; 4]>(buffer, flip_fill_rect as _);
 
         self.sdf_renderer.resize(
             e.graphics(),
@@ -1077,48 +1090,28 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 )
             })
             .collect();
-        let buffers = TwoPassStencilSDFRendererBuffers {
+        self.buffers = TwoPassStencilSDFRendererBuffers {
             fill_triangle_mesh: StandardIndexedMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(
-                    &self.buffer,
-                    figures_fill_triangle_points_offset,
-                    1,
-                )],
-                index_buffer: RangedBuffer::from_offset_length(
-                    &self.buffer,
-                    figures_fill_triangle_indices_offset,
-                    1,
-                ),
+                vertex_buffers: vec![figures_fill_triangle_points_buffer],
+                index_buffer: figures_fill_triangle_indices_buffer,
                 index_type: br::IndexType::U16,
                 vertex_count: 0, // ignored value
             },
-            fill_triangle_groups: &fill_triangle_groups,
+            fill_triangle_groups,
             curve_triangles_mesh: StandardMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(
-                    &self.buffer,
-                    figure_curve_triangles_offset,
-                    1,
-                )],
+                vertex_buffers: vec![figures_curve_triangles_buffer],
                 vertex_count: figure_curve_triangles_count as _,
             },
             outline_rects_mesh: StandardMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(
-                    &self.buffer,
-                    outline_rects_offset,
-                    1,
-                )],
+                vertex_buffers: vec![outline_rects_buffer],
                 vertex_count: (outline_rects_count * 6) as _,
             },
             invert_fill_rect_mesh: StandardMesh {
-                vertex_buffers: vec![RangedBuffer::from_offset_length(
-                    &self.buffer,
-                    flip_fill_rect,
-                    1,
-                )],
+                vertex_buffers: vec![flip_fill_rect_buffer],
                 vertex_count: 4,
             },
         };
-        let mut cmd = peridot::CommandBundle::new(
+        self.cmd = peridot::CommandBundle::new(
             e.graphics(),
             peridot::CBSubmissionType::Graphics,
             e.back_buffer_count(),
@@ -1126,9 +1119,9 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         .expect("Failed to create CommandBundle");
         for (cx, fb) in self.fb.iter().enumerate() {
             self.sdf_renderer
-                .commands(fb, &buffers)
+                .commands(fb, &self.buffers)
                 .execute_and_finish(unsafe {
-                    cmd[cx]
+                    self.cmd[cx]
                         .begin()
                         .expect("Failed to begin recording commands")
                         .as_dyn_ref()

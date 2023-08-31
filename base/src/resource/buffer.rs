@@ -338,6 +338,11 @@ impl<'g> BufferPrealloc<'g> {
         br::BufferDesc::new(self.total as _, self.usage)
     }
 
+    /// this ignores usage flags from appended contents
+    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferDesc {
+        br::BufferDesc::new(self.total as _, usage)
+    }
+
     pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {
         br::BufferDesc::new(self.total as _, self.usage).create(self.g.device.clone())
     }
