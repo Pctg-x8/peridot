@@ -570,53 +570,73 @@ impl<Device: br::Device> MemoryBlock<Device> {
         (aligned_size.trailing_zeros() - SLAB_ALLOC_BASE_SIZE.trailing_zeros()) as usize
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), fields(aligned_size = Self::aligned_object_size(size)))]
     pub fn suballocate(&mut self, size: usize) -> Option<u64> {
         let slab_object_size = Self::aligned_object_size(size);
         let slab_level = Self::slab_level(slab_object_size);
         let allocator = &mut self.slab_cache_by_object_size[slab_level as usize];
 
-        tracing::debug!("size aligned to {slab_object_size}, using level #{slab_level}");
+        tracing::debug!("using level #{slab_level}");
 
-        allocator.find_free_object_offset().or_else(|| {
-            // 既存のslab cache内ではみつからなかった 新しく登録して試す
-            let (new_slab_cache_offset_block, max_objects, block_count) =
-                match self.slab_cache_free_area_manager.acquire(1 << slab_level) {
-                    Ok(b) => (b, 32, 1 << slab_level),
-                    Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
-                        let (max_available_block_start, max_available_block_count) = self.slab_cache_free_area_manager.max_unallocated_memory_block_length();
-                        tracing::debug!("unavailable blocks: {max_available_block_start} {max_available_block_count}");
-                        let max_available_block_size = max_available_block_count * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64;
-                        if max_available_block_size < slab_object_size as u64 {
-                            // no enough blocks left
-                            return None;
-                        }
+        if let Some(o) = allocator.find_free_object_offset() {
+            return Some(o);
+        }
 
-                        let new_slab_object_count = ((max_available_block_size / slab_object_size as u64) >> 1).max(1);
-                        let new_slab_object_block_count = ((new_slab_object_count * slab_object_size as u64) / SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64) as u32;
-                        let new_block_start = self.slab_cache_free_area_manager.acquire(new_slab_object_block_count).ok()?;
+        // 既存のslab cache内ではみつからなかった 新しく登録して試す
+        let (new_slab_cache_offset_block, max_objects, block_count) = match self
+            .slab_cache_free_area_manager
+            .acquire(1 << slab_level)
+        {
+            Ok(b) => (b, 32, 1 << slab_level),
+            Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
+                let (max_available_block_start, max_available_block_count) = self
+                    .slab_cache_free_area_manager
+                    .max_unallocated_memory_block_length();
+                tracing::debug!(
+                    { max_available_block_start, max_available_block_count },
+                    "trying maximum allocation"
+                );
+                let max_available_block_size =
+                    max_available_block_count * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64;
+                if max_available_block_size < slab_object_size as u64 {
+                    // no enough blocks left
+                    return None;
+                }
 
-                        tracing::trace!("object too large! managing only {new_slab_object_count} objects");
-                        (new_block_start, new_slab_object_count, new_slab_object_block_count)
-                    }
-                    Err(_) => return None,
-                };
-            allocator.append_empty_slab(
-                (new_slab_cache_offset_block, block_count),
-                new_slab_cache_offset_block * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64,
-                max_objects as _,
-            );
+                let new_slab_object_count =
+                    ((max_available_block_size / slab_object_size as u64) >> 1).max(1);
+                let new_slab_object_block_count =
+                    ((new_slab_object_count * slab_object_size as u64)
+                        / SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64) as u32;
+                let new_block_start = self
+                    .slab_cache_free_area_manager
+                    .acquire(new_slab_object_block_count)
+                    .ok()?;
 
-            allocator.find_free_object_offset()
-        })
+                tracing::trace!("object too large! managing only {new_slab_object_count} objects");
+                (
+                    new_block_start,
+                    new_slab_object_count,
+                    new_slab_object_block_count,
+                )
+            }
+            Err(_) => return None,
+        };
+        allocator.append_empty_slab(
+            (new_slab_cache_offset_block, block_count),
+            new_slab_cache_offset_block * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64,
+            max_objects as _,
+        );
+
+        allocator.find_free_object_offset()
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self), fields(aligned_size = Self::aligned_object_size(size)))]
     pub fn free(&mut self, size: usize, offset: u64) {
         let slab_object_size = Self::aligned_object_size(size);
         let slab_level = Self::slab_level(slab_object_size);
 
-        tracing::debug!("size aligned:{slab_object_size}, using level #{slab_level}");
+        tracing::debug!("using level #{slab_level}");
 
         self.slab_cache_by_object_size[slab_level as usize].free_object(offset, |empty| {
             self.slab_cache_free_area_manager
