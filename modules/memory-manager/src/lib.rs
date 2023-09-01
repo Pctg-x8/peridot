@@ -18,20 +18,20 @@ mod slab;
 mod sub_block;
 mod utils;
 
-pub use resource_wrapper::{Buffer, Image, LinearImageBuffer};
+pub use resource_wrapper::{AnyPointer, Buffer, BufferMapMode, Image, LinearImageBuffer};
 
-pub struct MemoryType {
+struct MemoryType {
     pub index: u32,
     pub heap_index: u32,
     pub is_coherent: bool,
     pub is_cached: bool,
 }
 impl MemoryType {
-    pub const fn index_mask(&self) -> u32 {
+    const fn index_mask(&self) -> u32 {
         1 << self.index
     }
 
-    pub const fn host_property_flags(&self) -> br::vk::VkMemoryPropertyFlags {
+    const fn host_property_flags(&self) -> br::vk::VkMemoryPropertyFlags {
         let coherent_bit = if self.is_coherent {
             br::vk::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
         } else {
@@ -46,20 +46,20 @@ impl MemoryType {
         coherent_bit | cached_bit
     }
 }
-pub struct HeapStats {
+struct HeapStats {
     pub info: br::vk::VkMemoryHeap,
     pub used_bytes: u64,
 }
 
-pub struct MemoryBlock<Device: br::Device> {
-    pub object: br::DeviceMemoryObject<Device>,
-    pub total_size: u64,
+struct MemoryBlock<Device: br::Device> {
+    object: br::DeviceMemoryObject<Device>,
+    total_size: u64,
     /// 64*2^n where n is index of the vec
-    pub slab_cache_by_object_size: Vec<MemoryBlockSlabCache>,
-    pub slab_cache_free_area_manager: MemoryBlockSlabCacheFreeAreaManager,
+    slab_cache_by_object_size: Vec<MemoryBlockSlabCache>,
+    slab_cache_free_area_manager: MemoryBlockSlabCacheFreeAreaManager,
 }
 impl<Device: br::Device> MemoryBlock<Device> {
-    pub fn new(object: br::DeviceMemoryObject<Device>, total_size: u64) -> Self {
+    fn new(object: br::DeviceMemoryObject<Device>, total_size: u64) -> Self {
         let total_block_count = total_size / SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64;
 
         Self {
@@ -89,7 +89,7 @@ impl<Device: br::Device> MemoryBlock<Device> {
     }
 
     #[tracing::instrument(skip(self), fields(aligned_size = Self::align_object_size(size)))]
-    pub fn suballocate(&mut self, size: usize) -> Option<u64> {
+    fn suballocate(&mut self, size: usize) -> Option<u64> {
         let slab_object_size = Self::align_object_size(size);
         let slab_level = Self::slab_level(slab_object_size);
         let allocator = &mut self.slab_cache_by_object_size[slab_level as usize];
@@ -155,7 +155,7 @@ impl<Device: br::Device> MemoryBlock<Device> {
     }
 
     #[tracing::instrument(skip(self), fields(aligned_size = Self::align_object_size(size)))]
-    pub fn free(&mut self, size: usize, offset: u64) {
+    fn free(&mut self, size: usize, offset: u64) {
         let slab_object_size = Self::align_object_size(size);
         let slab_level = Self::slab_level(slab_object_size);
 
@@ -168,21 +168,21 @@ impl<Device: br::Device> MemoryBlock<Device> {
     }
 }
 
-pub struct OptimalBufferLinearImagePlacementInfo {
+struct OptimalBufferLinearImagePlacementInfo {
     pub alignment: u64,
     pub row_pitch_alignment: u64,
 }
 
 pub struct MemoryManager {
     /// Device Local only
-    pub device_local_memory_types: Vec<MemoryType>,
+    device_local_memory_types: Vec<MemoryType>,
     /// Host Visible only
-    pub host_visible_memory_types: Vec<MemoryType>,
+    host_visible_memory_types: Vec<MemoryType>,
     /// Both Device Local and Host Visible (this memory can be directly mapped)
-    pub direct_memory_types: Vec<MemoryType>,
-    pub heap_stats: Vec<HeapStats>,
-    pub optimal_buffer_linear_image_placement_info: OptimalBufferLinearImagePlacementInfo,
-    pub managed_blocks_per_type:
+    direct_memory_types: Vec<MemoryType>,
+    heap_stats: Vec<HeapStats>,
+    optimal_buffer_linear_image_placement_info: OptimalBufferLinearImagePlacementInfo,
+    managed_blocks_per_type:
         BTreeMap<u32, Vec<SharedMutableRef<MemoryBlock<peridot::DeviceObject>>>>,
 }
 impl MemoryManager {
