@@ -4,7 +4,7 @@ use peridot::mthelper::SharedMutableRef;
 
 use crate::MemoryBlock;
 
-pub enum BackingMemory {
+pub(crate) enum BackingMemory {
     Managed(SharedMutableRef<MemoryBlock<peridot::DeviceObject>>),
     Native(br::DeviceMemoryObject<peridot::DeviceObject>),
     NativeShared(SharedMutableRef<br::DeviceMemoryObject<peridot::DeviceObject>>),

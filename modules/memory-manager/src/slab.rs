@@ -76,16 +76,6 @@ impl MemoryBlockSlabCache {
         }
     }
 
-    pub const fn is_empty(&self) -> bool {
-        self.partially_allocated_slabs_head.is_none() && self.filled_slabs_head.is_none()
-    }
-
-    pub fn clear_chains(&mut self) {
-        self.empty_slabs_head = None;
-        self.partially_allocated_slabs_head = None;
-        self.filled_slabs_head = None;
-    }
-
     pub fn append_empty_slab(&mut self, block_info: (u32, u32), offset: u64, max: u32) {
         Self::append_slab_chain(
             &mut self.empty_slabs_head,

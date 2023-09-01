@@ -20,6 +20,7 @@ mod utils;
 
 pub use resource_wrapper::{AnyPointer, Buffer, BufferMapMode, Image, LinearImageBuffer};
 
+#[allow(dead_code)]
 struct MemoryType {
     pub index: u32,
     pub heap_index: u32,
@@ -30,22 +31,8 @@ impl MemoryType {
     const fn index_mask(&self) -> u32 {
         1 << self.index
     }
-
-    const fn host_property_flags(&self) -> br::vk::VkMemoryPropertyFlags {
-        let coherent_bit = if self.is_coherent {
-            br::vk::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-        } else {
-            0
-        };
-        let cached_bit = if self.is_cached {
-            br::vk::VK_MEMORY_PROPERTY_HOST_CACHED_BIT
-        } else {
-            0
-        };
-
-        coherent_bit | cached_bit
-    }
 }
+#[allow(dead_code)]
 struct HeapStats {
     pub info: br::vk::VkMemoryHeap,
     pub used_bytes: u64,
@@ -53,7 +40,6 @@ struct HeapStats {
 
 struct MemoryBlock<Device: br::Device> {
     object: br::DeviceMemoryObject<Device>,
-    total_size: u64,
     /// 64*2^n where n is index of the vec
     slab_cache_by_object_size: Vec<MemoryBlockSlabCache>,
     slab_cache_free_area_manager: MemoryBlockSlabCacheFreeAreaManager,
@@ -64,7 +50,6 @@ impl<Device: br::Device> MemoryBlock<Device> {
 
         Self {
             object,
-            total_size,
             slab_cache_by_object_size: power_of_2_series_from(SLAB_ALLOC_BASE_SIZE)
                 .take_while(|&x| x <= total_size as usize)
                 .map(MemoryBlockSlabCache::new)
@@ -178,8 +163,10 @@ pub struct MemoryManager {
     device_local_memory_types: Vec<MemoryType>,
     /// Host Visible only
     host_visible_memory_types: Vec<MemoryType>,
+    #[allow(dead_code)]
     /// Both Device Local and Host Visible (this memory can be directly mapped)
     direct_memory_types: Vec<MemoryType>,
+    #[allow(dead_code)]
     heap_stats: Vec<HeapStats>,
     optimal_buffer_linear_image_placement_info: OptimalBufferLinearImagePlacementInfo,
     managed_blocks_per_type:
