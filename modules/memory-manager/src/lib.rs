@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use bedrock as br;
-use br::{DeviceMemory, MemoryBound, StructureChainQuery};
+use br::{
+    Device, DeviceChild, DeviceMemory, MemoryBound, StructureChainQuery, VkHandle, VulkanStructure,
+};
 use num_integer::Integer;
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;
@@ -654,7 +656,7 @@ enum BackingMemory {
 pub struct Image {
     object: br::ImageObject<peridot::DeviceObject>,
     memory_block: BackingMemory,
-    offset: u64,
+    _offset: u64,
     byte_length: usize,
     malloc_offset: u64,
 }
@@ -746,9 +748,27 @@ impl AnyPointer {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BufferMapMode {
+    Unspecified,
+    Read,
+    Write,
+    ReadWrite,
+}
+impl BufferMapMode {
+    pub fn is_write(self) -> bool {
+        self == Self::Write || self == Self::ReadWrite
+    }
+
+    pub fn is_read(self) -> bool {
+        self == Self::Read || self == Self::ReadWrite
+    }
+}
+
 pub struct Buffer {
     object: br::BufferObject<peridot::DeviceObject>,
     memory_block: BackingMemory,
+    requires_flushing: bool,
     offset: u64,
     size: usize,
     // (size, offset)
@@ -759,7 +779,16 @@ impl Buffer {
         self.size
     }
 
-    pub fn guard_map<R>(&mut self, op: impl FnOnce(AnyPointer) -> R) -> br::Result<R> {
+    /// trueの場合、メモリ上のコンテンツをデバイスと同期するために明示的なFlush(書き込み)/Invalidate(読み取り)が必要
+    pub const fn requires_explicit_sync(&self) -> bool {
+        self.requires_flushing
+    }
+
+    pub fn guard_map<R>(
+        &mut self,
+        mode: BufferMapMode,
+        op: impl FnOnce(AnyPointer) -> R,
+    ) -> br::Result<R> {
         match self.memory_block {
             BackingMemory::Managed(ref m) => {
                 let mut locked = m.borrow_mut();
@@ -768,7 +797,32 @@ impl Buffer {
                         .object
                         .map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
                 };
+                if self.requires_explicit_sync() && mode.is_read() {
+                    unsafe {
+                        self.device()
+                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
+                                sType: br::vk::VkMappedMemoryRange::TYPE,
+                                pNext: core::ptr::null(),
+                                memory: locked.object.native_ptr(),
+                                offset: self.offset,
+                                size: self.size as _,
+                            }])?;
+                    }
+                }
                 let r = op(AnyPointer(ptr as _));
+                if self.requires_explicit_sync() && mode.is_write() {
+                    unsafe {
+                        self.device().flush_mapped_memory_ranges(&[
+                            br::vk::VkMappedMemoryRange {
+                                sType: br::vk::VkMappedMemoryRange::TYPE,
+                                pNext: core::ptr::null(),
+                                memory: locked.object.native_ptr(),
+                                offset: self.offset,
+                                size: self.size as _,
+                            },
+                        ])?;
+                    }
+                }
                 unsafe {
                     locked.object.unmap();
                 }
@@ -779,7 +833,31 @@ impl Buffer {
                 let ptr = unsafe {
                     m.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
                 };
+                if self.requires_flushing && mode.is_read() {
+                    unsafe {
+                        m.device()
+                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
+                                sType: br::vk::VkMappedMemoryRange::TYPE,
+                                pNext: core::ptr::null(),
+                                memory: m.native_ptr(),
+                                offset: self.offset,
+                                size: self.size as _,
+                            }])?;
+                    }
+                }
                 let r = op(AnyPointer(ptr as _));
+                if self.requires_flushing && mode.is_write() {
+                    unsafe {
+                        m.device()
+                            .flush_mapped_memory_ranges(&[br::vk::VkMappedMemoryRange {
+                                sType: br::vk::VkMappedMemoryRange::TYPE,
+                                pNext: core::ptr::null(),
+                                memory: m.native_ptr(),
+                                offset: self.offset,
+                                size: self.size as _,
+                            }])?;
+                    }
+                }
                 unsafe {
                     m.unmap();
                 }
@@ -791,7 +869,32 @@ impl Buffer {
                 let ptr = unsafe {
                     locked.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
                 };
+                if self.requires_explicit_sync() && mode.is_read() {
+                    unsafe {
+                        self.device()
+                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
+                                sType: br::vk::VkMappedMemoryRange::TYPE,
+                                pNext: core::ptr::null(),
+                                memory: locked.native_ptr(),
+                                offset: self.offset,
+                                size: self.size as _,
+                            }])?;
+                    }
+                }
                 let r = op(AnyPointer(ptr as _));
+                if self.requires_explicit_sync() && mode.is_write() {
+                    unsafe {
+                        self.device().flush_mapped_memory_ranges(&[
+                            br::vk::VkMappedMemoryRange {
+                                sType: br::vk::VkMappedMemoryRange::TYPE,
+                                pNext: core::ptr::null(),
+                                memory: locked.native_ptr(),
+                                offset: self.offset,
+                                size: self.size as _,
+                            },
+                        ])?;
+                    }
+                }
                 unsafe {
                     locked.unmap();
                 }
@@ -809,7 +912,7 @@ impl Buffer {
     }
 
     pub unsafe fn write_content_unchecked<T>(&mut self, value: T) -> br::Result<()> {
-        self.guard_map(|ptr| {
+        self.guard_map(BufferMapMode::Write, |ptr| {
             *ptr.get_mut_at(0) = value;
         })
     }
@@ -817,7 +920,7 @@ impl Buffer {
     pub fn clone_content_from_slice<T: Clone>(&mut self, values: &[T]) -> br::Result<()> {
         assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
 
-        self.guard_map(|ptr| unsafe {
+        self.guard_map(BufferMapMode::Write, |ptr| unsafe {
             ptr.clone_slice_to(0, values);
         })
     }
@@ -825,7 +928,7 @@ impl Buffer {
     pub fn copy_content_from_slice<T: Copy>(&mut self, values: &[T]) -> br::Result<()> {
         assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
 
-        self.guard_map(|ptr| unsafe {
+        self.guard_map(BufferMapMode::Write, |ptr| unsafe {
             ptr.copy_slice_to(0, values);
         })
     }
@@ -1131,6 +1234,7 @@ impl MemoryManager {
         Ok(Buffer {
             object: o,
             memory_block: memory,
+            requires_flushing: false,
             offset: aligned_offset,
             size: exact_size as _,
             malloc: (req.memoryRequirements.size, offset),
@@ -1173,7 +1277,6 @@ impl MemoryManager {
         let req = unsafe { req.assume_init() };
 
         // prefer host coherent(for less operations)
-        // TODO: coherentじゃないmemory typeが選択されたときどうしよう（Flush/Invalidateが必要なのでなんとか情報を利用側で取れる必要がある）
         let memory_type = self
             .host_visible_memory_types
             .iter()
@@ -1186,11 +1289,7 @@ impl MemoryManager {
                     .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
             })
             .expect("no memory type index");
-        if !memory_type.is_coherent {
-            tracing::warn!(
-                "TODO: selected memory type is not host-coherent, requires explicit flushing"
-            );
-        }
+        let requires_flushing = !memory_type.is_coherent;
 
         let (memory, offset) =
             self.allocate_internal(e.device(), &req, memory_type.index, |r| {
@@ -1214,6 +1313,7 @@ impl MemoryManager {
         Ok(Buffer {
             object: o,
             memory_block: memory,
+            requires_flushing,
             offset: aligned_offset,
             size: exact_size as _,
             malloc: (req.memoryRequirements.size, offset),
@@ -1324,7 +1424,7 @@ impl MemoryManager {
         Ok(Image {
             object: o,
             memory_block: memory,
-            offset: aligned_offset,
+            _offset: aligned_offset,
             byte_length: req.memoryRequirements.size as _,
             malloc_offset: offset,
         })
@@ -1436,7 +1536,7 @@ impl MemoryManager {
                     Ok(Image {
                         object,
                         memory_block: BackingMemory::Native(memory),
-                        offset: 0,
+                        _offset: 0,
                         byte_length: req.memoryRequirements.size as _,
                         malloc_offset: 0,
                     })
@@ -1448,7 +1548,7 @@ impl MemoryManager {
                         Ok(Image {
                             object,
                             memory_block: BackingMemory::NativeShared(combined.clone()),
-                            offset,
+                            _offset: offset,
                             byte_length: req.memoryRequirements.size as _,
                             malloc_offset: offset,
                         })
@@ -1474,7 +1574,7 @@ impl MemoryManager {
                         Ok(Image {
                             object,
                             memory_block: memory,
-                            offset: aligned_offset,
+                            _offset: aligned_offset,
                             byte_length: req.memoryRequirements.size as _,
                             malloc_offset: offset,
                         })
