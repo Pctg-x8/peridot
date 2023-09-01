@@ -14,7 +14,7 @@ use peridot_command_object::{
     BeginRenderPass, BufferUsage, ColorAttachmentBlending, EndRenderPass, GraphicsCommand,
     GraphicsCommandCombiner, GraphicsCommandSubmission, PipelineBarrier, RangedBuffer, RangedImage,
 };
-use peridot_memory_manager::MemoryManager;
+use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
@@ -176,7 +176,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
         let (vg_renderer_params, vg_renderer_params2) = stg_buffer
             .0
-            .guard_map(|m| unsafe {
+            .guard_map(BufferMapMode::Write, |m| unsafe {
                 let p0 = ctx.write_data_into(m.ptr(), vg_offs);
                 let p1 = ctx2.write_data_into(m.ptr(), vg_offs2);
                 return (p0, p1);
@@ -528,14 +528,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
     fn update(
         &mut self,
         e: &mut peridot::Engine<PL>,
-        on_backbuffer_of: u32,
+        on_back_buffer_of: u32,
         _dt: std::time::Duration,
     ) {
         e.do_render(
-            on_backbuffer_of,
+            on_back_buffer_of,
             None::<br::EmptySubmissionBatch>,
             br::EmptySubmissionBatch.with_command_buffers(
-                &self.render_cb[on_backbuffer_of as usize..=on_backbuffer_of as usize],
+                &self.render_cb[on_back_buffer_of as usize..=on_back_buffer_of as usize],
             ),
         )
         .expect("Failed to present");

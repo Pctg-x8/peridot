@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use bedrock as br;
 use br::{
     CommandBuffer, DescriptorPool, Device, Image, ImageChild, ImageSubresourceSlice,
@@ -13,7 +11,7 @@ use peridot_command_object::{
     GraphicsCommandSubmission, ImageResourceRange, Mesh, PipelineBarrier, RangedBuffer,
     RangedImage, StandardMesh,
 };
-use peridot_memory_manager::MemoryManager;
+use peridot_memory_manager::{BufferMapMode, MemoryManager};
 
 #[repr(C)]
 #[derive(Clone)]
@@ -220,17 +218,9 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             )
             .expect("Failed to create staging buffer");
         staging_buffer
-            .guard_map(|ptr| unsafe {
-                core::slice::from_raw_parts_mut(
-                    (ptr as *mut u8).add(staging_offsets[0] as _) as *mut peridot::VertexUV2D,
-                    sprite_plane.vertices.len(),
-                )
-                .clone_from_slice(&sprite_plane.vertices);
-                core::slice::from_raw_parts_mut(
-                    (ptr as *mut u8).add(staging_offsets[1] as _),
-                    main_image_data.0.u8_pixels().len(),
-                )
-                .copy_from_slice(main_image_data.0.u8_pixels());
+            .guard_map(BufferMapMode::Write, |ptr| unsafe {
+                ptr.clone_slice_to(staging_offsets[0] as _, &sprite_plane.vertices);
+                ptr.copy_slice_to(staging_offsets[1] as _, main_image_data.0.u8_pixels());
             })
             .expect("Failed to stage initial vertex buffer memory");
 

@@ -7,12 +7,11 @@ use peridot::math::{
 };
 use peridot::mthelper::{DynamicMutabilityProvider, SharedRef};
 use peridot::{
-    audio::StreamingPlayableWav, BufferContent, BufferPrealloc, CBSubmissionType, CommandBundle,
-    LayoutedPipeline, SubpassDependencyTemplates,
+    audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, LayoutedPipeline,
+    SubpassDependencyTemplates,
 };
-use peridot_memory_manager::MemoryManager;
+use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_vertex_processing_pack::PvpShaderModules;
-use std::convert::TryInto;
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -21,20 +20,10 @@ use std::time::Duration;
 use br::VkObject;
 
 use peridot_command_object::{
-    BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBuffer,
-    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner,
-    ImageResourceRange, PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
+    BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBufferToImage,
+    DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner, ImageResourceRange,
+    PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
 };
-
-struct BufferOffsets {
-    pub plane_vertices: u64,
-}
-struct MutableBufferOffsets {
-    pub uniform: u64,
-}
-struct StagingBufferOffsets {
-    pub image: u64,
-}
 
 pub struct Game<PL: peridot::NativeLinker> {
     ph: PhantomData<*const PL>,
@@ -48,7 +37,7 @@ pub struct Game<PL: peridot::NativeLinker> {
             SharedRef<<PL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
         >,
     >,
-    descriptor: (
+    _descriptor: (
         br::DescriptorSetLayoutObject<peridot::DeviceObject>,
         br::DescriptorPoolObject<peridot::DeviceObject>,
         Vec<br::DescriptorSet>,
@@ -185,10 +174,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let pre_configure_awaiter = e
             .submit_commands_async(|mut r| {
                 let texture = RangedImage::single_color_plane(&image);
-                let uniform_mut_buffer_ref = uniform_mut_buffer.make_ref();
                 let image_data_stg_buffer_ranged = RangedBuffer::from(&image_data_stg_buffer.inner);
 
-                let [mut_uniform_in_barrier, mut_uniform_out_barrier] = uniform_mut_buffer_ref
+                let [mut_uniform_in_barrier, mut_uniform_out_barrier] = uniform_mut_buffer
+                    .make_ref()
                     .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
                 let [tex_init_barrier, tex_ready_barrier] = texture.barrier3(
                     br::ImageLayout::Preinitialized,
@@ -225,8 +214,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     ])
                     .with_barrier(tex_ready_barrier)
                     .by_region();
-                let init_vertex = vertex_buffer.mirror_from(&vertex_buffer_stg);
-                let init_uniform = uniform_buffer.mirror_from(&uniform_mut_buffer);
+                let init_vertex = vertex_buffer.byref_mirror_from(&vertex_buffer_stg);
+                let init_uniform = uniform_buffer.byref_mirror_from(&uniform_mut_buffer);
                 let init_tex = CopyBufferToImage::new(&image_data_stg_buffer.inner, &image)
                     .with_range(
                         BufferImageDataDesc::new(0, image_data_stg_buffer.row_texels),
@@ -256,7 +245,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
             let in_barriers = [uniform_in_barrier, staging_uniform_in_barrier];
             let out_barriers = [uniform_out_barrier, staging_uniform_out_barrier];
-            let copy_uniform = uniform_buffer.mirror_from(&uniform_mut_buffer);
+            let copy_uniform = uniform_buffer.byref_mirror_from(&uniform_mut_buffer);
 
             copy_uniform
                 .between(in_barriers, out_barriers)
@@ -436,7 +425,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             render_cb,
             renderpass,
             framebuffers,
-            descriptor: (descriptor_layout, descriptor_pool, descriptor_main),
+            _descriptor: (descriptor_layout, descriptor_pool, descriptor_main),
             rot: 0.0,
             color_renders: color_renders.boxed(),
             mutable_uniform_buffer: uniform_mut_buffer,
@@ -454,8 +443,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let rot = self.rot;
         self.mutable_uniform_buffer
             .0
-            .guard_map(|ptr| unsafe {
-                (*(ptr as *mut Uniform)).object = Quaternion::new(rot, Vector3::up()).into();
+            .guard_map(BufferMapMode::Write, |ptr| unsafe {
+                ptr.get_mut_at::<Uniform>(0).object = Quaternion::new(rot, Vector3::up()).into();
             })
             .expect("Update DynamicStgBuffer");
 

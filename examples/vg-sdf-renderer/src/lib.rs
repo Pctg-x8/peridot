@@ -9,7 +9,7 @@ use peridot_command_object::{
     PipelineBarrier, RangedBuffer, RangedImage, SimpleDrawIndexed, StandardIndexedMesh,
     StandardMesh,
 };
-use peridot_memory_manager::MemoryManager;
+use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_vertex_processing_pack::PvpShaderModules;
 use peridot_vg::{FlatPathBuilder, Font, FontProvider, FontProviderConstruct};
 
@@ -660,7 +660,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
 
         buffer_init
             .0
-            .guard_map(|m| unsafe {
+            .guard_map(BufferMapMode::Write, |m| unsafe {
                 m.clone_slice_to(
                     flip_fill_rect as _,
                     &[
@@ -957,7 +957,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
 
         buffer_init
             .0
-            .guard_map(|m| unsafe {
+            .guard_map(BufferMapMode::Write, |m| unsafe {
                 m.clone_slice_to(
                     flip_fill_rect as _,
                     &[
