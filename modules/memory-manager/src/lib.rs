@@ -1,13 +1,24 @@
 use std::collections::BTreeMap;
 
 use bedrock as br;
-use br::{
-    Device, DeviceChild, DeviceMemory, MemoryBound, StructureChainQuery, VkHandle, VulkanStructure,
-};
+use br::{MemoryBound, StructureChainQuery};
 use num_integer::Integer;
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;
 use peridot::mthelper::{make_shared_mutable_ref, SharedMutableRef};
+use resource_wrapper::BackingMemory;
+use slab::{MemoryBlockSlabCache, SLAB_ALLOC_BASE_SIZE};
+use sub_block::{MemoryBlockSlabCacheFreeAreaManager, SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE};
+use utils::{align2, align2_u64, power_of_2_series_from, round_up_to_next_power_of_two};
+
+use crate::sub_block::MemoryBlockSlabCacheFreeAreaAcquisitionFailure;
+
+mod resource_wrapper;
+mod slab;
+mod sub_block;
+mod utils;
+
+pub use resource_wrapper::{Buffer, Image, LinearImageBuffer};
 
 pub struct MemoryType {
     pub index: u32,
@@ -40,504 +51,6 @@ pub struct HeapStats {
     pub used_bytes: u64,
 }
 
-// 64 consists of sizeof(mat4) = 4 * 4 * sizeof(f32)
-const SLAB_ALLOC_BASE_SIZE: usize = 64;
-
-pub struct MemoryBlockSlab {
-    /// (number, count)
-    block_info: (u64, u32),
-    offset: u64,
-    free_bits: u32,
-    max: u32,
-    next: Option<Box<MemoryBlockSlab>>,
-}
-impl MemoryBlockSlab {
-    pub const fn new(block_info: (u64, u32), offset: u64, max: u32) -> Self {
-        Self {
-            block_info,
-            offset,
-            free_bits: 0,
-            max,
-            next: None,
-        }
-    }
-
-    pub const fn is_filled(&self) -> bool {
-        self.free_bits.count_ones() == self.max
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.free_bits.count_ones() == 0
-    }
-
-    pub const fn get_first_free(&self) -> Option<usize> {
-        let x = self.free_bits.trailing_ones();
-
-        if x < self.max {
-            Some(x as _)
-        } else {
-            None
-        }
-    }
-
-    pub fn contains_object(&self, object_size: usize, offset: u64) -> bool {
-        (self.offset..self.offset + (object_size * self.max as usize) as u64).contains(&offset)
-    }
-
-    pub fn try_compute_object_index(&self, object_size: usize, offset: u64) -> Option<usize> {
-        if !self.contains_object(object_size, offset) {
-            return None;
-        }
-
-        Some((offset - self.offset) as usize / object_size)
-    }
-
-    pub fn mark_used(&mut self, index: usize) {
-        self.free_bits |= 1 << index;
-    }
-
-    pub fn mark_unused(&mut self, index: usize) {
-        self.free_bits &= !(1 << index);
-    }
-}
-
-/// Slab Allocatorによる小サイズメモリ（64bytes～）の管理
-pub struct MemoryBlockSlabCache {
-    pub object_size: usize,
-    pub empty_slabs_head: Option<Box<MemoryBlockSlab>>,
-    pub partially_allocated_slabs_head: Option<Box<MemoryBlockSlab>>,
-    pub filled_slabs_head: Option<Box<MemoryBlockSlab>>,
-}
-impl MemoryBlockSlabCache {
-    pub fn new(object_size: usize) -> Self {
-        Self {
-            object_size,
-            empty_slabs_head: None,
-            partially_allocated_slabs_head: None,
-            filled_slabs_head: None,
-        }
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.partially_allocated_slabs_head.is_none() && self.filled_slabs_head.is_none()
-    }
-
-    pub fn clear_chains(&mut self) {
-        self.empty_slabs_head = None;
-        self.partially_allocated_slabs_head = None;
-        self.filled_slabs_head = None;
-    }
-
-    pub fn append_empty_slab(&mut self, block_info: (u64, u32), offset: u64, max: u32) {
-        Self::append_slab_chain(
-            &mut self.empty_slabs_head,
-            Box::new(MemoryBlockSlab::new(block_info, offset, max)),
-        );
-    }
-
-    fn append_slab_chain(head: &mut Option<Box<MemoryBlockSlab>>, new_slab: Box<MemoryBlockSlab>) {
-        match head.as_mut() {
-            None => {
-                *head = Some(new_slab);
-            }
-            Some(h) => {
-                let mut term = h;
-                loop {
-                    match term.next {
-                        Some(ref mut t) => {
-                            term = t;
-                        }
-                        None => {
-                            term.next = Some(new_slab);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// returns global offset in container MemoryBlock
-    pub fn find_free_object_offset(&mut self) -> Option<u64> {
-        // finds from partially
-        let mut prev = None::<*mut MemoryBlockSlab>;
-        let mut p = self
-            .partially_allocated_slabs_head
-            .as_mut()
-            .map(|x| x.as_mut() as *mut MemoryBlockSlab);
-        while let Some(h) = p {
-            let slab = unsafe { &mut *h };
-            if let Some(x) = slab.get_first_free() {
-                // found
-                slab.mark_used(x);
-                let ptr = slab.offset + (self.object_size * x) as u64;
-                if slab.is_filled() {
-                    // move to filled
-                    let filled = match prev {
-                        Some(p) => unsafe {
-                            core::mem::replace(&mut (&mut *p).next, slab.next.take())
-                        },
-                        None => core::mem::replace(
-                            &mut self.partially_allocated_slabs_head,
-                            slab.next.take(),
-                        ),
-                    };
-                    // whileにこれたならかならずあるはず
-                    Self::append_slab_chain(&mut self.filled_slabs_head, unsafe {
-                        filled.unwrap_unchecked()
-                    });
-                }
-
-                return Some(ptr);
-            }
-
-            prev = Some(h);
-            p = slab.next.as_mut().map(|x| x.as_mut() as *mut _);
-        }
-
-        // finds from empty
-        let mut prev = None::<*mut MemoryBlockSlab>;
-        let mut p = self
-            .empty_slabs_head
-            .as_mut()
-            .map(|x| x.as_mut() as *mut MemoryBlockSlab);
-        while let Some(h) = p {
-            let slab = unsafe { &mut *h };
-            if let Some(x) = slab.get_first_free() {
-                // found
-                slab.mark_used(x);
-                let ptr = slab.offset + (self.object_size * x) as u64;
-
-                // move to partial
-                let filled = match prev {
-                    Some(p) => unsafe { core::mem::replace(&mut (&mut *p).next, slab.next.take()) },
-                    None => core::mem::replace(&mut self.empty_slabs_head, slab.next.take()),
-                };
-                // whileにこれたならかならずあるはず
-                Self::append_slab_chain(&mut self.partially_allocated_slabs_head, unsafe {
-                    filled.unwrap_unchecked()
-                });
-
-                return Some(ptr);
-            }
-
-            prev = Some(h);
-            p = slab.next.as_mut().map(|x| x.as_mut() as *mut _);
-        }
-
-        None
-    }
-
-    pub fn free_object(
-        &mut self,
-        offset: u64,
-        block_release_fn: impl FnOnce(Box<MemoryBlockSlab>),
-    ) {
-        // finds from filled
-        let mut prev = None::<*mut MemoryBlockSlab>;
-        let mut p = self
-            .filled_slabs_head
-            .as_mut()
-            .map(|x| x.as_mut() as *mut MemoryBlockSlab);
-        while let Some(h) = p {
-            let slab = unsafe { &mut *h };
-
-            if let Some(n) = slab.try_compute_object_index(self.object_size, offset) {
-                // found
-                slab.mark_unused(n);
-
-                // move to partial
-                let filled = match prev {
-                    Some(p) => unsafe { core::mem::replace(&mut (&mut *p).next, slab.next.take()) },
-                    None => core::mem::replace(&mut self.filled_slabs_head, slab.next.take()),
-                };
-                // whileにこれたならかならずあるはず
-                Self::append_slab_chain(&mut self.partially_allocated_slabs_head, unsafe {
-                    filled.unwrap_unchecked()
-                });
-
-                return;
-            }
-
-            prev = Some(h);
-            p = slab.next.as_mut().map(|x| x.as_mut() as *mut _);
-        }
-
-        // finds from partial
-        let mut prev = None::<*mut MemoryBlockSlab>;
-        let mut p = self
-            .partially_allocated_slabs_head
-            .as_mut()
-            .map(|x| x.as_mut() as *mut MemoryBlockSlab);
-        while let Some(h) = p {
-            let slab = unsafe { &mut *h };
-
-            if let Some(n) = slab.try_compute_object_index(self.object_size, offset) {
-                // found
-                slab.mark_unused(n);
-
-                if slab.is_empty() {
-                    // move to empty(or release)
-                    let empty = match prev {
-                        Some(p) => unsafe {
-                            core::mem::replace(&mut (&mut *p).next, slab.next.take())
-                        },
-                        None => core::mem::replace(
-                            &mut self.partially_allocated_slabs_head,
-                            slab.next.take(),
-                        ),
-                    };
-
-                    if let Some(e) = empty {
-                        // releaseしちゃっていい
-                        block_release_fn(e);
-                    }
-                }
-
-                return;
-            }
-
-            prev = Some(h);
-            p = slab.next.as_mut().map(|x| x.as_mut() as *mut _);
-        }
-    }
-}
-
-const SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE: usize = SLAB_ALLOC_BASE_SIZE * 32;
-
-pub enum MemoryBlockSlabCacheFreeAreaAcquisitionFailure {
-    TooLarge,
-    NoBlocksLeft,
-}
-
-/// Slab Allocatorが管理する用の一定サイズのメモリブロックを切り出す（Buddy Systemの簡易実装）
-pub struct MemoryBlockSlabCacheFreeAreaManager {
-    free_block_index_by_chains: Vec<Vec<u64>>,
-}
-impl MemoryBlockSlabCacheFreeAreaManager {
-    #[tracing::instrument]
-    pub fn new(block_count: u32) -> Self {
-        let aligned_block_count = round_up_to_next_power_of_two(block_count as _);
-        tracing::info!({ aligned_block_count }, "Initializing FreeBlockManager");
-
-        Self {
-            free_block_index_by_chains: power_of_2_series_from_u64(1)
-                .take_while(|&n| n < aligned_block_count)
-                .map(|_| Vec::new())
-                .chain(core::iter::once(vec![0]))
-                .collect(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.free_block_index_by_chains
-            .last()
-            .is_some_and(|r| r.len() == 1 && r.first() == Some(&0))
-    }
-
-    pub fn try_fill(&mut self) -> Option<u32> {
-        if self.is_empty() {
-            // 最後の要素しかないのでそれをclearすれば全部使ってることになる
-            unsafe {
-                self.free_block_index_by_chains
-                    .last_mut()
-                    .unwrap_unchecked()
-                    .clear()
-            };
-
-            Some(1 << (self.free_block_index_by_chains.len() - 1))
-        } else {
-            None
-        }
-    }
-
-    /// returns: (start block number, block count)
-    pub fn max_unallocated_memory_block_length(&self) -> (u64, u64) {
-        let largest = self
-            .free_block_index_by_chains
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, v)| !v.is_empty())
-            .map(|(level, v)| {
-                (
-                    unsafe { v.first().copied().unwrap_unchecked() },
-                    1 << level,
-                    level,
-                )
-            });
-        let Some((mut starting_number, mut block_count, largest_level)) = largest else {
-            return (0, 0);
-        };
-
-        // find descendant levels for chainable block
-        for (level, v) in self.free_block_index_by_chains[..largest_level]
-            .iter()
-            .enumerate()
-            .rev()
-        {
-            let level_block_count = 1 << level;
-
-            let chainable_before = v
-                .iter()
-                .find(|&&n| n + level_block_count == starting_number);
-            if let Some(&chainable_start) = chainable_before {
-                block_count += level_block_count;
-                starting_number = chainable_start;
-            }
-
-            let chainable_after = v.iter().find(|&&n| starting_number + block_count == n);
-            if chainable_after.is_some() {
-                block_count += level_block_count;
-            }
-        }
-
-        (starting_number, block_count)
-    }
-
-    fn block_count_to_level(count: u32) -> usize {
-        count.trailing_zeros() as _
-    }
-
-    #[tracing::instrument(skip(self))]
-    /// returns block number(not global byte offset)
-    pub fn acquire(
-        &mut self,
-        block_count: u32,
-    ) -> Result<u64, MemoryBlockSlabCacheFreeAreaAcquisitionFailure> {
-        tracing::trace!("acquire");
-
-        let aligned_block_count = round_up_to_next_power_of_two(block_count as _) as u32;
-        let base_level = Self::block_count_to_level(aligned_block_count);
-
-        if base_level >= self.free_block_index_by_chains.len() {
-            // too large
-            return Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge);
-        }
-
-        let exact_match_block = self.free_block_index_by_chains[base_level as usize].pop();
-        if let Some(b) = exact_match_block {
-            return Ok(b);
-        }
-
-        // divide large blocks
-        let large_block = self
-            .free_block_index_by_chains
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(n, x)| {
-                if n > base_level as usize {
-                    x.pop().map(move |f| (n, f))
-                } else {
-                    None
-                }
-            })
-            .next();
-        if let Some((found_level, b)) = large_block {
-            let mut left_block_count = (1 << found_level) - block_count;
-            for l in (1..=found_level - 1).rev() {
-                self.free_block_index_by_chains[l].push(b + (1 << l) as u64);
-                left_block_count -= 1 << l;
-                if left_block_count == 0 {
-                    break;
-                }
-            }
-
-            return Ok(b);
-        }
-
-        Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::NoBlocksLeft)
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub fn release_power_of_two_block(&mut self, block_number: u64, mut block_count: u32) {
-        tracing::trace!("release");
-
-        let base_level = Self::block_count_to_level(block_count);
-        let mut level = self.free_block_index_by_chains.len() - 1;
-        for l in base_level..self.free_block_index_by_chains.len() {
-            match self.free_block_index_by_chains[l]
-                .iter()
-                .enumerate()
-                .find(|&(_, &b)| block_number + block_count as u64 == b)
-            {
-                Some((n, _)) => {
-                    // chain
-                    block_count <<= 1;
-                    self.free_block_index_by_chains[l].swap_remove(n);
-                }
-                None => {
-                    // not chain
-                    level = l;
-                    break;
-                }
-            }
-        }
-
-        self.free_block_index_by_chains[level].push(block_number as _);
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub fn release(&mut self, mut block_number: u64, mut block_count: u32) {
-        // power of 2に切り上げ(こいつが最大レベル)
-        let aligned_block_count = 1u32 << ((32 - block_count.leading_zeros()) - 1);
-        let max_level = Self::block_count_to_level(aligned_block_count);
-
-        // 下からpower of 2に切り出しながら返却
-        for l in (0..max_level).rev() {
-            if block_count >= (1 << l) {
-                // subdivide
-                self.release_power_of_two_block(block_number, 1 << l);
-                block_number += 1 << l;
-                block_count -= 1 << l;
-            }
-
-            if block_count <= 0 {
-                break;
-            }
-        }
-    }
-}
-
-fn power_of_2_series_from_u64(mut base: u64) -> impl Iterator<Item = u64> {
-    core::iter::from_fn(move || {
-        base <<= 1;
-        Some(base >> 1)
-    })
-}
-fn power_of_2_series_from(mut base: usize) -> impl Iterator<Item = usize> {
-    core::iter::from_fn(move || {
-        base <<= 1;
-        Some(base >> 1)
-    })
-}
-
-/// 切り上げ a(アラインメント)は2の累乗数
-const fn align2(x: usize, a: usize) -> usize {
-    (x + (a - 1)) & !(a - 1)
-}
-
-/// 切り上げ a(アラインメント)は2の累乗数
-const fn align2_u64(x: u64, a: u64) -> u64 {
-    (x + (a - 1)) & !(a - 1)
-}
-
-/// 最上位ビットのみが立っている状態にする
-/// # Example
-/// ```
-/// assert_eq!(only_top_bit(0b0100_0000), 0b0100_0000);
-/// assert_eq!(only_top_bit(0b0110_1101), 0b0100_0000);
-/// ```
-const fn only_top_bit(x: u64) -> u64 {
-    1u64 << (64 - x.leading_zeros() - 1)
-}
-
-const fn round_up_to_next_power_of_two(value: u64) -> u64 {
-    // Note: 最上位ビット以下のみ立っている状態（= 最上位ビットのみ立っている状態 - 1）を足すと
-    // 純粋な2の累乗数以外は繰り上がるので、その状態で再び最上位ビットのみの状態にすると切り上げになる
-    only_top_bit(value + only_top_bit(value) - 1) as _
-}
-
 pub struct MemoryBlock<Device: br::Device> {
     pub object: br::DeviceMemoryObject<Device>,
     pub total_size: u64,
@@ -562,8 +75,7 @@ impl<Device: br::Device> MemoryBlock<Device> {
         }
     }
 
-    /// SLAB_ALLOC_BASE_SIZE以上 2の累乗数に切り上げ
-    fn aligned_object_size(size: usize) -> usize {
+    fn align_object_size(size: usize) -> usize {
         round_up_to_next_power_of_two(size.max(SLAB_ALLOC_BASE_SIZE) as _) as _
     }
 
@@ -572,9 +84,13 @@ impl<Device: br::Device> MemoryBlock<Device> {
         (aligned_size.trailing_zeros() - SLAB_ALLOC_BASE_SIZE.trailing_zeros()) as usize
     }
 
-    #[tracing::instrument(skip(self), fields(aligned_size = Self::aligned_object_size(size)))]
+    const fn max_block_count_for_slab_level(slab_level: usize) -> u32 {
+        1u32 << slab_level
+    }
+
+    #[tracing::instrument(skip(self), fields(aligned_size = Self::align_object_size(size)))]
     pub fn suballocate(&mut self, size: usize) -> Option<u64> {
-        let slab_object_size = Self::aligned_object_size(size);
+        let slab_object_size = Self::align_object_size(size);
         let slab_level = Self::slab_level(slab_object_size);
         let allocator = &mut self.slab_cache_by_object_size[slab_level as usize];
 
@@ -587,9 +103,9 @@ impl<Device: br::Device> MemoryBlock<Device> {
         // 既存のslab cache内ではみつからなかった 新しく登録して試す
         let (new_slab_cache_offset_block, max_objects, block_count) = match self
             .slab_cache_free_area_manager
-            .acquire(1 << slab_level)
+            .acquire(Self::max_block_count_for_slab_level(slab_level))
         {
-            Ok(b) => (b, 32, 1 << slab_level),
+            Ok(b) => (b, 32, Self::max_block_count_for_slab_level(slab_level)),
             Err(MemoryBlockSlabCacheFreeAreaAcquisitionFailure::TooLarge) => {
                 let (max_available_block_start, max_available_block_count) = self
                     .slab_cache_free_area_manager
@@ -599,23 +115,28 @@ impl<Device: br::Device> MemoryBlock<Device> {
                     "trying maximum allocation"
                 );
                 let max_available_block_size =
-                    max_available_block_count * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64;
+                    MemoryBlockSlabCacheFreeAreaManager::block_count_to_bytes(
+                        max_available_block_count,
+                    );
                 if max_available_block_size < slab_object_size as u64 {
                     // no enough blocks left
                     return None;
                 }
 
+                // 全部使うともったいないので半分にする
                 let new_slab_object_count =
                     ((max_available_block_size / slab_object_size as u64) >> 1).max(1);
                 let new_slab_object_block_count =
-                    ((new_slab_object_count * slab_object_size as u64)
-                        / SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64) as u32;
+                    MemoryBlockSlabCacheFreeAreaManager::byte_length_to_block_count(
+                        new_slab_object_count * slab_object_size as u64,
+                    );
                 let new_block_start = self
                     .slab_cache_free_area_manager
                     .acquire(new_slab_object_block_count)
                     .ok()?;
 
                 tracing::trace!("object too large! managing only {new_slab_object_count} objects");
+
                 (
                     new_block_start,
                     new_slab_object_count,
@@ -626,16 +147,16 @@ impl<Device: br::Device> MemoryBlock<Device> {
         };
         allocator.append_empty_slab(
             (new_slab_cache_offset_block, block_count),
-            new_slab_cache_offset_block * SLAB_CACHE_FREE_MANAGER_BLOCK_SIZE as u64,
+            MemoryBlockSlabCacheFreeAreaManager::block_number_to_bytes(new_slab_cache_offset_block),
             max_objects as _,
         );
 
         allocator.find_free_object_offset()
     }
 
-    #[tracing::instrument(skip(self), fields(aligned_size = Self::aligned_object_size(size)))]
+    #[tracing::instrument(skip(self), fields(aligned_size = Self::align_object_size(size)))]
     pub fn free(&mut self, size: usize, offset: u64) {
-        let slab_object_size = Self::aligned_object_size(size);
+        let slab_object_size = Self::align_object_size(size);
         let slab_level = Self::slab_level(slab_object_size);
 
         tracing::debug!("using level #{slab_level}");
@@ -644,343 +165,6 @@ impl<Device: br::Device> MemoryBlock<Device> {
             self.slab_cache_free_area_manager
                 .release_power_of_two_block(empty.block_info.0, empty.block_info.1);
         });
-    }
-}
-
-enum BackingMemory {
-    Managed(SharedMutableRef<MemoryBlock<peridot::DeviceObject>>),
-    Native(br::DeviceMemoryObject<peridot::DeviceObject>),
-    NativeShared(SharedMutableRef<br::DeviceMemoryObject<peridot::DeviceObject>>),
-}
-
-pub struct Image {
-    object: br::ImageObject<peridot::DeviceObject>,
-    memory_block: BackingMemory,
-    _offset: u64,
-    byte_length: usize,
-    malloc_offset: u64,
-}
-impl Drop for Image {
-    fn drop(&mut self) {
-        if let BackingMemory::Managed(ref b) = self.memory_block {
-            b.borrow_mut().free(self.byte_length, self.malloc_offset);
-        }
-    }
-}
-impl br::VkHandle for Image {
-    type Handle = <br::ImageObject<peridot::DeviceObject> as br::VkHandle>::Handle;
-
-    fn native_ptr(&self) -> Self::Handle {
-        self.object.native_ptr()
-    }
-}
-impl br::VkHandleMut for Image {
-    fn native_ptr_mut(&mut self) -> Self::Handle {
-        self.object.native_ptr_mut()
-    }
-}
-impl br::VkObject for Image {
-    const TYPE: br::vk::VkObjectType =
-        <br::ImageObject<peridot::DeviceObject> as br::VkObject>::TYPE;
-}
-impl br::DeviceChild for Image {
-    type ConcreteDevice =
-        <br::ImageObject<peridot::DeviceObject> as br::DeviceChild>::ConcreteDevice;
-
-    fn device(&self) -> &Self::ConcreteDevice {
-        self.object.device()
-    }
-}
-impl br::Image for Image {
-    fn format(&self) -> br::vk::VkFormat {
-        self.object.format()
-    }
-
-    fn size(&self) -> &br::vk::VkExtent3D {
-        self.object.size()
-    }
-
-    fn dimension(&self) -> br::vk::VkImageViewType {
-        self.object.dimension()
-    }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
-pub struct AnyPointer(pub *mut u8);
-impl AnyPointer {
-    pub const fn ptr(self) -> *mut u8 {
-        self.0
-    }
-
-    pub unsafe fn get_at<T>(&self, byte_offset: usize) -> &T {
-        (self.0.add(byte_offset) as *const T)
-            .as_ref()
-            .unwrap_unchecked()
-    }
-
-    pub unsafe fn get_mut_at<T>(&self, byte_offset: usize) -> &mut T {
-        (self.0.add(byte_offset) as *mut T)
-            .as_mut()
-            .unwrap_unchecked()
-    }
-
-    pub const unsafe fn slice<T>(&self, byte_offset: usize, len: usize) -> &[T] {
-        core::slice::from_raw_parts(self.0.add(byte_offset) as _, len)
-    }
-
-    pub unsafe fn slice_mut<T>(&self, byte_offset: usize, len: usize) -> &mut [T] {
-        core::slice::from_raw_parts_mut(self.0.add(byte_offset) as _, len)
-    }
-
-    pub unsafe fn clone_to<T: Clone>(&self, byte_offset: usize, value: &T) {
-        self.get_mut_at::<T>(byte_offset).clone_from(value)
-    }
-
-    pub unsafe fn clone_slice_to<T: Clone>(&self, byte_offset: usize, values: &[T]) {
-        self.slice_mut(byte_offset, values.len())
-            .clone_from_slice(values)
-    }
-
-    pub unsafe fn copy_slice_to<T: Copy>(&self, byte_offset: usize, values: &[T]) {
-        self.slice_mut(byte_offset, values.len())
-            .copy_from_slice(values)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum BufferMapMode {
-    Unspecified,
-    Read,
-    Write,
-    ReadWrite,
-}
-impl BufferMapMode {
-    pub fn is_write(self) -> bool {
-        self == Self::Write || self == Self::ReadWrite
-    }
-
-    pub fn is_read(self) -> bool {
-        self == Self::Read || self == Self::ReadWrite
-    }
-}
-
-pub struct Buffer {
-    object: br::BufferObject<peridot::DeviceObject>,
-    memory_block: BackingMemory,
-    requires_flushing: bool,
-    offset: u64,
-    size: usize,
-    // (size, offset)
-    malloc: (u64, u64),
-}
-impl Buffer {
-    pub const fn byte_length(&self) -> usize {
-        self.size
-    }
-
-    /// trueの場合、メモリ上のコンテンツをデバイスと同期するために明示的なFlush(書き込み)/Invalidate(読み取り)が必要
-    pub const fn requires_explicit_sync(&self) -> bool {
-        self.requires_flushing
-    }
-
-    pub fn guard_map<R>(
-        &mut self,
-        mode: BufferMapMode,
-        op: impl FnOnce(AnyPointer) -> R,
-    ) -> br::Result<R> {
-        match self.memory_block {
-            BackingMemory::Managed(ref m) => {
-                let mut locked = m.borrow_mut();
-                let ptr = unsafe {
-                    locked
-                        .object
-                        .map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
-                };
-                if self.requires_explicit_sync() && mode.is_read() {
-                    unsafe {
-                        self.device()
-                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.object.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
-                    }
-                }
-                let r = op(AnyPointer(ptr as _));
-                if self.requires_explicit_sync() && mode.is_write() {
-                    unsafe {
-                        self.device().flush_mapped_memory_ranges(&[
-                            br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.object.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            },
-                        ])?;
-                    }
-                }
-                unsafe {
-                    locked.object.unmap();
-                }
-
-                Ok(r)
-            }
-            BackingMemory::Native(ref mut m) => {
-                let ptr = unsafe {
-                    m.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
-                };
-                if self.requires_flushing && mode.is_read() {
-                    unsafe {
-                        m.device()
-                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: m.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
-                    }
-                }
-                let r = op(AnyPointer(ptr as _));
-                if self.requires_flushing && mode.is_write() {
-                    unsafe {
-                        m.device()
-                            .flush_mapped_memory_ranges(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: m.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
-                    }
-                }
-                unsafe {
-                    m.unmap();
-                }
-
-                Ok(r)
-            }
-            BackingMemory::NativeShared(ref m) => {
-                let mut locked = m.borrow_mut();
-                let ptr = unsafe {
-                    locked.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
-                };
-                if self.requires_explicit_sync() && mode.is_read() {
-                    unsafe {
-                        self.device()
-                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
-                    }
-                }
-                let r = op(AnyPointer(ptr as _));
-                if self.requires_explicit_sync() && mode.is_write() {
-                    unsafe {
-                        self.device().flush_mapped_memory_ranges(&[
-                            br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            },
-                        ])?;
-                    }
-                }
-                unsafe {
-                    locked.unmap();
-                }
-
-                Ok(r)
-            }
-        }
-    }
-
-    /// Writes value as buffer content. checked whether value size and buffer size are equal.
-    pub fn write_content<T>(&mut self, value: T) -> br::Result<()> {
-        assert_eq!(self.size, core::mem::size_of::<T>());
-
-        unsafe { self.write_content_unchecked(value) }
-    }
-
-    pub unsafe fn write_content_unchecked<T>(&mut self, value: T) -> br::Result<()> {
-        self.guard_map(BufferMapMode::Write, |ptr| {
-            *ptr.get_mut_at(0) = value;
-        })
-    }
-
-    pub fn clone_content_from_slice<T: Clone>(&mut self, values: &[T]) -> br::Result<()> {
-        assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
-
-        self.guard_map(BufferMapMode::Write, |ptr| unsafe {
-            ptr.clone_slice_to(0, values);
-        })
-    }
-
-    pub fn copy_content_from_slice<T: Copy>(&mut self, values: &[T]) -> br::Result<()> {
-        assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
-
-        self.guard_map(BufferMapMode::Write, |ptr| unsafe {
-            ptr.copy_slice_to(0, values);
-        })
-    }
-}
-impl Drop for Buffer {
-    fn drop(&mut self) {
-        if let BackingMemory::Managed(ref b) = self.memory_block {
-            b.borrow_mut().free(self.malloc.0 as _, self.malloc.1);
-        }
-    }
-}
-impl br::VkHandle for Buffer {
-    type Handle = <br::BufferObject<peridot::DeviceObject> as br::VkHandle>::Handle;
-
-    fn native_ptr(&self) -> Self::Handle {
-        self.object.native_ptr()
-    }
-}
-impl br::VkObject for Buffer {
-    const TYPE: br::vk::VkObjectType =
-        <br::BufferObject<peridot::DeviceObject> as br::VkObject>::TYPE;
-}
-impl br::VkHandleMut for Buffer {
-    fn native_ptr_mut(&mut self) -> Self::Handle {
-        self.object.native_ptr_mut()
-    }
-}
-impl br::DeviceChild for Buffer {
-    type ConcreteDevice =
-        <br::BufferObject<peridot::DeviceObject> as br::DeviceChild>::ConcreteDevice;
-
-    fn device(&self) -> &Self::ConcreteDevice {
-        self.object.device()
-    }
-}
-impl br::Buffer for Buffer {}
-
-pub struct LinearImageBuffer {
-    pub inner: Buffer,
-    pub row_texels: u32,
-    pub height: u32,
-}
-impl std::ops::Deref for LinearImageBuffer {
-    type Target = Buffer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-impl std::ops::DerefMut for LinearImageBuffer {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
     }
 }
 
