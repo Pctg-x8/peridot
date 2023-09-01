@@ -51,12 +51,13 @@ impl<Device: br::Device> CommandBundle<Device> {
     }
 
     #[inline]
-    pub unsafe fn synchronized_nth(
+    pub fn synchronized_nth(
         &mut self,
         n: usize,
     ) -> br::SynchronizedCommandBuffer<br::CommandPoolObject<Device>, br::CommandBufferObject<Device>>
     {
-        self.0[n].synchronize_with(&mut self.1)
+        // self.0は必ずself.1から生成されてるのでsafe
+        unsafe { self.0[n].synchronize_with(&mut self.1) }
     }
 }
 
