@@ -1,7 +1,6 @@
 //! Batched Operation Helpers
 
-#[cfg_attr(not(feature = "mt"), allow(unused_imports))]
-use crate::mthelper::{DynamicMutabilityProvider, SharedRef};
+use crate::mthelper::SharedRef;
 use bedrock as br;
 use br::vk::VkBufferCopy;
 use log::*;

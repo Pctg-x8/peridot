@@ -5,8 +5,8 @@ use br::{
     SubmissionBatch,
 };
 use cfg_if::cfg_if;
-use log::{debug, info, warn};
-use std::{collections::HashSet, iter::FromIterator, ops::Deref};
+use log::{info, warn};
+use std::{collections::HashSet, ops::Deref};
 
 pub type InstanceObject = SharedRef<br::InstanceObject>;
 pub type DeviceObject = SharedRef<br::DeviceObject<InstanceObject>>;
@@ -96,7 +96,7 @@ impl Graphics {
         app_name: &str,
         app_version: (u32, u32, u32),
         instance_extensions: Vec<&str>,
-        mut device_extensions: Vec<&str>,
+        device_extensions: Vec<&str>,
         features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Result<Self, GraphicsInitializationError> {
         info!("Supported Layers: ");
@@ -136,7 +136,7 @@ impl Graphics {
         #[cfg(feature = "debug")]
         {
             ib.add_extension("VK_EXT_debug_utils");
-            debug!("Debug reporting activated");
+            log::debug!("Debug reporting activated");
         }
         let instance = SharedRef::new(ib.create()?);
 

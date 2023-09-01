@@ -4,8 +4,6 @@ pub use peridot_math as math;
 
 use bedrock as br;
 use br::Device;
-#[cfg(feature = "mt")]
-use br::Status;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::ops::{Deref, DerefMut};

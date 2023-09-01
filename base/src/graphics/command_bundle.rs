@@ -1,5 +1,5 @@
 use bedrock as br;
-use br::{CommandBuffer, CommandPool, Device};
+use br::{CommandBuffer, CommandPool};
 use std::ops::{Deref, DerefMut};
 
 use super::{DeviceObject, Graphics};
