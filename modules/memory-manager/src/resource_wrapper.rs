@@ -1,5 +1,7 @@
 use bedrock as br;
 use br::{Device, DeviceChild, DeviceMemory, VkHandle, VulkanStructure};
+#[allow(unused_imports)]
+use peridot::mthelper::DynamicMutabilityProvider;
 use peridot::mthelper::SharedMutableRef;
 
 use crate::MemoryBlock;
