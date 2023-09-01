@@ -329,7 +329,7 @@ impl TwoPassStencilSDFRenderer {
             )
             .expect("Failed to create Outline Distance Pipeline");
 
-        TwoPassStencilSDFRenderer {
+        Self {
             render_pass,
             target_size: init_target_size,
             fill_shader,
@@ -704,20 +704,19 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             .expect("Failed to set init data");
 
         {
-            let stg_copied_buffer = buffer_init.subslice_ref(0..bp.total_size() as _);
-            let all_buffer = RangedBuffer::from_offset_length(&*buffer, 0, bp.total_size() as _);
+            let all_buffer = RangedBuffer::from(&*buffer);
             let stencil_buffer = RangedImage::single_stencil_plane(stencil_buffer_view.image());
 
-            let copy = all_buffer.byref_mirror_from(&stg_copied_buffer);
+            let copy = all_buffer.byref_mirror_from(&buffer_init);
 
             let [all_buffer_in_barrier, all_buffer_out_barrier] =
-                all_buffer.make_ref().usage_barrier3(
+                all_buffer.clone().usage_barrier3(
                     BufferUsage::UNUSED,
                     BufferUsage::TRANSFER_DST,
                     BufferUsage::VERTEX_BUFFER | BufferUsage::INDEX_BUFFER,
                 );
             let in_barriers = [
-                stg_copied_buffer
+                buffer_init
                     .make_ref()
                     .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
                 all_buffer_in_barrier,

@@ -201,9 +201,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Creating Transform BufferView 2");
 
         {
-            let copy = buffer
-                .subslice_ref(0..bp.total_size())
-                .mirror_from(stg_buffer.subslice_ref(0..bp.total_size()));
+            let copy = buffer.byref_mirror_from(&stg_buffer);
 
             let [all_buffer_in_barrier, all_buffer_out_barrier] = buffer.make_ref().usage_barrier3(
                 BufferUsage::UNUSED,
@@ -547,13 +545,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.render_cb.reset().expect("Resetting RenderCB");
         self.framebuffers.clear();
     }
-    fn on_resize(&mut self, e: &mut peridot::Engine<PL>, _new_size: Vector2<usize>) {
-        let rt_size = e
-            .back_buffer(0)
-            .expect("no back-buffers?")
-            .image()
-            .size()
-            .wh();
+    fn on_resize(&mut self, e: &mut peridot::Engine<PL>, new_size: Vector2<usize>) {
+        let rt_size = br::vk::VkExtent2D {
+            width: new_size.0 as _,
+            height: new_size.1 as _,
+        };
+
         let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
         let msaa_texture = self
             .memory_manager
