@@ -92,6 +92,23 @@ impl<B: br::Buffer> RangedBuffer<B> {
         &self.0
     }
 
+    /// generates copying command from self to dest.
+    ///
+    /// both buffer length must be equal
+    pub fn copy_to(self, dest: RangedBuffer<impl br::Buffer>) -> impl GraphicsCommand {
+        assert_eq!(self.byte_length(), dest.byte_length());
+
+        let (s, d, len) = (self.offset(), dest.offset(), self.byte_length());
+        CopyBuffer::new(self.0, dest.0).with_range(s, d, len as _)
+    }
+
+    /// generates copying command from src to self. (reversing copy_
+    ///
+    /// both buffer length must be equal
+    pub fn copy_from(self, src: RangedBuffer<impl br::Buffer>) -> impl GraphicsCommand {
+        src.copy_to(self)
+    }
+
     /// generates mirroring command from self to dest.
     ///
     /// both buffer length must be equal.
@@ -131,9 +148,58 @@ impl<B: br::Buffer> RangedBuffer<B> {
         src.byref_mirror_to(self)
     }
 }
-impl<B: br::Buffer + Clone> RangedBuffer<&'_ B> {
-    pub fn clone_inner_ref(&self) -> RangedBuffer<B> {
+impl<'b, B: br::Buffer + 'b> RangedBuffer<&'b B> {
+    pub fn clone_inner_ref(&self) -> RangedBuffer<B>
+    where
+        B: Clone,
+    {
         RangedBuffer(self.0.clone(), self.1.clone())
+    }
+
+    pub fn into_descriptor_buffer_ref(self) -> br::DescriptorBufferRef<'b> {
+        br::DescriptorBufferRef::new(self.0, self.1)
+    }
+}
+impl<B: br::Buffer + peridot::TransferrableBufferResource + 'static> RangedBuffer<B> {
+    pub fn batched_copy_from(
+        self,
+        tfb: &mut peridot::TransferBatch2,
+        src: impl peridot::TransferrableBufferResource + Clone + 'static,
+        src_offset: u64,
+    ) {
+        let (dst_offset, len) = (self.offset(), self.byte_length());
+
+        tfb.copy_buffer(src, src_offset, self.0, dst_offset, len);
+    }
+
+    pub fn batching_set_outer_usage(self, tfb: &mut peridot::TransferBatch2, usage: BufferUsage)
+    where
+        B: Clone,
+    {
+        tfb.register_outer_usage(
+            usage.vk_pipeline_stage_mask_requirements().0,
+            self.0,
+            self.1,
+            usage.vk_access_flags_requirements(),
+        );
+    }
+
+    pub fn batching_set_before_usage(self, tfb: &mut peridot::TransferBatch2, usage: BufferUsage) {
+        tfb.register_before_transition(
+            usage.vk_pipeline_stage_mask_requirements().0,
+            self.0,
+            self.1,
+            usage.vk_access_flags_requirements(),
+        );
+    }
+
+    pub fn batching_set_after_usage(self, tfb: &mut peridot::TransferBatch2, usage: BufferUsage) {
+        tfb.register_after_transition(
+            usage.vk_pipeline_stage_mask_requirements().0,
+            self.0,
+            self.1,
+            usage.vk_access_flags_requirements(),
+        );
     }
 }
 impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br::VkHandleMut>

@@ -211,10 +211,21 @@ impl<B: br::Buffer> From<BufferUsageTransitionBarrier<B>> for PipelineBarrier {
     }
 }
 
-pub struct CopyBuffer<S: br::Buffer, D: br::Buffer>(S, D, Vec<br::vk::VkBufferCopy>);
-impl<S: br::Buffer, D: br::Buffer> CopyBuffer<S, D> {
+pub struct CopyBuffer<
+    S: br::VkHandle<Handle = br::vk::VkBuffer>,
+    D: br::VkHandle<Handle = br::vk::VkBuffer>,
+>(S, D, Vec<br::vk::VkBufferCopy>);
+impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk::VkBuffer>>
+    CopyBuffer<S, D>
+{
     pub const fn new(source: S, dest: D) -> Self {
         Self(source, dest, Vec::new())
+    }
+
+    pub fn with_ranges(mut self, ranges: impl IntoIterator<Item = br::vk::VkBufferCopy>) -> Self {
+        self.2.extend(ranges);
+
+        self
     }
 
     pub fn with_range(mut self, src_offset: u64, dest_offset: u64, size: usize) -> Self {
@@ -238,7 +249,9 @@ impl<S: br::Buffer, D: br::Buffer> CopyBuffer<S, D> {
         self.with_mirroring(offset, std::mem::size_of::<T>())
     }
 }
-impl<S: br::Buffer, D: br::Buffer> GraphicsCommand for CopyBuffer<S, D> {
+impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk::VkBuffer>>
+    GraphicsCommand for CopyBuffer<S, D>
+{
     fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
         let _ = cb.copy_buffer(&self.0, &self.1, &self.2);
     }

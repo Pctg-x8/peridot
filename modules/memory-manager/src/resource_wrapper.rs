@@ -466,6 +466,15 @@ impl br::DeviceChild for Buffer {
     }
 }
 impl br::Buffer for Buffer {}
+impl peridot::TransferrableBufferResource for Buffer {
+    fn grouping_key(&self) -> u64 {
+        unsafe { core::mem::transmute(self.object.native_ptr()) }
+    }
+
+    fn raw_handle(&self) -> br::vk::VkBuffer {
+        self.object.native_ptr()
+    }
+}
 
 pub struct LinearImageBuffer {
     pub inner: Buffer,
