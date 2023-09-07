@@ -43,12 +43,7 @@ fn init_controls(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
 pub struct Game<NL: peridot::NativeLinker> {
     renderpass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<
-        br::FramebufferObject<
-            peridot::DeviceObject,
-            SharedRef<<NL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
-        >,
-    >,
+    framebuffers: Vec<br::FramebufferObject<peridot::DeviceObject>>,
     color_renders: Box<dyn GraphicsCommand>,
     _smp: br::SamplerObject<peridot::DeviceObject>,
     _dsl: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
@@ -91,16 +86,11 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         )
         .create(e.graphics().device().clone())
         .expect("Failed to create RenderPass");
-        let framebuffers: Vec<_> = (0..e.back_buffer_count())
-            .map(|bb_index| {
-                let b = e.back_buffer(bb_index).expect("no backbuffer?");
-                e.graphics()
-                    .device()
-                    .clone()
-                    .new_framebuffer(&renderpass, vec![b.clone()], b.image().size().as_ref(), 1)
-                    .expect("Failed to create Framebuffer")
-            })
-            .collect();
+        let framebuffers: Vec<_> = e
+            .iter_back_buffers()
+            .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create())
+            .collect::<Result<_, _>>()
+            .expect("Failed to create Framebuffer");
 
         let smp = br::SamplerBuilder::default()
             .create(e.graphics().device().clone())

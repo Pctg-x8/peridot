@@ -34,12 +34,7 @@ pub struct VgRendererFragmentFixedColor {
 
 pub struct Game<PL: peridot::NativeLinker> {
     render_pass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<
-        br::FramebufferObject<
-            peridot::DeviceObject,
-            SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
-        >,
-    >,
+    framebuffers: Vec<br::FramebufferObject<peridot::DeviceObject>>,
     render_cb: CommandBundle<peridot::DeviceObject>,
     _bufview: br::BufferViewObject<
         SharedRef<
@@ -308,16 +303,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let framebuffers = e
             .iter_back_buffers()
             .map(|bb| {
-                e.graphics().device().clone().new_framebuffer(
-                    &render_pass,
-                    vec![
-                        bb.clone()
-                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
-                        msaa_texture.clone(),
-                    ],
-                    screen_size.as_ref(),
-                    1,
-                )
+                br::FramebufferBuilder::new(&render_pass)
+                    .with_attachment(bb.clone())
+                    .with_attachment(msaa_texture.clone())
+                    .create()
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Framebuffer Creation");
@@ -631,16 +620,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.framebuffers = e
             .iter_back_buffers()
             .map(|bb| {
-                e.graphics().device().clone().new_framebuffer(
-                    &self.render_pass,
-                    vec![
-                        bb.clone()
-                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
-                        msaa_texture.clone(),
-                    ],
-                    bb.image().size().as_ref(),
-                    1,
-                )
+                br::FramebufferBuilder::new(&self.render_pass)
+                    .with_attachment(bb.clone())
+                    .with_attachment(msaa_texture.clone())
+                    .create()
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffer");
