@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 
 use bedrock as br;
-use br::{CommandBuffer, Device, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
+use br::{CommandBuffer, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
@@ -556,12 +556,7 @@ pub struct Game<NL: peridot::NativeLinker> {
             >,
         >,
     >,
-    fb: Vec<
-        br::FramebufferObject<
-            peridot::DeviceObject,
-            SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
-        >,
-    >,
+    fb: Vec<br::FramebufferObject<peridot::DeviceObject>>,
     sdf_renderer: TwoPassStencilSDFRenderer,
     cmd: peridot::CommandBundle<peridot::DeviceObject>,
     ph: std::marker::PhantomData<*const NL>,
@@ -762,16 +757,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let fb = e
             .iter_back_buffers()
             .map(|bb| {
-                e.graphics().device().clone().new_framebuffer(
-                    &sdf_renderer.render_pass,
-                    vec![
-                        bb.clone()
-                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
-                        stencil_buffer_view.clone(),
-                    ],
-                    &back_buffer_size,
-                    1,
-                )
+                br::FramebufferBuilder::new(&sdf_renderer.render_pass)
+                    .with_attachment(bb.clone())
+                    .with_attachment(stencil_buffer_view.clone())
+                    .create()
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Failed to create Framebuffers");
@@ -974,16 +963,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         self.fb = e
             .iter_back_buffers()
             .map(|bb| {
-                e.graphics().device().clone().new_framebuffer(
-                    &self.sdf_renderer.render_pass,
-                    vec![
-                        bb.clone()
-                            as SharedRef<dyn br::ImageView<ConcreteDevice = peridot::DeviceObject>>,
-                        self.stencil_buffer_view.clone(),
-                    ],
-                    bb.image().size().as_ref(),
-                    1,
-                )
+                br::FramebufferBuilder::new(&self.sdf_renderer.render_pass)
+                    .with_attachment(bb.clone())
+                    .with_attachment(self.stencil_buffer_view.clone())
+                    .create()
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Failed to create Framebuffers");
