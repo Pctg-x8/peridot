@@ -11,10 +11,12 @@ use-freetype = ["peridot-vg/use-freetype"]
 use-fontconfig = ["peridot-vg/use-fontconfig"]
 
 [dependencies]
-peridot = { path = "../.." }
-peridot-derive = { path = "../../derive" }
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["VK_EXT_debug_report"] }
+peridot = { path = "../../base", features = ["derive"] }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
+    "VK_EXT_debug_report",
+] }
 log = "0.4"
 
-peridot-vg = { path = "../../vg" }
-peridot-vertex-processing-pack = { path = "../../vertex-processing-pack" }
+peridot-vg = { path = "../../modules/vg" }
+peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
+peridot-command-object = { path = "../../modules/command-object" }

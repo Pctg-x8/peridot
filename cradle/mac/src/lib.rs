@@ -4,15 +4,12 @@ use log::*;
 use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
+use br::PhysicalDevice;
+use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::sync::{Arc, RwLock};
-
-#[cfg(not(feature = "mt"))]
-use std::rc::Rc as SharedPtr;
-#[cfg(feature = "mt")]
-use std::sync::Arc as SharedPtr;
 
 struct NSLogger;
 impl log::Log for NSLogger {
@@ -168,11 +165,13 @@ fn acquire_view_size(view: *mut c_void) -> peridot::math::Vector2<usize> {
 }
 pub struct Presenter {
     view_ptr: *mut c_void,
-    sc: peridot::IntegratedSwapchain,
+    sc: peridot::IntegratedSwapchain<br::SurfaceObject<SharedRef<br::InstanceObject>>>,
 }
 impl Presenter {
     fn new(view_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
-        let obj = br::Surface::new_macos(g.instance(), view_ptr as *const _)
+        let obj = g
+            .adapter()
+            .new_surface_macos(view_ptr as *const _)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
@@ -189,45 +188,59 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
+    type BackBuffer = br::ImageViewObject<
+        br::SwapchainImage<
+            SharedRef<
+                br::SurfaceSwapchainObject<
+                    peridot::DeviceObject,
+                    br::SurfaceObject<peridot::InstanceObject>,
+                >,
+            >,
+        >,
+    >;
+
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
-    fn backbuffer_count(&self) -> usize {
-        self.sc.backbuffer_count()
+    fn back_buffer_count(&self) -> usize {
+        self.sc.back_buffer_count()
     }
-    fn backbuffer(&self, index: usize) -> Option<SharedPtr<br::ImageView>> {
-        self.sc.backbuffer(index)
+    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+        self.sc.back_buffer(index)
     }
-    fn requesting_backbuffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
-        self.sc.requesting_backbuffer_layout()
+    fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
+        self.sc.requesting_back_buffer_layout()
     }
 
-    fn emit_initialize_backbuffer_commands(&self, recorder: &mut br::CmdRecord) {
-        self.sc.emit_initialize_backbuffer_commands(recorder);
+    fn emit_initialize_back_buffer_commands(
+        &self,
+        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
+    ) {
+        self.sc.emit_initialize_back_buffer_commands(recorder);
     }
-    fn next_backbuffer_index(&mut self) -> br::Result<u32> {
-        self.sc.acquire_next_backbuffer_index()
+    fn next_back_buffer_index(&mut self) -> br::Result<u32> {
+        self.sc.acquire_next_back_buffer_index()
     }
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut br::Fence,
-        backbuffer_index: u32,
-        render_submission: br::SubmissionBatch<'s>,
-        update_submission: Option<br::SubmissionBatch<'s>>,
+        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        back_buffer_index: u32,
+        render_submission: impl br::SubmissionBatch,
+        update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
         self.sc.render_and_present(
             g,
             last_render_fence,
-            backbuffer_index,
+            back_buffer_index,
             render_submission,
             update_submission,
         )
     }
-    /// Returns whether re-initializing is needed for backbuffer resources
+    /// Returns whether re-initializing is needed for back-buffer resources
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
         self.sc.resize(g, new_size);
-        // WSI integrated swapchain needs reinitializing backbuffer resource
+        // WSI integrated swapchain needs re-initializing back-buffer resource
         true
     }
     fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
@@ -275,18 +288,24 @@ type Engine = peridot::Engine<NativeLink>;
 pub struct GameDriver {
     engine: Engine,
     usercode: Game,
+    #[allow(dead_code)]
     nae: NativeAudioEngine,
 }
 impl GameDriver {
     pub fn new(rt_view: *mut libc::c_void) -> Self {
         let nl = NativeLink::new(rt_view);
-        let mut engine = Engine::new(Game::NAME, Game::VERSION, nl, Game::requested_features());
+        let mut engine = Engine::new(
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
+            nl,
+            Game::requested_features(),
+        );
         let usercode = Game::init(&mut engine);
         let nih = Box::new(NativeInputHandler::new(rt_view));
         engine.input_mut().set_nativelink(nih);
         let mut nae = NativeAudioEngine::init();
         nae.start(engine.audio_mixer().clone());
-        engine.postinit();
+        engine.post_init();
 
         GameDriver {
             engine,
@@ -299,7 +318,7 @@ impl GameDriver {
         self.engine.do_update(&mut self.usercode);
     }
     fn resize(&mut self, size: peridot::math::Vector2<usize>) {
-        self.engine.do_resize_backbuffer(size, &mut self.usercode);
+        self.engine.do_resize_back_buffer(size, &mut self.usercode);
     }
 }
 
@@ -341,15 +360,9 @@ pub extern "C" fn resize_game(g: *mut GameDriver, w: u32, h: u32) {
 }
 #[no_mangle]
 pub extern "C" fn captionbar_text() -> *mut c_void {
-    NSString::from_str(&format!(
-        "{} v{}.{}.{}",
-        Game::NAME,
-        Game::VERSION.0,
-        Game::VERSION.1,
-        Game::VERSION.2
-    ))
-    .expect("CaptionbarText NSString Allocation")
-    .into_id() as *mut _
+    NSString::from_str(userlib::APP_TITLE)
+        .expect("CaptionbarText NSString Allocation")
+        .into_id() as *mut _
 }
 
 pub struct OutputAU(appkit::AudioUnit);
@@ -452,17 +465,12 @@ impl NativeAudioEngine {
         }
     }
     fn start(&mut self, mixer: Arc<RwLock<peridot::audio::Mixer>>) {
-        let bptr = Box::into_raw(Box::new(mixer));
-        self.amixer = Some(unsafe { Box::from_raw(bptr) });
+        let mut mixer = Box::new(mixer);
         self.output
-            .set_render_callback(Self::render as _, bptr as *mut _);
+            .set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
         self.output.start();
-        self.amixer
-            .as_ref()
-            .expect("no audio?")
-            .write()
-            .expect("Poisoning Audio")
-            .start();
+        mixer.write().expect("Poisoned Audio").start();
+        self.amixer = Some(mixer);
     }
 
     extern "C" fn render(
@@ -553,6 +561,8 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
 struct NativeInputHandler {
     rt_view: *mut libc::c_void,
 }
+unsafe impl Sync for NativeInputHandler {}
+unsafe impl Send for NativeInputHandler {}
 impl NativeInputHandler {
     fn new(rt_view: *mut libc::c_void) -> Self {
         NativeInputHandler { rt_view }

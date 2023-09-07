@@ -1,0 +1,49 @@
+[package]
+name = "peridot-vg"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+[features]
+default = []
+use-freetype = ["freetype2"]
+use-fontconfig = ["fontconfig"]
+
+[dependencies]
+bedrock = { workspace = true }
+peridot = { path = "../../base" }
+pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
+lyon_path = "0.12"
+lyon_geom = "0.12"
+euclid = "0.19"
+log = "*"
+libc = "0.2"
+cfg-if = "1.0.0"
+peridot-command-object = { path = "../command-object" }
+
+[target.'cfg(target_os="macos")'.dependencies]
+appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
+objc-ext = { git = "https://github.com/Pctg-x8/objc-ext" }
+
+[target.'cfg(target_os="android")'.dependencies]
+android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.48"
+features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Direct2D_Common",
+]
+
+[target.'cfg(windows)'.dependencies]
+widestring = "1.0"
+
+[dependencies.freetype2]
+git = "https://github.com/Pctg-x8/ft2-rs"
+optional = true
+
+[dependencies.fontconfig]
+git = "https://github.com/Pctg-x8/fc-rs"
+optional = true

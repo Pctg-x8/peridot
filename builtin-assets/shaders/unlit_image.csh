@@ -1,7 +1,7 @@
-VertexInput { Binding 0 [PerVertex] { pos: vec3; uv: vec2; } }
+VertexInput { Binding 0 [PerVertex] { pos: vec4; uv: vec4; } }
 VertexShader {
-    RasterPosition = transpose(vp) * transpose(obj) * vec4(pos, 1.0);
-    uv_v = uv;
+    RasterPosition = transpose(vp) * transpose(obj) * vec4(pos.xyz, 1.0);
+    uv_v = uv.xy;
 }
 FragmentShader {
     Target[0] = texture(tex, uv_v);
