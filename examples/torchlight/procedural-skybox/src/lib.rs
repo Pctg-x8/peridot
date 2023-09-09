@@ -1,8 +1,16 @@
-//! http://publications.lib.chalmers.se/records/fulltext/203057/203057.pdf
-
 use bedrock as br;
-use br::VkHandle;
-use peridot::{Engine, EngineEvents, FeatureRequests, NativeLinker};
+use br::{
+    CommandBuffer, DescriptorPool, Device, Image, ImageChild, ImageSubresourceSlice,
+    SubmissionBatch,
+};
+use peridot::{
+    mthelper::{DynamicMutabilityProvider, SharedRef},
+    Engine, EngineEvents, FeatureRequests, NativeLinker,
+};
+use peridot_command_object::{
+    BeginRenderPass, BufferUsage, CopyBuffer, DescriptorSets, EndRenderPass, GraphicsCommand,
+    GraphicsCommandCombiner, PipelineBarrier, RangedBuffer, StandardMesh,
+};
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -18,16 +26,16 @@ pub struct SunLightData {
     pub incident_light_dir: peridot::math::Vector4F32,
 }
 
-pub struct ImmutableDescriptorSets {
-    _pool: br::DescriptorPool,
-    layouts_for_set: Vec<Rc<br::DescriptorSetLayout>>,
+pub struct ImmutableDescriptorSets<Device: br::Device> {
+    _pool: br::DescriptorPoolObject<Device>,
+    layouts_for_set: Vec<SharedRef<br::DescriptorSetLayoutObject<Device>>>,
     sets: Vec<br::DescriptorSet>,
 }
-impl ImmutableDescriptorSets {
-    pub fn new(
-        dev: &br::Device,
-        set_bindings: Vec<Vec<(br::ShaderStage, br::DescriptorUpdateInfo)>>,
-        dub: &mut peridot::DescriptorSetUpdateBatch,
+impl<Device: br::Device + Clone> ImmutableDescriptorSets<Device> {
+    pub fn new<'r>(
+        dev: Device,
+        set_bindings: Vec<Vec<(br::ShaderStage, br::DescriptorContents<'r>)>>,
+        dub: &mut peridot::DescriptorSetUpdateBatch<'r>,
     ) -> br::Result<Self> {
         let mut layouts = HashMap::new();
         let mut layouts_for_set = Vec::new();
@@ -35,93 +43,102 @@ impl ImmutableDescriptorSets {
         for b in &set_bindings {
             let layout_bindings = b
                 .iter()
-                .map(|&(ss, ref e)| match e {
-                    br::DescriptorUpdateInfo::Sampler(ref xs) => {
-                        *pool_sizes.entry(br::DescriptorType::Sampler).or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::Sampler(xs.len() as _, ss, &[])
+                .map(|&(ss, ref e)| {
+                    match e {
+                        br::DescriptorContents::Sampler(ref xs) => {
+                            *pool_sizes.entry(br::DescriptorType::Sampler).or_insert(0) += 1;
+
+                            br::DescriptorType::Sampler.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::CombinedImageSampler(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::CombinedImageSampler)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::CombinedImageSampler.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::SampledImage(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::SampledImage)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::SampledImage.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::StorageImage(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::StorageImage)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::StorageImage.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::InputAttachment(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::InputAttachment)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::InputAttachment.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::UniformBuffer(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::UniformBuffer)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::UniformBuffer.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::StorageBuffer(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::StorageBuffer)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::StorageBuffer.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::UniformBufferDynamic(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::UniformBufferDynamic)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::UniformBufferDynamic.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::StorageBufferDynamic(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::StorageBufferDynamic)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::StorageBufferDynamic.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::UniformTexelBuffer(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::UniformTexelBuffer)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::UniformTexelBuffer.make_binding(xs.len() as _)
+                        }
+                        br::DescriptorContents::StorageTexelBuffer(ref xs) => {
+                            *pool_sizes
+                                .entry(br::DescriptorType::StorageTexelBuffer)
+                                .or_insert(0) += 1;
+
+                            br::DescriptorType::StorageTexelBuffer.make_binding(xs.len() as _)
+                        }
                     }
-                    br::DescriptorUpdateInfo::CombinedImageSampler(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::CombinedImageSampler)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::CombinedImageSampler(xs.len() as _, ss, &[])
-                    }
-                    br::DescriptorUpdateInfo::SampledImage(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::SampledImage)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::SampledImage(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::StorageImage(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::StorageImage)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::StorageImage(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::InputAttachment(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::InputAttachment)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::InputAttachment(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::UniformBuffer(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::UniformBuffer)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::UniformBuffer(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::StorageBuffer(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::StorageBuffer)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::StorageBuffer(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::UniformBufferDynamic(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::UniformBufferDynamic)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::UniformBufferDynamic(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::StorageBufferDynamic(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::StorageBufferDynamic)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::StorageBufferDynamic(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::UniformTexelBuffer(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::UniformTexelBuffer)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::UniformTexelBuffer(xs.len() as _, ss)
-                    }
-                    br::DescriptorUpdateInfo::StorageTexelBuffer(ref xs) => {
-                        *pool_sizes
-                            .entry(br::DescriptorType::StorageTexelBuffer)
-                            .or_insert(0) += 1;
-                        br::DescriptorSetLayoutBinding::StorageTexelBuffer(xs.len() as _, ss)
-                    }
+                    .for_shader_stage(ss)
                 })
                 .collect::<Vec<_>>();
 
             let layout = match layouts.entry(layout_bindings) {
                 std::collections::hash_map::Entry::Vacant(v) => {
-                    let r = br::DescriptorSetLayout::new(dev, v.key())?;
-                    v.insert(std::rc::Rc::new(r)).clone()
+                    let r = br::DescriptorSetLayoutBuilder::with_bindings(v.key().clone())
+                        .create(dev.clone())?;
+                    v.insert(SharedRef::new(r)).clone()
                 }
                 std::collections::hash_map::Entry::Occupied(o) => o.get().clone(),
             };
             layouts_for_set.push(layout);
         }
 
-        let mut pool = br::DescriptorPool::new(
-            dev,
-            layouts_for_set.len() as _,
-            &pool_sizes
-                .into_iter()
-                .map(|(ty, a)| br::DescriptorPoolSize(ty, a))
-                .collect::<Vec<_>>(),
-            false,
-        )?;
+        let mut pool = br::DescriptorPoolBuilder::new(layouts_for_set.len() as _)
+            .reserve_all(pool_sizes.into_iter().map(|(ty, a)| ty.with_count(a)))
+            .create(dev)?;
         let sets = pool.alloc(&layouts_for_set.iter().map(|l| &**l).collect::<Vec<_>>())?;
 
         for (b, s) in set_bindings.into_iter().zip(sets.iter()) {
@@ -137,7 +154,7 @@ impl ImmutableDescriptorSets {
         })
     }
 }
-impl std::ops::Deref for ImmutableDescriptorSets {
+impl<Device: br::Device> std::ops::Deref for ImmutableDescriptorSets<Device> {
     type Target = [br::DescriptorSet];
 
     fn deref(&self) -> &Self::Target {
@@ -189,42 +206,47 @@ impl SkyboxPrecomputedTextures {
     pub fn init<NL: NativeLinker>(
         &self,
         e: &mut Engine<NL>,
-        dwt: &peridot::DeviceWorkingTextureStore,
+        dwt: &peridot::DeviceWorkingTextureStore<
+            peridot::Image<
+                br::ImageObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
     ) {
-        let linear_sampler = br::SamplerBuilder::default()
+        let linear_sampler = br::SamplerBuilder::new()
             .addressing(
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
             )
-            .create(e.graphics())
+            .create(e.graphics().device().clone())
             .expect("Failed to create linear_sampler");
         let mut dub = peridot::DescriptorSetUpdateBatch::new();
-        let precompute_sets = ImmutableDescriptorSets::new(
-            e.graphics(),
+        let pre_compute_sets = ImmutableDescriptorSets::new(
+            e.graphics().device().clone(),
             vec![
                 vec![(
                     br::ShaderStage::COMPUTE,
-                    br::DescriptorUpdateInfo::StorageImage(vec![(
-                        None,
-                        dwt.get(self.transmittance).native_ptr(),
+                    br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                        dwt.get(self.transmittance).underlying_view(),
                         br::ImageLayout::General,
                     )]),
                 )],
                 vec![
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(self.transmittance).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )]),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(self.transmittance).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.scatter).native_ptr(),
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.scatter).underlying_view(),
                             br::ImageLayout::General,
                         )]),
                     ),
@@ -232,17 +254,18 @@ impl SkyboxPrecomputedTextures {
                 vec![
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(self.scatter).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )]),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(self.scatter).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.gathered).native_ptr(),
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.gathered).underlying_view(),
                             br::ImageLayout::General,
                         )]),
                     ),
@@ -250,25 +273,28 @@ impl SkyboxPrecomputedTextures {
                 vec![
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(self.transmittance).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )]),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(self.transmittance).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(self.gathered).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )]),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(self.gathered).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.k_scatter).native_ptr(),
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.k_scatter).underlying_view(),
                             br::ImageLayout::General,
                         )]),
                     ),
@@ -276,17 +302,18 @@ impl SkyboxPrecomputedTextures {
                 vec![
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(self.k_scatter).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )]),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(self.k_scatter).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.k_gathered).native_ptr(),
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.k_gathered).underlying_view(),
                             br::ImageLayout::General,
                         )]),
                     ),
@@ -294,35 +321,15 @@ impl SkyboxPrecomputedTextures {
                 vec![
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.k_scatter).native_ptr(),
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.k_scatter).underlying_view(),
                             br::ImageLayout::General,
                         )]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.scatter).native_ptr(),
-                            br::ImageLayout::General,
-                        )]),
-                    ),
-                ],
-                vec![
-                    (
-                        br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.k_gathered).native_ptr(),
-                            br::ImageLayout::General,
-                        )]),
-                    ),
-                    (
-                        br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.gathered).native_ptr(),
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.scatter).underlying_view(),
                             br::ImageLayout::General,
                         )]),
                     ),
@@ -330,25 +337,44 @@ impl SkyboxPrecomputedTextures {
                 vec![
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(self.transmittance).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.k_gathered).underlying_view(),
+                            br::ImageLayout::General,
                         )]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(self.k_gathered).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.k_gathered).underlying_view(),
+                            br::ImageLayout::General,
                         )]),
+                    ),
+                ],
+                vec![
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(self.transmittance).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                     (
                         br::ShaderStage::COMPUTE,
-                        br::DescriptorUpdateInfo::StorageImage(vec![(
-                            None,
-                            dwt.get(self.k_scatter).native_ptr(),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(self.k_gathered).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
+                    ),
+                    (
+                        br::ShaderStage::COMPUTE,
+                        br::DescriptorContents::StorageImage(vec![br::DescriptorImageRef::new(
+                            dwt.get(self.k_scatter).underlying_view(),
                             br::ImageLayout::General,
                         )]),
                     ),
@@ -356,57 +382,61 @@ impl SkyboxPrecomputedTextures {
             ],
             &mut dub,
         )
-        .expect("Failed to allocate descriptor sets for Precomputation");
-        dub.submit(e.graphics());
+        .expect("Failed to allocate descriptor sets for Pre-computation");
+        dub.submit(e.graphics().device());
 
-        let inputonly_layout: Rc<_> =
-            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[0]], &[])
-                .expect("inputonly_layout creating failed")
+        let input_only_layout: Rc<_> =
+            br::PipelineLayoutBuilder::new(vec![&pre_compute_sets.layouts_for_set[0]], vec![])
+                .create(e.graphics().device().clone())
+                .expect("input only_layout creating failed")
                 .into();
-        let texio_layout: Rc<_> =
-            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[1]], &[])
-                .expect("texio_layout creating failed")
+        let tex_io_layout: Rc<_> =
+            br::PipelineLayoutBuilder::new(vec![&pre_compute_sets.layouts_for_set[1]], vec![])
+                .create(e.graphics().device().clone())
+                .expect("tex-io_layout creating failed")
                 .into();
-        let texi2o_layout: Rc<_> =
-            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[3]], &[])
-                .expect("texi2o_layout creating failed")
+        let tex_i2o_layout: Rc<_> =
+            br::PipelineLayoutBuilder::new(vec![&pre_compute_sets.layouts_for_set[3]], vec![])
+                .create(e.graphics().device().clone())
+                .expect("tex-i2o_layout creating failed")
                 .into();
-        let texio_pure_layout: Rc<_> =
-            br::PipelineLayout::new(e.graphics(), &[&precompute_sets.layouts_for_set[5]], &[])
-                .expect("texio_pure_layout creating failed")
+        let tex_io_pure_layout: Rc<_> =
+            br::PipelineLayoutBuilder::new(vec![&pre_compute_sets.layouts_for_set[5]], vec![])
+                .create(e.graphics().device().clone())
+                .expect("tex-io_pure_layout creating failed")
                 .into();
         let transmittance_compute = e
             .load::<peridot::SpirvShaderBlob>("shaders.precompute.transmittance")
             .expect("Failed to load precompute shader for transmittance")
-            .instantiate(e.graphics())
+            .instantiate(e.graphics().device().clone())
             .expect("Compute Shader Instantiation failed");
         let single_scatter_compute = e
             .load::<peridot::SpirvShaderBlob>("shaders.precompute.single_scatter")
             .expect("Failed to load precompute shader for single scatter")
-            .instantiate(e.graphics())
+            .instantiate(e.graphics().device().clone())
             .expect("Compute shader Instantiation failed");
         let gather_compute = e
             .load::<peridot::SpirvShaderBlob>("shaders.precompute.gather")
             .expect("Failed to load precompute shader for gathering")
-            .instantiate(e.graphics())
+            .instantiate(e.graphics().device().clone())
             .expect("Compute shader Instantiation failed");
         let multiple_scatter_compute = e
             .load::<peridot::SpirvShaderBlob>("shaders.precompute.multiple_scatter")
             .expect("Failed to load precompute shader for multiple scatter")
-            .instantiate(e.graphics())
+            .instantiate(e.graphics().device().clone())
             .expect("Compute shader Instantiation failed");
         let accum2_compute = e
             .load::<peridot::SpirvShaderBlob>("shaders.precompute.accum2")
             .expect("Failed to load precompute shader for accumulation-2d")
-            .instantiate(e.graphics())
+            .instantiate(e.graphics().device().clone())
             .expect("Compute shader Instantiation failed");
         let accum3_compute = e
             .load::<peridot::SpirvShaderBlob>("shaders.precompute.accum3")
             .expect("Failed to load precompute shader for accumulation-3d")
-            .instantiate(e.graphics())
+            .instantiate(e.graphics().device().clone())
             .expect("Compute shader Instantiation failed");
         let transmittance_compute_pipeline = br::ComputePipelineBuilder::new(
-            &inputonly_layout,
+            &input_only_layout,
             br::PipelineShader {
                 module: &transmittance_compute,
                 entry_name: std::ffi::CString::new("main").expect("cstring failed"),
@@ -414,7 +444,7 @@ impl SkyboxPrecomputedTextures {
             },
         );
         let single_scatter_compute_pipeline = br::ComputePipelineBuilder::new(
-            &texio_layout,
+            &tex_io_layout,
             br::PipelineShader {
                 module: &single_scatter_compute,
                 entry_name: std::ffi::CString::new("main").expect("cstring failed"),
@@ -422,7 +452,7 @@ impl SkyboxPrecomputedTextures {
             },
         );
         let gather_compute_pipeline = br::ComputePipelineBuilder::new(
-            &texio_layout,
+            &tex_io_layout,
             br::PipelineShader {
                 module: &gather_compute,
                 entry_name: std::ffi::CString::new("main").expect("cstring failed"),
@@ -430,7 +460,7 @@ impl SkyboxPrecomputedTextures {
             },
         );
         let multiple_scatter_compute_pipeline = br::ComputePipelineBuilder::new(
-            &texi2o_layout,
+            &tex_i2o_layout,
             br::PipelineShader {
                 module: &multiple_scatter_compute,
                 entry_name: std::ffi::CString::new("main").expect("cstring failed"),
@@ -438,7 +468,7 @@ impl SkyboxPrecomputedTextures {
             },
         );
         let accum2_pipeline = br::ComputePipelineBuilder::new(
-            &texio_pure_layout,
+            &tex_io_pure_layout,
             br::PipelineShader {
                 module: &accum2_compute,
                 entry_name: std::ffi::CString::new("main").expect("cstring failed"),
@@ -446,7 +476,7 @@ impl SkyboxPrecomputedTextures {
             },
         );
         let accum3_pipeline = br::ComputePipelineBuilder::new(
-            &texio_pure_layout,
+            &tex_io_pure_layout,
             br::PipelineShader {
                 module: &accum3_compute,
                 entry_name: std::ffi::CString::new("main").expect("cstring failed"),
@@ -455,7 +485,9 @@ impl SkyboxPrecomputedTextures {
         );
         let compute_pipelines = e
             .graphics()
-            .create_compute_pipelines(
+            .device()
+            .clone()
+            .new_compute_pipelines(
                 &[
                     transmittance_compute_pipeline,
                     single_scatter_compute_pipeline,
@@ -464,257 +496,178 @@ impl SkyboxPrecomputedTextures {
                     accum2_pipeline,
                     accum3_pipeline,
                 ],
-                None,
+                None::<&'_ br::PipelineCacheObject<peridot::DeviceObject>>,
             )
             .expect("Failed to create precomputation pipelines");
 
-        e.submit_commands(|rec| {
-            let transmittance_tex_area =
-                br::ImageSubref::color(dwt.get(self.transmittance).underlying(), 0..1, 0..1);
-            let scatter_tex_area =
-                br::ImageSubref::color(dwt.get(self.scatter).underlying(), 0..1, 0..1);
-            let gather_tex_area =
-                br::ImageSubref::color(dwt.get(self.gathered).underlying(), 0..1, 0..1);
-            let k_scatter_tex_area =
-                br::ImageSubref::color(dwt.get(self.k_scatter).underlying(), 0..1, 0..1);
-            let k_gather_tex_area =
-                br::ImageSubref::color(dwt.get(self.k_gathered).underlying(), 0..1, 0..1);
-            let ib_init = [
-                br::ImageMemoryBarrier::new(
-                    &transmittance_tex_area,
-                    br::ImageLayout::Preinitialized,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-                br::ImageMemoryBarrier::new(
-                    &scatter_tex_area,
-                    br::ImageLayout::Preinitialized,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-                br::ImageMemoryBarrier::new(
-                    &gather_tex_area,
-                    br::ImageLayout::Preinitialized,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-                br::ImageMemoryBarrier::new(
-                    &k_scatter_tex_area,
-                    br::ImageLayout::Preinitialized,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-                br::ImageMemoryBarrier::new(
-                    &k_gather_tex_area,
-                    br::ImageLayout::Preinitialized,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-            ];
-            let transmittance_fin = [br::ImageMemoryBarrier::new(
-                &transmittance_tex_area,
-                br::ImageLayout::General,
-                br::ImageLayout::ShaderReadOnlyOpt,
-            )
-            .src_access_mask(br::AccessFlags::SHADER.write)];
-            let scatter_to_readable = [br::ImageMemoryBarrier::new(
-                &scatter_tex_area,
-                br::ImageLayout::General,
-                br::ImageLayout::ShaderReadOnlyOpt,
-            )
-            .src_access_mask(br::AccessFlags::SHADER.write)];
-            let gather_to_readable = [br::ImageMemoryBarrier::new(
-                &gather_tex_area,
-                br::ImageLayout::General,
-                br::ImageLayout::ShaderReadOnlyOpt,
-            )
-            .src_access_mask(br::AccessFlags::SHADER.write)];
-            let gather_cont = [
-                br::ImageMemoryBarrier::new(
-                    &k_gather_tex_area,
-                    br::ImageLayout::General,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                )
-                .src_access_mask(br::AccessFlags::SHADER.read),
-                br::ImageMemoryBarrier::new(
-                    &k_scatter_tex_area,
-                    br::ImageLayout::General,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-            ];
-            let k_scatter_to_readable = [br::ImageMemoryBarrier::new(
-                &k_scatter_tex_area,
-                br::ImageLayout::General,
-                br::ImageLayout::ShaderReadOnlyOpt,
-            )
-            .src_access_mask(br::AccessFlags::SHADER.write)];
-            let ready_k_gather = [
-                br::ImageMemoryBarrier::new(
-                    &k_scatter_tex_area,
-                    br::ImageLayout::General,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                )
-                .src_access_mask(br::AccessFlags::SHADER.write),
-                br::ImageMemoryBarrier::new(
-                    &k_gather_tex_area,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-            ];
-            let accum_gather = [
-                br::ImageMemoryBarrier::new(
-                    &k_gather_tex_area,
-                    br::ImageLayout::General,
-                    br::ImageLayout::General,
-                )
-                .src_access_mask(br::AccessFlags::SHADER.write)
-                .dest_access_mask(br::AccessFlags::SHADER.read),
-                br::ImageMemoryBarrier::new(
-                    &k_scatter_tex_area,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.read),
-                br::ImageMemoryBarrier::new(
-                    &scatter_tex_area,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-                br::ImageMemoryBarrier::new(
-                    &gather_tex_area,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.write),
-            ];
-            let accum_gather2 = [
-                br::ImageMemoryBarrier::new(
-                    &k_gather_tex_area,
-                    br::ImageLayout::General,
-                    br::ImageLayout::General,
-                )
-                .src_access_mask(br::AccessFlags::SHADER.write)
-                .dest_access_mask(br::AccessFlags::SHADER.read),
-                br::ImageMemoryBarrier::new(
-                    &k_scatter_tex_area,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                    br::ImageLayout::General,
-                )
-                .dest_access_mask(br::AccessFlags::SHADER.read),
-            ];
-            let render_ready = [br::ImageMemoryBarrier::new(
-                &scatter_tex_area,
-                br::ImageLayout::General,
-                br::ImageLayout::ShaderReadOnlyOpt,
-            )
-            .src_access_mask(br::AccessFlags::SHADER.write)];
-
-            rec.pipeline_barrier(
-                br::PipelineStageFlags::TOP_OF_PIPE,
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                false,
-                &[],
-                &[],
-                &ib_init,
-            )
-            .bind_compute_pipeline_pair(&compute_pipelines[0], &inputonly_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[0].into()], &[])
-            .dispatch(
-                Self::TRANSMITTANCE_SIZE.0 / 32,
-                Self::TRANSMITTANCE_SIZE.1 / 32,
-                1,
-            )
-            .pipeline_barrier(
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                false,
-                &[],
-                &[],
-                &transmittance_fin,
-            )
-            .bind_compute_pipeline_pair(&compute_pipelines[1], &texio_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[1].into()], &[])
-            .dispatch(
-                Self::SCATTER_SIZE.0 / 8,
-                Self::SCATTER_SIZE.1 / 8,
-                Self::SCATTER_SIZE.2 / 8,
-            )
-            // gather1
-            .pipeline_barrier(
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                false,
-                &[],
-                &[],
-                &scatter_to_readable,
-            )
-            .bind_compute_pipeline_pair(&compute_pipelines[2], &texio_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[2].into()], &[])
-            .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-            // multiple scatter
-            .pipeline_barrier(
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                false,
-                &[],
-                &[],
-                &gather_to_readable,
-            )
-            .bind_compute_pipeline_pair(&compute_pipelines[3], &texi2o_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[3].into()], &[])
-            .dispatch(
-                Self::SCATTER_SIZE.0 / 8,
-                Self::SCATTER_SIZE.1 / 8,
-                Self::SCATTER_SIZE.2 / 8,
-            )
-            // gather-k
-            .pipeline_barrier(
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                false,
-                &[],
-                &[],
-                &k_scatter_to_readable,
-            )
-            .bind_compute_pipeline_pair(&compute_pipelines[2], &texio_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[4].into()], &[])
-            .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-            // accum
-            .pipeline_barrier(
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                br::PipelineStageFlags::COMPUTE_SHADER,
-                false,
-                &[],
-                &[],
-                &accum_gather,
-            )
-            .bind_compute_pipeline_pair(&compute_pipelines[4], &texio_pure_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[6].into()], &[])
-            .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-            .bind_compute_pipeline_pair(&compute_pipelines[5], &texio_pure_layout)
-            .bind_compute_descriptor_sets(0, &[precompute_sets[5].into()], &[])
-            .dispatch(
-                Self::SCATTER_SIZE.0 / 8,
-                Self::SCATTER_SIZE.1 / 8,
-                Self::SCATTER_SIZE.2 / 8,
+        e.submit_commands(|mut rec| {
+            let transmittance_tex_area = dwt
+                .get(self.transmittance)
+                .underlying()
+                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1);
+            let scatter_tex_area = dwt.get(self.scatter).underlying().subresource_range(
+                br::AspectMask::COLOR,
+                0..1,
+                0..1,
+            );
+            let gather_tex_area = dwt.get(self.gathered).underlying().subresource_range(
+                br::AspectMask::COLOR,
+                0..1,
+                0..1,
+            );
+            let k_scatter_tex_area = dwt.get(self.k_scatter).underlying().subresource_range(
+                br::AspectMask::COLOR,
+                0..1,
+                0..1,
+            );
+            let k_gather_tex_area = dwt.get(self.k_gathered).underlying().subresource_range(
+                br::AspectMask::COLOR,
+                0..1,
+                0..1,
             );
 
-            // multiple scatters after 2nd
-            for _ in 0..2 {
-                // multiple scatter 2
-                rec.pipeline_barrier(
+            let ib_init = [
+                transmittance_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+                scatter_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+                gather_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+                k_scatter_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+                k_gather_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+            ];
+            let transmittance_fin = [transmittance_tex_area
+                .memory_barrier(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
+                .src_access_mask(br::AccessFlags::SHADER.write)];
+            let scatter_to_readable = [scatter_tex_area
+                .clone()
+                .memory_barrier(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
+                .src_access_mask(br::AccessFlags::SHADER.write)];
+            let gather_to_readable = [gather_tex_area
+                .clone()
+                .memory_barrier(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
+                .src_access_mask(br::AccessFlags::SHADER.write)];
+            let gather_cont = [
+                k_gather_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
+                    .src_access_mask(br::AccessFlags::SHADER.read),
+                k_scatter_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::General, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+            ];
+            let k_scatter_to_readable = [k_scatter_tex_area
+                .clone()
+                .memory_barrier(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
+                .src_access_mask(br::AccessFlags::SHADER.write)];
+            let ready_k_gather = [
+                k_scatter_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
+                    .src_access_mask(br::AccessFlags::SHADER.write),
+                k_gather_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::ShaderReadOnlyOpt, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+            ];
+            let accum_gather = [
+                k_gather_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::General, br::ImageLayout::General)
+                    .src_access_mask(br::AccessFlags::SHADER.write)
+                    .dest_access_mask(br::AccessFlags::SHADER.read),
+                k_scatter_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::ShaderReadOnlyOpt, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.read),
+                scatter_tex_area
+                    .clone()
+                    .memory_barrier(br::ImageLayout::ShaderReadOnlyOpt, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+                gather_tex_area
+                    .memory_barrier(br::ImageLayout::ShaderReadOnlyOpt, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.write),
+            ];
+            let accum_gather2 = [
+                k_gather_tex_area
+                    .memory_barrier(br::ImageLayout::General, br::ImageLayout::General)
+                    .src_access_mask(br::AccessFlags::SHADER.write)
+                    .dest_access_mask(br::AccessFlags::SHADER.read),
+                k_scatter_tex_area
+                    .memory_barrier(br::ImageLayout::ShaderReadOnlyOpt, br::ImageLayout::General)
+                    .dest_access_mask(br::AccessFlags::SHADER.read),
+            ];
+            let render_ready = [scatter_tex_area
+                .memory_barrier(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
+                .src_access_mask(br::AccessFlags::SHADER.write)];
+
+            let _ = rec
+                .pipeline_barrier(
+                    br::PipelineStageFlags::TOP_OF_PIPE,
+                    br::PipelineStageFlags::COMPUTE_SHADER,
+                    false,
+                    &[],
+                    &[],
+                    &ib_init,
+                )
+                .bind_compute_pipeline_pair(&compute_pipelines[0], &input_only_layout)
+                .bind_compute_descriptor_sets(0, &[pre_compute_sets[0].into()], &[])
+                .dispatch(
+                    Self::TRANSMITTANCE_SIZE.0 / 32,
+                    Self::TRANSMITTANCE_SIZE.1 / 32,
+                    1,
+                )
+                .pipeline_barrier(
                     br::PipelineStageFlags::COMPUTE_SHADER,
                     br::PipelineStageFlags::COMPUTE_SHADER,
                     false,
                     &[],
                     &[],
-                    &gather_cont,
+                    &transmittance_fin,
                 )
-                .bind_compute_pipeline_pair(&compute_pipelines[3], &texi2o_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[7].into()], &[])
+                .bind_compute_pipeline_pair(&compute_pipelines[1], &tex_io_layout)
+                .bind_compute_descriptor_sets(0, &[pre_compute_sets[1].into()], &[])
+                .dispatch(
+                    Self::SCATTER_SIZE.0 / 8,
+                    Self::SCATTER_SIZE.1 / 8,
+                    Self::SCATTER_SIZE.2 / 8,
+                )
+                // gather1
+                .pipeline_barrier(
+                    br::PipelineStageFlags::COMPUTE_SHADER,
+                    br::PipelineStageFlags::COMPUTE_SHADER,
+                    false,
+                    &[],
+                    &[],
+                    &scatter_to_readable,
+                )
+                .bind_compute_pipeline_pair(&compute_pipelines[2], &tex_io_layout)
+                .bind_compute_descriptor_sets(0, &[pre_compute_sets[2].into()], &[])
+                .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
+                // multiple scatter
+                .pipeline_barrier(
+                    br::PipelineStageFlags::COMPUTE_SHADER,
+                    br::PipelineStageFlags::COMPUTE_SHADER,
+                    false,
+                    &[],
+                    &[],
+                    &gather_to_readable,
+                )
+                .bind_compute_pipeline_pair(&compute_pipelines[3], &tex_i2o_layout)
+                .bind_compute_descriptor_sets(0, &[pre_compute_sets[3].into()], &[])
                 .dispatch(
                     Self::SCATTER_SIZE.0 / 8,
                     Self::SCATTER_SIZE.1 / 8,
@@ -727,10 +680,10 @@ impl SkyboxPrecomputedTextures {
                     false,
                     &[],
                     &[],
-                    &ready_k_gather,
+                    &k_scatter_to_readable,
                 )
-                .bind_compute_pipeline_pair(&compute_pipelines[2], &texio_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[4].into()], &[])
+                .bind_compute_pipeline_pair(&compute_pipelines[2], &tex_io_layout)
+                .bind_compute_descriptor_sets(0, &[pre_compute_sets[4].into()], &[])
                 .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
                 // accum
                 .pipeline_barrier(
@@ -739,20 +692,71 @@ impl SkyboxPrecomputedTextures {
                     false,
                     &[],
                     &[],
-                    &accum_gather2,
+                    &accum_gather,
                 )
-                .bind_compute_pipeline_pair(&compute_pipelines[4], &texio_pure_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[6].into()], &[])
+                .bind_compute_pipeline_pair(&compute_pipelines[4], &tex_io_pure_layout)
+                .bind_compute_descriptor_sets(0, &[pre_compute_sets[6].into()], &[])
                 .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-                .bind_compute_pipeline_pair(&compute_pipelines[5], &texio_pure_layout)
-                .bind_compute_descriptor_sets(0, &[precompute_sets[5].into()], &[])
+                .bind_compute_pipeline_pair(&compute_pipelines[5], &tex_io_pure_layout)
+                .bind_compute_descriptor_sets(0, &[pre_compute_sets[5].into()], &[])
                 .dispatch(
                     Self::SCATTER_SIZE.0 / 8,
                     Self::SCATTER_SIZE.1 / 8,
                     Self::SCATTER_SIZE.2 / 8,
                 );
+
+            // multiple scatters after 2nd
+            for _ in 0..2 {
+                // multiple scatter 2
+                let _ = rec
+                    .pipeline_barrier(
+                        br::PipelineStageFlags::COMPUTE_SHADER,
+                        br::PipelineStageFlags::COMPUTE_SHADER,
+                        false,
+                        &[],
+                        &[],
+                        &gather_cont,
+                    )
+                    .bind_compute_pipeline_pair(&compute_pipelines[3], &tex_i2o_layout)
+                    .bind_compute_descriptor_sets(0, &[pre_compute_sets[7].into()], &[])
+                    .dispatch(
+                        Self::SCATTER_SIZE.0 / 8,
+                        Self::SCATTER_SIZE.1 / 8,
+                        Self::SCATTER_SIZE.2 / 8,
+                    )
+                    // gather-k
+                    .pipeline_barrier(
+                        br::PipelineStageFlags::COMPUTE_SHADER,
+                        br::PipelineStageFlags::COMPUTE_SHADER,
+                        false,
+                        &[],
+                        &[],
+                        &ready_k_gather,
+                    )
+                    .bind_compute_pipeline_pair(&compute_pipelines[2], &tex_io_layout)
+                    .bind_compute_descriptor_sets(0, &[pre_compute_sets[4].into()], &[])
+                    .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
+                    // accum
+                    .pipeline_barrier(
+                        br::PipelineStageFlags::COMPUTE_SHADER,
+                        br::PipelineStageFlags::COMPUTE_SHADER,
+                        false,
+                        &[],
+                        &[],
+                        &accum_gather2,
+                    )
+                    .bind_compute_pipeline_pair(&compute_pipelines[4], &tex_io_pure_layout)
+                    .bind_compute_descriptor_sets(0, &[pre_compute_sets[6].into()], &[])
+                    .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
+                    .bind_compute_pipeline_pair(&compute_pipelines[5], &tex_io_pure_layout)
+                    .bind_compute_descriptor_sets(0, &[pre_compute_sets[5].into()], &[])
+                    .dispatch(
+                        Self::SCATTER_SIZE.0 / 8,
+                        Self::SCATTER_SIZE.1 / 8,
+                        Self::SCATTER_SIZE.2 / 8,
+                    );
             }
-            rec.pipeline_barrier(
+            let _ = rec.pipeline_barrier(
                 br::PipelineStageFlags::COMPUTE_SHADER,
                 br::PipelineStageFlags::FRAGMENT_SHADER,
                 false,
@@ -760,74 +764,93 @@ impl SkyboxPrecomputedTextures {
                 &[],
                 &render_ready,
             );
+
+            rec
         })
         .expect("Dispatch Precomputation failed");
     }
 }
 
 pub struct Descriptors {
-    _static_sampler: br::Sampler,
-    descriptors: ImmutableDescriptorSets,
+    _static_sampler: br::SamplerObject<peridot::DeviceObject>,
+    descriptors: ImmutableDescriptorSets<peridot::DeviceObject>,
 }
 impl Descriptors {
     pub fn new(
         g: &peridot::Graphics,
-        dwt: &peridot::DeviceWorkingTextureStore,
+        dwt: &peridot::DeviceWorkingTextureStore<
+            peridot::Image<
+                br::ImageObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
         precomputes: &SkyboxPrecomputedTextures,
-        buf: &peridot::FixedMemory,
+        buf: &peridot::FixedMemory<
+            peridot::DeviceObject,
+            peridot::Buffer<
+                br::BufferObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
         buf_offsets: &FixedBufferOffsets,
     ) -> Self {
-        let linear_sampler = br::SamplerBuilder::default()
+        let linear_sampler = br::SamplerBuilder::new()
             .addressing(
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
             )
-            .create(g)
+            .create(g.device().clone())
             .expect("Failed to create linear sampler");
         let mut dub = peridot::DescriptorSetUpdateBatch::new();
         let descriptors = ImmutableDescriptorSets::new(
-            g,
+            g.device().clone(),
             vec![
                 vec![
                     (
                         br::ShaderStage::FRAGMENT.vertex(),
-                        br::DescriptorUpdateInfo::UniformBuffer(vec![(
-                            buf.buffer.0.native_ptr(),
-                            buf_offsets.uniform_range.clone(),
+                        br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
+                            &buf.buffer.object,
+                            buf_offsets.uniform_range.start as _
+                                ..buf_offsets.uniform_range.end as _,
                         )]),
                     ),
                     (
                         br::ShaderStage::FRAGMENT,
-                        br::DescriptorUpdateInfo::UniformBuffer(vec![(
-                            buf.buffer.0.native_ptr(),
-                            buf_offsets.sun_light_uniform_range.clone(),
+                        br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
+                            &buf.buffer.object,
+                            buf_offsets.sun_light_uniform_range.start as _
+                                ..buf_offsets.sun_light_uniform_range.end as _,
                         )]),
                     ),
                 ],
                 vec![
                     (
                         br::ShaderStage::FRAGMENT,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(precomputes.scatter).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )]),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(precomputes.scatter).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                     (
                         br::ShaderStage::FRAGMENT,
-                        br::DescriptorUpdateInfo::CombinedImageSampler(vec![(
-                            Some(linear_sampler.native_ptr()),
-                            dwt.get(precomputes.transmittance).native_ptr(),
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )]),
+                        br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageRef::new(
+                                dwt.get(precomputes.transmittance).underlying_view(),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(&linear_sampler),
+                        ]),
                     ),
                 ],
             ],
             &mut dub,
         )
         .expect("Failed to alloc descriptor sets");
-        dub.submit(g);
+        dub.submit(g.device());
 
         Descriptors {
             _static_sampler: linear_sampler,
@@ -835,24 +858,33 @@ impl Descriptors {
         }
     }
 
-    pub fn camera_input_layout(&self) -> &br::DescriptorSetLayout {
+    pub fn camera_input_layout(
+        &self,
+    ) -> &impl br::DescriptorSetLayout<ConcreteDevice = peridot::DeviceObject> {
         &self.descriptors.layouts_for_set[0]
     }
-    pub fn skybox_renderer_input_layout(&self) -> &br::DescriptorSetLayout {
+
+    pub fn skybox_renderer_input_layout(
+        &self,
+    ) -> &impl br::DescriptorSetLayout<ConcreteDevice = peridot::DeviceObject> {
         &self.descriptors.layouts_for_set[1]
     }
 
     pub fn camera_uniform(&self) -> br::DescriptorSet {
         self.descriptors[0]
     }
+
     pub fn skybox_precomputed_textures(&self) -> br::DescriptorSet {
         self.descriptors[1]
     }
 }
 
 pub struct SkyboxRenderer {
-    main_render_shader: PvpShaderModules<'static>,
-    pipeline: peridot::LayoutedPipeline,
+    main_render_shader: PvpShaderModules<'static, peridot::DeviceObject>,
+    pipeline: peridot::LayoutedPipeline<
+        br::PipelineObject<peridot::DeviceObject>,
+        br::PipelineLayoutObject<peridot::DeviceObject>,
+    >,
 }
 impl SkyboxRenderer {
     fn new<NL: NativeLinker>(
@@ -860,60 +892,61 @@ impl SkyboxRenderer {
         drt: &DetailedRenderTargets,
         descriptors: &Descriptors,
     ) -> Self {
-        let layout: Rc<_> = br::PipelineLayout::new(
-            e.graphics(),
-            &[
+        let layout = br::PipelineLayoutBuilder::new(
+            vec![
                 descriptors.camera_input_layout(),
                 descriptors.skybox_renderer_input_layout(),
             ],
-            &[],
+            vec![],
         )
-        .expect("Faield to create SkyboxRender pipeline")
-        .into();
+        .create(e.graphics().device().clone())
+        .expect("Failed to create SkyboxRender pipeline");
         let main_render_shader = PvpShaderModules::new(
-            e.graphics(),
+            e.graphics().device(),
             e.load("shaders.skybox")
                 .expect("Failed to load main shader"),
         )
         .expect("Instantiating shader failed");
 
-        let bb0 = e.backbuffer(0).expect("no backbuffers?");
-        let backbuffer_size = bb0.size();
-        let full_scissors = [br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D { x: 0, y: 0 },
-            extent: br::vk::VkExtent2D {
-                width: backbuffer_size.width,
-                height: backbuffer_size.height,
-            },
-        }];
-        let full_viewports = [br::vk::VkViewport::from_rect_with_depth_range(
-            &full_scissors[0],
-            0.0..1.0,
-        )];
+        let bb0 = e.back_buffer(0).expect("no backbuffers?");
+        let full_scissors = [bb0.image().size().wh().into_rect(br::vk::VkOffset2D::ZERO)];
+        let full_viewports = [full_scissors[0].make_viewport(0.0..1.0)];
 
         let main_vps =
             main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
         let mp = br::MultisampleState::new();
-        let pipeline = br::GraphicsPipelineBuilder::new(&layout, (&drt.rp, 0), main_vps)
-            .viewport_scissors(
-                br::DynamicArrayState::Static(&full_viewports),
-                br::DynamicArrayState::Static(&full_scissors),
-            )
-            .multisample_state(Some(mp))
-            .depth_test_settings(Some(br::CompareOp::LessOrEqual), false)
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-            .create(e.graphics(), None)
-            .expect("Creating GraphicsPipeline failed");
+        let pipeline = br::GraphicsPipelineBuilder::<
+            _,
+            br::PipelineObject<peridot::DeviceObject>,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        >::new(&layout, (&drt.rp, 0), main_vps)
+        .viewport_scissors(
+            br::DynamicArrayState::Static(&full_viewports),
+            br::DynamicArrayState::Static(&full_scissors),
+        )
+        .multisample_state(Some(mp))
+        .depth_test_settings(Some(br::CompareOp::LessOrEqual), false)
+        .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+        .create(
+            e.graphics().device().clone(),
+            None::<&'_ br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Creating GraphicsPipeline failed");
 
-        SkyboxRenderer {
+        Self {
             main_render_shader,
-            pipeline: peridot::LayoutedPipeline::combine(pipeline, &layout),
+            pipeline: peridot::LayoutedPipeline::combine(pipeline, layout),
         }
     }
 
     fn recreate_pipeline<NL: NativeLinker>(&mut self, e: &Engine<NL>, drt: &DetailedRenderTargets) {
-        let bb0 = e.backbuffer(0).expect("no backbuffers?");
-        let backbuffer_size = bb0.size();
+        let bb0 = e.back_buffer(0).expect("no backbuffers?");
+        let backbuffer_size = bb0.image().size();
         let full_scissors = [br::vk::VkRect2D {
             offset: br::vk::VkOffset2D { x: 0, y: 0 },
             extent: br::vk::VkExtent2D {
@@ -930,25 +963,41 @@ impl SkyboxRenderer {
             .main_render_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
         let mp = br::MultisampleState::new();
-        let pipeline =
-            br::GraphicsPipelineBuilder::new(self.pipeline.layout(), (&drt.rp, 0), main_vps)
-                .viewport_scissors(
-                    br::DynamicArrayState::Static(&full_viewports),
-                    br::DynamicArrayState::Static(&full_scissors),
-                )
-                .multisample_state(Some(mp))
-                .depth_test_settings(Some(br::CompareOp::LessOrEqual), false)
-                .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-                .create(e.graphics(), None)
-                .expect("Creating GraphicsPipeline failed");
+        let pipeline = br::GraphicsPipelineBuilder::<
+            _,
+            br::PipelineObject<peridot::DeviceObject>,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        >::new(self.pipeline.layout(), (&drt.rp, 0), main_vps)
+        .viewport_scissors(
+            br::DynamicArrayState::Static(&full_viewports),
+            br::DynamicArrayState::Static(&full_scissors),
+        )
+        .multisample_state(Some(mp))
+        .depth_test_settings(Some(br::CompareOp::LessOrEqual), false)
+        .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+        .create(
+            e.graphics().device().clone(),
+            None::<&'_ br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Creating GraphicsPipeline failed");
 
-        self.pipeline = peridot::LayoutedPipeline::combine(pipeline, self.pipeline.layout());
+        unsafe {
+            self.pipeline.replace_pipeline(pipeline);
+        }
     }
 }
 
 pub struct GridRenderer {
-    main_render_shader: PvpShaderModules<'static>,
-    pipeline: peridot::LayoutedPipeline,
+    main_render_shader: PvpShaderModules<'static, peridot::DeviceObject>,
+    pipeline: peridot::LayoutedPipeline<
+        br::PipelineObject<peridot::DeviceObject>,
+        br::PipelineLayoutObject<peridot::DeviceObject>,
+    >,
 }
 impl GridRenderer {
     pub fn new<NL: NativeLinker>(
@@ -956,54 +1005,55 @@ impl GridRenderer {
         drt: &DetailedRenderTargets,
         descriptors: &Descriptors,
     ) -> Self {
-        let pl: Rc<_> =
-            br::PipelineLayout::new(e.graphics(), &[descriptors.camera_input_layout()], &[])
-                .expect("Failed to create GridRender pipeline layout")
-                .into();
+        let pl = br::PipelineLayoutBuilder::new(vec![descriptors.camera_input_layout()], vec![])
+            .create(e.graphics().device().clone())
+            .expect("Failed to create GridRender pipeline layout");
 
         let main_render_shader = PvpShaderModules::new(
-            e.graphics(),
+            e.graphics().device(),
             e.load("shaders.colored")
                 .expect("Failed to load colored shader"),
         )
         .expect("Instantiating grid render shader failed");
 
-        let bb0 = e.backbuffer(0).expect("no backbuffers?");
-        let backbuffer_size = bb0.size();
-        let full_scissors = [br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D { x: 0, y: 0 },
-            extent: br::vk::VkExtent2D {
-                width: backbuffer_size.width,
-                height: backbuffer_size.height,
-            },
-        }];
-        let full_viewports = [br::vk::VkViewport::from_rect_with_depth_range(
-            &full_scissors[0],
-            0.0..1.0,
-        )];
+        let bb0 = e.back_buffer(0).expect("no backbuffers?");
+        let full_scissors = [bb0.image().size().wh().into_rect(br::vk::VkOffset2D::ZERO)];
+        let full_viewports = [full_scissors[0].make_viewport(0.0..1.0)];
 
         let main_vps = main_render_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
         let mp = br::MultisampleState::new();
-        let pipeline = br::GraphicsPipelineBuilder::new(&pl, (&drt.rp, 0), main_vps)
-            .viewport_scissors(
-                br::DynamicArrayState::Static(&full_viewports),
-                br::DynamicArrayState::Static(&full_scissors),
-            )
-            .multisample_state(Some(mp))
-            .depth_test_settings(Some(br::CompareOp::Less), true)
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-            .create(e.graphics(), None)
-            .expect("Creating GraphicsPipeline failed");
+        let pipeline = br::GraphicsPipelineBuilder::<
+            _,
+            br::PipelineObject<peridot::DeviceObject>,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        >::new(&pl, (&drt.rp, 0), main_vps)
+        .viewport_scissors(
+            br::DynamicArrayState::Static(&full_viewports),
+            br::DynamicArrayState::Static(&full_scissors),
+        )
+        .multisample_state(Some(mp))
+        .depth_test_settings(Some(br::CompareOp::Less), true)
+        .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+        .create(
+            e.graphics().device().clone(),
+            None::<&'_ br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Creating GraphicsPipeline failed");
 
-        GridRenderer {
+        Self {
             main_render_shader,
-            pipeline: peridot::LayoutedPipeline::combine(pipeline, &pl),
+            pipeline: peridot::LayoutedPipeline::combine(pipeline, pl),
         }
     }
 
     fn recreate_pipeline<NL: NativeLinker>(&mut self, e: &Engine<NL>, drt: &DetailedRenderTargets) {
-        let bb0 = e.backbuffer(0).expect("no backbuffers?");
-        let backbuffer_size = bb0.size();
+        let bb0 = e.back_buffer(0).expect("no backbuffers?");
+        let backbuffer_size = bb0.image().size();
         let full_scissors = [br::vk::VkRect2D {
             offset: br::vk::VkOffset2D { x: 0, y: 0 },
             extent: br::vk::VkExtent2D {
@@ -1020,78 +1070,100 @@ impl GridRenderer {
             .main_render_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
         let mp = br::MultisampleState::new();
-        let pipeline =
-            br::GraphicsPipelineBuilder::new(self.pipeline.layout(), (&drt.rp, 0), main_vps)
-                .viewport_scissors(
-                    br::DynamicArrayState::Static(&full_viewports),
-                    br::DynamicArrayState::Static(&full_scissors),
-                )
-                .multisample_state(Some(mp))
-                .depth_test_settings(Some(br::CompareOp::Less), true)
-                .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-                .create(e.graphics(), None)
-                .expect("Creating GraphicsPipeline failed");
+        let pipeline = br::GraphicsPipelineBuilder::<
+            _,
+            br::PipelineObject<peridot::DeviceObject>,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        >::new(self.pipeline.layout(), (&drt.rp, 0), main_vps)
+        .viewport_scissors(
+            br::DynamicArrayState::Static(&full_viewports),
+            br::DynamicArrayState::Static(&full_scissors),
+        )
+        .multisample_state(Some(mp))
+        .depth_test_settings(Some(br::CompareOp::Less), true)
+        .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+        .create(
+            e.graphics().device().clone(),
+            None::<&'_ br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Creating GraphicsPipeline failed");
 
-        self.pipeline = peridot::LayoutedPipeline::combine(pipeline, self.pipeline.layout());
+        unsafe {
+            self.pipeline.replace_pipeline(pipeline);
+        }
     }
 }
 
 pub struct DetailedRenderTargets {
-    depth_buffer: peridot::Image,
-    depth_buffer_view: br::ImageView,
-    rp: br::RenderPass,
-    fb: Vec<br::Framebuffer>,
+    depth_buffer: SharedRef<
+        br::ImageViewObject<
+            peridot::Image<
+                br::ImageObject<peridot::DeviceObject>,
+                br::DeviceMemoryObject<peridot::DeviceObject>,
+            >,
+        >,
+    >,
+    rp: br::RenderPassObject<peridot::DeviceObject>,
+    fb: Vec<br::FramebufferObject<peridot::DeviceObject>>,
 }
 impl DetailedRenderTargets {
     pub fn new<NL: NativeLinker>(e: &Engine<NL>) -> Self {
         let depth_buffer = br::ImageDesc::new(
-            AsRef::<br::vk::VkExtent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()),
+            e.back_buffer(0)
+                .expect("no backbuffers?")
+                .image()
+                .size()
+                .wh(),
             br::vk::VK_FORMAT_D32_SFLOAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
         )
-        .create(e.graphics())
+        .create(e.graphics().device().clone())
         .expect("Failed to create depth buffer");
-        let mut mb = peridot::MemoryBadget::new(e.graphics());
-        mb.add(depth_buffer);
+        let mut mb =
+            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
+        mb.add(peridot::MemoryBadgetEntry::Image(depth_buffer));
         let depth_buffer = mb
             .alloc()
             .expect("Failed to alloc depth buffer memory")
             .pop()
             .expect("no resources")
             .unwrap_image();
-        let depth_buffer_view = depth_buffer
-            .create_view(
-                None,
-                None,
-                &Default::default(),
-                &br::ImageSubresourceRange::depth_stencil(0..1, 0..1),
-            )
-            .expect("Failed to create depth buffer view");
+        let depth_buffer = SharedRef::new(
+            depth_buffer
+                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create depth buffer view"),
+        );
 
         let rp = peridot::RenderPassTemplates::single_render_with_depth(
-            e.backbuffer_format(),
+            e.back_buffer_format(),
             br::vk::VK_FORMAT_D32_SFLOAT_S8_UINT,
-            e.requesting_backbuffer_layout().0,
+            e.requesting_back_buffer_layout().0,
             false,
         )
-        .create(e.graphics())
+        .create(e.graphics().device().clone())
         .expect("Creating RenderPass failed");
-        let bb0 = e.backbuffer(0).expect("no backbuffers?");
-        let backbuffer_size = bb0.size();
         let fb = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|bb| {
-                br::Framebuffer::new(&rp, &[&bb, &depth_buffer_view], backbuffer_size.as_ref(), 1)
+                br::FramebufferBuilder::new_with_attachment(&rp, bb.clone())
+                    .with_attachment(depth_buffer.clone())
+                    .create()
                     .expect("Creating Framebuffer failed")
             })
             .collect();
 
-        DetailedRenderTargets {
+        Self {
             rp,
             fb,
             depth_buffer,
-            depth_buffer_view,
         }
     }
 
@@ -1107,53 +1179,59 @@ impl DetailedRenderTargets {
             peridot::math::Vector2::<u32>(size.0 as _, size.1 as _).into();
 
         let depth_buffer = br::ImageDesc::new(
-            AsRef::<br::vk::VkExtent2D>::as_ref(e.backbuffer(0).expect("no backbuffers?").size()),
+            su32,
             br::vk::VK_FORMAT_D32_SFLOAT_S8_UINT,
             br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
             br::ImageLayout::Undefined,
         )
-        .create(e.graphics())
+        .create(e.graphics().device().clone())
         .expect("Failed to create depth buffer");
-        let mut mb = peridot::MemoryBadget::new(e.graphics());
-        mb.add(depth_buffer);
-        self.depth_buffer = mb
+        let mut mb =
+            peridot::MemoryBadget::<br::BufferObject<peridot::DeviceObject>, _>::new(e.graphics());
+        mb.add(peridot::MemoryBadgetEntry::Image(depth_buffer));
+        let depth_buffer = mb
             .alloc()
             .expect("Failed to alloc depth buffer memory")
             .pop()
             .expect("no resources")
             .unwrap_image();
-        self.depth_buffer_view = self
-            .depth_buffer
-            .create_view(
-                None,
-                None,
-                &Default::default(),
-                &br::ImageSubresourceRange::depth_stencil(0..1, 0..1),
-            )
-            .expect("Failed to create depth buffer view");
+        self.depth_buffer = SharedRef::new(
+            depth_buffer
+                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create depth buffer view"),
+        );
 
         self.fb = e
-            .iter_backbuffers()
+            .iter_back_buffers()
             .map(|bb| {
-                br::Framebuffer::new(&self.rp, &[&bb, &self.depth_buffer_view], &su32, 1)
+                br::FramebufferBuilder::new_with_attachment(&self.rp, bb.clone())
+                    .with_attachment(self.depth_buffer.clone())
+                    .create()
                     .expect("Recreating Framebuffer failed")
             })
             .collect();
     }
 
-    pub fn postinit_commands(&self, r: &mut br::CmdRecord) {
-        r.pipeline_barrier(
+    pub fn postinit_commands(
+        &self,
+        r: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
+    ) {
+        let _ = r.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
             true,
             &[],
             &[],
-            &[br::ImageMemoryBarrier::new_raw(
-                &self.depth_buffer,
-                &br::ImageSubresourceRange::depth_stencil(0..1, 0..1),
-                br::ImageLayout::Undefined,
-                br::ImageLayout::DepthStencilAttachmentOpt,
-            )],
+            &[self
+                .depth_buffer
+                .image()
+                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
+                .memory_barrier(
+                    br::ImageLayout::Undefined,
+                    br::ImageLayout::DepthStencilAttachmentOpt,
+                )],
         );
     }
 }
@@ -1175,7 +1253,10 @@ pub struct FixedBufferInitializer {
     grid_vertices_offset: u64,
 }
 impl peridot::FixedBufferInitializer for FixedBufferInitializer {
-    fn stage_data(&mut self, m: &br::MappedMemoryRange) {
+    fn stage_data(
+        &mut self,
+        m: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
+    ) {
         unsafe {
             m.slice_mut(self.fill_plane_offset as _, self.fill_plane.vertices.len())
                 .clone_from_slice(&self.fill_plane.vertices);
@@ -1187,15 +1268,20 @@ impl peridot::FixedBufferInitializer for FixedBufferInitializer {
         }
     }
 
-    fn buffer_graphics_ready(
+    fn buffer_graphics_ready<Device: br::Device + 'static>(
         &self,
         tfb: &mut peridot::TransferBatch,
-        buf: &peridot::Buffer,
+        buf: &SharedRef<
+            peridot::Buffer<
+                impl br::Buffer<ConcreteDevice = Device> + 'static,
+                impl br::DeviceMemory<ConcreteDevice = Device> + 'static,
+            >,
+        >,
         range: std::ops::Range<u64>,
     ) {
         tfb.add_buffer_graphics_ready(
             br::PipelineStageFlags::VERTEX_INPUT.fragment_shader(),
-            buf,
+            buf.clone(),
             range.clone(),
             br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::UNIFORM_READ,
         );
@@ -1203,15 +1289,15 @@ impl peridot::FixedBufferInitializer for FixedBufferInitializer {
 }
 
 pub struct RenderCommands {
-    main_commands: peridot::CommandBundle,
+    main_commands: peridot::CommandBundle<peridot::DeviceObject>,
 }
 impl RenderCommands {
     fn new<NL: NativeLinker>(e: &Engine<NL>) -> Self {
-        RenderCommands {
+        Self {
             main_commands: peridot::CommandBundle::new(
                 e.graphics(),
                 peridot::CBSubmissionType::Graphics,
-                e.backbuffer_count(),
+                e.back_buffer_count(),
             )
             .expect("Failed to create Main CommandBundle"),
         }
@@ -1224,44 +1310,56 @@ impl RenderCommands {
         grid_renderer: &GridRenderer,
         descriptors: &Descriptors,
         drt: &DetailedRenderTargets,
-        buf: &peridot::FixedMemory,
+        buf: &peridot::FixedMemory<impl br::Device, impl br::Buffer>,
         buf_offsets: &FixedBufferOffsets,
     ) {
-        let render_area = br::vk::VkRect2D {
-            offset: br::vk::VkOffset2D { x: 0, y: 0 },
-            extent: AsRef::<br::vk::VkExtent2D>::as_ref(
-                e.backbuffer(0).expect("no backbuffers?").size(),
-            )
-            .clone(),
-        };
-
         let clear_values = [
             br::ClearValue::color([0.0; 4]),
             br::ClearValue::depth_stencil(1.0, 0),
         ];
+
         for (b, fb) in self.main_commands.iter_mut().zip(&drt.fb) {
-            unsafe { b.begin().expect("Failed to begin record main command") }
-                .begin_render_pass(&drt.rp, fb, render_area.clone(), &clear_values, true)
-                .bind_graphics_pipeline_pair(
-                    grid_renderer.pipeline.pipeline(),
-                    grid_renderer.pipeline.layout(),
-                )
-                .bind_graphics_descriptor_sets(0, &[descriptors.camera_uniform().into()], &[])
-                .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.grid_vertices as _)])
-                .draw(buf_offsets.grid_vertex_count, 1, 0, 0)
-                .bind_graphics_pipeline_pair(
-                    skybox_renderer.pipeline.pipeline(),
-                    skybox_renderer.pipeline.layout(),
-                )
-                // reset first common descriptor for moltenvk bug
-                .bind_graphics_descriptor_sets(
-                    0,
-                    &[descriptors.camera_uniform().into(), descriptors.skybox_precomputed_textures().into()],
-                    &[],
-                )
-                .bind_vertex_buffers(0, &[(&buf.buffer.0, buf_offsets.fill_plane as _)])
-                .draw(4, 1, 0, 0)
-                .end_render_pass();
+            let render_pass = BeginRenderPass::for_entire_framebuffer(&drt.rp, fb)
+                .with_clear_values(clear_values.into());
+
+            let grid = StandardMesh {
+                vertex_buffers: vec![RangedBuffer::from_offset_length(
+                    &buf.buffer.object,
+                    buf_offsets.grid_vertices as _,
+                    1,
+                )],
+                vertex_count: buf_offsets.grid_vertex_count,
+            };
+            let fill = StandardMesh {
+                vertex_buffers: vec![RangedBuffer::from_offset_length(
+                    &buf.buffer.object,
+                    buf_offsets.fill_plane as _,
+                    1,
+                )],
+                vertex_count: 4,
+            };
+
+            let draw_grid = grid.draw(1).after_of((
+                &grid_renderer.pipeline,
+                DescriptorSets(vec![descriptors.camera_uniform().into()]).into_bind_graphics(),
+            ));
+            let draw_skybox = fill.draw(1).after_of((
+                &skybox_renderer.pipeline,
+                DescriptorSets(vec![
+                    descriptors.camera_uniform().into(),
+                    descriptors.skybox_precomputed_textures().into(),
+                ])
+                .into_bind_graphics(),
+            ));
+
+            (draw_grid, draw_skybox)
+                .between(render_pass, EndRenderPass)
+                .execute_and_finish(unsafe {
+                    b.begin()
+                        .expect("Failed to begin record main command")
+                        .as_dyn_ref()
+                })
+                .expect("Failed to finish main commands");
         }
     }
     fn clear_commands(&mut self) {
@@ -1346,10 +1444,10 @@ impl MouseControl {
 
                 main_camera.rotation = peridot::math::Quaternion::new(
                     (self.view_zenith_angle - 90.0).to_radians(),
-                    peridot::math::Vector3::RIGHT,
+                    peridot::math::Vector3::right(),
                 ) * peridot::math::Quaternion::new(
                     self.azimuth_angle.to_radians(),
-                    peridot::math::Vector3::UP,
+                    peridot::math::Vector3::up(),
                 );
             }
             MouseButtonControlState::SunDirection => {
@@ -1359,12 +1457,12 @@ impl MouseControl {
                 let d1 = peridot::math::Matrix4::from(
                     peridot::math::Quaternion::new(
                         (self.sunlight_zenith_angle - 90.0).to_radians(),
-                        peridot::math::Vector3::RIGHT,
+                        peridot::math::Vector3::right(),
                     ) * peridot::math::Quaternion::new(
                         self.sunlight_azimuth_angle.to_radians(),
-                        peridot::math::Vector3::UP,
+                        peridot::math::Vector3::up(),
                     ),
-                ) * peridot::math::Vector3::FORWARD;
+                ) * peridot::math::Vector3::forward();
                 sun_light_data.incident_light_dir = peridot::math::Vector4(d1.0, d1.1, d1.2, 0.0);
             }
         }
@@ -1377,21 +1475,28 @@ pub struct Game<NL> {
     _skybox_precomputed: SkyboxPrecomputedTextures,
     skybox: SkyboxRenderer,
     grid: GridRenderer,
-    buf: peridot::FixedMemory,
+    buf: peridot::FixedMemory<
+        peridot::DeviceObject,
+        peridot::Buffer<
+            br::BufferObject<peridot::DeviceObject>,
+            br::DeviceMemoryObject<peridot::DeviceObject>,
+        >,
+    >,
     buf_offsets: FixedBufferOffsets,
-    _precompute_textures: peridot::DeviceWorkingTextureStore,
+    _precompute_textures: peridot::DeviceWorkingTextureStore<
+        peridot::Image<
+            br::ImageObject<peridot::DeviceObject>,
+            br::DeviceMemoryObject<peridot::DeviceObject>,
+        >,
+    >,
     cmds: RenderCommands,
-    update_cmds: peridot::CommandBundle,
+    update_cmds: peridot::CommandBundle<peridot::DeviceObject>,
     total_time: f32,
     main_camera: peridot::math::Camera,
     aspect_wh: f32,
     sun_light_data: SunLightData,
     mouse_control: MouseControl,
     ph: std::marker::PhantomData<*const NL>,
-}
-impl<NL> Game<NL> {
-    pub const NAME: &'static str = "pj-torchlight/procedural-skybox";
-    pub const VERSION: (u32, u32, u32) = (0, 1, 0);
 }
 impl<NL> FeatureRequests for Game<NL> {}
 impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
@@ -1402,9 +1507,9 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         e.input_mut().map(peridot::NativeAnalogInput::MouseX, 1);
 
         let aspect_wh = e
-            .backbuffer(0)
+            .back_buffer(0)
             .map(|b| {
-                let s = b.size();
+                let s = b.image().size();
                 s.width as f32 / s.height as f32
             })
             .expect("no backbuffers?");
@@ -1454,11 +1559,11 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             grid_vertices_offset,
         };
         let mut tfb = peridot::TransferBatch::new();
-        let mut buf = peridot::FixedMemory::new(
+        let buf = peridot::FixedMemory::new(
             e.graphics(),
             bp,
             mbp,
-            peridot::TextureInitializationGroup::new(e.graphics()),
+            peridot::TextureInitializationGroup::new(e.graphics().device().clone()),
             &mut fb_data,
             &mut tfb,
         )
@@ -1481,7 +1586,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             incident_light_dir: peridot::math::Vector4(0.0f32, -0.6, 0.8, 0.0).normalize(),
         };
         buf.mut_buffer
-            .0
+            .object
+            .borrow_mut()
             .guard_map(0..mut_buffer_size as u64, |m| unsafe {
                 *m.get_mut(uniform_offset as _) = Uniform {
                     main_view_projection: main_camera.view_projection_matrix(aspect_wh),
@@ -1492,45 +1598,58 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
                 *m.get_mut(sun_light_data_offset as _) = sun_light_data.clone();
             })
             .expect("Staging MutBuffer failed");
-        let mut tfb_update = peridot::TransferBatch::new();
-        let mut_update_range = buf.mut_buffer_placement + uniform_offset
-            ..buf.mut_buffer_placement + uniform_offset + std::mem::size_of::<Uniform>() as u64;
-        tfb_update.add_copying_buffer(
-            buf.mut_buffer.0.with_dev_offset(uniform_offset),
-            buf.buffer
-                .0
-                .with_dev_offset(buf.mut_buffer_placement + uniform_offset),
-            std::mem::size_of::<Uniform>() as _,
-        );
-        tfb_update.add_buffer_graphics_ready(
-            br::PipelineStageFlags::FRAGMENT_SHADER,
-            &buf.buffer.0,
-            mut_update_range,
-            br::AccessFlags::UNIFORM_READ,
-        );
-        tfb_update.add_copying_buffer(
-            buf.mut_buffer.0.with_dev_offset(sun_light_data_offset),
-            buf.buffer
-                .0
-                .with_dev_offset(buf.mut_buffer_placement + sun_light_data_offset),
-            std::mem::size_of::<SunLightData>() as _,
-        );
-        tfb_update.add_buffer_graphics_ready(
-            br::PipelineStageFlags::FRAGMENT_SHADER,
-            &buf.buffer.0,
-            buf.mut_buffer_placement + sun_light_data_offset
-                ..buf.mut_buffer_placement
-                    + sun_light_data_offset
-                    + std::mem::size_of::<SunLightData>() as u64,
-            br::AccessFlags::UNIFORM_READ,
-        );
         let mut update_cb =
             peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, 1)
                 .expect("Alloc CommandBundle failed(copy)");
         {
             let mut r = unsafe { update_cb[0].begin().expect("Begin UpdateCmdRec") };
-            tfb_update.sink_transfer_commands(&mut r);
-            tfb_update.sink_graphics_ready_commands(&mut r);
+
+            let uniform_buffer = RangedBuffer::for_type::<Uniform>(
+                &buf.buffer.object,
+                buf.mut_buffer_placement + uniform_offset,
+            );
+            let uniform_buffer_stg =
+                RangedBuffer::for_type::<Uniform>(buf.mut_buffer.object.borrow(), uniform_offset);
+            let sun_light_uniform_buffer = RangedBuffer::for_type::<SunLightData>(
+                &buf.buffer.object,
+                buf.mut_buffer_placement + sun_light_data_offset,
+            );
+            let sun_light_uniform_buffer_stg = RangedBuffer::for_type::<SunLightData>(
+                buf.mut_buffer.object.borrow(),
+                sun_light_data_offset,
+            );
+
+            let [uniform_in_barrier, uniform_out_barrier] = uniform_buffer
+                .usage_barrier3_switching(BufferUsage::FRAGMENT_UNIFORM, BufferUsage::TRANSFER_DST);
+            let [sun_light_in_barrier, sun_light_out_barrier] = sun_light_uniform_buffer
+                .usage_barrier3_switching(BufferUsage::FRAGMENT_UNIFORM, BufferUsage::TRANSFER_DST);
+            let [uniform_stg_in_barrier, uniform_stg_out_barrier] = uniform_buffer_stg
+                .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
+            let [sun_light_stg_in_barrier, sun_light_stg_out_barrier] = sun_light_uniform_buffer
+                .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
+
+            let copies = CopyBuffer::new(&uniform_buffer_stg.0, &uniform_buffer.0)
+                .with_range_for_type::<Uniform>(
+                    uniform_buffer_stg.offset(),
+                    uniform_buffer.offset(),
+                )
+                .with_range_for_type::<SunLightData>(
+                    sun_light_uniform_buffer_stg.offset(),
+                    sun_light_uniform_buffer.offset(),
+                );
+            let in_barriers = PipelineBarrier::new()
+                .with_barriers([uniform_in_barrier, sun_light_in_barrier])
+                .with_barrier(uniform_stg_in_barrier)
+                .with_barrier(sun_light_stg_in_barrier);
+            let out_barriers = PipelineBarrier::new()
+                .with_barriers([uniform_out_barrier, sun_light_out_barrier])
+                .with_barrier(uniform_stg_out_barrier)
+                .with_barrier(sun_light_stg_out_barrier);
+
+            copies
+                .between(in_barriers, out_barriers)
+                .execute_and_finish(r.as_dyn_ref())
+                .expect("Failed to record update commands");
         }
 
         let rt = DetailedRenderTargets::new(e);
@@ -1549,10 +1668,12 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let mut cmds = RenderCommands::new(e);
         cmds.generate_commands(e, &skybox, &grid, &descriptors, &rt, &buf, &buf_offsets);
 
-        e.submit_commands(|r| {
-            tfb.sink_transfer_commands(r);
-            tfb.sink_graphics_ready_commands(r);
-            rt.postinit_commands(r);
+        e.submit_commands(|mut r| {
+            tfb.sink_transfer_commands(&mut r);
+            tfb.sink_graphics_ready_commands(&mut r);
+            rt.postinit_commands(&mut r);
+
+            r
         })
         .expect("Failed to resource memory initialization");
 
@@ -1575,12 +1696,7 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             ph: std::marker::PhantomData,
         }
     }
-    fn update(
-        &mut self,
-        e: &mut Engine<NL>,
-        on_backbuffer_of: u32,
-        dt: std::time::Duration,
-    ) -> (Option<br::SubmissionBatch>, br::SubmissionBatch) {
+    fn update(&mut self, e: &mut Engine<NL>, on_backbuffer_of: u32, dt: std::time::Duration) {
         self.mouse_control
             .update(e, &mut self.main_camera, &mut self.sun_light_data);
 
@@ -1591,7 +1707,8 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
         let aspect_wh = self.aspect_wh;
         self.buf
             .mut_buffer
-            .0
+            .object
+            .borrow_mut()
             .guard_map(0..self.buf_offsets.mut_buffer_size, |m| unsafe {
                 *m.get_mut(buf_offsets.mut_uniform_offset as _) = Uniform {
                     main_view_projection: main_camera.view_projection_matrix(aspect_wh),
@@ -1603,26 +1720,23 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             })
             .expect("Staging MutBuffer failed");
 
-        (
-            br::SubmissionBatch {
-                command_buffers: std::borrow::Cow::Borrowed(&self.update_cmds),
-                ..Default::default()
-            }
-            .into(),
-            br::SubmissionBatch {
-                command_buffers: std::borrow::Cow::Borrowed(
-                    &self.cmds.main_commands
-                        [on_backbuffer_of as usize..(on_backbuffer_of + 1) as usize],
-                ),
-                ..Default::default()
-            },
+        e.do_render(
+            on_backbuffer_of,
+            br::EmptySubmissionBatch
+                .with_command_buffers(&self.update_cmds)
+                .into(),
+            br::EmptySubmissionBatch.with_command_buffers(
+                &self.cmds.main_commands[on_backbuffer_of as usize..=on_backbuffer_of as usize],
+            ),
         )
+        .expect("Failed to submit works");
     }
 
-    fn discard_backbuffer_resources(&mut self) {
+    fn discard_back_buffer_resources(&mut self) {
         self.cmds.clear_commands();
         self.rt.discard_framebuffers();
     }
+
     fn on_resize(&mut self, e: &mut Engine<NL>, new_size: peridot::math::Vector2<usize>) {
         self.aspect_wh = new_size.0 as f32 / new_size.1 as f32;
 
@@ -1639,8 +1753,10 @@ impl<NL: NativeLinker> EngineEvents<NL> for Game<NL> {
             &self.buf_offsets,
         );
 
-        e.submit_commands(|r| {
-            self.rt.postinit_commands(r);
+        e.submit_commands(|mut r| {
+            self.rt.postinit_commands(&mut r);
+
+            r
         })
         .expect("Failed to execute resize commands");
     }

@@ -1,7 +1,7 @@
 #!/bin/bash -xe
 
 SCRIPT_PATH=$(dirname $0 | xargs realpath)
-TOOL_PATH="$SCRIPT_PATH/../../../target/release"
+TOOL_PATH="$SCRIPT_PATH/../../../tools/target/release"
 
 cd $SCRIPT_PATH/assets
 for code in shaders/*.csh; do

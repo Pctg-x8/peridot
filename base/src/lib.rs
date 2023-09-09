@@ -556,14 +556,12 @@ impl RenderPassTemplates {
         outer_requesting_layout: br::ImageLayout,
         read_depth_after: bool,
     ) -> br::RenderPassBuilder {
-        let mut b = br::RenderPassBuilder::new();
         let adesc = br::AttachmentDescription::new(
             format,
             outer_requesting_layout,
             outer_requesting_layout,
         )
-        .load_op(br::LoadOp::Clear)
-        .store_op(br::StoreOp::Store);
+        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store);
         let depth_layout = if read_depth_after {
             br::ImageLayout::DepthStencilReadOnlyOpt
         } else {
@@ -575,36 +573,35 @@ impl RenderPassTemplates {
             br::StoreOp::DontCare
         };
         let ddesc = br::AttachmentDescription::new(depth_format, depth_layout, depth_layout)
-            .load_op(br::LoadOp::Clear)
-            .store_op(store_depth);
-        b.add_attachments(vec![adesc, ddesc]);
-        b.add_subpass(
-            br::SubpassDescription::new()
-                .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
-                .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt),
-        );
-        b.add_dependency(br::vk::VkSubpassDependency {
-            srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
-            dstSubpass: 0,
-            dstAccessMask: if read_depth_after {
-                br::AccessFlags::COLOR_ATTACHMENT.write
-                    | br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write
-            } else {
-                br::AccessFlags::COLOR_ATTACHMENT.write
-            },
-            dstStageMask: if read_depth_after {
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    .early_fragment_tests()
-                    .0
-            } else {
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0
-            },
-            srcStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
-            srcAccessMask: 0,
-            dependencyFlags: 0
-        });
+            .color_memory_op(br::LoadOp::Clear, store_depth);
 
-        b
+        br::RenderPassBuilder::new()
+            .add_attachments([adesc, ddesc])
+            .add_subpass(
+                br::SubpassDescription::new()
+                    .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
+                    .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt),
+            )
+            .add_dependency(br::vk::VkSubpassDependency {
+                srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
+                dstSubpass: 0,
+                dstAccessMask: if read_depth_after {
+                    br::AccessFlags::COLOR_ATTACHMENT.write
+                        | br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write
+                } else {
+                    br::AccessFlags::COLOR_ATTACHMENT.write
+                },
+                dstStageMask: if read_depth_after {
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        .early_fragment_tests()
+                        .0
+                } else {
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0
+                },
+                srcStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
+                srcAccessMask: 0,
+                dependencyFlags: 0,
+            })
     }
 }
 
@@ -631,5 +628,10 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         rec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
     ) {
         let _ = rec.bind_graphics_pipeline_pair(&self.0, &self.1);
+    }
+
+    /// new pipeline must be bound same layout as before
+    pub unsafe fn replace_pipeline(&mut self, new_pipeline: Pipeline) -> Pipeline {
+        core::mem::replace(&mut self.0, new_pipeline)
     }
 }
