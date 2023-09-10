@@ -9,6 +9,7 @@ edition = "2021"
 bedrock = { workspace = true, features = [
     "VK_KHR_dedicated_allocation",
     "VK_KHR_get_memory_requirements2",
+    "VK_KHR_bind_memory2",
 ] }
 num-integer = "0.1.45"
 peridot = { path = "../../base" }

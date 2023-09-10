@@ -5,7 +5,6 @@ use log::*;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3,
 };
-use peridot::mthelper::{DynamicMutabilityProvider, SharedRef};
 use peridot::{
     audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, LayoutedPipeline,
     SubpassDependencyTemplates,
@@ -85,16 +84,23 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         };
         cam.look_at(Vector3(0.0, 0.0, 0.0));
 
-        let vertex_buffer: RangedBuffer<_> = memory_manager
-            .allocate_device_local_buffer(
+        let [vertex_buffer, uniform_buffer] = memory_manager
+            .allocate_device_local_buffer_array(
                 e.graphics(),
-                br::BufferDesc::new(
-                    plane_mesh.byte_length(),
-                    br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
-                ),
+                [
+                    br::BufferDesc::new(
+                        plane_mesh.byte_length(),
+                        br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
+                    ),
+                    br::BufferDesc::new(
+                        core::mem::size_of::<Uniform>(),
+                        br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+                    ),
+                ],
             )
-            .expect("Failed to allocate vertex buffer")
-            .into();
+            .expect("Failed to allocate buffers");
+        let vertex_buffer = RangedBuffer::from(vertex_buffer);
+        let uniform_buffer = RangedBuffer::from(uniform_buffer);
         #[cfg(feature = "debug")]
         vertex_buffer
             .0
@@ -102,38 +108,33 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 core::ffi::CStr::from_bytes_with_nul_unchecked(b"Vertex Buffer\0")
             }))
             .expect("Failed to set object name");
-        let mut vertex_buffer_stg: RangedBuffer<_> = memory_manager
-            .allocate_upload_buffer(
+        #[cfg(feature = "debug")]
+        uniform_buffer
+            .0
+            .set_name(Some(unsafe {
+                core::ffi::CStr::from_bytes_with_nul_unchecked(b"Uniform Buffer\0")
+            }))
+            .expect("Failed to set object name");
+
+        let [vertex_buffer_stg, uniform_mut_buffer] = memory_manager
+            .allocate_upload_buffer_array(
                 e.graphics(),
-                br::BufferDesc::new(plane_mesh.byte_length(), br::BufferUsage::TRANSFER_SRC),
+                [
+                    br::BufferDesc::new(plane_mesh.byte_length(), br::BufferUsage::TRANSFER_SRC),
+                    br::BufferDesc::new(
+                        core::mem::size_of::<Uniform>(),
+                        br::BufferUsage::TRANSFER_SRC,
+                    ),
+                ],
             )
-            .expect("Failed to allocate staging vertex buffer")
-            .into();
+            .expect("Failed to allocate upload buffer");
+        let mut vertex_buffer_stg = RangedBuffer::from(vertex_buffer_stg);
+        let mut uniform_mut_buffer = RangedBuffer::from(uniform_mut_buffer);
+
         vertex_buffer_stg
             .0
             .clone_content_from_slice(&plane_mesh.vertices)
             .expect("Failed to set upload content");
-
-        let uniform_buffer: RangedBuffer<_> = memory_manager
-            .allocate_device_local_buffer(
-                e.graphics(),
-                br::BufferDesc::new(
-                    core::mem::size_of::<Uniform>(),
-                    br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
-                ),
-            )
-            .expect("Failed to allocate uniform buffer")
-            .into();
-        let mut uniform_mut_buffer: RangedBuffer<_> = memory_manager
-            .allocate_upload_buffer(
-                e.graphics(),
-                br::BufferDesc::new(
-                    core::mem::size_of::<Uniform>(),
-                    br::BufferUsage::TRANSFER_SRC,
-                ),
-            )
-            .expect("Failed to allocate mutable uniform buffer")
-            .into();
         uniform_mut_buffer
             .0
             .write_content(Uniform {
@@ -244,13 +245,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
             copy_uniform
                 .between(in_barriers, out_barriers)
-                .execute_and_finish(unsafe {
+                .execute_and_finish(
                     update_cb
                         .synchronized_nth(0)
                         .begin()
                         .expect("Failed to begin recording update command")
-                        .as_dyn_ref()
-                })
+                        .as_dyn_ref(),
+                )
                 .expect("Failed to record update commands");
         }
 

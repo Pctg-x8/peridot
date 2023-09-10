@@ -15,7 +15,7 @@ pub(crate) enum BackingMemory {
 pub struct Image {
     pub(crate) object: br::ImageObject<peridot::DeviceObject>,
     pub(crate) memory_block: BackingMemory,
-    pub(crate) _offset: u64,
+    pub(crate) offset: u64,
     pub(crate) byte_length: usize,
     pub(crate) malloc_offset: u64,
 }

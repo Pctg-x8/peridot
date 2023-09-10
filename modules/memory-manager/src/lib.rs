@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use bedrock as br;
-use br::{MemoryBound, StructureChainQuery};
+use br::{Device, MemoryBound, StructureChainQuery, VkHandle, VulkanStructure};
 use num_integer::Integer;
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;
@@ -412,6 +412,216 @@ impl MemoryManager {
         })
     }
 
+    pub fn allocate_multiple_device_local_buffers<'r>(
+        &mut self,
+        e: &peridot::Graphics,
+        descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
+    ) -> br::Result<Vec<Buffer>> {
+        let descs = descs.into_iter();
+        let (s, _) = descs.size_hint();
+        let (mut exact_sizes, mut objects, mut requirements) = (
+            Vec::with_capacity(s),
+            Vec::with_capacity(s),
+            Vec::with_capacity(s),
+        );
+        for d in descs {
+            exact_sizes.push(d.size());
+            let object = d.create(e.device().clone())?;
+
+            let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+            let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+            if e.can_request_extended_memory_requirements() {
+                unsafe {
+                    (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
+                }
+                object.requirements2().query(&mut req);
+            } else {
+                unsafe {
+                    (*req.as_mut_ptr()).memoryRequirements = object.requirements();
+
+                    // 情報取れないのでないものとして設定
+                    (*sink_dedicated_alloc.as_mut_ptr()).prefersDedicatedAllocation = false as _;
+                    (*sink_dedicated_alloc.as_mut_ptr()).requiresDedicatedAllocation = false as _;
+                }
+            }
+
+            requirements.push(unsafe { (req.assume_init(), sink_dedicated_alloc.assume_init()) });
+            objects.push(object);
+        }
+
+        enum ObjectAllocationMode {
+            Small(u64),
+            Dedicated,
+        }
+
+        let (mut total, mut native_memory_index_mask, mut object_allocation_marks) =
+            (0, u32::MAX, Vec::with_capacity(objects.len()));
+        for (r, dedicated) in requirements.iter() {
+            if dedicated.requiresDedicatedAllocation != 0
+                || dedicated.prefersDedicatedAllocation != 0
+            {
+                // use dedicated allocation for this resource
+                object_allocation_marks.push(ObjectAllocationMode::Dedicated);
+            } else {
+                let offset = align2_u64(total, r.memoryRequirements.alignment);
+                total = offset + r.memoryRequirements.size;
+                native_memory_index_mask &= r.memoryRequirements.memoryTypeBits;
+                object_allocation_marks.push(ObjectAllocationMode::Small(offset));
+            }
+        }
+
+        let memory_index = self
+            .device_local_memory_types
+            .iter()
+            .find(|t| (native_memory_index_mask & t.index_mask()) != 0)
+            .expect("no memory type index")
+            .index;
+
+        let combined_native_memory = if total >= Self::SMALL_ALLOCATION_THRESHOLD {
+            // SMALL_ALLOCATION_THRESHOLD以上の場合はひとつのNativeを確保して配置する
+            tracing::trace!(
+                { total_size = total },
+                "multiple request is enough big to sharing one native memory"
+            );
+
+            Some(make_shared_mutable_ref(
+                br::DeviceMemoryRequest::allocate(total as _, memory_index)
+                    .execute(e.device().clone())?,
+            ))
+        } else {
+            None
+        };
+
+        let (mut bound_objects, mut binding_info) = (
+            Vec::with_capacity(objects.len()),
+            Vec::with_capacity(objects.len()),
+        );
+        for (((object, exact_size), mark), (req, _)) in objects
+            .into_iter()
+            .zip(exact_sizes.into_iter())
+            .zip(object_allocation_marks.into_iter())
+            .zip(requirements.into_iter())
+        {
+            match mark {
+                ObjectAllocationMode::Dedicated => {
+                    tracing::trace!("requested resource is enough big for 1:1 allocation");
+
+                    let memory_index = self
+                        .device_local_memory_types
+                        .iter()
+                        .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
+                        .expect("no memory type index")
+                        .index;
+
+                    let mut memory_req = br::DeviceMemoryRequest::allocate(
+                        req.memoryRequirements.size as _,
+                        memory_index,
+                    );
+                    if e.dedicated_allocation_available() {
+                        memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
+                    }
+                    let memory = memory_req.execute(e.device().clone())?;
+
+                    binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
+                        sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                        pNext: core::ptr::null(),
+                        buffer: object.native_ptr(),
+                        memory: memory.native_ptr(),
+                        memoryOffset: 0,
+                    });
+                    bound_objects.push(Buffer {
+                        object,
+                        memory_block: BackingMemory::Native(memory),
+                        requires_flushing: false,
+                        offset: 0,
+                        size: exact_size as _,
+                        malloc: (req.memoryRequirements.size, 0),
+                    });
+                }
+                ObjectAllocationMode::Small(offset) => {
+                    if let Some(ref combined) = combined_native_memory {
+                        // placement into combined native memory
+
+                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
+                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            buffer: object.native_ptr(),
+                            memory: combined.borrow().native_ptr(),
+                            memoryOffset: offset,
+                        });
+                        bound_objects.push(Buffer {
+                            object,
+                            memory_block: BackingMemory::NativeShared(combined.clone()),
+                            requires_flushing: false,
+                            offset,
+                            size: exact_size as _,
+                            malloc: (req.memoryRequirements.size, offset),
+                        });
+                    } else {
+                        // normal small allocation
+                        let (memory, offset) =
+                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                                unreachable!("no dedicated allocation must occurs!")
+                            })?;
+                        // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
+                        // この前提が崩れることがあったら考え直す)
+                        let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
+
+                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
+                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            buffer: object.native_ptr(),
+                            memory: match memory {
+                                BackingMemory::Managed(ref m) => m.borrow().object.native_ptr(),
+                                BackingMemory::Native(ref m) => m.native_ptr(),
+                                BackingMemory::NativeShared(ref m) => m.borrow().native_ptr(),
+                            },
+                            memoryOffset: aligned_offset,
+                        });
+                        bound_objects.push(Buffer {
+                            object,
+                            memory_block: memory,
+                            requires_flushing: false,
+                            offset: aligned_offset,
+                            size: exact_size as _,
+                            malloc: (req.memoryRequirements.size, offset),
+                        });
+                    }
+                }
+            }
+        }
+
+        if e.extended_memory_binding_available() {
+            // use batched binding
+
+            e.device().bind_buffers(&binding_info)?;
+        } else {
+            // use old binding
+
+            bound_objects
+                .iter_mut()
+                .map(|b| match b.memory_block {
+                    BackingMemory::Managed(ref m) => {
+                        b.object.bind(&m.borrow().object, b.offset as _)
+                    }
+                    BackingMemory::Native(ref m) => b.object.bind(m, b.offset as _),
+                    BackingMemory::NativeShared(ref m) => b.object.bind(&m.borrow(), b.offset as _),
+                })
+                .collect::<Result<(), _>>()?;
+        }
+
+        Ok(bound_objects)
+    }
+
+    pub fn allocate_device_local_buffer_array<const N: usize>(
+        &mut self,
+        e: &peridot::Graphics,
+        descs: [br::BufferDesc; N],
+    ) -> br::Result<[Buffer; N]> {
+        self.allocate_multiple_device_local_buffers(e, descs)
+            .map(|x| unsafe { x.try_into().unwrap_unchecked() })
+    }
+
     pub fn allocate_device_local_buffer_with_contents(
         &mut self,
         e: &peridot::Graphics,
@@ -489,6 +699,232 @@ impl MemoryManager {
             size: exact_size as _,
             malloc: (req.memoryRequirements.size, offset),
         })
+    }
+
+    pub fn allocate_multiple_upload_buffers<'r>(
+        &mut self,
+        e: &peridot::Graphics,
+        descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
+    ) -> br::Result<Vec<Buffer>> {
+        let descs = descs.into_iter();
+        let (s, _) = descs.size_hint();
+        let (mut exact_sizes, mut objects, mut requirements) = (
+            Vec::with_capacity(s),
+            Vec::with_capacity(s),
+            Vec::with_capacity(s),
+        );
+        for d in descs {
+            exact_sizes.push(d.size());
+            let object = d.create(e.device().clone())?;
+
+            let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+            let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+            if e.can_request_extended_memory_requirements() {
+                unsafe {
+                    (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
+                }
+                object.requirements2().query(&mut req);
+            } else {
+                unsafe {
+                    (*req.as_mut_ptr()).memoryRequirements = object.requirements();
+
+                    // 情報取れないのでないものとして設定
+                    (*sink_dedicated_alloc.as_mut_ptr()).prefersDedicatedAllocation = false as _;
+                    (*sink_dedicated_alloc.as_mut_ptr()).requiresDedicatedAllocation = false as _;
+                }
+            }
+
+            requirements.push(unsafe { (req.assume_init(), sink_dedicated_alloc.assume_init()) });
+            objects.push(object);
+        }
+
+        enum ObjectAllocationMode {
+            Small(u64),
+            Dedicated,
+        }
+
+        let (mut total, mut native_memory_index_mask, mut object_allocation_marks) =
+            (0, u32::MAX, Vec::with_capacity(objects.len()));
+        for (r, dedicated) in requirements.iter() {
+            if dedicated.requiresDedicatedAllocation != 0
+                || dedicated.prefersDedicatedAllocation != 0
+            {
+                // use dedicated allocation for this resource
+                object_allocation_marks.push(ObjectAllocationMode::Dedicated);
+            } else {
+                let offset = align2_u64(total, r.memoryRequirements.alignment);
+                total = offset + r.memoryRequirements.size;
+                native_memory_index_mask &= r.memoryRequirements.memoryTypeBits;
+                object_allocation_marks.push(ObjectAllocationMode::Small(offset));
+            }
+        }
+
+        // prefer host coherent(for less operations)
+        let memory_type = self
+            .host_visible_memory_types
+            .iter()
+            .find(|t| (native_memory_index_mask & t.index_mask()) != 0 && t.is_coherent)
+            .or_else(|| {
+                self.host_visible_memory_types
+                    .iter()
+                    .find(|t| (native_memory_index_mask & t.index_mask()) != 0)
+            })
+            .expect("no memory type index");
+        let requires_flushing = !memory_type.is_coherent;
+        let memory_index = memory_type.index;
+
+        let combined_native_memory = if total >= Self::SMALL_ALLOCATION_THRESHOLD {
+            // SMALL_ALLOCATION_THRESHOLD以上の場合はひとつのNativeを確保して配置する
+            tracing::trace!(
+                { total_size = total },
+                "multiple request is enough big to sharing one native memory"
+            );
+
+            Some(make_shared_mutable_ref(
+                br::DeviceMemoryRequest::allocate(total as _, memory_index)
+                    .execute(e.device().clone())?,
+            ))
+        } else {
+            None
+        };
+
+        let (mut bound_objects, mut binding_info) = (
+            Vec::with_capacity(objects.len()),
+            Vec::with_capacity(objects.len()),
+        );
+        for (((object, exact_size), mark), (req, _)) in objects
+            .into_iter()
+            .zip(exact_sizes.into_iter())
+            .zip(object_allocation_marks.into_iter())
+            .zip(requirements.into_iter())
+        {
+            match mark {
+                ObjectAllocationMode::Dedicated => {
+                    tracing::trace!("requested resource is enough big for 1:1 allocation");
+
+                    // prefer host coherent(for less operations)
+                    let memory_type = self
+                        .host_visible_memory_types
+                        .iter()
+                        .find(|t| {
+                            (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0
+                                && t.is_coherent
+                        })
+                        .or_else(|| {
+                            self.host_visible_memory_types.iter().find(|t| {
+                                (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0
+                            })
+                        })
+                        .expect("no memory type index");
+                    let requires_flushing = !memory_type.is_coherent;
+
+                    let mut memory_req = br::DeviceMemoryRequest::allocate(
+                        req.memoryRequirements.size as _,
+                        memory_type.index,
+                    );
+                    if e.dedicated_allocation_available() {
+                        memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
+                    }
+                    let memory = memory_req.execute(e.device().clone())?;
+
+                    binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
+                        sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                        pNext: core::ptr::null(),
+                        buffer: object.native_ptr(),
+                        memory: memory.native_ptr(),
+                        memoryOffset: 0,
+                    });
+                    bound_objects.push(Buffer {
+                        object,
+                        memory_block: BackingMemory::Native(memory),
+                        requires_flushing,
+                        offset: 0,
+                        size: exact_size as _,
+                        malloc: (req.memoryRequirements.size, 0),
+                    });
+                }
+                ObjectAllocationMode::Small(offset) => {
+                    if let Some(ref combined) = combined_native_memory {
+                        // placement into combined native memory
+
+                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
+                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            buffer: object.native_ptr(),
+                            memory: combined.borrow().native_ptr(),
+                            memoryOffset: offset,
+                        });
+                        bound_objects.push(Buffer {
+                            object,
+                            memory_block: BackingMemory::NativeShared(combined.clone()),
+                            requires_flushing: false,
+                            offset,
+                            size: exact_size as _,
+                            malloc: (req.memoryRequirements.size, offset),
+                        });
+                    } else {
+                        // normal small allocation
+                        let (memory, offset) =
+                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                                unreachable!("no dedicated allocation must occurs!")
+                            })?;
+                        // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
+                        // この前提が崩れることがあったら考え直す)
+                        let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
+
+                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
+                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            buffer: object.native_ptr(),
+                            memory: match memory {
+                                BackingMemory::Managed(ref m) => m.borrow().object.native_ptr(),
+                                BackingMemory::Native(ref m) => m.native_ptr(),
+                                BackingMemory::NativeShared(ref m) => m.borrow().native_ptr(),
+                            },
+                            memoryOffset: aligned_offset,
+                        });
+                        bound_objects.push(Buffer {
+                            object,
+                            memory_block: memory,
+                            requires_flushing,
+                            offset: aligned_offset,
+                            size: exact_size as _,
+                            malloc: (req.memoryRequirements.size, offset),
+                        });
+                    }
+                }
+            }
+        }
+
+        if e.extended_memory_binding_available() {
+            // use batched binding
+
+            e.device().bind_buffers(&binding_info)?;
+        } else {
+            // use old binding
+
+            bound_objects
+                .iter_mut()
+                .map(|b| match b.memory_block {
+                    BackingMemory::Managed(ref m) => {
+                        b.object.bind(&m.borrow().object, b.offset as _)
+                    }
+                    BackingMemory::Native(ref m) => b.object.bind(m, b.offset as _),
+                    BackingMemory::NativeShared(ref m) => b.object.bind(&m.borrow(), b.offset as _),
+                })
+                .collect::<Result<(), _>>()?;
+        }
+
+        Ok(bound_objects)
+    }
+
+    pub fn allocate_upload_buffer_array<const N: usize>(
+        &mut self,
+        e: &peridot::Graphics,
+        descs: [br::BufferDesc; N],
+    ) -> br::Result<[Buffer; N]> {
+        self.allocate_multiple_upload_buffers(e, descs)
+            .map(|x| unsafe { x.try_into().unwrap_unchecked() })
     }
 
     pub fn allocate_upload_buffer_with_contents(
@@ -595,7 +1031,7 @@ impl MemoryManager {
         Ok(Image {
             object: o,
             memory_block: memory,
-            _offset: aligned_offset,
+            offset: aligned_offset,
             byte_length: req.memoryRequirements.size as _,
             malloc_offset: offset,
         })
@@ -680,11 +1116,16 @@ impl MemoryManager {
             None
         };
 
-        objects
+        let (mut bound_objects, mut bind_infos) = (
+            Vec::with_capacity(objects.len()),
+            Vec::with_capacity(objects.len()),
+        );
+        for ((mut object, mark), (req, _, _)) in objects
             .into_iter()
             .zip(object_allocation_marks.into_iter())
             .zip(requirements.into_iter())
-            .map(|((mut object, mark), (req, _, _))| match mark {
+        {
+            match mark {
                 ObjectAllocationMode::Dedicated => {
                     tracing::trace!("requested resource is enough big for 1:1 allocation");
 
@@ -704,25 +1145,39 @@ impl MemoryManager {
                     }
                     let memory = memory_req.execute(e.device().clone())?;
                     object.bind(&memory, 0)?;
-                    Ok(Image {
+
+                    bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
+                        sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
+                        pNext: core::ptr::null(),
+                        image: object.native_ptr(),
+                        memory: memory.native_ptr(),
+                        memoryOffset: 0,
+                    });
+                    bound_objects.push(Image {
                         object,
                         memory_block: BackingMemory::Native(memory),
-                        _offset: 0,
+                        offset: 0,
                         byte_length: req.memoryRequirements.size as _,
                         malloc_offset: 0,
-                    })
+                    });
                 }
                 ObjectAllocationMode::Small(offset) => {
                     if let Some(ref combined) = combined_native_memory {
                         // placement into combined native memory
-                        object.bind(&combined.borrow(), offset as _)?;
-                        Ok(Image {
+                        bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
+                            sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            image: object.native_ptr(),
+                            memory: combined.borrow().native_ptr(),
+                            memoryOffset: offset as _,
+                        });
+                        bound_objects.push(Image {
                             object,
                             memory_block: BackingMemory::NativeShared(combined.clone()),
-                            _offset: offset,
+                            offset,
                             byte_length: req.memoryRequirements.size as _,
                             malloc_offset: offset,
-                        })
+                        });
                     } else {
                         // normal small allocation
                         let (memory, offset) =
@@ -732,26 +1187,58 @@ impl MemoryManager {
                         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
                         // この前提が崩れることがあったら考え直す)
                         let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
-                        match memory {
-                            BackingMemory::Managed(ref m) => {
-                                object.bind(&m.borrow().object, aligned_offset as _)
-                            }
-                            BackingMemory::Native(ref m) => object.bind(m, aligned_offset as _),
-                            BackingMemory::NativeShared(ref m) => {
-                                object.bind(&m.borrow(), aligned_offset as _)
-                            }
-                        }?;
 
-                        Ok(Image {
+                        bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
+                            sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            image: object.native_ptr(),
+                            memory: match memory {
+                                BackingMemory::Managed(ref m) => m.borrow().object.native_ptr(),
+                                BackingMemory::Native(ref m) => m.native_ptr(),
+                                BackingMemory::NativeShared(ref m) => m.borrow().native_ptr(),
+                            },
+                            memoryOffset: aligned_offset as _,
+                        });
+                        bound_objects.push(Image {
                             object,
                             memory_block: memory,
-                            _offset: aligned_offset,
+                            offset: aligned_offset,
                             byte_length: req.memoryRequirements.size as _,
                             malloc_offset: offset,
-                        })
+                        });
                     }
                 }
-            })
-            .collect()
+            }
+        }
+
+        if e.extended_memory_binding_available() {
+            // use batched binding
+
+            e.device().bind_images(&bind_infos)?;
+        } else {
+            // use old binding
+
+            bound_objects
+                .iter_mut()
+                .map(|b| match b.memory_block {
+                    BackingMemory::Managed(ref m) => {
+                        b.object.bind(&m.borrow().object, b.offset as _)
+                    }
+                    BackingMemory::Native(ref m) => b.object.bind(m, b.offset as _),
+                    BackingMemory::NativeShared(ref m) => b.object.bind(&m.borrow(), b.offset as _),
+                })
+                .collect::<Result<(), _>>()?;
+        }
+
+        Ok(bound_objects)
+    }
+
+    pub fn allocate_device_local_image_array<const N: usize>(
+        &mut self,
+        e: &peridot::Graphics,
+        descs: [br::ImageDesc; N],
+    ) -> br::Result<[Image; N]> {
+        self.allocate_multiple_device_local_images(e, descs)
+            .map(|x| unsafe { x.try_into().unwrap_unchecked() })
     }
 }

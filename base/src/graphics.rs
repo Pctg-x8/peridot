@@ -150,6 +150,12 @@ impl Graphics {
             .next()
             .ok_or(GraphicsInitializationError::NoPhysicalDevices)?;
 
+        let optional_device_features = [
+            "VK_KHR_dedicated_allocation",
+            "VK_KHR_get_memory_requirements2",
+            "VK_KHR_bind_memory2",
+        ];
+
         let mut auto_device_extensions = Vec::new();
         info!("Device Extensions: ");
         for d in adapter
@@ -164,7 +170,7 @@ impl Graphics {
                 .expect("invalid sequence");
             info!("* {name}: {}", d.specVersion);
 
-            if name == "VK_KHR_dedicated_allocation" || name == "VK_KHR_get_memory_requirements2" {
+            if optional_device_features.contains(&name) {
                 auto_device_extensions.push(name.to_owned());
             }
         }
@@ -325,6 +331,10 @@ impl Graphics {
 
     pub fn can_request_extended_memory_requirements(&self) -> bool {
         self.vk_extension_is_available("VK_KHR_get_memory_requirements2")
+    }
+
+    pub fn extended_memory_binding_available(&self) -> bool {
+        self.vk_extension_is_available("VK_KHR_bind_memory2")
     }
 }
 /// Adapter Property exports
