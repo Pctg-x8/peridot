@@ -172,8 +172,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let (vg_renderer_params, vg_renderer_params2) = stg_buffer
             .0
             .guard_map(BufferMapMode::Write, |m| unsafe {
-                let p0 = ctx.write_data_into(m.ptr(), vg_offs);
-                let p1 = ctx2.write_data_into(m.ptr(), vg_offs2);
+                let p0 = ctx.write_data_into(m.ptr().as_ptr(), vg_offs);
+                let p1 = ctx2.write_data_into(m.ptr().as_ptr(), vg_offs2);
                 return (p0, p1);
             })
             .expect("StgMem Initialization");
