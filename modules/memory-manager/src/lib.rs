@@ -285,6 +285,12 @@ impl MemoryManager {
         }
     }
 
+    fn device_local_memory_type(&self, index_mask: u32) -> Option<&MemoryType> {
+        self.device_local_memory_types
+            .iter()
+            .find(|t| (index_mask & t.index_mask()) != 0)
+    }
+
     #[tracing::instrument(skip(self, device, dedicated_allocate_additional_ops))]
     fn allocate_internal(
         &mut self,
@@ -378,9 +384,7 @@ impl MemoryManager {
         let req = unsafe { req.assume_init() };
 
         let memory_index = self
-            .device_local_memory_types
-            .iter()
-            .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
+            .device_local_memory_type(req.memoryRequirements.memoryTypeBits)
             .expect("no memory type index")
             .index;
 
@@ -449,43 +453,21 @@ impl MemoryManager {
             objects.push(object);
         }
 
-        enum ObjectAllocationMode {
-            Small(u64),
-            Dedicated,
-        }
-
-        let (mut total, mut native_memory_index_mask, mut object_allocation_marks) =
-            (0, u32::MAX, Vec::with_capacity(objects.len()));
-        for (r, dedicated) in requirements.iter() {
-            if dedicated.requiresDedicatedAllocation != 0
-                || dedicated.prefersDedicatedAllocation != 0
-            {
-                // use dedicated allocation for this resource
-                object_allocation_marks.push(ObjectAllocationMode::Dedicated);
-            } else {
-                let offset = align2_u64(total, r.memoryRequirements.alignment);
-                total = offset + r.memoryRequirements.size;
-                native_memory_index_mask &= r.memoryRequirements.memoryTypeBits;
-                object_allocation_marks.push(ObjectAllocationMode::Small(offset));
-            }
-        }
-
+        let alloc_info = ObjectAllocationInfo::compute(&requirements);
         let memory_index = self
-            .device_local_memory_types
-            .iter()
-            .find(|t| (native_memory_index_mask & t.index_mask()) != 0)
-            .expect("no memory type index")
+            .device_local_memory_type(alloc_info.combined_memory_index_mask)
+            .expect("no memory type")
             .index;
 
-        let combined_native_memory = if total >= Self::SMALL_ALLOCATION_THRESHOLD {
+        let combined_native_memory = if alloc_info.total_size >= Self::SMALL_ALLOCATION_THRESHOLD {
             // SMALL_ALLOCATION_THRESHOLD以上の場合はひとつのNativeを確保して配置する
             tracing::trace!(
-                { total_size = total },
+                { total_size = alloc_info.total_size },
                 "multiple request is enough big to sharing one native memory"
             );
 
             Some(make_shared_mutable_ref(
-                br::DeviceMemoryRequest::allocate(total as _, memory_index)
+                br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
                     .execute(e.device().clone())?,
             ))
         } else {
@@ -496,21 +478,19 @@ impl MemoryManager {
             Vec::with_capacity(objects.len()),
             Vec::with_capacity(objects.len()),
         );
-        for (((object, exact_size), mark), (req, _)) in objects
+        for (((object, exact_size), mode), (req, _)) in objects
             .into_iter()
             .zip(exact_sizes.into_iter())
-            .zip(object_allocation_marks.into_iter())
+            .zip(alloc_info.allocation_modes.into_iter())
             .zip(requirements.into_iter())
         {
-            match mark {
+            match mode {
                 ObjectAllocationMode::Dedicated => {
                     tracing::trace!("requested resource is enough big for 1:1 allocation");
 
                     let memory_index = self
-                        .device_local_memory_types
-                        .iter()
-                        .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
-                        .expect("no memory type index")
+                        .device_local_memory_type(req.memoryRequirements.memoryTypeBits)
+                        .expect("no memory type")
                         .index;
 
                     let mut memory_req = br::DeviceMemoryRequest::allocate(
@@ -591,25 +571,7 @@ impl MemoryManager {
             }
         }
 
-        if e.extended_memory_binding_available() {
-            // use batched binding
-
-            e.device().bind_buffers(&binding_info)?;
-        } else {
-            // use old binding
-
-            bound_objects
-                .iter_mut()
-                .map(|b| match b.memory_block {
-                    BackingMemory::Managed(ref m) => {
-                        b.object.bind(&m.borrow().object, b.offset as _)
-                    }
-                    BackingMemory::Native(ref m) => b.object.bind(m, b.offset as _),
-                    BackingMemory::NativeShared(ref m) => b.object.bind(&m.borrow(), b.offset as _),
-                })
-                .collect::<Result<(), _>>()?;
-        }
-
+        bind_buffers(e, &binding_info)?;
         Ok(bound_objects)
     }
 
@@ -738,50 +700,33 @@ impl MemoryManager {
             objects.push(object);
         }
 
-        enum ObjectAllocationMode {
-            Small(u64),
-            Dedicated,
-        }
-
-        let (mut total, mut native_memory_index_mask, mut object_allocation_marks) =
-            (0, u32::MAX, Vec::with_capacity(objects.len()));
-        for (r, dedicated) in requirements.iter() {
-            if dedicated.requiresDedicatedAllocation != 0
-                || dedicated.prefersDedicatedAllocation != 0
-            {
-                // use dedicated allocation for this resource
-                object_allocation_marks.push(ObjectAllocationMode::Dedicated);
-            } else {
-                let offset = align2_u64(total, r.memoryRequirements.alignment);
-                total = offset + r.memoryRequirements.size;
-                native_memory_index_mask &= r.memoryRequirements.memoryTypeBits;
-                object_allocation_marks.push(ObjectAllocationMode::Small(offset));
-            }
-        }
+        let alloc_info = ObjectAllocationInfo::compute(&requirements);
 
         // prefer host coherent(for less operations)
         let memory_type = self
             .host_visible_memory_types
             .iter()
-            .find(|t| (native_memory_index_mask & t.index_mask()) != 0 && t.is_coherent)
+            .find(|t| {
+                (alloc_info.combined_memory_index_mask & t.index_mask()) != 0 && t.is_coherent
+            })
             .or_else(|| {
                 self.host_visible_memory_types
                     .iter()
-                    .find(|t| (native_memory_index_mask & t.index_mask()) != 0)
+                    .find(|t| (alloc_info.combined_memory_index_mask & t.index_mask()) != 0)
             })
             .expect("no memory type index");
         let requires_flushing = !memory_type.is_coherent;
         let memory_index = memory_type.index;
 
-        let combined_native_memory = if total >= Self::SMALL_ALLOCATION_THRESHOLD {
+        let combined_native_memory = if alloc_info.total_size >= Self::SMALL_ALLOCATION_THRESHOLD {
             // SMALL_ALLOCATION_THRESHOLD以上の場合はひとつのNativeを確保して配置する
             tracing::trace!(
-                { total_size = total },
+                { total_size = alloc_info.total_size },
                 "multiple request is enough big to sharing one native memory"
             );
 
             Some(make_shared_mutable_ref(
-                br::DeviceMemoryRequest::allocate(total as _, memory_index)
+                br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
                     .execute(e.device().clone())?,
             ))
         } else {
@@ -792,13 +737,13 @@ impl MemoryManager {
             Vec::with_capacity(objects.len()),
             Vec::with_capacity(objects.len()),
         );
-        for (((object, exact_size), mark), (req, _)) in objects
+        for (((object, exact_size), mode), (req, _)) in objects
             .into_iter()
             .zip(exact_sizes.into_iter())
-            .zip(object_allocation_marks.into_iter())
+            .zip(alloc_info.allocation_modes.into_iter())
             .zip(requirements.into_iter())
         {
-            match mark {
+            match mode {
                 ObjectAllocationMode::Dedicated => {
                     tracing::trace!("requested resource is enough big for 1:1 allocation");
 
@@ -896,25 +841,7 @@ impl MemoryManager {
             }
         }
 
-        if e.extended_memory_binding_available() {
-            // use batched binding
-
-            e.device().bind_buffers(&binding_info)?;
-        } else {
-            // use old binding
-
-            bound_objects
-                .iter_mut()
-                .map(|b| match b.memory_block {
-                    BackingMemory::Managed(ref m) => {
-                        b.object.bind(&m.borrow().object, b.offset as _)
-                    }
-                    BackingMemory::Native(ref m) => b.object.bind(m, b.offset as _),
-                    BackingMemory::NativeShared(ref m) => b.object.bind(&m.borrow(), b.offset as _),
-                })
-                .collect::<Result<(), _>>()?;
-        }
-
+        bind_buffers(e, &binding_info)?;
         Ok(bound_objects)
     }
 
@@ -1042,74 +969,51 @@ impl MemoryManager {
         e: &peridot::Graphics,
         descriptions: impl IntoIterator<Item = br::ImageDesc<'r>>,
     ) -> br::Result<Vec<Image>> {
-        let objects = descriptions
-            .into_iter()
-            .map(|x| x.create(e.device().clone()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let requirements = objects
-            .iter()
-            .map(|o| {
-                let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
-                let mut sink_dedicated_alloc =
-                    br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-                if e.can_request_extended_memory_requirements() {
-                    unsafe {
-                        (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
-                    }
-                    o.requirements2().query(&mut req);
+        let descs = descriptions.into_iter();
+        let (s, _) = descs.size_hint();
+        let (mut objects, mut requirements) = (Vec::with_capacity(s), Vec::with_capacity(s));
+        for d in descs {
+            let object = d.create(e.device().clone())?;
 
-                    let (req, dedicated_alloc_req) =
-                        unsafe { (req.assume_init(), sink_dedicated_alloc.assume_init()) };
-                    (
-                        req,
-                        dedicated_alloc_req.requiresDedicatedAllocation != 0,
-                        dedicated_alloc_req.prefersDedicatedAllocation != 0,
-                    )
-                } else {
-                    unsafe {
-                        (*req.as_mut_ptr()).memoryRequirements = o.requirements();
-
-                        (req.assume_init(), false, false)
-                    }
+            let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+            let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+            if e.can_request_extended_memory_requirements() {
+                unsafe {
+                    (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
-            })
-            .collect::<Vec<_>>();
-
-        enum ObjectAllocationMode {
-            Small(u64),
-            Dedicated,
-        }
-
-        let (mut total, mut native_memory_index_mask, mut object_allocation_marks) =
-            (0, u32::MAX, Vec::with_capacity(objects.len()));
-        for &(ref r, require_dedicated, prefer_dedicated) in requirements.iter() {
-            if require_dedicated || prefer_dedicated {
-                // use dedicated allocation for this resource
-                object_allocation_marks.push(ObjectAllocationMode::Dedicated);
+                object.requirements2().query(&mut req);
             } else {
-                let offset = align2_u64(total, r.memoryRequirements.alignment);
-                total = offset + r.memoryRequirements.size;
-                native_memory_index_mask &= r.memoryRequirements.memoryTypeBits;
-                object_allocation_marks.push(ObjectAllocationMode::Small(offset));
+                unsafe {
+                    (*req.as_mut_ptr()).memoryRequirements = object.requirements();
+
+                    // 情報取れないのでないものとして設定
+                    (*sink_dedicated_alloc.as_mut_ptr()).prefersDedicatedAllocation = false as _;
+                    (*sink_dedicated_alloc.as_mut_ptr()).requiresDedicatedAllocation = false as _;
+                }
             }
+
+            requirements.push(unsafe { (req.assume_init(), sink_dedicated_alloc.assume_init()) });
+            objects.push(object);
         }
+
+        let alloc_info = ObjectAllocationInfo::compute(&requirements);
 
         let memory_index = self
             .device_local_memory_types
             .iter()
-            .find(|t| (native_memory_index_mask & t.index_mask()) != 0)
+            .find(|t| (alloc_info.combined_memory_index_mask & t.index_mask()) != 0)
             .expect("no memory type index")
             .index;
 
-        let combined_native_memory = if total >= Self::SMALL_ALLOCATION_THRESHOLD {
+        let combined_native_memory = if alloc_info.total_size >= Self::SMALL_ALLOCATION_THRESHOLD {
             // SMALL_ALLOCATION_THRESHOLD以上の場合はひとつのNativeを確保して配置する
             tracing::trace!(
-                { total_size = total },
+                { total_size = alloc_info.total_size },
                 "multiple request is enough big to sharing one native memory"
             );
 
             Some(make_shared_mutable_ref(
-                br::DeviceMemoryRequest::allocate(total as _, memory_index)
+                br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
                     .execute(e.device().clone())?,
             ))
         } else {
@@ -1120,12 +1024,12 @@ impl MemoryManager {
             Vec::with_capacity(objects.len()),
             Vec::with_capacity(objects.len()),
         );
-        for ((mut object, mark), (req, _, _)) in objects
+        for ((mut object, mode), (req, _)) in objects
             .into_iter()
-            .zip(object_allocation_marks.into_iter())
+            .zip(alloc_info.allocation_modes.into_iter())
             .zip(requirements.into_iter())
         {
-            match mark {
+            match mode {
                 ObjectAllocationMode::Dedicated => {
                     tracing::trace!("requested resource is enough big for 1:1 allocation");
 
@@ -1211,25 +1115,7 @@ impl MemoryManager {
             }
         }
 
-        if e.extended_memory_binding_available() {
-            // use batched binding
-
-            e.device().bind_images(&bind_infos)?;
-        } else {
-            // use old binding
-
-            bound_objects
-                .iter_mut()
-                .map(|b| match b.memory_block {
-                    BackingMemory::Managed(ref m) => {
-                        b.object.bind(&m.borrow().object, b.offset as _)
-                    }
-                    BackingMemory::Native(ref m) => b.object.bind(m, b.offset as _),
-                    BackingMemory::NativeShared(ref m) => b.object.bind(&m.borrow(), b.offset as _),
-                })
-                .collect::<Result<(), _>>()?;
-        }
-
+        bind_images(e, &bind_infos)?;
         Ok(bound_objects)
     }
 
@@ -1241,4 +1127,102 @@ impl MemoryManager {
         self.allocate_multiple_device_local_images(e, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
     }
+}
+
+enum ObjectAllocationMode {
+    Small(u64),
+    Dedicated,
+}
+struct ObjectAllocationInfo {
+    total_size: u64,
+    combined_memory_index_mask: u32,
+    allocation_modes: Vec<ObjectAllocationMode>,
+}
+impl ObjectAllocationInfo {
+    fn compute(
+        requirements: &[(
+            br::vk::VkMemoryRequirements2KHR,
+            br::vk::VkMemoryDedicatedRequirementsKHR,
+        )],
+    ) -> Self {
+        let mut collected = Self {
+            total_size: 0,
+            combined_memory_index_mask: u32::MAX,
+            allocation_modes: Vec::with_capacity(requirements.len()),
+        };
+
+        for (r, dedicated) in requirements.iter() {
+            if dedicated.requiresDedicatedAllocation != 0
+                || dedicated.prefersDedicatedAllocation != 0
+            {
+                // use dedicated allocation for this resource
+                collected
+                    .allocation_modes
+                    .push(ObjectAllocationMode::Dedicated);
+            } else {
+                let offset = align2_u64(collected.total_size, r.memoryRequirements.alignment);
+                collected.total_size = offset + r.memoryRequirements.size;
+                collected.combined_memory_index_mask &= r.memoryRequirements.memoryTypeBits;
+                collected
+                    .allocation_modes
+                    .push(ObjectAllocationMode::Small(offset));
+            }
+        }
+
+        collected
+    }
+}
+
+fn bind_buffers(
+    e: &peridot::Graphics,
+    binds: &[br::vk::VkBindBufferMemoryInfoKHR],
+) -> br::Result<()> {
+    if e.extended_memory_binding_available() {
+        // use batched binding
+
+        e.device().bind_buffers(&binds)?;
+    } else {
+        // use old binding
+
+        for b in binds.iter() {
+            unsafe {
+                br::vkresolve::bind_buffer_memory(
+                    e.device().native_ptr(),
+                    b.buffer,
+                    b.memory,
+                    b.memoryOffset,
+                )
+                .into_result()?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn bind_images(
+    e: &peridot::Graphics,
+    binds: &[br::vk::VkBindImageMemoryInfoKHR],
+) -> br::Result<()> {
+    if e.extended_memory_binding_available() {
+        // use batched binding
+
+        e.device().bind_images(&binds)?;
+    } else {
+        // use old binding
+
+        for b in binds.iter() {
+            unsafe {
+                br::vkresolve::bind_image_memory(
+                    e.device().native_ptr(),
+                    b.image,
+                    b.memory,
+                    b.memoryOffset,
+                )
+                .into_result()?;
+            }
+        }
+    }
+
+    Ok(())
 }
