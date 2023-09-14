@@ -1,0 +1,6 @@
+[book]
+authors = ["S.Percentage"]
+language = "ja"
+multilingual = false
+src = "src"
+title = "Book of Peridot Engine"
