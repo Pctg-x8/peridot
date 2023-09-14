@@ -66,7 +66,7 @@ impl NativeAudioEngine {
     }
 
     pub fn new(mixer: &Arc<StdRwLock<peridot::audio::Mixer>>) -> Self {
-        info!("Starting AudioEngine via PipeWire......");
+        tracing::info!("Starting AudioEngine via PipeWire......");
 
         pw::init();
 
@@ -104,17 +104,10 @@ impl NativeAudioEngine {
         let stream_listener = stream
             .add_local_listener_with_user_data(writer)
             .state_changed(|old_state, new_state| {
-                trace!("State Changed: {old_state:?} -> {new_state:?}");
+                tracing::trace!("State Changed: {old_state:?} -> {new_state:?}");
             })
             .param_changed(|stream, id, userdata, params| {
-                trace!("Param Changed: id={id}");
-                if let Some(p) = params {
-                    if let Ok((_rest, param_value)) =
-                        PodDeserializer::deserialize_any_from(p.as_bytes())
-                    {
-                        trace!("  Param: {param_value:?}");
-                    }
-                }
+                let _span = tracing::trace_span!("Param Changed Handler", id).entered();
 
                 if id == SPA_PARAM_Format {
                     // configure format
@@ -123,7 +116,7 @@ impl NativeAudioEngine {
                     let mut fmt = core::mem::MaybeUninit::uninit();
                     unsafe { spa_format_audio_raw_parse(params.as_raw_ptr(), fmt.as_mut_ptr()) };
                     let fmt = unsafe { fmt.assume_init() };
-                    trace!("Configured Format: {fmt:?}");
+                    tracing::trace!({ ?fmt }, "Configured Format");
                     stream
                         .update_params(&mut [params.as_raw_ptr()])
                         .expect("Failed to negotiate format");
@@ -132,6 +125,14 @@ impl NativeAudioEngine {
                         userdata.converter = Box::new(Float32Converter);
                     } else {
                         unimplemented!("Format conversion not implemented: {}", fmt.format);
+                    }
+                } else {
+                    if let Some((_rest, param_value)) = params
+                        .and_then(|p| PodDeserializer::deserialize_any_from(p.as_bytes()).ok())
+                    {
+                        tracing::trace!("Unknown Param Changed: {param_value:?}");
+                    } else {
+                        tracing::trace!("Unknown Param Changed without value");
                     }
                 }
             })

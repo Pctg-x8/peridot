@@ -59,6 +59,7 @@ impl Dispatch<XdgWmBase, ()> for State {
     }
 }
 impl Dispatch<XdgSurface, ()> for State {
+    #[tracing::instrument(skip(state, proxy, _data, _conn, _qhandle))]
     fn event(
         state: &mut Self,
         proxy: &XdgSurface,
@@ -69,7 +70,8 @@ impl Dispatch<XdgSurface, ()> for State {
     ) {
         match event {
             wayland_protocols::xdg::shell::client::xdg_surface::Event::Configure { serial } => {
-                trace!("configure xdgsurface");
+                tracing::trace!("configure xdgsurface");
+
                 proxy.ack_configure(serial);
                 if state.geometry.0 > 0 && state.geometry.1 > 0 {
                     proxy.set_window_geometry(0, 0, state.geometry.0 as _, state.geometry.1 as _);
@@ -80,6 +82,7 @@ impl Dispatch<XdgSurface, ()> for State {
     }
 }
 impl Dispatch<XdgToplevel, ()> for State {
+    #[tracing::instrument(skip(state, _proxy, _data, _conn, _qhandle))]
     fn event(
         state: &mut Self,
         _proxy: &XdgToplevel,
@@ -97,7 +100,8 @@ impl Dispatch<XdgToplevel, ()> for State {
                 height,
                 states,
             } => {
-                debug!("Configure XdgToplevel: {width} {height} {states:?}");
+                tracing::trace!({ width, height, ?states }, "Configure XdgToplevel");
+
                 if width > 0 && height > 0 {
                     state.geometry = peridot::math::Vector2(width as _, height as _);
                 }
@@ -165,7 +169,7 @@ impl Wayland {
             return None;
         };
 
-        info!("Using Wayland as window backend");
+        tracing::info!("Using Wayland as window backend");
 
         let mut registry_queue = con.new_event_queue();
         let mut interfaces = RegistryCollector(HashMap::new());
@@ -433,7 +437,7 @@ impl Dispatch<WlRegistry, ()> for RegistryCollector {
                 interface,
                 version,
             } => {
-                debug!("Wayland Registry collected: {interface} version={version}");
+                tracing::debug!({ interface, version }, "Wayland Registry collected");
                 state.0.insert(interface, (name, version));
             }
             wayland_client::protocol::wl_registry::Event::GlobalRemove { name } => {

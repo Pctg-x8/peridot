@@ -1,7 +1,7 @@
 //! DeviceMemory Helper
 
 use bedrock as br;
-use br::{Device, PhysicalDevice};
+use br::PhysicalDevice;
 
 use crate::{
     mthelper::{DynamicMut, SharedRef},

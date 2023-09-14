@@ -307,6 +307,13 @@ impl BufferContent {
             std::mem::align_of::<T>() as _,
         )
     }
+
+    pub const fn raw_for_slice<T>(slice: &[T]) -> Self {
+        Self::Raw(
+            (core::mem::size_of::<T>() * slice.len()) as _,
+            core::mem::align_of::<T>() as _,
+        )
+    }
 }
 #[derive(Clone)]
 pub struct BufferPrealloc<'g> {
@@ -325,6 +332,15 @@ impl<'g> BufferPrealloc<'g> {
             total: 0,
             common_align: 1,
         }
+    }
+
+    pub fn build_desc(&self) -> br::BufferDesc {
+        br::BufferDesc::new(self.total as _, self.usage)
+    }
+
+    /// this ignores usage flags from appended contents
+    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferDesc {
+        br::BufferDesc::new(self.total as _, usage)
     }
 
     pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {

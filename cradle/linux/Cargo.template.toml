@@ -16,8 +16,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "VK_KHR_xcb_surface",
     "VK_KHR_wayland_surface",
 ] }
-log = "0.4"
-env_logger = "0.5"
 xcb = "1.1"
 pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 libc = "0.2"
@@ -32,6 +30,8 @@ wayland-protocols = { version = "0.30.0", features = [
 pipewire = "0.7.0"
 libspa-sys = "0.7.0"
 parking_lot = "0.12.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dependencies.async-std]
 version = "1.0"

@@ -3,7 +3,7 @@
 use bedrock as br;
 #[cfg(feature = "debug")]
 use br::VkObject;
-use br::{Device, Image, ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
+use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
 
 use crate::{mthelper::SharedRef, DeviceObject};
 

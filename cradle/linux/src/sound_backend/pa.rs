@@ -53,7 +53,7 @@ impl NativeAudioEngine {
     }
 
     pub fn new(mixer: &Arc<RwLock<peridot::audio::Mixer>>) -> Self {
-        info!("Starting AudioEngine via PulseAudio......");
+        tracing::info!("Starting AudioEngine via PulseAudio......");
 
         let mlp = Box::pin(
             pa::mainloop::Threaded::new().expect("Failed to initialize PulseAudio Mainloop"),
@@ -106,9 +106,9 @@ impl NativeAudioEngine {
                 l.wait();
                 current_state = stream.state();
             }
-            info!("PulseAudio Sink Device = {}", stream.device_name());
+            tracing::info!("PulseAudio Sink Device = {}", stream.device_name());
             let ss = stream.sample_spec();
-            debug!("SampleSpec: {} {} {}", ss.format, ss.rate, ss.channels);
+            tracing::debug!("SampleSpec: {} {} {}", ss.format, ss.rate, ss.channels);
             *writer.conv.borrow_mut() = if ss.format == pa::SampleFormat::S24LE as _ {
                 Box::new(SignedInt24LEConverter)
             } else if ss.format == pa::SampleFormat::S32LE as _ {
@@ -118,7 +118,7 @@ impl NativeAudioEngine {
             };
         }
 
-        trace!("Done!");
+        tracing::trace!("Done!");
         NativeAudioEngine {
             mlp,
             context: ManuallyDrop::new(context),

@@ -19,6 +19,11 @@ impl Blending {
         Self::new(factor, br::BlendOp::Add, br::BlendFactor::Zero)
     }
 
+    /// src * 0 + dest * factor
+    pub const fn dest_only(factor: br::BlendFactor) -> Self {
+        Self::new(br::BlendFactor::Zero, br::BlendOp::Add, factor)
+    }
+
     /// no factors applied: src * 1 op dest * 1
     pub const fn pure_color_op(op: br::BlendOp) -> Self {
         Self::new(br::BlendFactor::One, op, br::BlendFactor::One)
@@ -29,6 +34,8 @@ impl Blending {
         Self::new(br::BlendFactor::One, op, br::BlendFactor::One)
     }
 
+    pub const STRAIGHT_SOURCE: Self = Self::source_only(br::BlendFactor::One);
+    pub const STRAIGHT_DEST: Self = Self::dest_only(br::BlendFactor::One);
     pub const MAX_COLOR: Self = Self::pure_color_op(br::BlendOp::Max);
     pub const MAX_ALPHA: Self = Self::pure_alpha_op(br::BlendOp::Max);
     pub const MIN_COLOR: Self = Self::pure_color_op(br::BlendOp::Min);

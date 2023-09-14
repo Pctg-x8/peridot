@@ -1,7 +1,10 @@
 use bedrock as br;
 use br::vk::VkCommandBuffer;
 
-use crate::{vk_pipeline_stage_mask_requirements_for_image_layout, IndexedMesh, Mesh};
+use crate::{
+    vk_pipeline_stage_mask_requirements_for_image_layout, BufferUsageTransitionBarrier,
+    IndexedMesh, Mesh,
+};
 
 pub trait GraphicsCommand {
     fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>);
@@ -197,11 +200,32 @@ impl GraphicsCommand for PipelineBarrier {
         );
     }
 }
+impl From<br::ImageMemoryBarrier> for PipelineBarrier {
+    fn from(value: br::ImageMemoryBarrier) -> Self {
+        Self::new().with_barrier(value)
+    }
+}
+impl<B: br::Buffer> From<BufferUsageTransitionBarrier<B>> for PipelineBarrier {
+    fn from(value: BufferUsageTransitionBarrier<B>) -> Self {
+        Self::new().with_barrier(value)
+    }
+}
 
-pub struct CopyBuffer<S: br::Buffer, D: br::Buffer>(S, D, Vec<br::vk::VkBufferCopy>);
-impl<S: br::Buffer, D: br::Buffer> CopyBuffer<S, D> {
+pub struct CopyBuffer<
+    S: br::VkHandle<Handle = br::vk::VkBuffer>,
+    D: br::VkHandle<Handle = br::vk::VkBuffer>,
+>(S, D, Vec<br::vk::VkBufferCopy>);
+impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk::VkBuffer>>
+    CopyBuffer<S, D>
+{
     pub const fn new(source: S, dest: D) -> Self {
         Self(source, dest, Vec::new())
+    }
+
+    pub fn with_ranges(mut self, ranges: impl IntoIterator<Item = br::vk::VkBufferCopy>) -> Self {
+        self.2.extend(ranges);
+
+        self
     }
 
     pub fn with_range(mut self, src_offset: u64, dest_offset: u64, size: usize) -> Self {
@@ -225,7 +249,9 @@ impl<S: br::Buffer, D: br::Buffer> CopyBuffer<S, D> {
         self.with_mirroring(offset, std::mem::size_of::<T>())
     }
 }
-impl<S: br::Buffer, D: br::Buffer> GraphicsCommand for CopyBuffer<S, D> {
+impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk::VkBuffer>>
+    GraphicsCommand for CopyBuffer<S, D>
+{
     fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
         let _ = cb.copy_buffer(&self.0, &self.1, &self.2);
     }
@@ -260,7 +286,7 @@ impl<S: br::Buffer, D: br::Image> CopyBufferToImage<S, D> {
     ) -> Self {
         self.regions.push(br::vk::VkBufferImageCopy {
             bufferOffset: buffer_data_desc.offset,
-            bufferRowLength: buffer_data_desc.row_bytes,
+            bufferRowLength: buffer_data_desc.row_texels,
             bufferImageHeight: buffer_data_desc.image_height,
             imageSubresource: image_range.layers,
             imageOffset: image_range.offset,
@@ -695,14 +721,14 @@ impl GraphicsCommand for Vec<br::vk::VkCommandBuffer> {
 
 pub struct BufferImageDataDesc {
     offset: u64,
-    row_bytes: u32,
+    row_texels: u32,
     image_height: u32,
 }
 impl BufferImageDataDesc {
-    pub const fn new(offset: u64, row_bytes: u32) -> Self {
+    pub const fn new(offset: u64, row_texels: u32) -> Self {
         Self {
             offset,
-            row_bytes,
+            row_texels,
             image_height: 0,
         }
     }
