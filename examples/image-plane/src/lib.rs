@@ -1,6 +1,6 @@
 use bedrock as br;
 use br::{resources::Image, SubmissionBatch};
-use br::{CommandBuffer, DescriptorPool, Device, ImageChild, ImageSubresourceSlice, RenderPass};
+use br::{CommandBuffer, DescriptorPool, Device, ImageChild, ImageSubresourceSlice};
 use log::*;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3,
@@ -30,7 +30,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     render_cb: peridot::CommandBundle<peridot::DeviceObject>,
     update_cb: peridot::CommandBundle<peridot::DeviceObject>,
     renderpass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<br::FramebufferObject<peridot::DeviceObject>>,
+    framebuffers: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
     _descriptor: (
         br::DescriptorSetLayoutObject<peridot::DeviceObject>,
         br::DescriptorPoolObject<peridot::DeviceObject>,
@@ -455,9 +455,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         self.framebuffers = e
             .iter_back_buffers()
             .map(|b| {
-                (&self.renderpass)
-                    .framebuffer_builder(vec![b.clone()])
-                    .create()
+                br::FramebufferBuilder::new_with_attachment(&self.renderpass, b.clone()).create()
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("Bind Framebuffers");

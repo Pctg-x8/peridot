@@ -34,7 +34,7 @@ pub struct VgRendererFragmentFixedColor {
 pub struct Game<PL: peridot::NativeLinker> {
     memory_manager: MemoryManager,
     render_pass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<br::FramebufferObject<peridot::DeviceObject>>,
+    framebuffers: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
     render_cb: CommandBundle<peridot::DeviceObject>,
     _bufview: br::BufferViewObject<SharedRef<peridot_memory_manager::Buffer>>,
     _bufview2: br::BufferViewObject<SharedRef<peridot_memory_manager::Buffer>>,

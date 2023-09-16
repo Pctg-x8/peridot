@@ -548,7 +548,7 @@ pub struct Game<NL: peridot::NativeLinker> {
     memory_manager: MemoryManager,
     buffers: TwoPassStencilSDFRendererBuffers,
     stencil_buffer_view: SharedRef<br::ImageViewObject<peridot_memory_manager::Image>>,
-    fb: Vec<br::FramebufferObject<peridot::DeviceObject>>,
+    fb: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
     sdf_renderer: TwoPassStencilSDFRenderer,
     cmd: peridot::CommandBundle<peridot::DeviceObject>,
     ph: std::marker::PhantomData<*const NL>,
