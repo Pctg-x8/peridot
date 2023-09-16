@@ -4,12 +4,11 @@ use br::{
     SubmissionBatch,
 };
 use peridot::mthelper::SharedRef;
-use peridot::ModelData;
 use peridot_command_object::{
     BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBuffer,
     CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner,
-    GraphicsCommandSubmission, ImageResourceRange, Mesh, PipelineBarrier, RangedBuffer,
-    RangedImage, StandardMesh,
+    GraphicsCommandSubmission, ImageResourceRange, PipelineBarrier, RangedBuffer, RangedImage,
+    StandardMesh,
 };
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 
@@ -42,7 +41,7 @@ fn init_controls(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
 pub struct Game<NL: peridot::NativeLinker> {
     renderpass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<br::FramebufferObject<peridot::DeviceObject>>,
+    framebuffers: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
     color_renders: Box<dyn GraphicsCommand>,
     _smp: br::SamplerObject<peridot::DeviceObject>,
     _dsl: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
