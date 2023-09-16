@@ -1,34 +1,34 @@
 jobs:
-  "dev-pacage-build-to-artifact":
-    "runs-on": "${{ matrix.os }}"
+  dev-pacage-build-to-artifact:
+    runs-on: "${{ matrix.os }}"
     steps:
-    - name: Checking out
-      uses: "actions/checkout@v2"
-    - if: "matrix.os == 'windows-latest'"
-      name: "Build tools (For PowerShell Env)"
-      run: "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }"
-    - if: "matrix.os == 'macos-latest'"
-      name: "Upgrade utils (Only for MacOS)"
-      run: brew install bash findutils
-    - if: "matrix.os != 'windows-latest'"
-      name: "Build tools (For Bash Env)"
-      run: "./tools/build-all.sh"
-    - if: "matrix.os == 'windows-latest'"
-      name: "Make package (For PowerShell Env)"
-      run: "powershell.exe -File ./make-dev-package.ps1 -OutDirectory peridot-sdk -PeridotBranch $($Env:GITHUB_REF -replace \"^refs/heads/\")"
-    - if: "matrix.os != 'windows-latest'"
-      name: "Make package (For Bash Env)"
-      run: "./make-dev-package.sh -o peridot-sdk -b ${GITHUB_REF#\"refs/heads/\"}"
-    - name: Uploading Artifacts
-      uses: "actions/upload-artifact@v1"
-      with:
-        name: "PeridotSDK-${{ matrix.os }}"
-        path: "peridot-sdk"
+      - name: Checking out
+        uses: "actions/checkout@v3"
+      - if: "matrix.os == 'windows-latest'"
+        name: "Build tools (For PowerShell Env)"
+        run: "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }"
+      - if: "matrix.os == 'macos-latest'"
+        name: "Upgrade utils (Only for MacOS)"
+        run: brew install bash findutils
+      - if: "matrix.os != 'windows-latest'"
+        name: "Build tools (For Bash Env)"
+        run: "./tools/build-all.sh"
+      - if: "matrix.os == 'windows-latest'"
+        name: "Make package (For PowerShell Env)"
+        run: "powershell.exe -File ./make-dev-package.ps1 -OutDirectory peridot-sdk -PeridotBranch $($Env:GITHUB_REF -replace \"^refs/heads/\")"
+      - if: "matrix.os != 'windows-latest'"
+        name: "Make package (For Bash Env)"
+        run: "./make-dev-package.sh -o peridot-sdk -b ${GITHUB_REF#\"refs/heads/\"}"
+      - name: Uploading Artifacts
+        uses: "actions/upload-artifact@v1"
+        with:
+          name: "PeridotSDK-${{ matrix.os }}"
+          path: peridot-sdk
     strategy:
       matrix:
         os:
-        - "windows-latest"
-        - "macos-latest"
-        - "ubuntu-latest"
-name: "Dev-Package Build"
-'on': workflow_dispatch
+          - windows-latest
+          - macos-latest
+          - ubuntu-latest
+name: Dev-Package Build
+on: workflow_dispatch
