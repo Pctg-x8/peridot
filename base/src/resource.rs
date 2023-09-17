@@ -297,6 +297,11 @@ impl<Image: br::Image> DeviceWorkingTexture2D<Image> {
     pub fn underlying(&self) -> &Image {
         &*self.view
     }
+
+    /// Gets underlying view object
+    pub fn underlying_view(&self) -> &br::ImageViewObject<Image> {
+        &self.view
+    }
 }
 impl<Image: br::Image> Deref for DeviceWorkingTexture2D<Image> {
     type Target = br::ImageViewObject<Image>;
@@ -341,6 +346,11 @@ impl<Image: br::Image> DeviceWorkingTexture3D<Image> {
     pub fn underlying(&self) -> &Image {
         &*self.view
     }
+
+    /// Gets underlying view object
+    pub fn underlying_view(&self) -> &br::ImageViewObject<Image> {
+        &self.view
+    }
 }
 impl<Image: br::Image> Deref for DeviceWorkingTexture3D<Image> {
     type Target = br::ImageViewObject<Image>;
@@ -380,6 +390,11 @@ impl<Image: br::Image> DeviceWorkingCubeTexture<Image> {
     /// Gets underlying resource object
     pub fn underlying(&self) -> &Image {
         &*self.view
+    }
+
+    /// Gets underlying view object
+    pub fn underlying_view(&self) -> &br::ImageViewObject<Image> {
+        &self.view
     }
 }
 impl<Image: br::Image> Deref for DeviceWorkingCubeTexture<Image> {

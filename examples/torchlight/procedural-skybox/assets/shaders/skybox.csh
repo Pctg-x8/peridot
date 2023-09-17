@@ -1,0 +1,105 @@
+// Skybox Shader from http://publications.lib.chalmers.se/records/fulltext/203057/203057.pdf
+
+VertexInput {
+    Binding 0 [PerVertex] { pos: vec2; uvin: vec2; }
+}
+
+VertexShader {
+    uv = uvin;
+    RasterPosition = vec4(pos, 1.0f, 1.0f);
+}
+
+Varyings VertexShader -> FragmentShader {
+    uv: vec2;
+}
+
+Uniform[FragmentShader](0, 0) ViewUniform {
+    mat4 main_view_projection;
+    mat4 main_view;
+    float persp_fov_rad, aspect_wh;
+}
+Uniform[FragmentShader](0, 1) SunLightData {
+    vec4 incidentLightDir;
+}
+
+Header[FragmentShader] {
+    layout(set = 1, binding = 0) uniform sampler3D scatter;
+    layout(set = 1, binding = 1) uniform sampler2D transmittance;
+
+    // From precompute_common.comp
+    const float H_ATM = 80000;
+    const float R_EARTH = 6371000;
+    const vec3 RayleighCoeffs = vec3(6.55e-6, 1.23e-5, 2.30e-5);
+    const vec3 MieCoeffs = vec3(2e-6, 2e-6, 2e-6);
+    const vec3 TransmittanceMieCoeffs = MieCoeffs / 0.9;
+
+    // Parameterizations //
+    float parameterizeHeight(float h) { return sqrt(h / H_ATM); }
+    float parameterizeViewZenithCos(float cv, float h)
+    {
+        const float ch = -sqrt(h * (2.0 * R_EARTH + h)) / (R_EARTH + h);
+        return cv > ch ? (0.5 + 0.5 * pow((cv - ch) / (1.0 - ch), 0.2)) : (0.5 * pow((ch - cv) / (ch + 1.0), 0.2));
+    }
+    float parameterizeSunZenithCos(float cs)
+    {
+        return 0.5 * ((1.0 - 0.26) + (atan(max(cs, -0.1975) * tan(1.26 * 0.75)) / 0.75));
+    }
+
+    const float MieAsymmetryFactor = 0.93;
+    float phaseRayleigh(float cv) { return 8.0 * (7.0 / 5.0 + 0.5 * cv) / 10.0; }
+    float phaseMie(float cv)
+    {
+        const float v = (3.0 * (1.0 - pow(MieAsymmetryFactor, 2.0))) / (2.0 * (2.0 + pow(MieAsymmetryFactor, 2.0)));
+        return v * (1.0 + pow(cv, 2.0)) / pow(1.0 + pow(MieAsymmetryFactor, 2.0) - 2.0 * MieAsymmetryFactor * pow(cv, 2.0), 3.0 / 2.0);
+    }
+
+    vec4 getScatterLight(float height, float cv, float cs)
+    {
+        return texture(scatter, vec3(parameterizeHeight(height), parameterizeViewZenithCos(cv, height), parameterizeSunZenithCos(cs)));
+    }
+    vec3 estimateMieRgb(vec4 scatterLight)
+    {
+        return scatterLight.xyz * (scatterLight.w / scatterLight.x) * (RayleighCoeffs.x / MieCoeffs.x) * (MieCoeffs / RayleighCoeffs);
+    }
+    vec4 lookupTransmittance(float height, float cvs)
+    {
+        return texture(transmittance, vec2(cvs, parameterizeHeight(height)));
+    }
+
+    // ACES tonemapper //
+    // https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
+    const mat3 INPUT_MATRIX = mat3(
+        vec3(0.59719, 0.35458, 0.04823),
+        vec3(0.07600, 0.90834, 0.01566),
+        vec3(0.02840, 0.13383, 0.83777)
+    );
+    const mat3 OUTPUT_MATRIX = mat3(
+        vec3( 1.60475, -0.53108, -0.07367),
+        vec3(-0.10208,  1.10813, -0.00605),
+        vec3(-0.00327, -0.07276,  1.07602)
+    );
+    vec3 fit(vec3 v) {
+        const vec3 a = v * (v + 0.0245786) - 0.000090537;
+        const vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
+        
+        return a / b;
+    }
+
+    vec4 tonemap(vec4 i) {
+        vec3 c = fit(i.xyz * INPUT_MATRIX) * OUTPUT_MATRIX;
+        return vec4(clamp(c, 0.0, 1.0), i.w);
+    }
+}
+
+FragmentShader {
+    const float zd = 1.0 / tan(persp_fov_rad * 0.5);
+    const vec3 viewvec = normalize((main_view * vec4((2.0 * uv.x - 1.0) * aspect_wh, -(2.0 * uv.y - 1.0), zd, 0.0)).xyz);
+    const float cv = dot(viewvec, vec3(0.0, 1.0, 0.0));
+    const float camHeight = (main_view * vec4(0.0, 0.0, 0.0, 1.0)).y;
+    const float cs = dot(-incidentLightDir.xyz, vec3(0.0, 1.0, 0.0));
+    const float vs_cos = dot(incidentLightDir.xyz, -viewvec);
+
+    const vec4 scatterLight = getScatterLight(camHeight, cv, cs);
+    const vec3 mieRgb = phaseMie(vs_cos) * estimateMieRgb(scatterLight);
+    Target[0] = tonemap(vec4(10.0 * (/*lookupTransmittance(eyeHeight, cs).xyz + */phaseRayleigh(vs_cos) * scatterLight.xyz + mieRgb), 1.0));
+}

@@ -1,0 +1,3 @@
+app_package_id = "io.ct2.peridot.torchlight.examples.procedural_skybox"
+title = "Peridot Examples - Procedural Skybox"
+asset_dir = "./assets"
