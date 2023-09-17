@@ -137,7 +137,7 @@ impl PointerPositionProvider for X11 {
             // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
             Some((ptrinfo.win_x() as _, ptrinfo.win_y() as f32 - 5.0))
         } else {
-            debug!("Fixme: Handle same_screen = false");
+            tracing::debug!("Fixme: Handle same_screen = false");
             None
         }
     }
@@ -191,6 +191,9 @@ impl EventProcessor for X11 {
             .poll_for_event()
             .expect("Failed to poll window system events")
         {
+            let _span =
+                tracing::span!(tracing::Level::TRACE, "Event Handler(xcb)", event = ?ev).entered();
+
             match ev {
                 xcb::Event::X(xcb::x::Event::ClientMessage(e)) => match e.data() {
                     xcb::x::ClientMessageData::Data32(d)
@@ -205,7 +208,7 @@ impl EventProcessor for X11 {
                         peridot::math::Vector2(e.width() as _, e.height() as _);
                 }
                 _ => {
-                    debug!("Unhandled Event: {ev:?}");
+                    tracing::debug!("Unhandled Event");
                 }
             }
         }

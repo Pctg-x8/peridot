@@ -6,6 +6,8 @@ mod input;
 mod userlib;
 use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
@@ -127,7 +129,10 @@ impl GameDriver {
 }
 
 fn main() {
-    env_logger::init();
+    let fmt = tracing_subscriber::fmt::layer().pretty();
+    let filter = tracing_subscriber::filter::EnvFilter::from_default_env();
+    tracing_subscriber::registry().with(fmt).with(filter).init();
+
     let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
 
     unsafe {

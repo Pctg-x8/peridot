@@ -28,11 +28,21 @@ pub enum PixelFormat {
 }
 impl PixelFormat {
     /// Bits per pixel for each format enums
-    pub fn bpp(self) -> usize {
+    pub const fn bpp(self) -> usize {
         match self {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
             PixelFormat::RGBA64F => 64,
+        }
+    }
+
+    /// Optimal alignment for the format
+    pub const fn alignment(self) -> usize {
+        match self {
+            PixelFormat::RGBA32 | PixelFormat::BGRA32 | PixelFormat::RGB24 | PixelFormat::BGR24 => {
+                4
+            }
+            PixelFormat::RGBA64F => 8,
         }
     }
 }

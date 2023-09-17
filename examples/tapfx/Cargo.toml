@@ -12,4 +12,7 @@ peridot = { path = "../../base" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
 peridot-image = { path = "../../modules/image" }
-peridot-command-object = { path = "../../modules/command-object" }
+peridot-command-object = { path = "../../modules/command-object", features = [
+    "memory-manager-interop",
+] }
+peridot-memory-manager = { path = "../../modules/memory-manager" }

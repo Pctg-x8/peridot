@@ -271,7 +271,7 @@ impl InputSystem {
                 .unwrap_or_else(|| String::from("<unknown device name>"));
             // diag_device(&device);
 
-            info!("Registering Input Device: {devnode} ({device_name})");
+            tracing::trace!("Registering Input Device: {devnode} ({device_name})");
 
             Some((
                 String::from(devnode),
@@ -326,7 +326,7 @@ impl InputSystem {
 
         match action {
             "add" => {
-                info!("Registering Input Device: {devnode} ({device_name})");
+                tracing::trace!("Registering Input Device: {devnode} ({device_name})");
                 self.devmgr.add(
                     String::from(devnode),
                     EventDevice::open(devnode_c, device.is_mouse())
@@ -336,11 +336,11 @@ impl InputSystem {
             }
             "remove" => {
                 if let Some(id) = self.devmgr.lookup_id_by_node(devnode) {
-                    info!("Unregistering Input Device: {devnode} ({device_name})");
+                    tracing::trace!("Unregistering Input Device: {devnode} ({device_name})");
                     self.devmgr.remove(id, &ep);
                 }
             }
-            a => debug!("Unknown device action: {a:?}"),
+            a => tracing::debug!("Unknown device action: {a:?}"),
         }
     }
 
@@ -357,12 +357,12 @@ impl InputSystem {
             Some(d) => match d.read() {
                 Ok(ev) => (ev, d.is_mouse),
                 Err(e) => {
-                    error!("Failed to read from device: {e:?}");
+                    tracing::error!("Failed to read from device: {e:?}");
                     return;
                 }
             },
             None => {
-                error!("device not found? ev={ep_value}");
+                tracing::error!({ ev = ep_value }, "device not found?");
                 return;
             }
         };
@@ -373,7 +373,7 @@ impl InputSystem {
                 return;
             }
 
-            debug!("syn event: code={}, value={}", ev.code, ev.value);
+            tracing::trace!({ code = ev.code, value = ev.value }, "syn event");
         } else if ev.type_ == kernel_input::EventType::Key as u16 {
             let is_press = match ev.value {
                 0 => false,
@@ -408,7 +408,7 @@ impl InputSystem {
                     return;
                 }
 
-                debug!("key event: code={}", ev.code);
+                tracing::trace!({ code = ev.code }, "key event");
             }
         } else if ev.type_ == kernel_input::EventType::Relative as u16 {
             if !window_backend.query_input_focus() {
@@ -423,7 +423,7 @@ impl InputSystem {
             } {
                 input.dispatch_analog_event(b, ev.value as _, false);
             } else {
-                debug!("relative event: code={}, value={}", ev.code, ev.value);
+                tracing::trace!({ code = ev.code, value = ev.value }, "relative event");
             }
         } else if ev.type_ == kernel_input::EventType::Absolute as u16 {
             // ignore misc event from mouse, bitmask of pressed buttons
@@ -444,7 +444,7 @@ impl InputSystem {
             } {
                 input.dispatch_analog_event(b, ev.value as _, true);
             } else {
-                debug!("absolute event: code={}, value={}", ev.code, ev.value);
+                tracing::trace!({ code = ev.code, value = ev.value }, "absolute event");
             }
         } else {
             if !window_backend.query_input_focus() {
@@ -456,10 +456,8 @@ impl InputSystem {
             if ev.type_ == kernel_input::EventType::Misc as u16 && ev.code == 4 {
                 return;
             }
-            debug!(
-                "Other event: type={}, code={}, value={}",
-                ev.type_, ev.code, ev.value
-            );
+
+            tracing::trace!({ r#type = ev.type_, code = ev.code, value = ev.value }, "Other event");
         }
     }
 }
@@ -474,6 +472,7 @@ fn map_analog_key_emulation(key: u16) -> Option<peridot::NativeAnalogInput> {
 
     None
 }
+#[tracing::instrument]
 fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
     use peridot::NativeButtonInput::Character as C;
     use peridot::NativeButtonInput::*;
@@ -617,7 +616,7 @@ fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
         ));
     }
 
-    debug!("key event: code={key}");
+    tracing::debug!("unhandled key event?");
     None
 }
 fn map_mouse_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
