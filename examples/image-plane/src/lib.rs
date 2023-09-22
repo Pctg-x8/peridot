@@ -1,6 +1,9 @@
 use bedrock as br;
 use br::{resources::Image, SubmissionBatch};
-use br::{CommandBuffer, DescriptorPool, Device, ImageChild, ImageSubresourceSlice};
+use br::{
+    CommandBuffer, DescriptorPool, Device, GraphicsPipelineBuilder, ImageChild,
+    ImageSubresourceSlice,
+};
 use log::*;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3,
@@ -310,27 +313,18 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
         let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        let gp = br::GraphicsPipelineBuilder::<
-            _,
-            br::PipelineObject<peridot::DeviceObject>,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        >::new(&pl, (&renderpass, 0), vps)
-        .viewport_scissors(
-            br::DynamicArrayState::Static(&vp),
-            br::DynamicArrayState::Static(&sc),
-        )
-        .multisample_state(br::MultisampleState::new().into())
-        .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()])
-        .create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Create GraphicsPipeline");
+        let gp = br::NonDerivedGraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps)
+            .viewport_scissors(
+                br::DynamicArrayState::Static(&vp),
+                br::DynamicArrayState::Static(&sc),
+            )
+            .multisample_state(br::MultisampleState::new().into())
+            .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()])
+            .create(
+                e.graphics().device().clone(),
+                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+            )
+            .expect("Create GraphicsPipeline");
         #[cfg(feature = "debug")]
         gp.set_name(Some(
             &std::ffi::CString::new("Main Pipeline").expect("invalid sequence?"),

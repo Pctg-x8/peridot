@@ -1,7 +1,7 @@
 use bedrock as br;
 use br::{
-    CommandBuffer, DescriptorPool, Device, Image, ImageChild, ImageSubresourceSlice,
-    SubmissionBatch,
+    CommandBuffer, DescriptorPool, Device, GraphicsPipelineBuilder, Image, ImageChild,
+    ImageSubresourceSlice, SubmissionBatch,
 };
 use peridot::mthelper::SharedRef;
 use peridot_command_object::{
@@ -121,27 +121,18 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
 
         let scissors = [bb_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
         let viewports = [scissors[0].make_viewport(0.0..1.0)];
-        let pipeline = br::GraphicsPipelineBuilder::<
-            _,
-            br::PipelineObject<peridot::DeviceObject>,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        >::new(&pl, (&renderpass, 0), vps)
-        .viewport_scissors(
-            br::DynamicArrayState::Static(&viewports),
-            br::DynamicArrayState::Static(&scissors),
-        )
-        .multisample_state(br::MultisampleState::new().into())
-        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()])
-        .create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Failed to create GraphicsPipeline");
+        let pipeline = br::NonDerivedGraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps)
+            .viewport_scissors(
+                br::DynamicArrayState::Static(&viewports),
+                br::DynamicArrayState::Static(&scissors),
+            )
+            .multisample_state(br::MultisampleState::new().into())
+            .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()])
+            .create(
+                e.graphics().device().clone(),
+                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+            )
+            .expect("Failed to create GraphicsPipeline");
         let pipeline = peridot::LayoutedPipeline::combine(pipeline, pl);
 
         let main_image_data: peridot_image::PNG = e
