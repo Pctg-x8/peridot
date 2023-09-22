@@ -233,69 +233,6 @@ impl<'d, Device: br::Device + Clone> PvpShaderModules<'d, Device> {
         )
     }
 }
-impl<Device: br::Device> br::PipelineShaderStageProvider for PvpShaderModules<'_, Device> {
-    type ExtraStorage = (
-        Option<br::vk::VkSpecializationInfo>,
-        Option<br::vk::VkSpecializationInfo>,
-    );
-
-    fn base_struct(
-        &self,
-        extra_storage: &Self::ExtraStorage,
-    ) -> Vec<br::vk::VkPipelineShaderStageCreateInfo> {
-        let mut v = vec![br::vk::VkPipelineShaderStageCreateInfo {
-            sType: br::vk::VkPipelineShaderStageCreateInfo::TYPE,
-            pNext: core::ptr::null(),
-            flags: 0,
-            stage: br::ShaderStage::VERTEX.0,
-            module: self.vertex.native_ptr(),
-            pName: unsafe { core::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0").as_ptr() },
-            pSpecializationInfo: extra_storage
-                .0
-                .as_ref()
-                .map_or_else(core::ptr::null, |x| x as _),
-        }];
-
-        if let Some(ref f) = self.fragment {
-            v.push(br::vk::VkPipelineShaderStageCreateInfo {
-                sType: br::vk::VkPipelineShaderStageCreateInfo::TYPE,
-                pNext: core::ptr::null(),
-                flags: 0,
-                stage: br::ShaderStage::FRAGMENT.0,
-                module: f.native_ptr(),
-                pName: unsafe {
-                    core::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0").as_ptr()
-                },
-                pSpecializationInfo: extra_storage
-                    .1
-                    .as_ref()
-                    .map_or_else(core::ptr::null, |x| x as _),
-            });
-        }
-
-        v
-    }
-    fn make_extras(&self) -> Self::ExtraStorage {
-        (
-            self.vertex_spec_constants
-                .as_ref()
-                .map(|c| br::vk::VkSpecializationInfo {
-                    mapEntryCount: c.0.len() as _,
-                    pMapEntries: c.0.as_ptr(),
-                    dataSize: c.1.len(),
-                    pData: c.1.as_ptr() as *const _ as _,
-                }),
-            self.fragment_spec_constants
-                .as_ref()
-                .map(|c| br::vk::VkSpecializationInfo {
-                    mapEntryCount: c.0.len() as _,
-                    pMapEntries: c.0.as_ptr(),
-                    dataSize: c.1.len(),
-                    pData: c.1.as_ptr() as *const _ as _,
-                }),
-        )
-    }
-}
 
 pub struct PvpContainerReader<R: BufRead + Seek> {
     vb_offset: usize,
