@@ -74,6 +74,7 @@ pub struct PvpShaderModulesStageProvider<'d, Device: br::Device> {
     vertex_spec_constants: Option<(&'d [br::vk::VkSpecializationMapEntry], &'d [u8])>,
     fragment_spec_constants: Option<(&'d [br::vk::VkSpecializationMapEntry], &'d [u8])>,
 }
+#[cfg(feature = "with-loader-impl")]
 impl<'d, Device: br::Device> PvpShaderModulesStageProvider<'d, Device> {
     pub fn set_vertex_spec_constants(
         &mut self,
@@ -91,6 +92,7 @@ impl<'d, Device: br::Device> PvpShaderModulesStageProvider<'d, Device> {
         self.fragment_spec_constants = Some((map_entries, data));
     }
 }
+#[cfg(feature = "with-loader-impl")]
 impl<Device: br::Device> br::PipelineShaderStageProvider
     for PvpShaderModulesStageProvider<'_, Device>
 {
