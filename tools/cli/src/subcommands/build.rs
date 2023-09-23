@@ -11,7 +11,7 @@ pub struct Args {
     /// Path to userlib crate
     userlib_path: PathBuf,
     /// Target Platform
-    #[structopt(long, short = "p", possible_values = &Platform::variants(), case_insensitive = true, required = true)]
+    #[structopt(long, short = "p", possible_values = &Platform::variants(), case_insensitive = true, required = false)]
     platform: Vec<Platform>,
     /// Entry TypeName(default: Game)
     #[structopt(long, short = "e")]
@@ -100,7 +100,7 @@ pub struct BuildArgs {
     run: bool,
 }
 
-pub fn run(args: BuildArgs) {
+pub fn run(mut args: BuildArgs) {
     let project: Project = toml::from_str(
         &std::fs::read_to_string(args.base.project_config_path())
             .expect("Failed to load project configuration"),
@@ -112,6 +112,13 @@ pub fn run(args: BuildArgs) {
         BuildMode::Normal
     };
 
+    if args.base.platform.is_empty() {
+        // select default runtime platform
+        args.base
+            .platform
+            .push(Platform::runtime().expect("least one platform must be selected"));
+    }
+
     for p in &args.base.platform {
         let project_config = project.resolve_config(p.identifier());
         let options = args.base.to_build_options(&project_config);
@@ -119,12 +126,18 @@ pub fn run(args: BuildArgs) {
     }
 }
 
-pub fn run_check(args: Args) {
+pub fn run_check(mut args: Args) {
     let project: Project = toml::from_str(
         &std::fs::read_to_string(args.project_config_path())
             .expect("Failed to load project configuration"),
     )
     .expect("Invalid project configuration");
+
+    if args.platform.is_empty() {
+        // select default runtime platform
+        args.platform
+            .push(Platform::runtime().expect("least one platform must be selected"));
+    }
 
     for p in &args.platform {
         let project_config = project.resolve_config(p.identifier());
@@ -133,12 +146,18 @@ pub fn run_check(args: Args) {
     }
 }
 
-pub fn run_test(args: Args) {
+pub fn run_test(mut args: Args) {
     let project: Project = toml::from_str(
         &std::fs::read_to_string(args.project_config_path())
             .expect("Failed to load project configuration"),
     )
     .expect("Invalid project configuration");
+
+    if args.platform.is_empty() {
+        // select default runtime platform
+        args.platform
+            .push(Platform::runtime().expect("least one platform must be selected"));
+    }
 
     for p in &args.platform {
         let project_config = project.resolve_config(p.identifier());
