@@ -1048,7 +1048,6 @@ impl MemoryManager {
                         memory_req = unsafe { memory_req.for_dedicated_image_allocation(&object) };
                     }
                     let memory = memory_req.execute(e.device().clone())?;
-                    object.bind(&memory, 0)?;
 
                     bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
                         sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
