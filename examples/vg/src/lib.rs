@@ -1,7 +1,7 @@
 use bedrock as br;
 use br::{
-    Buffer, CommandBuffer, DescriptorPool, Device, Image, ImageChild, ImageSubresourceSlice,
-    SubmissionBatch,
+    Buffer, CommandBuffer, DescriptorPool, Device, GraphicsPipelineBuilder, Image, ImageChild,
+    ImageSubresourceSlice, SubmissionBatch,
 };
 use log::*;
 use peridot::math::Vector2;
@@ -31,10 +31,17 @@ pub struct VgRendererFragmentFixedColor {
     a: f32,
 }
 
+const unsafe fn as_u8_slice<T>(slice: &[T]) -> &[u8] {
+    core::slice::from_raw_parts(
+        slice.as_ptr() as *const u8,
+        slice.len() * core::mem::size_of::<T>(),
+    )
+}
+
 pub struct Game<PL: peridot::NativeLinker> {
     memory_manager: MemoryManager,
     render_pass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<br::FramebufferObject<peridot::DeviceObject>>,
+    framebuffers: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
     render_cb: CommandBundle<peridot::DeviceObject>,
     _bufview: br::BufferViewObject<SharedRef<peridot_memory_manager::Buffer>>,
     _bufview2: br::BufferViewObject<SharedRef<peridot_memory_manager::Buffer>>,
@@ -308,13 +315,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             &[],
         );
 
-        let shader = PvpShaderModules::new(
+        let mut shader = PvpShaderModules::new(
             e.graphics().device(),
             e.load("shaders.interiorColorFixed")
                 .expect("Loading PvpContainer"),
         )
         .expect("Creating Shader");
-        let curve_shader = PvpShaderModules::new(
+        let mut curve_shader = PvpShaderModules::new(
             e.graphics().device(),
             e.load("shaders.curveColorFixed")
                 .expect("Loading CurveShader"),
@@ -340,53 +347,35 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 size: 4,
             },
         ];
-        let mut interior_vertex_processing =
-            shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        let mut curve_vertex_processing =
-            curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        interior_vertex_processing.vertex_shader_mut().specinfo = Some((
+        shader.set_vertex_spec_constants(
             Cow::Borrowed(spc_map),
-            br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP),
-        ));
-        curve_vertex_processing.vertex_shader_mut().specinfo = Some((
+            Cow::Borrowed(unsafe { as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]) }),
+        );
+        curve_shader.set_vertex_spec_constants(
             Cow::Borrowed(spc_map),
-            br::DynamicDataCell::from_slice(&pvg::renderer_pivot::LEFT_TOP),
-        ));
+            Cow::Borrowed(unsafe { as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]) }),
+        );
 
-        interior_vertex_processing
-            .fragment_shader_mut()
-            .expect("fragment shader not exist?")
-            .specinfo = Some(
-            VgRendererFragmentFixedColor {
-                r: 1.0,
-                g: 0.5,
-                b: 0.0,
-                a: 1.0,
-            }
-            .as_pair(),
+        let (color1_emap, color1_values) = VgRendererFragmentFixedColor {
+            r: 1.0,
+            g: 0.5,
+            b: 0.0,
+            a: 1.0,
+        }
+        .as_pair();
+        // TODO: このcloneなんとかしたい
+        shader.set_fragment_spec_constants(color1_emap.clone(), color1_values.clone());
+        curve_shader.set_fragment_spec_constants(color1_emap, color1_values);
+        let interior_vertex_processing =
+            shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        let curve_vertex_processing =
+            curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+        let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(
+            &pl,
+            (&render_pass, 0),
+            interior_vertex_processing,
         );
-        curve_vertex_processing
-            .fragment_shader_mut()
-            .expect("fragment shader not exist?")
-            .specinfo = Some(
-            VgRendererFragmentFixedColor {
-                r: 1.0,
-                g: 0.5,
-                b: 0.0,
-                a: 1.0,
-            }
-            .as_pair(),
-        );
-        let mut gpb = br::GraphicsPipelineBuilder::<
-            _,
-            br::PipelineObject<peridot::DeviceObject>,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        >::new(&pl, (&render_pass, 0), interior_vertex_processing);
         gpb.multisample_state(Some({
             let mut state = br::MultisampleState::new();
             state.rasterization_samples(msaa_count as _);
@@ -406,18 +395,17 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Create GraphicsPipeline"),
             pl.clone(),
         );
+
+        let (color2_layout, color2_values) = VgRendererFragmentFixedColor {
+            r: 0.0,
+            g: 0.5,
+            b: 1.0,
+            a: 1.0,
+        }
+        .as_pair();
         gpb.vertex_processing_mut()
-            .fragment_shader_mut()
-            .expect("Fragment shader not exist?")
-            .specinfo = Some(
-            VgRendererFragmentFixedColor {
-                r: 0.0,
-                g: 0.5,
-                b: 1.0,
-                a: 1.0,
-            }
-            .as_pair(),
-        );
+            .shader_stages_mut()
+            .set_fragment_spec_constants(color2_layout.as_ref(), &color2_values);
         let gp2 = LayoutedPipeline::combine(
             gpb.create(
                 e.graphics().device().clone(),
@@ -436,17 +424,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             pl.clone(),
         );
         gpb.vertex_processing_mut()
-            .fragment_shader_mut()
-            .expect("fragment shader not exist?")
-            .specinfo = Some(
-            VgRendererFragmentFixedColor {
-                r: 0.0,
-                g: 0.5,
-                b: 1.0,
-                a: 1.0,
-            }
-            .as_pair(),
-        );
+            .shader_stages_mut()
+            .set_fragment_spec_constants(&*color2_layout, &color2_values);
         let gp2_curve = LayoutedPipeline::combine(
             gpb.create(
                 e.graphics().device().clone(),

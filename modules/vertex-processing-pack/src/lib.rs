@@ -4,11 +4,9 @@ extern crate bedrock;
 extern crate peridot_serialization_utils;
 use peridot_serialization_utils::*;
 
-use bedrock as br;
+use bedrock::{self as br, VkHandle, VulkanStructure};
 #[cfg(feature = "with-loader-impl")]
 use std::borrow::Cow;
-#[cfg(feature = "with-loader-impl")]
-use std::ffi::CString;
 use std::fs::File;
 #[cfg(feature = "with-loader-impl")]
 use std::io::Read;
@@ -70,19 +68,105 @@ impl peridot::FromAsset for PvpContainer {
 }
 
 #[cfg(feature = "with-loader-impl")]
+pub struct PvpShaderModulesStageProvider<'d, Device: br::Device> {
+    vertex: &'d br::ShaderModuleObject<Device>,
+    fragment: Option<&'d br::ShaderModuleObject<Device>>,
+    vertex_spec_constants: Option<(&'d [br::vk::VkSpecializationMapEntry], &'d [u8])>,
+    fragment_spec_constants: Option<(&'d [br::vk::VkSpecializationMapEntry], &'d [u8])>,
+}
+#[cfg(feature = "with-loader-impl")]
+impl<'d, Device: br::Device> PvpShaderModulesStageProvider<'d, Device> {
+    pub fn set_vertex_spec_constants(
+        &mut self,
+        map_entries: &'d [br::vk::VkSpecializationMapEntry],
+        data: &'d [u8],
+    ) {
+        self.vertex_spec_constants = Some((map_entries, data));
+    }
+
+    pub fn set_fragment_spec_constants(
+        &mut self,
+        map_entries: &'d [br::vk::VkSpecializationMapEntry],
+        data: &'d [u8],
+    ) {
+        self.fragment_spec_constants = Some((map_entries, data));
+    }
+}
+#[cfg(feature = "with-loader-impl")]
+impl<Device: br::Device> br::PipelineShaderStageProvider
+    for PvpShaderModulesStageProvider<'_, Device>
+{
+    type ExtraStorage = (
+        Option<br::vk::VkSpecializationInfo>,
+        Option<br::vk::VkSpecializationInfo>,
+    );
+
+    fn base_struct(
+        &self,
+        extra_storage: &Self::ExtraStorage,
+    ) -> Vec<br::vk::VkPipelineShaderStageCreateInfo> {
+        let mut v = vec![br::vk::VkPipelineShaderStageCreateInfo {
+            sType: br::vk::VkPipelineShaderStageCreateInfo::TYPE,
+            pNext: core::ptr::null(),
+            flags: 0,
+            stage: br::ShaderStage::VERTEX.0,
+            module: self.vertex.native_ptr(),
+            pName: unsafe { core::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0").as_ptr() },
+            pSpecializationInfo: extra_storage
+                .0
+                .as_ref()
+                .map_or_else(core::ptr::null, |x| x as _),
+        }];
+
+        if let Some(ref f) = self.fragment {
+            v.push(br::vk::VkPipelineShaderStageCreateInfo {
+                sType: br::vk::VkPipelineShaderStageCreateInfo::TYPE,
+                pNext: core::ptr::null(),
+                flags: 0,
+                stage: br::ShaderStage::FRAGMENT.0,
+                module: f.native_ptr(),
+                pName: unsafe {
+                    core::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0").as_ptr()
+                },
+                pSpecializationInfo: extra_storage
+                    .1
+                    .as_ref()
+                    .map_or_else(core::ptr::null, |x| x as _),
+            });
+        }
+
+        v
+    }
+    fn make_extras(&self) -> Self::ExtraStorage {
+        (
+            self.vertex_spec_constants
+                .as_ref()
+                .map(|c| br::vk::VkSpecializationInfo {
+                    mapEntryCount: c.0.len() as _,
+                    pMapEntries: c.0.as_ptr(),
+                    dataSize: c.1.len(),
+                    pData: c.1.as_ptr() as *const _ as _,
+                }),
+            self.fragment_spec_constants
+                .as_ref()
+                .map(|c| br::vk::VkSpecializationInfo {
+                    mapEntryCount: c.0.len() as _,
+                    pMapEntries: c.0.as_ptr(),
+                    dataSize: c.1.len(),
+                    pData: c.1.as_ptr() as *const _ as _,
+                }),
+        )
+    }
+}
+
+#[cfg(feature = "with-loader-impl")]
 pub struct PvpShaderModules<'d, Device: br::Device> {
     bindings: Vec<br::vk::VkVertexInputBindingDescription>,
     attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
     vertex: br::ShaderModuleObject<Device>,
     fragment: Option<br::ShaderModuleObject<Device>>,
-    vertex_spec_constants: Option<(
-        Vec<br::vk::VkSpecializationMapEntry>,
-        br::DynamicDataCell<'d>,
-    )>,
-    fragment_spec_constants: Option<(
-        Vec<br::vk::VkSpecializationMapEntry>,
-        br::DynamicDataCell<'d>,
-    )>,
+    vertex_spec_constants: Option<(Cow<'d, [br::vk::VkSpecializationMapEntry]>, Cow<'d, [u8]>)>,
+    fragment_spec_constants: Option<(Cow<'d, [br::vk::VkSpecializationMapEntry]>, Cow<'d, [u8]>)>,
 }
 #[cfg(feature = "with-loader-impl")]
 impl<'d, Device: br::Device + Clone> PvpShaderModules<'d, Device> {
@@ -102,17 +186,26 @@ impl<'d, Device: br::Device + Clone> PvpShaderModules<'d, Device> {
         })
     }
 
+    pub fn set_vertex_spec_constants(
+        &mut self,
+        map_entries: Cow<'d, [br::vk::VkSpecializationMapEntry]>,
+        data: Cow<'d, [u8]>,
+    ) {
+        self.vertex_spec_constants = Some((map_entries, data));
+    }
+
+    pub fn set_fragment_spec_constants(
+        &mut self,
+        map_entries: Cow<'d, [br::vk::VkSpecializationMapEntry]>,
+        data: Cow<'d, [u8]>,
+    ) {
+        self.fragment_spec_constants = Some((map_entries, data));
+    }
+
     pub fn generate_vps(
         &'d self,
         primitive_topo: br::vk::VkPrimitiveTopology,
-    ) -> br::VertexProcessingStages<
-        'd,
-        &'d br::ShaderModuleObject<Device>,
-        &'d br::ShaderModuleObject<Device>,
-        &'d br::ShaderModuleObject<Device>,
-        &'d br::ShaderModuleObject<Device>,
-        &'d br::ShaderModuleObject<Device>,
-    > {
+    ) -> br::VertexProcessingStages<'d, PvpShaderModulesStageProvider<'d, Device>> {
         let bindings = unsafe {
             // Transparentなのでok
             std::slice::from_raw_parts(
@@ -120,30 +213,24 @@ impl<'d, Device: br::Device + Clone> PvpShaderModules<'d, Device> {
                 self.bindings.len(),
             )
         };
-        let mut r = br::VertexProcessingStages::new(
-            br::PipelineShader {
-                module: &self.vertex,
-                entry_name: CString::new("main").expect("unreachable"),
-                specinfo: self
+
+        br::VertexProcessingStages::new(
+            PvpShaderModulesStageProvider {
+                vertex: &self.vertex,
+                fragment: self.fragment.as_ref(),
+                vertex_spec_constants: self
                     .vertex_spec_constants
                     .as_ref()
-                    .map(|(e, d)| (Cow::Borrowed(&e[..]), d.clone())),
+                    .map(|(a, b)| (a.as_ref(), b.as_ref())),
+                fragment_spec_constants: self
+                    .fragment_spec_constants
+                    .as_ref()
+                    .map(|(a, b)| (a.as_ref(), b.as_ref())),
             },
             bindings,
             &self.attributes,
             primitive_topo,
-        );
-        if let Some(ref f) = self.fragment {
-            r.fragment_shader(br::PipelineShader {
-                module: f,
-                entry_name: CString::new("main").expect("unreachable"),
-                specinfo: self
-                    .fragment_spec_constants
-                    .as_ref()
-                    .map(|(e, d)| (Cow::Borrowed(&e[..]), d.clone())),
-            });
-        }
-        return r;
+        )
     }
 }
 

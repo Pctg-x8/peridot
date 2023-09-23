@@ -1,5 +1,8 @@
 use bedrock as br;
-use br::{CommandBuffer, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
+use br::{
+    CommandBuffer, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice,
+    SubmissionBatch,
+};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
@@ -217,14 +220,17 @@ impl TwoPassStencilSDFRenderer {
             target_width: init_target_size.0 as _,
             target_height: init_target_size.1 as _,
         };
+        let stencil_triangle_vsh_parameters = stencil_triangle_vsh_parameters.as_pair();
         let outline_vsh_parameters = OutlineVertexShaderParameters {
             target_width: init_target_size.0 as _,
             target_height: init_target_size.1 as _,
             sdf_max_distance,
         };
+        let outline_vsh_parameters = outline_vsh_parameters.as_pair();
         let fill_fsh_color_output = FillFragmentShaderParameters {
             enable_color_output: true as _,
         };
+        let fill_fsh_color_output = fill_fsh_color_output.as_pair();
 
         let scissors =
             [br::vk::VkExtent2D::from(init_target_size).into_rect(br::vk::VkOffset2D::ZERO)];
@@ -255,18 +261,17 @@ impl TwoPassStencilSDFRenderer {
 
         let mut stencil_triangle_shader =
             fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_triangle_shader.vertex_shader_mut().specinfo =
-            Some(stencil_triangle_vsh_parameters.as_pair());
-        let mut pipebuild = br::GraphicsPipelineBuilder::<
-            _,
-            br::PipelineObject<peridot::DeviceObject>,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        >::new(&empty_pl, (&render_pass, 0), stencil_triangle_shader);
+        stencil_triangle_shader
+            .shader_stages_mut()
+            .set_vertex_spec_constants(
+                &stencil_triangle_vsh_parameters.0,
+                &stencil_triangle_vsh_parameters.1,
+            );
+        let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
+            &empty_pl,
+            (&render_pass, 0),
+            stencil_triangle_shader,
+        );
         pipebuild
             .viewport_scissors(
                 br::DynamicArrayState::Static(&viewports),
@@ -284,8 +289,12 @@ impl TwoPassStencilSDFRenderer {
             .expect("Failed to create Triangle Fans Stencil Pipeline");
         let mut stencil_curve_shader =
             curve_fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_curve_shader.vertex_shader_mut().specinfo =
-            Some(stencil_triangle_vsh_parameters.as_pair());
+        stencil_curve_shader
+            .shader_stages_mut()
+            .set_vertex_spec_constants(
+                &stencil_triangle_vsh_parameters.0,
+                &stencil_triangle_vsh_parameters.1,
+            );
         pipebuild.vertex_processing(stencil_curve_shader);
         let curve_triangles_stencil_pipeline = pipebuild
             .create(
@@ -296,9 +305,8 @@ impl TwoPassStencilSDFRenderer {
         let mut invert_fill_shader =
             fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
         invert_fill_shader
-            .fragment_shader_mut()
-            .expect("no fragment shader?")
-            .specinfo = Some(fill_fsh_color_output.as_pair());
+            .shader_stages_mut()
+            .set_fragment_spec_constants(&fill_fsh_color_output.0, &fill_fsh_color_output.1);
         pipebuild
             .render_pass(&render_pass, 1)
             .vertex_processing(invert_fill_shader)
@@ -316,7 +324,9 @@ impl TwoPassStencilSDFRenderer {
             .expect("Failed to create Invert Pipeline");
         let mut outline_render_vps =
             outline_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        outline_render_vps.vertex_shader_mut().specinfo = Some(outline_vsh_parameters.as_pair());
+        outline_render_vps
+            .shader_stages_mut()
+            .set_vertex_spec_constants(&outline_vsh_parameters.0, &outline_vsh_parameters.1);
         pipebuild
             .vertex_processing(outline_render_vps)
             .stencil_control(Self::stencil_noop())
@@ -361,14 +371,17 @@ impl TwoPassStencilSDFRenderer {
             target_width: new_size.0 as _,
             target_height: new_size.1 as _,
         };
+        let stencil_vsh_parameters = stencil_vsh_parameters.as_pair();
         let outline_vsh_parameters = OutlineVertexShaderParameters {
             target_width: new_size.0 as _,
             target_height: new_size.1 as _,
             sdf_max_distance,
         };
+        let outline_vsh_parameters = outline_vsh_parameters.as_pair();
         let fill_fsh_color_output = FillFragmentShaderParameters {
             enable_color_output: true as _,
         };
+        let fill_fsh_color_output = fill_fsh_color_output.as_pair();
 
         let scissors = [br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO)];
         let viewports = [scissors[0].make_viewport(0.0..1.0)];
@@ -376,18 +389,10 @@ impl TwoPassStencilSDFRenderer {
         let mut stencil_triangle_shader = self
             .fill_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_triangle_shader.vertex_shader_mut().specinfo =
-            Some(stencil_vsh_parameters.as_pair());
-        let mut pipebuild = br::GraphicsPipelineBuilder::<
-            _,
-            br::PipelineObject<peridot::DeviceObject>,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        >::new(
+        stencil_triangle_shader
+            .shader_stages_mut()
+            .set_vertex_spec_constants(&stencil_vsh_parameters.0, &stencil_vsh_parameters.1);
+        let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
             self.triangle_fans_stencil_pipeline.layout(),
             (&self.render_pass, 0),
             stencil_triangle_shader,
@@ -410,7 +415,9 @@ impl TwoPassStencilSDFRenderer {
         let mut stencil_curve_shader = self
             .curve_fill_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        stencil_curve_shader.vertex_shader_mut().specinfo = Some(stencil_vsh_parameters.as_pair());
+        stencil_curve_shader
+            .shader_stages_mut()
+            .set_vertex_spec_constants(&stencil_vsh_parameters.0, &stencil_vsh_parameters.1);
         pipebuild.vertex_processing(stencil_curve_shader);
         let curve_triangles_stencil_pipeline = pipebuild
             .create(
@@ -422,9 +429,8 @@ impl TwoPassStencilSDFRenderer {
             .fill_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
         invert_fill_shader
-            .fragment_shader_mut()
-            .expect("no fragment shader?")
-            .specinfo = Some(fill_fsh_color_output.as_pair());
+            .shader_stages_mut()
+            .set_fragment_spec_constants(&fill_fsh_color_output.0, &fill_fsh_color_output.1);
         pipebuild
             .render_pass(&self.render_pass, 1)
             .vertex_processing(invert_fill_shader)
@@ -443,7 +449,9 @@ impl TwoPassStencilSDFRenderer {
         let mut outline_render_vps = self
             .outline_shader
             .generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        outline_render_vps.vertex_shader_mut().specinfo = Some(outline_vsh_parameters.as_pair());
+        outline_render_vps
+            .shader_stages_mut()
+            .set_vertex_spec_constants(&outline_vsh_parameters.0, &outline_vsh_parameters.1);
         pipebuild
             .vertex_processing(outline_render_vps)
             .stencil_control(Self::stencil_noop())
@@ -548,7 +556,7 @@ pub struct Game<NL: peridot::NativeLinker> {
     memory_manager: MemoryManager,
     buffers: TwoPassStencilSDFRendererBuffers,
     stencil_buffer_view: SharedRef<br::ImageViewObject<peridot_memory_manager::Image>>,
-    fb: Vec<br::FramebufferObject<peridot::DeviceObject>>,
+    fb: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
     sdf_renderer: TwoPassStencilSDFRenderer,
     cmd: peridot::CommandBundle<peridot::DeviceObject>,
     ph: std::marker::PhantomData<*const NL>,

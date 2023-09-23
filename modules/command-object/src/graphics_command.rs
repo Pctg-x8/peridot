@@ -339,14 +339,14 @@ impl<R: br::RenderPass, F: br::Framebuffer> BeginRenderPass<R, F> {
         }
     }
 }
-impl<'f, R, D> BeginRenderPass<R, &'f br::FramebufferObject<D>>
+impl<'f, R, D> BeginRenderPass<R, &'f br::FramebufferObject<'f, D>>
 where
     R: br::RenderPass<ConcreteDevice = D>,
     D: br::Device,
 {
     pub fn for_entire_framebuffer(
         render_pass: R,
-        framebuffer: &'f br::FramebufferObject<D>,
+        framebuffer: &'f br::FramebufferObject<'f, D>,
     ) -> Self {
         Self::new(
             render_pass,

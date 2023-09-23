@@ -551,7 +551,7 @@ impl RenderPassTemplates {
 }
 
 pub trait SpecConstantStorage {
-    fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, br::DynamicDataCell);
+    fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, Cow<[u8]>);
 }
 
 pub struct LayoutedPipeline<Pipeline: br::Pipeline, Layout: br::PipelineLayout>(Pipeline, Layout);
