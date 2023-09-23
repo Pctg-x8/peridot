@@ -17,6 +17,21 @@ arg_enum! {
         Android
     }
 }
+impl Platform {
+    pub const fn runtime() -> Option<Self> {
+        if cfg!(windows) {
+            Some(Self::Windows)
+        } else if cfg!(target_os = "macos") {
+            Some(Self::Mac)
+        } else if cfg!(target_os = "linux") {
+            Some(Self::Linux)
+        } else if cfg!(target_os = "android") {
+            Some(Self::Android)
+        } else {
+            None
+        }
+    }
+}
 
 pub struct BuildOptions<'s> {
     pub userlib: &'s Path,
