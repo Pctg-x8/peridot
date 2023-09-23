@@ -27,3 +27,5 @@ env_logger = "0.5"
 objc = "0.2"
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 libc = "0.2"
+tracing = { version = "0.1.37", features = ["log"] }
+tracing-subscriber = { version = "0.3.17", features = ["fmt", "env-filter"] }
