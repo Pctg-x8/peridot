@@ -271,6 +271,10 @@ instance ToJSON PermissionTable where
   toJSON (GrantAll PermWrite) = toJSON ("write-all" :: String)
   toJSON (GrantAll PermNone) = object []
 
+permissionTable :: PermissionTable -> Map PermissionKey Permission
+permissionTable (PermissionTable t) = t
+permissionTable (GrantAll g) = M.fromList $ map (,g) allPermissionKeys
+
 maybePermissionTable :: PermissionTable -> Maybe PermissionTable
 maybePermissionTable (PermissionTable p) = PermissionTable <$> maybeNonEmptyMap p
 maybePermissionTable p = Just p
@@ -281,19 +285,27 @@ instance ToJSON Concurrency where
   toJSON (ConcurrentQueuedGroup g) = toJSON g
   toJSON (ConcurrentCancelledGroup g) = object ["group" .= g, "cancel-in-progress" .= True]
 
-data Workflow = Workflow (Maybe String) (Maybe String) WorkflowTrigger PermissionTable (Map String String) (Maybe Concurrency) (Map String Job)
+data Workflow = Workflow
+  { workflowName' :: Maybe String,
+    workflowRunName' :: Maybe String,
+    workflowOn :: WorkflowTrigger,
+    workflowPermissions :: PermissionTable,
+    workflowEnv :: Map String String,
+    workflowConcurrency' :: Maybe Concurrency,
+    workflowJobs' :: Map String Job
+  }
 
 instance ToJSON Workflow where
-  toJSON (Workflow name runName on permissions wEnv concurrency jobs) =
+  toJSON Workflow {..} =
     object $
       catMaybes
-        [ ("name" .=) <$> name,
-          ("run-name" .=) <$> runName,
-          Just ("on" .= on),
-          ("permissions" .=) <$> maybePermissionTable permissions,
-          ("env" .=) <$> maybeNonEmptyMap wEnv,
-          ("concurrency" .=) <$> concurrency,
-          Just ("jobs" .= jobs)
+        [ ("name" .=) <$> workflowName',
+          ("run-name" .=) <$> workflowRunName',
+          Just ("on" .= workflowOn),
+          ("permissions" .=) <$> maybePermissionTable workflowPermissions,
+          ("env" .=) <$> maybeNonEmptyMap workflowEnv,
+          ("concurrency" .=) <$> workflowConcurrency',
+          Just ("jobs" .= workflowJobs')
         ]
 
 emptyWorkflow :: WorkflowTrigger -> Workflow
@@ -316,10 +328,6 @@ workflowRunName runName (Workflow n _ on pt wEnv c jobs) = Workflow n (Just runN
 
 workflowModifyPermissionTable :: (PermissionTable -> PermissionTable) -> Workflow -> Workflow
 workflowModifyPermissionTable f (Workflow n rn on pt wEnv c jobs) = Workflow n rn on (f pt) wEnv c jobs
-
-permissionTable :: PermissionTable -> Map PermissionKey Permission
-permissionTable (PermissionTable t) = t
-permissionTable (GrantAll g) = M.fromList $ map (,g) allPermissionKeys
 
 workflowModifyEnvironmentMap :: (Map String String -> Map String String) -> Workflow -> Workflow
 workflowModifyEnvironmentMap f (Workflow n rn on pt wEnv c jobs) = Workflow n rn on pt (f wEnv) c jobs
