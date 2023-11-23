@@ -92,10 +92,10 @@ data Step = Step
   { stepId :: Maybe String,
     stepIf :: Maybe String,
     stepName :: Maybe String,
-    uses :: Maybe String,
-    run :: Maybe String,
-    shell :: Maybe String,
-    with :: Map String Value,
+    stepUses :: Maybe String,
+    stepRun :: Maybe String,
+    stepShell :: Maybe String,
+    stepWith :: Map String Value,
     stepEnv :: Map String String,
     stepWorkingDirectory :: Maybe String
   }
@@ -106,19 +106,19 @@ emptyStep =
     { stepId = Nothing,
       stepIf = Nothing,
       stepName = Nothing,
-      uses = Nothing,
-      run = Nothing,
-      shell = Nothing,
-      with = M.empty,
+      stepUses = Nothing,
+      stepRun = Nothing,
+      stepShell = Nothing,
+      stepWith = M.empty,
       stepEnv = M.empty,
       stepWorkingDirectory = Nothing
     }
 
 runStep :: String -> Step
-runStep command = emptyStep {run = Just command}
+runStep command = emptyStep {stepRun = Just command}
 
 actionStep :: String -> Map String Value -> Step
-actionStep name withArgs = emptyStep {uses = Just name, with = withArgs}
+actionStep name withArgs = emptyStep {stepUses = Just name, stepWith = withArgs}
 
 type StepModifier = Step -> Step
 
@@ -126,13 +126,13 @@ modifyStepEnv :: (Map String String -> Map String String) -> StepModifier
 modifyStepEnv f x@(Step {stepEnv}) = x {stepEnv = f stepEnv}
 
 modifyStepWith :: (Map String Value -> Map String Value) -> StepModifier
-modifyStepWith f x = x {with = f $ with x}
+modifyStepWith f x = x {stepWith = f $ stepWith x}
 
 stepSetWithParam :: (ToJSON v) => String -> v -> StepModifier
 stepSetWithParam k v = modifyStepWith $ M.insert k $ toJSON v
 
 stepUseShell :: String -> StepModifier
-stepUseShell name x = x {shell = Just name}
+stepUseShell name x = x {stepShell = Just name}
 
 instance ToJSON Step where
   toJSON self =
@@ -141,30 +141,30 @@ instance ToJSON Step where
         [ ("id" .=) <$> stepId self,
           ("if" .=) <$> stepIf self,
           ("name" .=) <$> stepName self,
-          ("uses" .=) <$> uses self,
-          ("run" .=) <$> run self,
-          ("shell" .=) <$> shell self,
-          ("with" .=) <$> maybeNonEmptyMap (with self),
+          ("uses" .=) <$> stepUses self,
+          ("run" .=) <$> stepRun self,
+          ("shell" .=) <$> stepShell self,
+          ("with" .=) <$> maybeNonEmptyMap (stepWith self),
           ("env" .=) <$> maybeNonEmptyMap (stepEnv self),
           ("working-directory" .=) <$> stepWorkingDirectory self
         ]
 
-data Environment = LocalEnvironment String | RemoteEnvironment String String
+data Environment = RepositoryEnvironment String | ForeignEnvironment String String
 
 instance ToJSON Environment where
-  toJSON (LocalEnvironment s) = toJSON s
-  toJSON (RemoteEnvironment s url) = object ["name" .= s, "url" .= url]
+  toJSON (RepositoryEnvironment s) = toJSON s
+  toJSON (ForeignEnvironment s url) = object ["name" .= s, "url" .= url]
 
 data Job = Job
   { jobName :: Maybe String,
-    permissions :: PermissionTable,
-    steps :: [Step],
-    needs :: Maybe [String],
+    jobPermissions :: PermissionTable,
+    jobSteps :: [Step],
+    jobNeeds :: Maybe [String],
     jobIf :: Maybe String,
-    runsOn :: [String],
-    environment :: Maybe Environment,
-    concurrency :: Maybe Concurrency,
-    outputs :: Map String String,
+    jobRunsOn' :: [String],
+    jobEnvironment :: Maybe Environment,
+    jobConcurrency :: Maybe Concurrency,
+    jobOutputs :: Map String String,
     jobEnv :: Map String String
   }
 
@@ -172,47 +172,47 @@ job :: [Step] -> Job
 job steps =
   Job
     { jobName = Nothing,
-      permissions = PermissionTable M.empty,
-      needs = Nothing,
-      steps = steps,
+      jobPermissions = PermissionTable M.empty,
+      jobNeeds = Nothing,
+      jobSteps = steps,
       jobIf = Nothing,
-      runsOn = pure "ubuntu-latest",
-      environment = Nothing,
-      concurrency = Nothing,
-      outputs = M.empty,
+      jobRunsOn' = ["ubuntu-latest"],
+      jobEnvironment = Nothing,
+      jobConcurrency = Nothing,
+      jobOutputs = M.empty,
       jobEnv = M.empty
     }
 
 instance ToJSON Job where
-  toJSON (Job {jobName, permissions, steps, needs, jobIf, runsOn, environment, concurrency, outputs, jobEnv}) =
+  toJSON Job {..} =
     object $
       catMaybes
-        [ Just ("steps" .= steps),
-          ("needs" .=) <$> needs,
+        [ Just ("steps" .= jobSteps),
+          ("needs" .=) <$> jobNeeds,
           ("name" .=) <$> jobName,
-          ("permissions" .=) <$> maybePermissionTable permissions,
+          ("permissions" .=) <$> maybePermissionTable jobPermissions,
           ("if" .=) <$> jobIf,
-          Just (if length runsOn == 1 then "runs-on" .= head runsOn else "runs-on" .= runsOn),
-          ("environment" .=) <$> environment,
-          ("concurrency" .=) <$> concurrency,
-          ("outputs" .=) <$> maybeNonEmptyMap outputs,
+          Just (if length jobRunsOn' == 1 then "runs-on" .= head jobRunsOn' else "runs-on" .= jobRunsOn'),
+          ("environment" .=) <$> jobEnvironment,
+          ("concurrency" .=) <$> jobConcurrency,
+          ("outputs" .=) <$> maybeNonEmptyMap jobOutputs,
           ("env" .=) <$> maybeNonEmptyMap jobEnv
         ]
 
 jobModifySteps :: ([Step] -> [Step]) -> Job -> Job
-jobModifySteps f self@(Job {steps}) = self {steps = f steps}
+jobModifySteps f self = self {jobSteps = f $ jobSteps self}
 
 jobOutput :: String -> String -> Job -> Job
-jobOutput k v self = self {outputs = M.insert k v $ outputs self}
+jobOutput k v self = self {jobOutputs = M.insert k v $ jobOutputs self}
 
 jobForwardingStepOutput :: String -> String -> Job -> Job
 jobForwardingStepOutput stepName key = jobOutput key $ mkRefStepOutputExpression stepName key
 
 jobRunsOn :: [String] -> Job -> Job
-jobRunsOn platform self = self {runsOn = platform}
+jobRunsOn platform self = self {jobRunsOn' = platform}
 
 jobUseEnvironment :: Environment -> Job -> Job
-jobUseEnvironment e self = self {environment = Just e}
+jobUseEnvironment e self = self {jobEnvironment = Just e}
 
 data WorkflowTrigger = WorkflowTrigger
   { workflowTriggerOnPullRequest :: Maybe WorkflowPullRequestTrigger,
@@ -495,8 +495,8 @@ class PermissionControlledElement e where
   grantReadable = flip permit PermRead
 
 instance PermissionControlledElement Job where
-  permit key value self@(Job {permissions}) = self {permissions = PermissionTable $ M.insert key value $ permissionTable permissions}
-  grantAll perm self = self {permissions = GrantAll perm}
+  permit key value self = self {jobPermissions = PermissionTable $ M.insert key value $ permissionTable $ jobPermissions self}
+  grantAll perm self = self {jobPermissions = GrantAll perm}
 
 instance PermissionControlledElement Workflow where
   permit name p = workflowModifyPermissionTable $ PermissionTable . M.insert name p . permissionTable

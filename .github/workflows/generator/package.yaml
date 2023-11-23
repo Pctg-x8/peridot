@@ -45,6 +45,7 @@ default-extensions:
   - FlexibleInstances
   - FlexibleContexts
   - MonoLocalBinds
+  - RecordWildCards
 
 library:
   source-dirs: src
