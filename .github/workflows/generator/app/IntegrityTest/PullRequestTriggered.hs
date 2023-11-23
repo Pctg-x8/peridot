@@ -126,6 +126,6 @@ integrityTest = run $ withSlackNotification slackNotifyProvider $ do
     GHA.buildWorkflow
       [ GHA.namedAs "Integrity Check",
         GHA.concurrentPolicy $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
-        GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
+        GHA.workflowReplaceJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
       ]
       trigger

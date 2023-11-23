@@ -18,7 +18,6 @@ where
 import Control.Eff (Eff, Member)
 import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
-import Data.Aeson (ToJSON (toJSON))
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.Map qualified as M
@@ -27,6 +26,7 @@ import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
+import Workflow.GitHub.Actions.Predefined.InstallLLVM qualified as InstallLLVMAction
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
 import Workflow.GitHub.Actions.Predefined.SetupJava qualified as SetupJavaAction
 
@@ -198,11 +198,8 @@ checkCradleLinux precondition =
     llvmCacheStepId = "llvm-cache"
     llvmInstallStep =
       GHA.namedAs "Install LLVM" $
-        GHA.actionStep "KyleMayes/install-llvm-action@v1" $
-          M.fromList
-            [ ("version", toJSON ("11" :: String)),
-              ("cached", toJSON $ GHA.mkRefStepOutputExpression llvmCacheStepId "cache-hit")
-            ]
+        InstallLLVMAction.step "11"
+          & InstallLLVMAction.isCached (GHA.mkRefStepOutputExpression llvmCacheStepId "cache-hit")
     integratedTestStep =
       applyModifiers
         [ GHA.namedAs "cargo check",

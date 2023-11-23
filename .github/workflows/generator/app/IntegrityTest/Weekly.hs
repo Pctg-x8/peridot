@@ -57,9 +57,8 @@ weeklyIntegrityTest = run $ withSlackNotification weeklySlackNotifyProvider $ do
           ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
       ]
 
-  pure
-    $ GHA.buildWorkflow
-      [ GHA.namedAs "Integrity Check (Weekly)",
-        GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
-      ]
-    $ GHA.scheduled [GHA.CronTimer "0 12 * * wed"]
+  pure $
+    (GHA.emptyWorkflow $ GHA.scheduled [GHA.CronTimer "0 12 * * wed"])
+      { GHA.workflowName = Just "Integrity Check (Weekly)",
+        GHA.workflowJobs = preconditions' ~=> checkJobs ~=> reportSuccessJob'
+      }

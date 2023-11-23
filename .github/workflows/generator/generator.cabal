@@ -38,6 +38,7 @@ library
       Workflow.GitHub.Actions.Predefined.Cache
       Workflow.GitHub.Actions.Predefined.Checkout
       Workflow.GitHub.Actions.Predefined.Google.Auth
+      Workflow.GitHub.Actions.Predefined.InstallLLVM
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain
       Workflow.GitHub.Actions.Predefined.SetupJava
       Workflow.GitHub.Actions.Step
