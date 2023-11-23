@@ -46,6 +46,7 @@ default-extensions:
   - FlexibleContexts
   - MonoLocalBinds
   - RecordWildCards
+  - OverloadedStrings
 
 library:
   source-dirs: src

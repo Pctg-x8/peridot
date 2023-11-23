@@ -1,4 +1,4 @@
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NoOverloadedStrings #-}
 
 module CustomAction.PostCINotifications (Status (..), Mode (..), DiffHashPair (..), PullRequestInfo (..), currentPullRequestDiffMode, Params (..), step) where
 

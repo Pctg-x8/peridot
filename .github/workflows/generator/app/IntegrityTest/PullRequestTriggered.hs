@@ -1,8 +1,9 @@
+{-# LANGUAGE NoOverloadedStrings #-}
+
 module IntegrityTest.PullRequestTriggered (integrityTest) where
 
 import Control.Eff (run)
 import Control.Eff.Reader.Strict (runReader)
-import Control.Monad (join)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
 import Data.Map qualified as M
 import IntegrityTest.Shared
@@ -128,7 +129,7 @@ integrityTest = run $ runReader slackNotifyProvider $ do
   pure $
     GHA.buildWorkflow
       [ GHA.namedAs "Integrity Check",
-        GHA.workflowConcurrency $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
+        GHA.concurrentPolicy $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
         GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
       ]
       trigger

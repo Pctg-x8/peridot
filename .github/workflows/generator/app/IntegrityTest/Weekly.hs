@@ -1,3 +1,5 @@
+{-# LANGUAGE NoOverloadedStrings #-}
+
 module IntegrityTest.Weekly (weeklyIntegrityTest) where
 
 import Control.Eff (run)

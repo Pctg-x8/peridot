@@ -3,7 +3,7 @@ module Workflow.GitHub.Actions.JobGroupComposer (depends, JobGroup (..), (~=>)) 
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (fromMaybe)
-import Workflow.GitHub.Actions (Job, jobNeeds)
+import Workflow.GitHub.Actions.Job (Job, jobNeeds)
 
 depends :: [String] -> Job -> Job
 depends deps x = x {jobNeeds = Just $ fromMaybe [] (jobNeeds x) <> deps}

@@ -10,6 +10,7 @@ module Workflow.GitHub.Actions.WorkflowTriggers
     WorkflowPushTrigger (..),
     workflowPushTrigger,
     WorkflowScheduleTrigger (..),
+    WorkflowScheduleTimer (..),
     PathFilteredTrigger (..),
     BranchFilteredTrigger (..),
     TypeFilteredTrigger (..),

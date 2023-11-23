@@ -26,14 +26,22 @@ source-repository head
 library
   exposed-modules:
       Workflow.GitHub.Actions
+      Workflow.GitHub.Actions.CommonTraits
+      Workflow.GitHub.Actions.Concurrency
+      Workflow.GitHub.Actions.Environment
+      Workflow.GitHub.Actions.ExpressionBuilder
       Workflow.GitHub.Actions.InternalHelpers
+      Workflow.GitHub.Actions.Job
       Workflow.GitHub.Actions.JobGroupComposer
+      Workflow.GitHub.Actions.Permissions
       Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
       Workflow.GitHub.Actions.Predefined.Cache
       Workflow.GitHub.Actions.Predefined.Checkout
       Workflow.GitHub.Actions.Predefined.Google.Auth
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain
       Workflow.GitHub.Actions.Predefined.SetupJava
+      Workflow.GitHub.Actions.Step
+      Workflow.GitHub.Actions.Workflow
       Workflow.GitHub.Actions.WorkflowTriggers
   other-modules:
       Paths_generator
@@ -46,6 +54,7 @@ library
       FlexibleContexts
       MonoLocalBinds
       RecordWildCards
+      OverloadedStrings
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       aeson
@@ -79,6 +88,7 @@ executable generator-exe
       FlexibleContexts
       MonoLocalBinds
       RecordWildCards
+      OverloadedStrings
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
@@ -105,6 +115,7 @@ test-suite generator-test
       FlexibleContexts
       MonoLocalBinds
       RecordWildCards
+      OverloadedStrings
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
