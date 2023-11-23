@@ -1,17 +1,20 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MonoLocalBinds #-}
+{-# LANGUAGE TypeOperators #-}
 
 module SlackNotification
-  ( SlackNotification (..),
+  ( SlackReport (..),
     SlackNotificationProvider (..),
     SlackNotifyContext,
+    withSlackNotification,
     slackNotifySteps,
     reportJobFailure,
   )
 where
 
 import Control.Eff (Eff, Member)
-import Control.Eff.Reader.Strict (Reader, reader)
+import Control.Eff.Reader.Strict (Reader, reader, runReader)
 import Data.Maybe (fromMaybe)
 import Utils
 import Workflow.GitHub.Actions qualified as GHA
@@ -26,13 +29,19 @@ configureSlackNotification =
     ]
     AWSConfigureCredentials.step
 
-data SlackNotification = ReportSuccess | ReportFailure String
+data SlackReport = ReportSuccess | ReportFailure String
 
-data SlackNotificationProvider = SlackNotificationProvider {buildSuccessReportStep :: GHA.Step, buildFailureReportStep :: String -> GHA.Step}
+data SlackNotificationProvider = SlackNotificationProvider
+  { buildSuccessReportStep :: GHA.Step,
+    buildFailureReportStep :: String -> GHA.Step
+  }
 
 type SlackNotifyContext = Reader SlackNotificationProvider
 
-slackNotifySteps :: (Member SlackNotifyContext r) => SlackNotification -> Eff r [GHA.Step]
+withSlackNotification :: SlackNotificationProvider -> Eff (SlackNotifyContext : r) a -> Eff r a
+withSlackNotification = runReader
+
+slackNotifySteps :: (Member SlackNotifyContext r) => SlackReport -> Eff r [GHA.Step]
 slackNotifySteps ReportSuccess = reader $ \provider ->
   [configureSlackNotification, buildSuccessReportStep provider]
 slackNotifySteps (ReportFailure jobName) = reader $ \provider ->

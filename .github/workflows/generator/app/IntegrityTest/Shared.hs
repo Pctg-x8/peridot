@@ -20,7 +20,7 @@ import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import Data.Aeson (ToJSON (toJSON))
 import Data.Map qualified as M
-import SlackNotification (SlackNotification (ReportSuccess), SlackNotifyContext, reportJobFailure, slackNotifySteps)
+import SlackNotification (SlackNotifyContext, SlackReport (ReportSuccess), reportJobFailure, slackNotifySteps)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction

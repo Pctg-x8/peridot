@@ -3,7 +3,6 @@
 module IntegrityTest.Weekly (weeklyIntegrityTest) where
 
 import Control.Eff (run)
-import Control.Eff.Reader.Strict (runReader)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
 import Data.Map qualified as M
 import IntegrityTest.Shared
@@ -33,7 +32,7 @@ weeklySlackNotifyProvider = SlackNotificationProvider succ' fail'
           mkParams PostCINotificationsAction.SuccessStatus
 
 weeklyIntegrityTest :: GHA.Workflow
-weeklyIntegrityTest = run $ runReader weeklySlackNotifyProvider $ do
+weeklyIntegrityTest = run $ withSlackNotification weeklySlackNotifyProvider $ do
   let preconditions' =
         M.singleton "preconditions" $
           applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $

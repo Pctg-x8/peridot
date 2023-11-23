@@ -3,7 +3,6 @@
 module IntegrityTest.PullRequestTriggered (integrityTest) where
 
 import Control.Eff (run)
-import Control.Eff.Reader.Strict (runReader)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
 import Data.Map qualified as M
 import IntegrityTest.Shared
@@ -99,7 +98,7 @@ preconditions =
     apiRequest = "curl -s -H \"Authorization: Bearer " <> secretGitHubTokenExpr <> "\" -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
 
 integrityTest :: GHA.Workflow
-integrityTest = run $ runReader slackNotifyProvider $ do
+integrityTest = run $ withSlackNotification slackNotifyProvider $ do
   let preconditions' = M.singleton "preconditions" preconditions
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 
