@@ -121,10 +121,7 @@ integrityTest = run $ withSlackNotification slackNotifyProvider $ do
       ]
 
   let trigger =
-        GHA.onPullRequest $
-          GHA.workflowPullRequestTrigger
-            { GHA.prTriggerTypes = ["opened", "synchronize"]
-            }
+        GHA.onPullRequest $ GHA.workflowPullRequestTrigger {GHA.prTriggerTypes = ["opened", "synchronize"]}
   pure $
     GHA.buildWorkflow
       [ GHA.namedAs "Integrity Check",

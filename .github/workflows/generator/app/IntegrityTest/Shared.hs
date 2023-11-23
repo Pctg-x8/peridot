@@ -19,6 +19,8 @@ import Control.Eff (Eff, Member)
 import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import Data.Aeson (ToJSON (toJSON))
+import Data.Function ((&))
+import Data.Functor ((<&>))
 import Data.Map qualified as M
 import SlackNotification (SlackNotifyContext, SlackReport (ReportSuccess), reportJobFailure, slackNotifySteps)
 import Utils (applyModifiers)
@@ -72,73 +74,47 @@ checkFormats precondition =
         )
 
 checkBaseLayer :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
-checkBaseLayer precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Base Layer"] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  GHA.namedAs "Building as Checking" $ GHA.actionStep "./.github/actions/checkbuild-baselayer" M.empty
-                ]
-        )
+checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.job steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> [ checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              GHA.namedAs "Building as Checking" $ GHA.actionStep "./.github/actions/checkbuild-baselayer" M.empty
+            ]
 
 checkTools :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
-checkTools precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Tools"] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  CheckBuildSubdirAction.step "./tools"
-                ]
-        )
+checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> [checkoutHeadStep, checkoutStep, rustCacheStep, CheckBuildSubdirAction.step "./tools"]
 
 checkModules :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
-checkModules precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Modules"] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  CheckBuildSubdirAction.step "./modules"
-                ]
-        )
+checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> [checkoutHeadStep, checkoutStep, rustCacheStep, CheckBuildSubdirAction.step "./modules"]
 
 checkExamples :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
-checkExamples precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Examples"] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  CheckBuildSubdirAction.step "./examples"
-                ]
-        )
+checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> [checkoutHeadStep, checkoutStep, rustCacheStep, CheckBuildSubdirAction.step "./examples"]
 
 cliBuildStep, archiverBuildStep :: GHA.Step
-cliBuildStep =
-  GHA.namedAs "Build CLI" $
-    GHA.workAt "./tools/cli" $
-      GHA.runStep "cargo build"
-archiverBuildStep =
-  GHA.namedAs "Build archiver" $
-    GHA.workAt "./tools/archiver" $
-      GHA.runStep "cargo build"
+cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build"
+archiverBuildStep = GHA.namedAs "Build archiver" $ GHA.workAt "./tools/archiver" $ GHA.runStep "cargo build"
 
-withBuilderEnv :: GHA.StepModifier
-withBuilderEnv =
-  applyModifiers
-    [ GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)",
+withBuilderEnv :: (GHA.HasEnvironmentVariables e) => e -> e
+withBuilderEnv = setCradleBase . setBuiltinAssetsPath
+  where
+    setCradleBase = GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)"
+    setBuiltinAssetsPath =
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
-    ]
 
 checkCradleWindows :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleWindows precondition =
@@ -155,7 +131,7 @@ checkCradleWindows precondition =
                 ]
         )
   where
-    integratedTestStep = applyModifiers [GHA.env "VK_SDK_PATH" "", withBuilderEnv] . GHA.runStep
+    integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . GHA.runStep
 
     integratedTestNormalScript =
       "\
@@ -193,10 +169,7 @@ checkCradleMacos precondition =
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 addPPAStep :: [String] -> GHA.Step
-addPPAStep ppaList =
-  GHA.namedAs "Add External PPA" $
-    GHA.runStep $
-      "sudo apt-add-repository -y " <> unwords ppaList
+addPPAStep ppaList = GHA.namedAs "Add External PPA" $ GHA.runStep $ "sudo apt-add-repository -y " <> unwords ppaList
 
 aptInstallStep :: [String] -> GHA.Step
 aptInstallStep packages =
@@ -247,12 +220,10 @@ checkCradleAndroid precondition =
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
-                  applyModifiers
-                    [ GHA.namedAs "Setup Rust for Android",
-                      RustToolchainAction.useStable,
-                      RustToolchainAction.forTarget "aarch64-linux-android"
-                    ]
-                    RustToolchainAction.step,
+                  GHA.namedAs "Setup Rust for Android" $
+                    RustToolchainAction.step
+                      & RustToolchainAction.useStable
+                      & RustToolchainAction.forTarget "aarch64-linux-android",
                   GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" $ Just "17",
                   GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
                   cliBuildStep,
@@ -270,9 +241,8 @@ checkCradleAndroid precondition =
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 reportSuccessJob :: (Member SlackNotifyContext r) => Eff r GHA.Job
-reportSuccessJob = do
-  reportSteps <- slackNotifySteps ReportSuccess
-  pure $
-    applyModifiers [GHA.namedAs "Report as Success", GHA.grantWritable GHA.IDTokenPermission] $
-      -- NotificationでHeadの情報見るっぽくて必要そう
-      GHA.job ([checkoutStep, checkoutHeadStep] <> reportSteps)
+reportSuccessJob =
+  slackNotifySteps ReportSuccess <&> \reportSteps ->
+    -- NotificationでHeadの情報見るっぽくて必要そう
+    let steps = [checkoutStep, checkoutHeadStep] <> reportSteps
+     in GHA.namedAs "Report as Success" $ GHA.grantWritable GHA.IDTokenPermission $ GHA.job steps

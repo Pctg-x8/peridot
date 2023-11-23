@@ -29,7 +29,7 @@ import Workflow.GitHub.Actions.Permissions
 import Workflow.GitHub.Actions.WorkflowTriggers (WorkflowTrigger)
 
 data Workflow = Workflow
-  { workflowName' :: Maybe String,
+  { workflowName :: Maybe String,
     workflowRunName' :: Maybe String,
     workflowOn :: WorkflowTrigger,
     workflowPermissions :: PermissionTable,
@@ -51,7 +51,7 @@ instance ToJSON Workflow where
   toJSON Workflow {..} =
     object $
       catMaybes
-        [ ("name" .=) <$> workflowName',
+        [ ("name" .=) <$> workflowName,
           ("run-name" .=) <$> workflowRunName',
           Just ("on" .= workflowOn),
           ("permissions" .=) <$> maybePermissionTable workflowPermissions,
@@ -68,14 +68,11 @@ instance ConcurrentlyElement Workflow where
   concurrentPolicy c self = self {workflowConcurrency = Just c}
 
 instance NamedElement Workflow where
-  namedAs = workflowName
+  namedAs name (Workflow _ rn on pt wEnv c jobs) = Workflow (Just name) rn on pt wEnv c jobs
   nameOf (Workflow n _ _ _ _ _ _) = n
 
 instance HasEnvironmentVariables Workflow where
   env k v = workflowModifyEnvironmentMap $ M.insert k v
-
-workflowName :: String -> Workflow -> Workflow
-workflowName name (Workflow _ rn on pt wEnv c jobs) = Workflow (Just name) rn on pt wEnv c jobs
 
 workflowRunName :: String -> Workflow -> Workflow
 workflowRunName runName (Workflow n _ on pt wEnv c jobs) = Workflow n (Just runName) on pt wEnv c jobs
