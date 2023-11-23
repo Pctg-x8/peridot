@@ -9,7 +9,7 @@ edition = "2021"
 memory-manager-interop = ["peridot-memory-manager"]
 
 [dependencies]
-bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
+bedrock = { workspace = true, features = [
     "Implements",
 ] }
 peridot = { path = "../../base" }

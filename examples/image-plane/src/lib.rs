@@ -313,13 +313,14 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
         let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        let gp = br::NonDerivedGraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps)
-            .viewport_scissors(
-                br::DynamicArrayState::Static(&vp),
-                br::DynamicArrayState::Static(&sc),
-            )
-            .multisample_state(br::MultisampleState::new().into())
-            .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()])
+        let mut gp = br::NonDerivedGraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps);
+        gp.viewport_scissors(
+            br::DynamicArrayState::Static(&vp),
+            br::DynamicArrayState::Static(&sc),
+        )
+        .multisample_state(br::MultisampleState::new().into())
+        .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
+        let gp = gp
             .create(
                 e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
