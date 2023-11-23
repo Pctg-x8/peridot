@@ -26,6 +26,7 @@ source-repository head
 library
   exposed-modules:
       Workflow.GitHub.Actions
+      Workflow.GitHub.Actions.InternalHelpers
       Workflow.GitHub.Actions.JobGroupComposer
       Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
       Workflow.GitHub.Actions.Predefined.Cache
@@ -33,6 +34,7 @@ library
       Workflow.GitHub.Actions.Predefined.Google.Auth
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain
       Workflow.GitHub.Actions.Predefined.SetupJava
+      Workflow.GitHub.Actions.WorkflowTriggers
   other-modules:
       Paths_generator
   hs-source-dirs:
