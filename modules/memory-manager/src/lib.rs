@@ -597,6 +597,38 @@ impl MemoryManager {
         Ok((obj, offsets))
     }
 
+    fn find_uploadable_memory_type(&self, index_mask: u32) -> Option<&MemoryType> {
+        // prefer host coherent(for less operations)
+        let mut target_types = self
+            .host_visible_memory_types
+            .iter()
+            .filter(|t| index_mask & t.index_mask() != 0);
+
+        target_types
+            .next()
+            .map(|t| {
+                if t.is_coherent {
+                    t
+                } else {
+                    target_types.find(|t| t.is_coherent).unwrap_or(t)
+                }
+            })
+            .or_else(|| {
+                // find from direct memory
+                let mut target_types = self
+                    .direct_memory_types
+                    .iter()
+                    .filter(|t| index_mask & t.index_mask() != 0);
+                target_types.next().map(|t| {
+                    if t.is_coherent {
+                        t
+                    } else {
+                        target_types.find(|t| t.is_coherent).unwrap_or(t)
+                    }
+                })
+            })
+    }
+
     pub fn allocate_upload_buffer(
         &mut self,
         e: &peridot::Graphics,
@@ -619,18 +651,8 @@ impl MemoryManager {
         }
         let req = unsafe { req.assume_init() };
 
-        // prefer host coherent(for less operations)
         let memory_type = self
-            .host_visible_memory_types
-            .iter()
-            .find(|t| {
-                (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0 && t.is_coherent
-            })
-            .or_else(|| {
-                self.host_visible_memory_types
-                    .iter()
-                    .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
-            })
+            .find_uploadable_memory_type(req.memoryRequirements.memoryTypeBits)
             .expect("no memory type index");
         let requires_flushing = !memory_type.is_coherent;
 
@@ -702,18 +724,8 @@ impl MemoryManager {
 
         let alloc_info = ObjectAllocationInfo::compute(&requirements);
 
-        // prefer host coherent(for less operations)
         let memory_type = self
-            .host_visible_memory_types
-            .iter()
-            .find(|t| {
-                (alloc_info.combined_memory_index_mask & t.index_mask()) != 0 && t.is_coherent
-            })
-            .or_else(|| {
-                self.host_visible_memory_types
-                    .iter()
-                    .find(|t| (alloc_info.combined_memory_index_mask & t.index_mask()) != 0)
-            })
+            .find_uploadable_memory_type(alloc_info.combined_memory_index_mask)
             .expect("no memory type index");
         let requires_flushing = !memory_type.is_coherent;
         let memory_index = memory_type.index;
@@ -747,19 +759,8 @@ impl MemoryManager {
                 ObjectAllocationMode::Dedicated => {
                     tracing::trace!("requested resource is enough big for 1:1 allocation");
 
-                    // prefer host coherent(for less operations)
                     let memory_type = self
-                        .host_visible_memory_types
-                        .iter()
-                        .find(|t| {
-                            (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0
-                                && t.is_coherent
-                        })
-                        .or_else(|| {
-                            self.host_visible_memory_types.iter().find(|t| {
-                                (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0
-                            })
-                        })
+                        .find_uploadable_memory_type(req.memoryRequirements.memoryTypeBits)
                         .expect("no memory type index");
                     let requires_flushing = !memory_type.is_coherent;
 
