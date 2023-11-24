@@ -15,6 +15,7 @@ where
 
 import Control.Eff (Eff, Member)
 import Control.Eff.Reader.Strict (Reader, reader, runReader)
+import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import Utils
 import Workflow.GitHub.Actions qualified as GHA
@@ -22,12 +23,10 @@ import Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials qualified as 
 
 configureSlackNotification :: GHA.Step
 configureSlackNotification =
-  applyModifiers
-    [ GHA.namedAs "Configure for Slack Notification",
-      AWSConfigureCredentials.awsRegion "ap-northeast-1",
-      AWSConfigureCredentials.roleToAssume "arn:aws:iam::208140986057:role/GHALambdaInvoker"
-    ]
+  GHA.namedAs "Configure for Slack Notification" $
     AWSConfigureCredentials.step
+      & AWSConfigureCredentials.awsRegion "ap-northeast-1"
+      & AWSConfigureCredentials.roleToAssume "arn:aws:iam::208140986057:role/GHALambdaInvoker"
 
 data SlackReport = ReportSuccess | ReportFailure String
 

@@ -36,8 +36,9 @@ pullRequestNumberExpr = GHA.mkExpression "github.event.number"
 
 preconditionRecordBeginTimeStamp :: GHA.Step
 preconditionRecordBeginTimeStamp =
-  applyModifiers [GHA.identifiedAs "begintime", GHA.namedAs "Getting begintime"] $
-    GHA.runStep "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
+  GHA.identifiedAs "begintime" $
+    GHA.namedAs "Getting begintime" $
+      GHA.runStep "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
 
 preconditionBeginTimestampOutputDef :: GHA.Job -> GHA.Job
 preconditionBeginTimestampOutputDef = GHA.jobOutput "begintime" $ GHA.mkRefStepOutputExpression "begintime" "begintime"

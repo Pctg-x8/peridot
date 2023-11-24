@@ -21,6 +21,17 @@ import Data.Aeson (ToJSON (toJSON), object, (.=))
 import Data.Maybe (catMaybes)
 import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyList)
 
+class PathFilteredTrigger t where
+  filterPath :: String -> t -> t
+  ignorePath :: String -> t -> t
+
+class BranchFilteredTrigger t where
+  filterBranch :: String -> t -> t
+  ignoreBranch :: String -> t -> t
+
+class TypeFilteredTrigger t where
+  filterType :: String -> t -> t
+
 data WorkflowTrigger = WorkflowTrigger
   { workflowTriggerOnPullRequest :: Maybe WorkflowPullRequestTrigger,
     workflowTriggerOnPullRequestTarget :: Maybe WorkflowPullRequestTrigger,
@@ -29,13 +40,13 @@ data WorkflowTrigger = WorkflowTrigger
   }
 
 instance ToJSON WorkflowTrigger where
-  toJSON t =
+  toJSON WorkflowTrigger {..} =
     object $
       catMaybes
-        [ ("pull_request" .=) <$> workflowTriggerOnPullRequest t,
-          ("pull_request_target" .=) <$> workflowTriggerOnPullRequestTarget t,
-          ("push" .=) <$> workflowTriggerOnPush t,
-          ("schedule" .=) <$> workflowTriggerOnSchedule t
+        [ ("pull_request" .=) <$> workflowTriggerOnPullRequest,
+          ("pull_request_target" .=) <$> workflowTriggerOnPullRequestTarget,
+          ("push" .=) <$> workflowTriggerOnPush,
+          ("schedule" .=) <$> workflowTriggerOnSchedule
         ]
 
 _emptyWorkflowTrigger :: WorkflowTrigger
@@ -65,14 +76,14 @@ data WorkflowPullRequestTrigger = WorkflowPullRequestTrigger
   }
 
 instance ToJSON WorkflowPullRequestTrigger where
-  toJSON t =
+  toJSON WorkflowPullRequestTrigger {..} =
     object $
       catMaybes
-        [ ("branches" .=) <$> maybeNonEmptyList (prTriggerBranches t),
-          ("branches-ignore" .=) <$> maybeNonEmptyList (prTriggerBranchesIgnore t),
-          ("paths" .=) <$> maybeNonEmptyList (prTriggerPaths t),
-          ("paths-ignore" .=) <$> maybeNonEmptyList (prTriggerPathsIgnore t),
-          ("types" .=) <$> maybeNonEmptyList (prTriggerTypes t)
+        [ ("branches" .=) <$> maybeNonEmptyList prTriggerBranches,
+          ("branches-ignore" .=) <$> maybeNonEmptyList prTriggerBranchesIgnore,
+          ("paths" .=) <$> maybeNonEmptyList prTriggerPaths,
+          ("paths-ignore" .=) <$> maybeNonEmptyList prTriggerPathsIgnore,
+          ("types" .=) <$> maybeNonEmptyList prTriggerTypes
         ]
 
 workflowPullRequestTrigger :: WorkflowPullRequestTrigger
@@ -85,22 +96,56 @@ workflowPullRequestTrigger =
       prTriggerTypes = []
     }
 
-data WorkflowPushTrigger = WorkflowPushTrigger [String] [String] [String] [String] [String] [String]
+instance PathFilteredTrigger WorkflowPullRequestTrigger where
+  filterPath path w = w {prTriggerPaths = path : prTriggerPaths w}
+  ignorePath path w = w {prTriggerPathsIgnore = path : prTriggerPathsIgnore w}
+
+instance BranchFilteredTrigger WorkflowPullRequestTrigger where
+  filterBranch branch w = w {prTriggerBranches = branch : prTriggerBranches w}
+  ignoreBranch branch w = w {prTriggerBranchesIgnore = branch : prTriggerBranchesIgnore w}
+
+instance TypeFilteredTrigger WorkflowPullRequestTrigger where
+  filterType t w = w {prTriggerTypes = t : prTriggerTypes w}
+
+data WorkflowPushTrigger = WorkflowPushTrigger
+  { pushTriggerBranches :: [String],
+    pushTriggerBranchesIgnore :: [String],
+    pushTriggerTags :: [String],
+    pushTriggerTagsIgnore :: [String],
+    pushTriggerPaths :: [String],
+    pushTriggerPathsIgnore :: [String]
+  }
 
 instance ToJSON WorkflowPushTrigger where
-  toJSON (WorkflowPushTrigger branches branchesIgnore tags tagsIgnore paths pathsIgnore) =
+  toJSON WorkflowPushTrigger {..} =
     object $
       catMaybes
-        [ ("branches" .=) <$> maybeNonEmptyList branches,
-          ("branches-ignore" .=) <$> maybeNonEmptyList branchesIgnore,
-          ("tags" .=) <$> maybeNonEmptyList tags,
-          ("tags-ignore" .=) <$> maybeNonEmptyList tagsIgnore,
-          ("paths" .=) <$> maybeNonEmptyList paths,
-          ("pathsIgnore" .=) <$> maybeNonEmptyList pathsIgnore
+        [ ("branches" .=) <$> maybeNonEmptyList pushTriggerBranches,
+          ("branches-ignore" .=) <$> maybeNonEmptyList pushTriggerBranchesIgnore,
+          ("tags" .=) <$> maybeNonEmptyList pushTriggerTags,
+          ("tags-ignore" .=) <$> maybeNonEmptyList pushTriggerTagsIgnore,
+          ("paths" .=) <$> maybeNonEmptyList pushTriggerPaths,
+          ("pathsIgnore" .=) <$> maybeNonEmptyList pushTriggerPathsIgnore
         ]
 
 workflowPushTrigger :: WorkflowPushTrigger
-workflowPushTrigger = WorkflowPushTrigger [] [] [] [] [] []
+workflowPushTrigger =
+  WorkflowPushTrigger
+    { pushTriggerBranches = [],
+      pushTriggerBranchesIgnore = [],
+      pushTriggerTags = [],
+      pushTriggerTagsIgnore = [],
+      pushTriggerPaths = [],
+      pushTriggerPathsIgnore = []
+    }
+
+instance PathFilteredTrigger WorkflowPushTrigger where
+  filterPath path self = self {pushTriggerPaths = path : pushTriggerPaths self}
+  ignorePath path self = self {pushTriggerPathsIgnore = path : pushTriggerPathsIgnore self}
+
+instance BranchFilteredTrigger WorkflowPushTrigger where
+  filterBranch branch self = self {pushTriggerBranches = branch : pushTriggerBranches self}
+  ignoreBranch branch self = self {pushTriggerBranchesIgnore = branch : pushTriggerBranchesIgnore self}
 
 newtype WorkflowScheduleTrigger = WorkflowScheduleTrigger [WorkflowScheduleTimer]
 
@@ -111,33 +156,3 @@ newtype WorkflowScheduleTimer = CronTimer String
 
 instance ToJSON WorkflowScheduleTimer where
   toJSON (CronTimer timer) = object ["cron" .= timer]
-
-class PathFilteredTrigger t where
-  filterPath :: String -> t -> t
-  ignorePath :: String -> t -> t
-
-class BranchFilteredTrigger t where
-  filterBranch :: String -> t -> t
-  ignoreBranch :: String -> t -> t
-
-class TypeFilteredTrigger t where
-  filterType :: String -> t -> t
-
-instance PathFilteredTrigger WorkflowPushTrigger where
-  filterPath path (WorkflowPushTrigger b bi t ti paths pi') = WorkflowPushTrigger b bi t ti (paths ++ [path]) pi'
-  ignorePath path (WorkflowPushTrigger b bi t ti p pathsIgnore) = WorkflowPushTrigger b bi t ti p $ pathsIgnore ++ [path]
-
-instance BranchFilteredTrigger WorkflowPushTrigger where
-  filterBranch branch (WorkflowPushTrigger branches bi t ti p pi') = WorkflowPushTrigger (branches ++ [branch]) bi t ti p pi'
-  ignoreBranch branch (WorkflowPushTrigger b branchesIgnore t ti p pi') = WorkflowPushTrigger b (branchesIgnore ++ [branch]) t ti p pi'
-
-instance PathFilteredTrigger WorkflowPullRequestTrigger where
-  filterPath path w = w {prTriggerPaths = prTriggerPaths w ++ [path]}
-  ignorePath path w = w {prTriggerPathsIgnore = prTriggerPathsIgnore w ++ [path]}
-
-instance BranchFilteredTrigger WorkflowPullRequestTrigger where
-  filterBranch branch w = w {prTriggerBranches = prTriggerBranches w ++ [branch]}
-  ignoreBranch branch w = w {prTriggerBranchesIgnore = prTriggerBranchesIgnore w ++ [branch]}
-
-instance TypeFilteredTrigger WorkflowPullRequestTrigger where
-  filterType t w = w {prTriggerTypes = prTriggerTypes w ++ [t]}

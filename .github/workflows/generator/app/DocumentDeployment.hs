@@ -1,6 +1,6 @@
 module DocumentDeployment (workflow) where
 
-import Data.Map qualified as M
+import Data.Function ((&))
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
@@ -13,15 +13,10 @@ authStep =
     "dev-autocd-deployer@docs-peridot.iam.gserviceaccount.com"
 
 buildStep :: GHA.Step
-buildStep =
-  applyModifiers
-    [ GHA.namedAs "Build docs"
-    ]
-    $ GHA.actionStep "./.github/actions/build-doc" M.empty
+buildStep = GHA.namedAs "Build docs" $ GHA.actionStep "./.github/actions/build-doc" mempty
 
 deploymentStep :: GHA.Step
-deploymentStep =
-  applyModifiers [GHA.namedAs "Deployment"] $ GHA.actionStep "./.github/actions/deployment-dev" M.empty
+deploymentStep = GHA.namedAs "Deployment" $ GHA.actionStep "./.github/actions/deployment-dev" mempty
 
 workflow :: GHA.Workflow
 workflow =
@@ -31,13 +26,7 @@ workflow =
     ]
     $ GHA.onPush trigger
   where
-    trigger =
-      applyModifiers
-        [ GHA.filterBranch "dev",
-          GHA.filterPath "**.rs",
-          GHA.filterPath "**.toml"
-        ]
-        GHA.workflowPushTrigger
+    trigger = GHA.workflowPushTrigger & GHA.filterBranch "dev" & GHA.filterPath "**.rs" & GHA.filterPath "**.toml"
     job =
       applyModifiers
         [ GHA.namedAs "Doc Generate and Deploy",
@@ -45,9 +34,4 @@ workflow =
           GHA.grantReadable GHA.ContentsPermission,
           GHA.runInEnvironment $ GHA.RepositoryEnvironment "dev-document"
         ]
-        $ GHA.job
-          [ Checkout.step $ Just "dev",
-            authStep,
-            buildStep,
-            deploymentStep
-          ]
+        $ GHA.job [Checkout.step $ Just "dev", authStep, buildStep, deploymentStep]

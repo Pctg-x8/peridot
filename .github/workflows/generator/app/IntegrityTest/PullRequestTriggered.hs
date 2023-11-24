@@ -4,6 +4,7 @@ module IntegrityTest.PullRequestTriggered (integrityTest) where
 
 import Control.Eff (run)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
+import Data.Function ((&))
 import Data.Map qualified as M
 import IntegrityTest.Shared
 import SlackNotification
@@ -18,9 +19,11 @@ repositoryNameExpr = GHA.mkExpression "github.event.repository.name"
 secretGitHubTokenExpr :: String
 secretGitHubTokenExpr = GHA.mkExpression "secrets.GITHUB_TOKEN"
 
-preconditionOutputHasChanges, preconditionOutputHasWorkflowChanges :: String
+preconditionOutputHasChanges :: String
 preconditionOutputHasChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_code_changes" <> " == 1"
-preconditionOutputHasWorkflowChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_workflow_changes" <> " == 1"
+
+-- preconditionOutputHasWorkflowChanges :: String
+-- preconditionOutputHasWorkflowChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_workflow_changes" <> " == 1"
 
 slackNotifyProvider :: SlackNotificationProvider
 slackNotifyProvider = SlackNotificationProvider succ' fail'
@@ -121,7 +124,7 @@ integrityTest = run $ withSlackNotification slackNotifyProvider $ do
       ]
 
   let trigger =
-        GHA.onPullRequest $ GHA.workflowPullRequestTrigger {GHA.prTriggerTypes = ["opened", "synchronize"]}
+        GHA.onPullRequest $ GHA.workflowPullRequestTrigger & GHA.filterType "opened" & GHA.filterType "synchronize"
   pure $
     GHA.buildWorkflow
       [ GHA.namedAs "Integrity Check",
