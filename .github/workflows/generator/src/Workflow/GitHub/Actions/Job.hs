@@ -5,13 +5,14 @@ module Workflow.GitHub.Actions.Job
     jobOutput,
     jobForwardingStepOutput,
     jobRunsOn,
+    jobAddStrategyMatrix,
   )
 where
 
-import Data.Aeson (ToJSON (..), object, (.=))
+import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Map (Map)
 import Data.Map qualified as M
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Workflow.GitHub.Actions.CommonTraits
 import Workflow.GitHub.Actions.Concurrency (Concurrency, ConcurrentlyElement (..))
 import Workflow.GitHub.Actions.Environment (Environment, EnvironmentalElement (..))
@@ -24,6 +25,7 @@ import Workflow.GitHub.Actions.Permissions
     permissionTable,
   )
 import Workflow.GitHub.Actions.Step (Step)
+import Workflow.GitHub.Actions.Strategy (Strategy, strategy, strategyMatrixEntry)
 
 data Job = Job
   { jobName :: Maybe String,
@@ -35,22 +37,24 @@ data Job = Job
     jobEnvironment :: Maybe Environment,
     jobConcurrency :: Maybe Concurrency,
     jobOutputs :: Map String String,
-    jobEnv :: Map String String
+    jobEnv :: Map String String,
+    jobStrategy :: Maybe Strategy
   }
 
 job :: [Step] -> Job
 job steps =
   Job
     { jobName = Nothing,
-      jobPermissions = PermissionTable M.empty,
+      jobPermissions = PermissionTable mempty,
       jobNeeds = Nothing,
       jobSteps = steps,
       jobIf = Nothing,
       jobRunsOn' = ["ubuntu-latest"],
       jobEnvironment = Nothing,
       jobConcurrency = Nothing,
-      jobOutputs = M.empty,
-      jobEnv = M.empty
+      jobOutputs = mempty,
+      jobEnv = mempty,
+      jobStrategy = Nothing
     }
 
 instance ToJSON Job where
@@ -66,7 +70,8 @@ instance ToJSON Job where
           ("environment" .=) <$> jobEnvironment,
           ("concurrency" .=) <$> jobConcurrency,
           ("outputs" .=) <$> maybeNonEmptyMap jobOutputs,
-          ("env" .=) <$> maybeNonEmptyMap jobEnv
+          ("env" .=) <$> maybeNonEmptyMap jobEnv,
+          ("strategy" .=) <$> jobStrategy
         ]
 
 instance PermissionControlledElement Job where
@@ -100,3 +105,6 @@ jobForwardingStepOutput stepName key = jobOutput key $ mkRefStepOutputExpression
 
 jobRunsOn :: [String] -> Job -> Job
 jobRunsOn platform self = self {jobRunsOn' = platform}
+
+jobAddStrategyMatrix :: String -> Value -> Job -> Job
+jobAddStrategyMatrix key values self = self {jobStrategy = Just $ strategyMatrixEntry key values $ fromMaybe strategy $ jobStrategy self}

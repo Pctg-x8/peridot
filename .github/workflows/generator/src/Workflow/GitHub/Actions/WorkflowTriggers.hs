@@ -5,6 +5,7 @@ module Workflow.GitHub.Actions.WorkflowTriggers
     onPullRequest,
     onPush,
     scheduled,
+    onWorkflowDispatch,
     WorkflowPullRequestTrigger (..),
     workflowPullRequestTrigger,
     WorkflowPushTrigger (..),
@@ -36,7 +37,8 @@ data WorkflowTrigger = WorkflowTrigger
   { workflowTriggerOnPullRequest :: Maybe WorkflowPullRequestTrigger,
     workflowTriggerOnPullRequestTarget :: Maybe WorkflowPullRequestTrigger,
     workflowTriggerOnPush :: Maybe WorkflowPushTrigger,
-    workflowTriggerOnSchedule :: Maybe WorkflowScheduleTrigger
+    workflowTriggerOnSchedule :: Maybe WorkflowScheduleTrigger,
+    workflowTriggerOnWorkflowDispatch :: Maybe WorkflowDispatchTrigger
   }
 
 instance ToJSON WorkflowTrigger where
@@ -46,7 +48,8 @@ instance ToJSON WorkflowTrigger where
         [ ("pull_request" .=) <$> workflowTriggerOnPullRequest,
           ("pull_request_target" .=) <$> workflowTriggerOnPullRequestTarget,
           ("push" .=) <$> workflowTriggerOnPush,
-          ("schedule" .=) <$> workflowTriggerOnSchedule
+          ("schedule" .=) <$> workflowTriggerOnSchedule,
+          ("workflow_dispatch" .=) <$> workflowTriggerOnWorkflowDispatch
         ]
 
 _emptyWorkflowTrigger :: WorkflowTrigger
@@ -55,7 +58,8 @@ _emptyWorkflowTrigger =
     { workflowTriggerOnPullRequest = Nothing,
       workflowTriggerOnPullRequestTarget = Nothing,
       workflowTriggerOnPush = Nothing,
-      workflowTriggerOnSchedule = Nothing
+      workflowTriggerOnSchedule = Nothing,
+      workflowTriggerOnWorkflowDispatch = Nothing
     }
 
 onPullRequest :: WorkflowPullRequestTrigger -> WorkflowTrigger
@@ -66,6 +70,9 @@ onPush details = _emptyWorkflowTrigger {workflowTriggerOnPush = Just details}
 
 scheduled :: [WorkflowScheduleTimer] -> WorkflowTrigger
 scheduled timers = _emptyWorkflowTrigger {workflowTriggerOnSchedule = Just $ WorkflowScheduleTrigger timers}
+
+onWorkflowDispatch :: WorkflowTrigger
+onWorkflowDispatch = _emptyWorkflowTrigger {workflowTriggerOnWorkflowDispatch = Just WorkflowDispatchTrigger}
 
 data WorkflowPullRequestTrigger = WorkflowPullRequestTrigger
   { prTriggerBranches :: [String],
@@ -156,3 +163,8 @@ newtype WorkflowScheduleTimer = CronTimer String
 
 instance ToJSON WorkflowScheduleTimer where
   toJSON (CronTimer timer) = object ["cron" .= timer]
+
+data WorkflowDispatchTrigger = WorkflowDispatchTrigger
+
+instance ToJSON WorkflowDispatchTrigger where
+  toJSON WorkflowDispatchTrigger = object []

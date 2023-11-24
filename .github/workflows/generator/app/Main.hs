@@ -7,6 +7,7 @@ import Data.Foldable (traverse_)
 import DocumentDeployment qualified
 import IntegrityTest.PullRequestTriggered
 import IntegrityTest.Weekly
+import SDKBuild qualified
 import System.Environment (getArgs)
 import System.FilePath ((</>))
 import Workflow.GitHub.Actions qualified as GHA
@@ -21,7 +22,8 @@ main =
       [ ("integrity-test.yml", integrityTest),
         ("weekly-integrity-test.yml", weeklyIntegrityTest),
         ("docs-cd.yml", DocumentDeployment.workflow),
-        ("auto-delivery-dev.yml", AutoDeliveryDev.workflow)
+        ("auto-delivery-dev.yml", AutoDeliveryDev.workflow),
+        ("sdk-build.yml", SDKBuild.workflow)
       ]
 
 buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()

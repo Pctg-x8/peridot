@@ -41,7 +41,9 @@ library
       Workflow.GitHub.Actions.Predefined.InstallLLVM
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain
       Workflow.GitHub.Actions.Predefined.SetupJava
+      Workflow.GitHub.Actions.Predefined.UploadArtifact
       Workflow.GitHub.Actions.Step
+      Workflow.GitHub.Actions.Strategy
       Workflow.GitHub.Actions.Workflow
       Workflow.GitHub.Actions.WorkflowTriggers
   other-modules:
@@ -79,6 +81,7 @@ executable generator-exe
       IntegrityTest.PullRequestTriggered
       IntegrityTest.Shared
       IntegrityTest.Weekly
+      SDKBuild
       SlackNotification
       Utils
       Paths_generator

@@ -1,5 +1,5 @@
 jobs:
-  dev-pacage-build-to-artifact:
+  dev-package-build-to-artifact:
     runs-on: "${{ matrix.os }}"
     steps:
       - name: Checking out
@@ -8,7 +8,7 @@ jobs:
         name: "Build tools (For PowerShell Env)"
         run: "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }"
       - if: "matrix.os == 'macos-latest'"
-        name: "Upgrade utils (Only for MacOS)"
+        name: "Upgrade utils (Only for macOS)"
         run: brew install bash findutils
       - if: "matrix.os != 'windows-latest'"
         name: "Build tools (For Bash Env)"
@@ -31,4 +31,5 @@ jobs:
           - macos-latest
           - ubuntu-latest
 name: Dev-Package Build
-on: workflow_dispatch
+on:
+  workflow_dispatch: {}

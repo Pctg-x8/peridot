@@ -3,6 +3,7 @@ module Workflow.GitHub.Actions.ExpressionBuilder
     mkRefStepOutputExpression,
     mkNeedsOutputExpression,
     mkNeedsOutputPath,
+    mkRefMatrixValueExpression,
   )
 where
 
@@ -19,3 +20,6 @@ mkNeedsOutputPath jobId name = intercalate "." ["needs", jobId, "outputs", name]
 
 mkNeedsOutputExpression :: String -> String -> String
 mkNeedsOutputExpression jobId name = mkExpression $ mkNeedsOutputPath jobId name
+
+mkRefMatrixValueExpression :: String -> String
+mkRefMatrixValueExpression key = mkExpression $ "matrix." <> key
