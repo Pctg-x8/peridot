@@ -1,5 +1,6 @@
 module Main (main) where
 
+import AutoDeliveryDev qualified
 import Data.Aeson.Yaml (encode)
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Foldable (traverse_)
@@ -19,7 +20,8 @@ main =
     >>= buildWorkflows
       [ ("integrity-test.yml", integrityTest),
         ("weekly-integrity-test.yml", weeklyIntegrityTest),
-        ("docs-cd.yml", DocumentDeployment.workflow)
+        ("docs-cd.yml", DocumentDeployment.workflow),
+        ("auto-delivery-dev.yml", AutoDeliveryDev.workflow)
       ]
 
 buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()

@@ -1,10 +1,9 @@
 jobs:
   make-pr-for-deliver:
-    name: Make Delivering PullRequest
+    name: Make Delivering Diffs
     runs-on: ubuntu-latest
     steps:
-      - name: Checking out
-        uses: "actions/checkout@v3"
+      - uses: "actions/checkout@v3"
       - name: Fetching all branches
         run: "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
       - env:

@@ -70,8 +70,10 @@ library
 executable generator-exe
   main-is: Main.hs
   other-modules:
+      AutoDeliveryDev
       CustomAction.CheckBuildSubdirectory
       CustomAction.CodeFormChecker
+      CustomAction.CreateDevDeliverPRs
       CustomAction.PostCINotifications
       DocumentDeployment
       IntegrityTest.PullRequestTriggered

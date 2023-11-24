@@ -1,5 +1,5 @@
 
-TARGET_WORKFLOWS = auto-delivery-dev sdk-build
+TARGET_WORKFLOWS = sdk-build
 CONVERTER = dhall-to-yaml
 DIFF = colordiff -u
 
