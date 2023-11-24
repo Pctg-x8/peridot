@@ -38,8 +38,7 @@ buildJob =
   where
     checkout = GHA.namedAs "Checking out" $ Checkout.step Nothing
     buildTools =
-      [ GHA.namedAs "Build tools (For PowerShell Env)" $
-          poshScriptStep "./tools/build-all.ps1" "2>&1 | %{ \"$_\" }",
+      [ GHA.namedAs "Build tools (For PowerShell Env)" $ poshScriptStep "./tools/build-all.ps1" "2>&1 | %{ \"$_\" }",
         macOnly $ GHA.namedAs "Upgrade utils (Only for macOS)" $ GHA.runStep "brew install bash findutils",
         GHA.namedAs "Build tools (For Bash Env)" $ bashScriptStep "./tools/build-all.sh"
       ]
