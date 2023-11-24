@@ -20,4 +20,4 @@ workflow =
     deliverJob =
       GHA.namedAs "Make Delivering Diffs" $
         GHA.job
-          [Checkout.step Nothing, fetchAllBranchesStep, CreateDevDeliverPRsAction.step]
+          [GHA.namedAs "Checking out" $ Checkout.step Nothing, fetchAllBranchesStep, CreateDevDeliverPRsAction.step]

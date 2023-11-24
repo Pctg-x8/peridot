@@ -3,7 +3,8 @@ jobs:
     name: Make Delivering Diffs
     runs-on: ubuntu-latest
     steps:
-      - uses: "actions/checkout@v3"
+      - name: Checking out
+        uses: "actions/checkout@v3"
       - name: Fetching all branches
         run: "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
       - env:
