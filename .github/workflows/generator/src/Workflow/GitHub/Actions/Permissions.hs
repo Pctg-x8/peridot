@@ -3,7 +3,7 @@ module Workflow.GitHub.Actions.Permissions
     PermissionKey (..),
     PermissionTable (..),
     permissionTable,
-    maybePermissionTable,
+    maybeNonEmptyPermissionTable,
     PermissionControlledElement (..),
   )
 where
@@ -88,9 +88,9 @@ permissionTable :: PermissionTable -> Map PermissionKey Permission
 permissionTable (PermissionTable t) = t
 permissionTable (GrantAll g) = M.fromList $ map (,g) allPermissionKeys
 
-maybePermissionTable :: PermissionTable -> Maybe PermissionTable
-maybePermissionTable (PermissionTable p) = PermissionTable <$> maybeNonEmptyMap p
-maybePermissionTable p = Just p
+maybeNonEmptyPermissionTable :: PermissionTable -> Maybe PermissionTable
+maybeNonEmptyPermissionTable (PermissionTable p) = PermissionTable <$> maybeNonEmptyMap p
+maybeNonEmptyPermissionTable p = Just p
 
 class PermissionControlledElement e where
   permit :: PermissionKey -> Permission -> e -> e

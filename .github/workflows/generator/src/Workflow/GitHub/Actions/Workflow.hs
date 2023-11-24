@@ -23,7 +23,7 @@ import Workflow.GitHub.Actions.Job (Job)
 import Workflow.GitHub.Actions.Permissions
   ( PermissionControlledElement (..),
     PermissionTable (..),
-    maybePermissionTable,
+    maybeNonEmptyPermissionTable,
     permissionTable,
   )
 import Workflow.GitHub.Actions.WorkflowTriggers (WorkflowTrigger)
@@ -63,7 +63,7 @@ instance ToJSON Workflow where
         [ ("name" .=) <$> workflowName,
           ("run-name" .=) <$> workflowRunName',
           Just ("on" .= workflowOn),
-          ("permissions" .=) <$> maybePermissionTable workflowPermissions,
+          ("permissions" .=) <$> maybeNonEmptyPermissionTable workflowPermissions,
           ("env" .=) <$> maybeNonEmptyMap workflowEnv,
           ("concurrency" .=) <$> workflowConcurrency,
           Just ("jobs" .= workflowJobs)

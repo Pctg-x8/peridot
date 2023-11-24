@@ -19,7 +19,7 @@ main =
     >>= buildWorkflows
       [ ("integrity-test.yml", integrityTest),
         ("weekly-integrity-test.yml", weeklyIntegrityTest),
-        ("docs-cd.yml", DocumentDeployment.workflow)
+        ("docs-c.yml", DocumentDeployment.workflow)
       ]
 
 buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()

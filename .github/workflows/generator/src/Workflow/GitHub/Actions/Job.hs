@@ -20,7 +20,7 @@ import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap)
 import Workflow.GitHub.Actions.Permissions
   ( PermissionControlledElement (..),
     PermissionTable (..),
-    maybePermissionTable,
+    maybeNonEmptyPermissionTable,
     permissionTable,
   )
 import Workflow.GitHub.Actions.Step (Step)
@@ -60,7 +60,7 @@ instance ToJSON Job where
         [ Just ("steps" .= jobSteps),
           ("needs" .=) <$> jobNeeds,
           ("name" .=) <$> jobName,
-          ("permissions" .=) <$> maybePermissionTable jobPermissions,
+          ("permissions" .=) <$> maybeNonEmptyPermissionTable jobPermissions,
           ("if" .=) <$> jobIf,
           Just (if length jobRunsOn' == 1 then "runs-on" .= head jobRunsOn' else "runs-on" .= jobRunsOn'),
           ("environment" .=) <$> jobEnvironment,
