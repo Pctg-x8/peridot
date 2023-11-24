@@ -6,7 +6,9 @@ import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 
 fetchAllBranchesStep :: GHA.Step
-fetchAllBranchesStep = GHA.namedAs "Fetching all branches" $ GHA.runStep "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
+fetchAllBranchesStep =
+  GHA.namedAs "Fetching all branches" $
+    GHA.runStep "git fetch --no-tags -p --depth=1 origin +refs/heads/*:refs/remotes/origin/*"
 
 workflow :: GHA.Workflow
 workflow =
