@@ -8,14 +8,14 @@ import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.UploadArtifact qualified as UploadArtifact
 
-powershellOnlyStep :: GHA.StepModifier
-powershellOnlyStep = GHA.withCondition "matrix.os == 'windows-latest'"
+powershellOnly :: (GHA.ConditionalElement e) => e -> e
+powershellOnly = GHA.withCondition "matrix.os == 'windows-latest'"
 
-macOnlyStep :: GHA.StepModifier
-macOnlyStep = GHA.withCondition "matrix.os == 'macos-latest'"
+macOnly :: (GHA.ConditionalElement e) => e -> e
+macOnly = GHA.withCondition "matrix.os == 'macos-latest'"
 
-bashOnlyStep :: GHA.StepModifier
-bashOnlyStep = GHA.withCondition "matrix.os != 'windows-latest'"
+bashOnly :: (GHA.ConditionalElement e) => e -> e
+bashOnly = GHA.withCondition "matrix.os != 'windows-latest'"
 
 buildJob :: GHA.Job
 buildJob =
@@ -30,18 +30,18 @@ buildJob =
     artifactDir = "peridot-sdk"
     checkout = GHA.namedAs "Checking out" $ Checkout.step Nothing
     buildTools =
-      [ powershellOnlyStep $
+      [ powershellOnly $
           GHA.namedAs "Build tools (For PowerShell Env)" $
             GHA.runStep "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }",
-        macOnlyStep $ GHA.namedAs "Upgrade utils (Only for macOS)" $ GHA.runStep "brew install bash findutils",
-        bashOnlyStep $ GHA.namedAs "Build tools (For Bash Env)" $ GHA.runStep "./tools/build-all.sh"
+        macOnly $ GHA.namedAs "Upgrade utils (Only for macOS)" $ GHA.runStep "brew install bash findutils",
+        bashOnly $ GHA.namedAs "Build tools (For Bash Env)" $ GHA.runStep "./tools/build-all.sh"
       ]
     buildPackage =
-      [ powershellOnlyStep $
+      [ powershellOnly $
           GHA.namedAs "Make package (For PowerShell Env)" $
             GHA.runStep $
               "powershell.exe -File ./make-dev-package.ps1 -OutDirectory " <> artifactDir <> " -PeridotBranch $($Env:GITHUB_REF -replace \"^refs/heads/\")",
-        bashOnlyStep $
+        bashOnly $
           GHA.namedAs "Make package (For Bash Env)" $
             GHA.runStep $
               "./make-dev-package.sh -o " <> artifactDir <> " -b ${GITHUB_REF#\"refs/heads/\"}"
