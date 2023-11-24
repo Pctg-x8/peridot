@@ -20,5 +20,5 @@ instance ToJSON Strategy where
         [ ("matrix" .=) <$> maybeNonEmptyMap strategyMatrix
         ]
 
-strategyMatrixEntry :: String -> Value -> Strategy -> Strategy
-strategyMatrixEntry key value self = self {strategyMatrix = M.insert key value $ strategyMatrix self}
+strategyMatrixEntry :: (ToJSON v) => String -> v -> Strategy -> Strategy
+strategyMatrixEntry key value self = self {strategyMatrix = M.insert key (toJSON value) $ strategyMatrix self}

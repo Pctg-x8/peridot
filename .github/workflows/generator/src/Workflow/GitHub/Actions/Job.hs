@@ -9,7 +9,7 @@ module Workflow.GitHub.Actions.Job
   )
 where
 
-import Data.Aeson (ToJSON (..), Value, object, (.=))
+import Data.Aeson (ToJSON (..), object, (.=))
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (catMaybes, fromMaybe)
@@ -106,5 +106,5 @@ jobForwardingStepOutput stepName key = jobOutput key $ mkRefStepOutputExpression
 jobRunsOn :: [String] -> Job -> Job
 jobRunsOn platform self = self {jobRunsOn' = platform}
 
-jobAddStrategyMatrix :: String -> Value -> Job -> Job
+jobAddStrategyMatrix :: (ToJSON v) => String -> v -> Job -> Job
 jobAddStrategyMatrix key values self = self {jobStrategy = Just $ strategyMatrixEntry key values $ fromMaybe strategy $ jobStrategy self}

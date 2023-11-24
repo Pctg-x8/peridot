@@ -26,7 +26,7 @@ poshScriptStep file args = powershellOnly $ GHA.runStep $ "powershell.exe -File 
 buildJob :: GHA.Job
 buildJob =
   applyModifiers
-    [ GHA.jobAddStrategyMatrix "os" $ toJSON ["windows-latest", "macos-latest", "ubuntu-latest"],
+    [ GHA.jobAddStrategyMatrix "os" ["windows-latest", "macos-latest", "ubuntu-latest"],
       GHA.jobRunsOn [GHA.mkRefMatrixValueExpression "os"]
     ]
     $ GHA.job
