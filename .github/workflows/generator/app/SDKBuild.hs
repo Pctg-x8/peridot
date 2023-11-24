@@ -11,6 +11,9 @@ import Workflow.GitHub.Actions.Predefined.UploadArtifact qualified as UploadArti
 powershellOnlyStep :: GHA.StepModifier
 powershellOnlyStep = GHA.withCondition "matrix.os == 'windows-latest'"
 
+macOnlyStep :: GHA.StepModifier
+macOnlyStep = GHA.withCondition "matrix.os == 'macos-latest'"
+
 bashOnlyStep :: GHA.StepModifier
 bashOnlyStep = GHA.withCondition "matrix.os != 'windows-latest'"
 
@@ -30,9 +33,7 @@ buildJob =
       [ powershellOnlyStep $
           GHA.namedAs "Build tools (For PowerShell Env)" $
             GHA.runStep "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }",
-        GHA.namedAs "Upgrade utils (Only for macOS)" $
-          GHA.withCondition "matrix.os == 'macos-latest'" $
-            GHA.runStep "brew install bash findutils",
+        macOnlyStep $ GHA.namedAs "Upgrade utils (Only for macOS)" $ GHA.runStep "brew install bash findutils",
         bashOnlyStep $ GHA.namedAs "Build tools (For Bash Env)" $ GHA.runStep "./tools/build-all.sh"
       ]
     buildPackage =
