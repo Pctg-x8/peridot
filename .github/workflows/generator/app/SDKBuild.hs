@@ -2,7 +2,7 @@
 
 module SDKBuild (workflow) where
 
-import Data.Aeson (ToJSON (toJSON))
+import Control.Monad (join)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
@@ -23,6 +23,10 @@ bashScriptStep script = bashOnly $ GHA.runStep script
 poshScriptStep :: String -> String -> GHA.Step
 poshScriptStep file args = powershellOnly $ GHA.runStep $ "powershell.exe -File " <> file <> " " <> args
 
+artifactName, artifactDir :: String
+artifactName = "PeridotSDK-" <> GHA.mkRefMatrixValueExpression "os"
+artifactDir = "peridot-sdk"
+
 buildJob :: GHA.Job
 buildJob =
   applyModifiers
@@ -30,10 +34,8 @@ buildJob =
       GHA.jobRunsOn [GHA.mkRefMatrixValueExpression "os"]
     ]
     $ GHA.job
-    $ [checkout] <> buildTools <> buildPackage <> [upload]
+    $ join [pure checkout, buildTools, buildPackage, pure upload]
   where
-    artifactName = "PeridotSDK-" <> GHA.mkRefMatrixValueExpression "os"
-    artifactDir = "peridot-sdk"
     checkout = GHA.namedAs "Checking out" $ Checkout.step Nothing
     buildTools =
       [ GHA.namedAs "Build tools (For PowerShell Env)" $
