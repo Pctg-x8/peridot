@@ -130,7 +130,7 @@
 				985C79C425D5234C00CDBC0F /* MoltenVK.xcframework */,
 			);
 			name = VulkanSDK;
-			path = /Users/pctgx8/VulkanSDK/1.3.204.1;
+			path = /Users/pctgx8/VulkanSDK/1.3.268.1;
 			sourceTree = "<absolute>";
 		};
 /* End PBXGroup section */
@@ -359,9 +359,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/rlibs",
-				);
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/rlibs";
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
@@ -370,7 +368,7 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
-				VULKAN_SDK = "$(HOME)/VulkanSDK/1.3.204.1/macOS";
+				VULKAN_SDK = "$(HOME)/VulkanSDK/1.3.268.1/macOS";
 			};
 			name = Debug;
 		};
@@ -392,9 +390,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/rlibs",
-				);
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/rlibs";
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
@@ -403,7 +399,7 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
-				VULKAN_SDK = "$(HOME)/VulkanSDK/1.3.204.1/macOS";
+				VULKAN_SDK = "$(HOME)/VulkanSDK/1.3.268.1/macOS";
 			};
 			name = Release;
 		};

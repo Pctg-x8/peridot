@@ -10,6 +10,31 @@ use peridot::{EngineEvents, FeatureRequests};
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::sync::{Arc, RwLock};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::{Layer, Registry};
+
+struct NativeLogStream;
+impl std::io::Write for &'_ NativeLogStream {
+    fn write(&mut self, buf: &[u8]) -> IOResult<usize> {
+        unsafe {
+            let mut fmt =
+                NSString::from_str(core::str::from_utf8_unchecked(buf)).expect("NSString");
+            NSLog(&mut *fmt);
+            Ok(buf.len())
+        }
+    }
+
+    fn flush(&mut self) -> IOResult<()> {
+        std::io::stderr().flush()
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for NativeLogStream {
+    type Writer = &'a Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self
+    }
+}
 
 struct NSLogger;
 impl log::Log for NSLogger {
@@ -335,8 +360,16 @@ extern "C" {
 
 #[no_mangle]
 pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameDriver {
-    log::set_logger(&LOGGER).expect("Failed to set logger");
-    log::set_max_level(log::LevelFilter::Trace);
+    // log::set_logger(&LOGGER).expect("Failed to set logger");
+    // log::set_max_level(log::LevelFilter::Trace);
+
+    let subscriber = Registry::default().with(
+        tracing_subscriber::fmt::layer()
+            .pretty()
+            .with_writer(NativeLogStream)
+            .with_filter(tracing_subscriber::filter::EnvFilter::from_default_env()),
+    );
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set log subscriber");
 
     Box::into_raw(Box::new(GameDriver::new(v)))
 }
