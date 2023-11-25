@@ -36,14 +36,11 @@ buildJob =
       GHA.jobRunsOn [GHA.mkRefMatrixValueExpression "os"]
     ]
     $ GHA.job
-    $ mconcat [pure checkout, pure preconfigure, buildTools, buildPackage, pure upload]
+    $ mconcat [pure checkout, pure preconfigure, pure buildTools, buildPackage, pure upload]
   where
     checkout = GHA.namedAs "Checking out" $ Checkout.step Nothing
     preconfigure = GHA.namedAs "Upgrade utils (Only for macOS)" $ brewInstallStep ["bash", "findutils"]
-    buildTools =
-      [ GHA.namedAs "Build tools (For PowerShell Env)" $ poshScriptStep "./tools/build-all.ps1" "2>&1 | %{ \"$_\" }",
-        GHA.namedAs "Build tools (For Bash Env)" $ bashScriptStep "./tools/build-all.sh"
-      ]
+    buildTools = GHA.namedAs "Build tools" $ GHA.runStep "make -C tools"
     buildPackage =
       [ GHA.namedAs "Make package (For PowerShell Env)" $
           poshScriptStep "./make-dev-package.ps1" $

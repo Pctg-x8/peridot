@@ -7,12 +7,8 @@ jobs:
       - if: "matrix.os == 'macos-latest'"
         name: "Upgrade utils (Only for macOS)"
         run: brew install bash findutils
-      - if: "matrix.os == 'windows-latest'"
-        name: "Build tools (For PowerShell Env)"
-        run: "powershell.exe -File ./tools/build-all.ps1 2>&1 | %{ \"$_\" }"
-      - if: "matrix.os != 'windows-latest'"
-        name: "Build tools (For Bash Env)"
-        run: "./tools/build-all.sh"
+      - name: Build tools
+        run: make -C tools
       - if: "matrix.os == 'windows-latest'"
         name: "Make package (For PowerShell Env)"
         run: "powershell.exe -File ./make-dev-package.ps1 -OutDirectory peridot-sdk -PeridotBranch $($Env:GITHUB_REF -replace \"^refs/heads/\")"
