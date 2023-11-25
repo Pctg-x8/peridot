@@ -9,8 +9,8 @@ module Workflow.GitHub.Actions.Permissions
   )
 where
 
-import Data.Aeson (ToJSON (..), ToJSONKey (..), object)
-import Data.Aeson.Types (toJSONKeyText)
+import Data.Aeson (ToJSON (..), ToJSONKey (..), Value (String))
+import Data.Aeson.Types (emptyObject, toJSONKeyText)
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.String (IsString (fromString))
@@ -19,9 +19,9 @@ import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap)
 data Permission = PermWrite | PermRead | PermNone
 
 instance ToJSON Permission where
-  toJSON PermWrite = toJSON ("write" :: String)
-  toJSON PermRead = toJSON ("read" :: String)
-  toJSON PermNone = toJSON ("none" :: String)
+  toJSON PermWrite = String "write"
+  toJSON PermRead = String "read"
+  toJSON PermNone = String "none"
 
 data PermissionKey
   = ActionsPermission
@@ -55,7 +55,7 @@ instance Show PermissionKey where
   show StatusesPermission = "statuses"
 
 instance ToJSON PermissionKey where
-  toJSON = toJSON . show
+  toJSON = String . fromString . show
 
 instance ToJSONKey PermissionKey where
   toJSONKey = toJSONKeyText $ fromString . show
@@ -81,9 +81,9 @@ data PermissionTable = PermissionTable (Map PermissionKey Permission) | GrantAll
 
 instance ToJSON PermissionTable where
   toJSON (PermissionTable p) = toJSON p
-  toJSON (GrantAll PermRead) = toJSON ("read-all" :: String)
-  toJSON (GrantAll PermWrite) = toJSON ("write-all" :: String)
-  toJSON (GrantAll PermNone) = object []
+  toJSON (GrantAll PermRead) = String "read-all"
+  toJSON (GrantAll PermWrite) = String "write-all"
+  toJSON (GrantAll PermNone) = emptyObject
 
 permissionTable :: PermissionTable -> Map PermissionKey Permission
 permissionTable (PermissionTable t) = t

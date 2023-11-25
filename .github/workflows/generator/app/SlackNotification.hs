@@ -16,6 +16,7 @@ where
 import Control.Eff (Eff, Member)
 import Control.Eff.Reader.Strict (Reader, reader, runReader)
 import Data.Function ((&))
+import Data.Functor ((<&>))
 import Data.Maybe (fromMaybe)
 import Utils
 import Workflow.GitHub.Actions qualified as GHA
@@ -47,8 +48,7 @@ slackNotifySteps (ReportFailure jobName) = reader $ \provider ->
   [configureSlackNotification, buildFailureReportStep provider jobName]
 
 reportJobFailure :: (Member SlackNotifyContext r) => GHA.Job -> Eff r GHA.Job
-reportJobFailure job = do
-  reportSteps <- slackNotifySteps $ ReportFailure $ fromMaybe "<unknown job>" $ GHA.nameOf job
-  pure $
-    GHA.grantWritable GHA.IDTokenPermission $
-      GHA.jobModifySteps (<> fmap runOnFailure reportSteps) job
+reportJobFailure job =
+  let jobName = fromMaybe "<unknown job>" $ GHA.nameOf job
+   in slackNotifySteps (ReportFailure jobName) <&> \reportSteps ->
+        GHA.grantWritable GHA.IDTokenPermission $ GHA.jobAppendSteps (runOnFailure <$> reportSteps) job

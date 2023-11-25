@@ -16,7 +16,7 @@ jobs:
           workload_identity_provider: projects/488336166113/locations/global/workloadIdentityPools/github-actions-oidc-federation/providers/github-actions
       - name: Build docs
         uses: "./.github/actions/build-doc"
-      - name: Deployment
+      - name: Deploy
         uses: "./.github/actions/deployment-dev"
 name: "Document Continuous Deployment (for dev)"
 on:

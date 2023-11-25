@@ -15,8 +15,8 @@ authStep =
 buildStep :: GHA.Step
 buildStep = GHA.namedAs "Build docs" $ GHA.actionStep "./.github/actions/build-doc" mempty
 
-deploymentStep :: GHA.Step
-deploymentStep = GHA.namedAs "Deployment" $ GHA.actionStep "./.github/actions/deployment-dev" mempty
+deployStep :: GHA.Step
+deployStep = GHA.namedAs "Deploy" $ GHA.actionStep "./.github/actions/deployment-dev" mempty
 
 workflow :: GHA.Workflow
 workflow =
@@ -34,4 +34,4 @@ workflow =
           GHA.grantReadable GHA.ContentsPermission,
           GHA.runInEnvironment $ GHA.RepositoryEnvironment "dev-document"
         ]
-        $ GHA.job [Checkout.step $ Just "dev", authStep, buildStep, deploymentStep]
+        $ GHA.job [Checkout.step $ Just "dev", authStep, buildStep, deployStep]

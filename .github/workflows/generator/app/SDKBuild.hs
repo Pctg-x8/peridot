@@ -2,7 +2,6 @@
 
 module SDKBuild (workflow) where
 
-import Control.Monad (join)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
@@ -37,7 +36,7 @@ buildJob =
       GHA.jobRunsOn [GHA.mkRefMatrixValueExpression "os"]
     ]
     $ GHA.job
-    $ join [pure checkout, pure preconfigure, buildTools, buildPackage, pure upload]
+    $ mconcat [pure checkout, pure preconfigure, buildTools, buildPackage, pure upload]
   where
     checkout = GHA.namedAs "Checking out" $ Checkout.step Nothing
     preconfigure = GHA.namedAs "Upgrade utils (Only for macOS)" $ brewInstallStep ["bash", "findutils"]
