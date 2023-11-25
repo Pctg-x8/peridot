@@ -1,4 +1,4 @@
-module Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap, maybeNonEmptyList, applyModifiers) where
+module Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap, maybeNonEmptyList, applyModifiers, updateLens) where
 
 import Data.List qualified as L
 import Data.Map (Map)
@@ -12,3 +12,6 @@ maybeNonEmptyList xs = if L.null xs then Nothing else Just xs
 
 applyModifiers :: (Foldable f) => f (a -> a) -> a -> a
 applyModifiers = foldr (.) id
+
+updateLens :: (a -> b) -> (a -> b -> a) -> (b -> b) -> a -> a
+updateLens in' out' f x = out' x $ f $ in' x

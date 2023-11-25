@@ -17,6 +17,9 @@ macOnly = GHA.withCondition "matrix.os == 'macos-latest'"
 bashOnly :: (GHA.ConditionalElement e) => e -> e
 bashOnly = GHA.withCondition "matrix.os != 'windows-latest'"
 
+brewInstallStep :: [String] -> GHA.Step
+brewInstallStep packages = macOnly $ GHA.runStep $ "brew install " <> unwords packages
+
 bashScriptStep :: String -> GHA.Step
 bashScriptStep script = bashOnly $ GHA.runStep script
 
@@ -30,16 +33,16 @@ artifactDir = "peridot-sdk"
 buildJob :: GHA.Job
 buildJob =
   applyModifiers
-    [ GHA.jobAddStrategyMatrix "os" ["windows-latest", "macos-latest", "ubuntu-latest"],
+    [ GHA.addStrategyMatrixEntry "os" ["windows-latest", "macos-latest", "ubuntu-latest"],
       GHA.jobRunsOn [GHA.mkRefMatrixValueExpression "os"]
     ]
     $ GHA.job
-    $ join [pure checkout, buildTools, buildPackage, pure upload]
+    $ join [pure checkout, pure preconfigure, buildTools, buildPackage, pure upload]
   where
     checkout = GHA.namedAs "Checking out" $ Checkout.step Nothing
+    preconfigure = GHA.namedAs "Upgrade utils (Only for macOS)" $ brewInstallStep ["bash", "findutils"]
     buildTools =
       [ GHA.namedAs "Build tools (For PowerShell Env)" $ poshScriptStep "./tools/build-all.ps1" "2>&1 | %{ \"$_\" }",
-        macOnly $ GHA.namedAs "Upgrade utils (Only for macOS)" $ GHA.runStep "brew install bash findutils",
         GHA.namedAs "Build tools (For Bash Env)" $ bashScriptStep "./tools/build-all.sh"
       ]
     buildPackage =
