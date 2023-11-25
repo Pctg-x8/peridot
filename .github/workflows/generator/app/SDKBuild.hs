@@ -40,7 +40,7 @@ buildJob =
   where
     checkout = GHA.namedAs "Checking out" $ Checkout.step Nothing
     preconfigure = GHA.namedAs "Upgrade utils (Only for macOS)" $ brewInstallStep ["bash", "findutils"]
-    buildTools = GHA.namedAs "Build tools" $ GHA.runStep "make -C tools"
+    buildTools = GHA.namedAs "Build tools" $ GHA.runStep "make -C tools build-release"
     buildPackage =
       [ GHA.namedAs "Make package (For PowerShell Env)" $
           poshScriptStep "./make-dev-package.ps1" $
