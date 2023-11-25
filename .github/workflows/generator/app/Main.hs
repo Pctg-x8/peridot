@@ -13,19 +13,17 @@ import System.Environment (getArgs)
 import System.FilePath ((</>))
 import Workflow.GitHub.Actions qualified as GHA
 
-basePath :: IO FilePath
-basePath = head <$> getArgs
+targets :: [(FilePath, GHA.Workflow)]
+targets =
+  [ ("integrity-test.yml", integrityTest),
+    ("weekly-integrity-test.yml", weeklyIntegrityTest),
+    ("docs-cd.yml", DocumentDeployment.workflow),
+    ("auto-delivery-dev.yml", AutoDeliveryDev.workflow),
+    ("sdk-build.yml", SDKBuild.workflow)
+  ]
 
 main :: IO ()
-main =
-  basePath
-    >>= buildWorkflows
-      [ ("integrity-test.yml", integrityTest),
-        ("weekly-integrity-test.yml", weeklyIntegrityTest),
-        ("docs-cd.yml", DocumentDeployment.workflow),
-        ("auto-delivery-dev.yml", AutoDeliveryDev.workflow),
-        ("sdk-build.yml", SDKBuild.workflow)
-      ]
+main = getArgs >>= buildWorkflows targets . head
 
 buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()
 buildWorkflows xs base = forM_ xs $ uncurry LBS8.writeFile . bimap (base </>) encode
