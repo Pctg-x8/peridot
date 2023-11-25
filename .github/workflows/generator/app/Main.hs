@@ -1,6 +1,7 @@
 module Main (main) where
 
 import AutoDeliveryDev qualified
+import Control.Monad (forM_)
 import Data.Aeson.Yaml (encode)
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import DocumentDeployment qualified
@@ -26,4 +27,4 @@ main =
       ]
 
 buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()
-buildWorkflows xs base = mapM_ (\(p, w) -> LBS8.writeFile (base </> p) $ encode w) xs
+buildWorkflows xs base = forM_ xs $ \(p, w) -> LBS8.writeFile (base </> p) $ encode w
