@@ -38,8 +38,8 @@ Copy-Item $ScriptPath/build.sh $OutDirectory
 
 # Copy tools(for Windows)
 New-Item $OutDirectory/tools -ItemType Directory -Force | Out-Null
-Copy-Item $ScriptPath/target/release/peridot-*.exe $OutDirectory/tools
-Copy-Item $ScriptPath/target/release/peridot.exe $OutDirectory/tools
+Copy-Item $ScriptPath/tools/target/release/peridot-*.exe $OutDirectory/tools
+Copy-Item $ScriptPath/tools/target/release/peridot.exe $OutDirectory/tools
 
 
 # Compress(if required)
