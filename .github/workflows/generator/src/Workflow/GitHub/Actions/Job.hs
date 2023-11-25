@@ -2,6 +2,7 @@ module Workflow.GitHub.Actions.Job
   ( Job (..),
     job,
     jobModifySteps,
+    jobAppendSteps,
     jobOutput,
     jobForwardingStepOutput,
     jobRunsOn,
@@ -98,6 +99,9 @@ instance StrategyElement Job where
 
 jobModifySteps :: ([Step] -> [Step]) -> Job -> Job
 jobModifySteps = updateLens jobSteps (\s x -> s {jobSteps = x})
+
+jobAppendSteps :: [Step] -> Job -> Job
+jobAppendSteps = jobModifySteps . flip (<>)
 
 jobOutput :: String -> String -> Job -> Job
 jobOutput k v = updateLens jobOutputs (\s x -> s {jobOutputs = x}) $ M.insert k v
