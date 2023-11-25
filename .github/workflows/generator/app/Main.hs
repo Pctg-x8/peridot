@@ -1,10 +1,12 @@
 module Main (main) where
 
 import AutoDeliveryDev qualified
+import Control.Exception (Exception, throwIO)
 import Control.Monad (forM_)
 import Data.Aeson.Yaml (encode)
 import Data.Bifunctor (Bifunctor (bimap))
 import Data.ByteString.Lazy.Char8 qualified as LBS8
+import Data.Maybe (listToMaybe)
 import DocumentDeployment qualified
 import IntegrityTest.PullRequestTriggered
 import IntegrityTest.Weekly
@@ -22,8 +24,18 @@ targets =
     ("sdk-build.yml", SDKBuild.workflow)
   ]
 
+data MissingArgumentException = BasePathRequired
+
+instance Show MissingArgumentException where
+  show BasePathRequired = "BasePath argument required"
+
+instance Exception MissingArgumentException
+
+getBasePath :: IO FilePath
+getBasePath = getArgs >>= maybe (throwIO BasePathRequired) pure . listToMaybe
+
 main :: IO ()
-main = getArgs >>= buildWorkflows targets . head
+main = getBasePath >>= buildWorkflows targets
 
 buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()
 buildWorkflows xs base = forM_ xs $ uncurry LBS8.writeFile . bimap (base </>) encode
