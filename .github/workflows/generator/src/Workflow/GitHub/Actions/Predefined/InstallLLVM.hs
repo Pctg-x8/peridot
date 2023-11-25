@@ -8,4 +8,4 @@ step :: String -> Step
 step = actionStep "KyleMayes/install-llvm-action@v1" . M.singleton "version" . toJSON
 
 isCached :: (ToJSON v) => v -> StepModifier
-isCached = stepSetWithParam "cached" . toJSON
+isCached = stepSetWithParam "cached"

@@ -10,6 +10,7 @@ module Workflow.GitHub.Actions.Job
 where
 
 import Data.Aeson (ToJSON (..), object, (.=))
+import Data.Composition (compose2)
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (catMaybes)
@@ -75,7 +76,7 @@ instance ToJSON Job where
         ]
 
 instance PermissionControlledElement Job where
-  permit key value = updateLens jobPermissions (\s x -> s {jobPermissions = x}) $ setPermissionTableEntry key value
+  permit = updateLens jobPermissions (\s x -> s {jobPermissions = x}) `compose2` setPermissionTableEntry
   grantAll perm self = self {jobPermissions = GrantAll perm}
 
 instance EnvironmentalElement Job where
@@ -92,10 +93,10 @@ instance NamedElement Job where
   nameOf = jobName
 
 instance HasEnvironmentVariables Job where
-  env k v = updateLens jobEnv (\s x -> s {jobEnv = x}) $ M.insert k v
+  env = updateLens jobEnv (\s x -> s {jobEnv = x}) `compose2` M.insert
 
 instance StrategyElement Job where
-  addStrategyMatrixEntry key value = updateLens jobStrategy (\s x -> s {jobStrategy = x}) $ strategyMatrixAddEntry key value
+  addStrategyMatrixEntry = updateLens jobStrategy (\s x -> s {jobStrategy = x}) `compose2` strategyMatrixAddEntry
 
 jobModifySteps :: ([Step] -> [Step]) -> Job -> Job
 jobModifySteps = updateLens jobSteps (\s x -> s {jobSteps = x})
@@ -104,7 +105,7 @@ jobAppendSteps :: [Step] -> Job -> Job
 jobAppendSteps = jobModifySteps . flip (<>)
 
 jobOutput :: String -> String -> Job -> Job
-jobOutput k v = updateLens jobOutputs (\s x -> s {jobOutputs = x}) $ M.insert k v
+jobOutput = updateLens jobOutputs (\s x -> s {jobOutputs = x}) `compose2` M.insert
 
 jobForwardingStepOutput :: String -> String -> Job -> Job
 jobForwardingStepOutput stepName key = jobOutput key $ mkRefStepOutputExpression stepName key

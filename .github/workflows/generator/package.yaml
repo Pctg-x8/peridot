@@ -27,6 +27,7 @@ dependencies:
   - containers
   - extensible-effects
   - filepath
+  - composition
 
 ghc-options:
   - -Wall

@@ -64,6 +64,7 @@ library
     , aeson-yaml
     , base >=4.7 && <5
     , bytestring
+    , composition
     , containers
     , extensible-effects
     , filepath
@@ -101,6 +102,7 @@ executable generator-exe
     , aeson-yaml
     , base >=4.7 && <5
     , bytestring
+    , composition
     , containers
     , extensible-effects
     , filepath
@@ -128,6 +130,7 @@ test-suite generator-test
     , aeson-yaml
     , base >=4.7 && <5
     , bytestring
+    , composition
     , containers
     , extensible-effects
     , filepath

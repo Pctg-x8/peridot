@@ -19,6 +19,7 @@ module Workflow.GitHub.Actions.WorkflowTriggers
 where
 
 import Data.Aeson (ToJSON (toJSON), object, (.=))
+import Data.Aeson.Types (emptyObject)
 import Data.Maybe (catMaybes)
 import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyList)
 
@@ -167,4 +168,4 @@ instance ToJSON WorkflowScheduleTimer where
 data WorkflowDispatchTrigger = WorkflowDispatchTrigger
 
 instance ToJSON WorkflowDispatchTrigger where
-  toJSON WorkflowDispatchTrigger = object []
+  toJSON WorkflowDispatchTrigger = emptyObject

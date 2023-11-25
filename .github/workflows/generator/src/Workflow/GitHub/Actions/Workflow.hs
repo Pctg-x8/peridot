@@ -6,25 +6,26 @@ module Workflow.GitHub.Actions.Workflow
     workflowRunName,
     workflowMergeJobs,
     workflowMergeEnvs,
-    workflowEnvironmentMap,
+    workflowReplaceEnvironmentMap,
     workflowJob,
     workflowReplaceJobs,
   )
 where
 
 import Data.Aeson (ToJSON (..), object, (.=))
+import Data.Composition (compose2)
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (catMaybes)
 import Workflow.GitHub.Actions.CommonTraits
 import Workflow.GitHub.Actions.Concurrency (Concurrency, ConcurrentlyElement (..))
-import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap)
+import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap, updateLens)
 import Workflow.GitHub.Actions.Job (Job)
 import Workflow.GitHub.Actions.Permissions
   ( PermissionControlledElement (..),
     PermissionTable (..),
     maybeNonEmptyPermissionTable,
-    permissionTable,
+    setPermissionTableEntry,
   )
 import Workflow.GitHub.Actions.WorkflowTriggers (WorkflowTrigger)
 
@@ -70,7 +71,7 @@ instance ToJSON Workflow where
         ]
 
 instance PermissionControlledElement Workflow where
-  permit name p = workflowModifyPermissionTable $ PermissionTable . M.insert name p . permissionTable
+  permit = workflowModifyPermissionTable `compose2` setPermissionTableEntry
   grantAll = workflowModifyPermissionTable . const . GrantAll
 
 instance ConcurrentlyElement Workflow where
@@ -81,28 +82,28 @@ instance NamedElement Workflow where
   nameOf = workflowName
 
 instance HasEnvironmentVariables Workflow where
-  env k v = workflowModifyEnvironmentMap $ M.insert k v
+  env = workflowModifyEnvironmentMap `compose2` M.insert
 
 workflowRunName :: String -> Workflow -> Workflow
 workflowRunName runName self = self {workflowRunName' = Just runName}
 
 workflowModifyPermissionTable :: (PermissionTable -> PermissionTable) -> Workflow -> Workflow
-workflowModifyPermissionTable f self = self {workflowPermissions = f $ workflowPermissions self}
+workflowModifyPermissionTable = updateLens workflowPermissions $ \s x -> s {workflowPermissions = x}
 
 workflowModifyEnvironmentMap :: (Map String String -> Map String String) -> Workflow -> Workflow
-workflowModifyEnvironmentMap f self = self {workflowEnv = f $ workflowEnv self}
+workflowModifyEnvironmentMap = updateLens workflowEnv $ \s x -> s {workflowEnv = x}
 
 workflowMergeEnvs :: Map String String -> Workflow -> Workflow
 workflowMergeEnvs = workflowModifyEnvironmentMap . (<>)
 
-workflowEnvironmentMap :: Map String String -> Workflow -> Workflow
-workflowEnvironmentMap = workflowModifyEnvironmentMap . const
+workflowReplaceEnvironmentMap :: Map String String -> Workflow -> Workflow
+workflowReplaceEnvironmentMap = workflowModifyEnvironmentMap . const
 
 workflowModifyJobs :: (Map String Job -> Map String Job) -> Workflow -> Workflow
-workflowModifyJobs f self = self {workflowJobs = f $ workflowJobs self}
+workflowModifyJobs = updateLens workflowJobs $ \s x -> s {workflowJobs = x}
 
 workflowJob :: String -> Job -> Workflow -> Workflow
-workflowJob name j = workflowModifyJobs $ M.insert name j
+workflowJob = workflowModifyJobs `compose2` M.insert
 
 workflowMergeJobs :: Map String Job -> Workflow -> Workflow
 workflowMergeJobs = workflowModifyJobs . (<>)

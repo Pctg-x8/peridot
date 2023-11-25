@@ -7,11 +7,10 @@ module Workflow.GitHub.Actions.Predefined.Rust.Toolchain
   )
 where
 
-import Data.Map qualified as M
 import Workflow.GitHub.Actions qualified as GHA
 
 step :: GHA.Step
-step = GHA.actionStep "actions-rs/toolchain@v1" M.empty
+step = GHA.actionStep "actions-rs/toolchain@v1" mempty
 
 useToolchain :: String -> GHA.StepModifier
 useToolchain = GHA.stepSetWithParam "toolchain"

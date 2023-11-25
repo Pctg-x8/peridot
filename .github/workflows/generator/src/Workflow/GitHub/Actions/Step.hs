@@ -12,11 +12,12 @@ module Workflow.GitHub.Actions.Step
 where
 
 import Data.Aeson (ToJSON (..), Value, object, (.=))
+import Data.Composition (compose2)
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (catMaybes)
 import Workflow.GitHub.Actions.CommonTraits
-import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap)
+import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap, updateLens)
 
 data Step = Step
   { stepId :: Maybe String,
@@ -53,16 +54,16 @@ actionStep name withArgs = emptyStep {stepUses = Just name, stepWith = withArgs}
 type StepModifier = Step -> Step
 
 modifyStepEnv :: (Map String String -> Map String String) -> StepModifier
-modifyStepEnv f x = x {stepEnv = f $ stepEnv x}
+modifyStepEnv = updateLens stepEnv $ \s x -> s {stepEnv = x}
 
 modifyStepWith :: (Map String Value -> Map String Value) -> StepModifier
-modifyStepWith f x = x {stepWith = f $ stepWith x}
+modifyStepWith = updateLens stepWith $ \s x -> s {stepWith = x}
 
 stepSetWithParam :: (ToJSON v) => String -> v -> StepModifier
-stepSetWithParam k v = modifyStepWith $ M.insert k $ toJSON v
+stepSetWithParam k = modifyStepWith . M.insert k . toJSON
 
 stepUseShell :: String -> StepModifier
-stepUseShell name x = x {stepShell = Just name}
+stepUseShell name self = self {stepShell = Just name}
 
 instance ToJSON Step where
   toJSON self =
@@ -90,7 +91,7 @@ instance NamedElement Step where
   nameOf = stepName
 
 instance HasEnvironmentVariables Step where
-  env k v = modifyStepEnv $ M.insert k v
+  env = modifyStepEnv `compose2` M.insert
 
 instance DirectoryWorker Step where
   workAt path self = self {stepWorkingDirectory = Just path}

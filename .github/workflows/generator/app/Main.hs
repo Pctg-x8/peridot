@@ -3,7 +3,6 @@ module Main (main) where
 import AutoDeliveryDev qualified
 import Data.Aeson.Yaml (encode)
 import Data.ByteString.Lazy.Char8 qualified as LBS8
-import Data.Foldable (traverse_)
 import DocumentDeployment qualified
 import IntegrityTest.PullRequestTriggered
 import IntegrityTest.Weekly
@@ -27,4 +26,4 @@ main =
       ]
 
 buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()
-buildWorkflows xs base = traverse_ (\(p, w) -> LBS8.writeFile (base </> p) $ encode w) xs
+buildWorkflows xs base = mapM_ (\(p, w) -> LBS8.writeFile (base </> p) $ encode w) xs

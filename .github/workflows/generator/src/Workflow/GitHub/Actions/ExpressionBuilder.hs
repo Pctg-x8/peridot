@@ -7,19 +7,23 @@ module Workflow.GitHub.Actions.ExpressionBuilder
   )
 where
 
+import Data.Composition (compose2)
 import Data.List (intercalate)
 
 mkExpression :: String -> String
 mkExpression expr = "${{ " <> expr <> " }}"
 
+objectRefExpr :: [String] -> String
+objectRefExpr = intercalate "."
+
 mkRefStepOutputExpression :: String -> String -> String
-mkRefStepOutputExpression stepId name = mkExpression $ "steps." <> stepId <> ".outputs." <> name
+mkRefStepOutputExpression stepId name = mkExpression $ objectRefExpr ["steps", stepId, "outputs", name]
 
 mkNeedsOutputPath :: String -> String -> String
-mkNeedsOutputPath jobId name = intercalate "." ["needs", jobId, "outputs", name]
+mkNeedsOutputPath jobId name = objectRefExpr ["needs", jobId, "outputs", name]
 
 mkNeedsOutputExpression :: String -> String -> String
-mkNeedsOutputExpression jobId name = mkExpression $ mkNeedsOutputPath jobId name
+mkNeedsOutputExpression = mkExpression `compose2` mkNeedsOutputPath
 
 mkRefMatrixValueExpression :: String -> String
-mkRefMatrixValueExpression key = mkExpression $ "matrix." <> key
+mkRefMatrixValueExpression key = mkExpression $ objectRefExpr ["matrix", key]

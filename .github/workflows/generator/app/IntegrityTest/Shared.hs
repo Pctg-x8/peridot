@@ -222,7 +222,7 @@ checkCradleAndroid precondition =
                     RustToolchainAction.step
                       & RustToolchainAction.useStable
                       & RustToolchainAction.forTarget "aarch64-linux-android",
-                  GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" $ Just "17",
+                  GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" & SetupJavaAction.javaVersion "17",
                   GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
                   cliBuildStep,
                   integratedTestStep

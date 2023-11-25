@@ -52,7 +52,7 @@ buildJob =
           bashScriptStep $
             "./make-dev-package.sh -o " <> artifactDir <> " -b ${GITHUB_REF#\"refs/heads/\"}"
       ]
-    upload = UploadArtifact.step artifactName artifactDir
+    upload = GHA.namedAs "Uploading Artifacts" $ UploadArtifact.step artifactName artifactDir
 
 workflow :: GHA.Workflow
 workflow =
