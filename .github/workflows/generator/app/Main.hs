@@ -31,11 +31,8 @@ instance Show MissingArgumentException where
 
 instance Exception MissingArgumentException
 
-getBasePath :: IO FilePath
-getBasePath = getArgs >>= maybe (throwIO BasePathRequired) pure . listToMaybe
-
 main :: IO ()
-main = getBasePath >>= buildWorkflows targets
-
-buildWorkflows :: (Foldable f) => f (FilePath, GHA.Workflow) -> FilePath -> IO ()
-buildWorkflows xs base = forM_ xs $ uncurry LBS8.writeFile . bimap (base </>) encode
+main = getBasePath >>= buildWorkflows
+  where
+    getBasePath = getArgs >>= maybe (throwIO BasePathRequired) pure . listToMaybe
+    buildWorkflows base = forM_ targets $ uncurry LBS8.writeFile . bimap (base </>) encode
