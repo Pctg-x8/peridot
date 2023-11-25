@@ -32,10 +32,6 @@ Write-Host "Rewriting Cargo Manifests......"
 Write-Host "Peridot Branch = $PeridotBranch"
 Get-Item $OutDirectory/cradle/**/Cargo.template.toml | ForEach-Object { RewriteCargoManifest $_.FullName }
 
-# Copy scripts
-Copy-Item $ScriptPath/build.ps1 $OutDirectory
-Copy-Item $ScriptPath/build.sh $OutDirectory
-
 # Copy tools(for Windows)
 New-Item $OutDirectory/tools -ItemType Directory -Force | Out-Null
 Copy-Item $ScriptPath/tools/target/release/peridot-*.exe $OutDirectory/tools
