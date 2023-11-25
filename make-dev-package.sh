@@ -66,7 +66,7 @@ if type gfind > /dev/null 2>&1; then FIND=gfind; else FIND=find; fi
 
 # Copy tools(for *nix)
 mkdir -p $OUT_DIRECTORY/tools
-for f in $($FIND $SCRIPT_PATH/tools/target/release -name "peridot-*" -type f -perm /a+x); do
+for f in $($FIND $SCRIPT_PATH/tools/target/release -name "peridot-*" -type f -perm /a+x -maxdepth 1); do
     echo "tool detected: $f"
     cp $f $OUT_DIRECTORY/tools/
 done
