@@ -16,9 +16,6 @@ repositoryOwnerLoginExpr, repositoryNameExpr :: String
 repositoryOwnerLoginExpr = GHA.mkExpression "github.event.repository.owner.login"
 repositoryNameExpr = GHA.mkExpression "github.event.repository.name"
 
-secretGitHubToken :: String
-secretGitHubToken = GHA.mkExpression "secrets.GITHUB_TOKEN"
-
 preconditionOutputHasChanges :: String
 preconditionOutputHasChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_code_changes" <> " == 1"
 
@@ -98,7 +95,7 @@ preconditions =
                \echo \"has_workflow_changes=$HAS_WORKFLOW_CHANGES\" >> $GITHUB_OUTPUT\n\
                \"
     queryString = "query($cursor: String) { repository(owner: \"" <> repositoryOwnerLoginExpr <> "\", name: \"" <> repositoryNameExpr <> "\") { pullRequest(number: " <> pullRequestNumberExpr <> ") { files(first: 50, after: $cursor) { nodes { path } pageInfo { hasNextPage endCursor } } } } }"
-    apiRequestAuthHeader = "\"Authorization: Bearer " <> secretGitHubToken <> "\""
+    apiRequestAuthHeader = "\"Authorization: Bearer " <> GHA.githubToken <> "\""
     apiRequest = "curl -s -H " <> apiRequestAuthHeader <> " -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
 
 integrityTest :: GHA.Workflow
