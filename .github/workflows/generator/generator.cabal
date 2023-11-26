@@ -1,6 +1,6 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.1.
+-- This file has been generated from package.yaml by hpack version 0.36.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -26,13 +26,26 @@ source-repository head
 library
   exposed-modules:
       Workflow.GitHub.Actions
+      Workflow.GitHub.Actions.CommonTraits
+      Workflow.GitHub.Actions.Concurrency
+      Workflow.GitHub.Actions.Environment
+      Workflow.GitHub.Actions.ExpressionBuilder
+      Workflow.GitHub.Actions.InternalHelpers
+      Workflow.GitHub.Actions.Job
       Workflow.GitHub.Actions.JobGroupComposer
+      Workflow.GitHub.Actions.Permissions
       Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
       Workflow.GitHub.Actions.Predefined.Cache
       Workflow.GitHub.Actions.Predefined.Checkout
       Workflow.GitHub.Actions.Predefined.Google.Auth
+      Workflow.GitHub.Actions.Predefined.InstallLLVM
       Workflow.GitHub.Actions.Predefined.Rust.Toolchain
       Workflow.GitHub.Actions.Predefined.SetupJava
+      Workflow.GitHub.Actions.Predefined.UploadArtifact
+      Workflow.GitHub.Actions.Step
+      Workflow.GitHub.Actions.Strategy
+      Workflow.GitHub.Actions.Workflow
+      Workflow.GitHub.Actions.WorkflowTriggers
   other-modules:
       Paths_generator
   hs-source-dirs:
@@ -43,12 +56,16 @@ library
       FlexibleInstances
       FlexibleContexts
       MonoLocalBinds
+      RecordWildCards
+      OverloadedStrings
+      BlockArguments
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       aeson
     , aeson-yaml
     , base >=4.7 && <5
     , bytestring
+    , composition
     , containers
     , extensible-effects
     , filepath
@@ -57,13 +74,17 @@ library
 executable generator-exe
   main-is: Main.hs
   other-modules:
+      AutoDeliveryDev
+      CustomAction.CheckBuildBaseLayer
       CustomAction.CheckBuildSubdirectory
       CustomAction.CodeFormChecker
+      CustomAction.CreateDevDeliverPRs
       CustomAction.PostCINotifications
       DocumentDeployment
       IntegrityTest.PullRequestTriggered
       IntegrityTest.Shared
       IntegrityTest.Weekly
+      SDKBuild
       SlackNotification
       Utils
       Paths_generator
@@ -75,12 +96,16 @@ executable generator-exe
       FlexibleInstances
       FlexibleContexts
       MonoLocalBinds
+      RecordWildCards
+      OverloadedStrings
+      BlockArguments
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
     , aeson-yaml
     , base >=4.7 && <5
     , bytestring
+    , composition
     , containers
     , extensible-effects
     , filepath
@@ -100,12 +125,16 @@ test-suite generator-test
       FlexibleInstances
       FlexibleContexts
       MonoLocalBinds
+      RecordWildCards
+      OverloadedStrings
+      BlockArguments
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
     , aeson-yaml
     , base >=4.7 && <5
     , bytestring
+    , composition
     , containers
     , extensible-effects
     , filepath

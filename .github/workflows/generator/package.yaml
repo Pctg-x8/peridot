@@ -27,6 +27,7 @@ dependencies:
   - containers
   - extensible-effects
   - filepath
+  - composition
 
 ghc-options:
   - -Wall
@@ -45,6 +46,9 @@ default-extensions:
   - FlexibleInstances
   - FlexibleContexts
   - MonoLocalBinds
+  - RecordWildCards
+  - OverloadedStrings
+  - BlockArguments
 
 library:
   source-dirs: src

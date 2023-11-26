@@ -597,5 +597,5 @@ name: Integrity Check
 on:
   pull_request:
     types:
-      - opened
       - synchronize
+      - opened

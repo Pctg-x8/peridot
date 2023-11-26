@@ -5,7 +5,6 @@ module Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials
   )
 where
 
-import Data.Map qualified as M
 import Workflow.GitHub.Actions qualified as GHA
 
 -- data Params = Params
@@ -23,25 +22,8 @@ import Workflow.GitHub.Actions qualified as GHA
 --     roleSkipSessionTagging :: Maybe Bool
 --   }
 
--- defaultParams :: Params
--- defaultParams =
---   Params
---     { audience = Nothing,
---       awsAccessKeyID = Nothing,
---       awsSecretAccessKey = Nothing,
---       awsSessionToken = Nothing,
---       awsRegion = Nothing,
---       maskAWSAccountID = Nothing,
---       roleToAssume = Nothing,
---       webIdentityTokenFile = Nothing,
---       roleDurationSeconds = Nothing,
---       roleSessionName = Nothing,
---       roleExternalID = Nothing,
---       roleSkipSessionTagging = Nothing
---     }
-
 step :: GHA.Step
-step = GHA.actionStep "aws-actions/configure-aws-credentials@v1" M.empty
+step = GHA.actionStep "aws-actions/configure-aws-credentials@v1" mempty
 
 awsRegion :: String -> GHA.StepModifier
 awsRegion = GHA.stepSetWithParam "aws-region"

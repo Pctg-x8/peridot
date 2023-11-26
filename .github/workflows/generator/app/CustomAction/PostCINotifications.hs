@@ -1,4 +1,4 @@
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NoOverloadedStrings #-}
 
 module CustomAction.PostCINotifications (Status (..), Mode (..), DiffHashPair (..), PullRequestInfo (..), currentPullRequestDiffMode, Params (..), step) where
 
@@ -31,13 +31,13 @@ currentPullRequestDiffMode = DiffMode hashPair pr
 data Params = Params {status :: Status, beginTime :: String, reportName :: String, mode :: Mode}
 
 step :: Params -> GHA.Step
-step params = GHA.namedAs "Notify" $ GHA.actionStep "Pctg-x8/ci-notifications-post-invoker@master" withArgs
+step Params {..} = GHA.namedAs "Notify" $ GHA.actionStep "Pctg-x8/ci-notifications-post-invoker@master" withArgs
   where
     withArgs =
-      let statusFields = M.fromList $ case status params of
+      let statusFields = M.fromList $ case status of
             SuccessStatus -> [("status", toJSON "success")]
             FailureStatus jobName -> [("status", toJSON "failure"), ("failure_step", toJSON jobName)]
-          modeFields = M.fromList $ case mode params of
+          modeFields = M.fromList $ case mode of
             DiffMode hashPair pr ->
               [ ("mode", toJSON "diff"),
                 ("head_sha", toJSON $ diffHead hashPair),
@@ -46,5 +46,5 @@ step params = GHA.namedAs "Notify" $ GHA.actionStep "Pctg-x8/ci-notifications-po
                 ("pr_title", toJSON $ prTitle pr)
               ]
             BranchMode -> [("mode", toJSON "branch")]
-          commonParams = M.fromList [("begintime", toJSON $ beginTime params), ("report_name", toJSON $ reportName params)]
+          commonParams = M.fromList [("begintime", toJSON beginTime), ("report_name", toJSON reportName)]
        in mconcat [commonParams, statusFields, modeFields]
