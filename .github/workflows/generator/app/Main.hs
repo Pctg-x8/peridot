@@ -24,12 +24,12 @@ targets =
     ("sdk-build.yml", SDKBuild.workflow)
   ]
 
-data MissingArgumentException = BasePathRequired
+data AppException = BasePathRequired
 
-instance Show MissingArgumentException where
+instance Show AppException where
   show BasePathRequired = "BasePath argument required"
 
-instance Exception MissingArgumentException
+instance Exception AppException
 
 throwIfNothing :: (Exception e) => e -> Maybe a -> IO a
 throwIfNothing e = maybe (throwIO e) pure
