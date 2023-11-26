@@ -198,7 +198,7 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
     llvmInstallStep =
       GHA.namedAs "Install LLVM" $
         InstallLLVMAction.step "11"
-          & InstallLLVMAction.isCached (GHA.mkRefStepOutputExpression llvmCacheStepId "cache-hit")
+          & InstallLLVMAction.isCached (CacheAction.refCacheHit llvmCacheStepId)
     integratedTestStep =
       applyModifiers
         [ GHA.namedAs "cargo check",
