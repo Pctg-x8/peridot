@@ -4,8 +4,8 @@ module Workflow.GitHub.Actions.Step
     runStep,
     actionStep,
     StepModifier,
-    modifyStepEnv,
-    modifyStepWith,
+    stepModifyEnv,
+    stepModifyWith,
     stepSetWithParam,
     stepUseShell,
   )
@@ -40,8 +40,8 @@ emptyStep =
       stepUses = Nothing,
       stepRun = Nothing,
       stepShell = Nothing,
-      stepWith = M.empty,
-      stepEnv = M.empty,
+      stepWith = mempty,
+      stepEnv = mempty,
       stepWorkingDirectory = Nothing
     }
 
@@ -53,14 +53,14 @@ actionStep name withArgs = emptyStep {stepUses = Just name, stepWith = withArgs}
 
 type StepModifier = Step -> Step
 
-modifyStepEnv :: (Map String String -> Map String String) -> StepModifier
-modifyStepEnv = updateLens stepEnv $ \s x -> s {stepEnv = x}
+stepModifyEnv :: (Map String String -> Map String String) -> StepModifier
+stepModifyEnv = updateLens stepEnv \s x -> s {stepEnv = x}
 
-modifyStepWith :: (Map String Value -> Map String Value) -> StepModifier
-modifyStepWith = updateLens stepWith $ \s x -> s {stepWith = x}
+stepModifyWith :: (Map String Value -> Map String Value) -> StepModifier
+stepModifyWith = updateLens stepWith \s x -> s {stepWith = x}
 
 stepSetWithParam :: (ToJSON v) => String -> v -> StepModifier
-stepSetWithParam k = modifyStepWith . M.insert k . toJSON
+stepSetWithParam k = stepModifyWith . M.insert k . toJSON
 
 stepUseShell :: String -> StepModifier
 stepUseShell name self = self {stepShell = Just name}
@@ -91,7 +91,7 @@ instance NamedElement Step where
   nameOf = stepName
 
 instance HasEnvironmentVariables Step where
-  env = modifyStepEnv `compose2` M.insert
+  env = stepModifyEnv `compose2` M.insert
 
 instance DirectoryWorker Step where
   workAt path self = self {stepWorkingDirectory = Just path}

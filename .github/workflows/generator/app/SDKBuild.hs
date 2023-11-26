@@ -8,13 +8,13 @@ import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.UploadArtifact qualified as UploadArtifact
 
 powershellOnly :: (GHA.ConditionalElement e) => e -> e
-powershellOnly = GHA.withCondition "matrix.os == 'windows-latest'"
+powershellOnly = GHA.withCondition $ GHA.runnerOsExpr <> " == 'windows-latest'"
 
 macOnly :: (GHA.ConditionalElement e) => e -> e
-macOnly = GHA.withCondition "matrix.os == 'macos-latest'"
+macOnly = GHA.withCondition $ GHA.runnerOsExpr <> " == 'macos-latest'"
 
 bashOnly :: (GHA.ConditionalElement e) => e -> e
-bashOnly = GHA.withCondition "matrix.os != 'windows-latest'"
+bashOnly = GHA.withCondition $ GHA.runnerOsExpr <> " != 'windows-latest'"
 
 brewInstallStep :: [String] -> GHA.Step
 brewInstallStep packages = macOnly $ GHA.runStep $ "brew install " <> unwords packages
@@ -26,7 +26,7 @@ poshScriptStep :: String -> String -> GHA.Step
 poshScriptStep file args = powershellOnly $ GHA.runStep $ "powershell.exe -File " <> file <> " " <> args
 
 artifactName, artifactDir :: String
-artifactName = "PeridotSDK-" <> GHA.mkRefMatrixValueExpression "os"
+artifactName = "PeridotSDK-" <> GHA.runnerOs
 artifactDir = "peridot-sdk"
 
 buildJob :: GHA.Job

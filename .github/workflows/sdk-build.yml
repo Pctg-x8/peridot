@@ -4,21 +4,21 @@ jobs:
     steps:
       - name: Checking out
         uses: "actions/checkout@v3"
-      - if: "matrix.os == 'macos-latest'"
+      - if: "runner.os == 'macos-latest'"
         name: "Upgrade utils (Only for macOS)"
         run: brew install bash findutils
       - name: Build tools
         run: make -C tools build-release
-      - if: "matrix.os == 'windows-latest'"
+      - if: "runner.os == 'windows-latest'"
         name: "Make package (For PowerShell Env)"
         run: "powershell.exe -File ./make-dev-package.ps1 -OutDirectory peridot-sdk -PeridotBranch $($Env:GITHUB_REF -replace \"^refs/heads/\")"
-      - if: "matrix.os != 'windows-latest'"
+      - if: "runner.os != 'windows-latest'"
         name: "Make package (For Bash Env)"
         run: "./make-dev-package.sh -o peridot-sdk -b ${GITHUB_REF#\"refs/heads/\"}"
       - name: Uploading Artifacts
         uses: "actions/upload-artifact@v1"
         with:
-          name: "PeridotSDK-${{ matrix.os }}"
+          name: "PeridotSDK-${{ runner.os }}"
           path: peridot-sdk
     strategy:
       matrix:

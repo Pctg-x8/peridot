@@ -48,6 +48,7 @@ default-extensions:
   - MonoLocalBinds
   - RecordWildCards
   - OverloadedStrings
+  - BlockArguments
 
 library:
   source-dirs: src

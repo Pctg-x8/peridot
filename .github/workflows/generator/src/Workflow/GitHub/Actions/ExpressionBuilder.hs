@@ -4,6 +4,10 @@ module Workflow.GitHub.Actions.ExpressionBuilder
     mkNeedsOutputExpression,
     mkNeedsOutputPath,
     mkRefMatrixValueExpression,
+    runnerOsExpr,
+    runnerOs,
+    githubTokenExpr,
+    githubToken,
   )
 where
 
@@ -13,17 +17,29 @@ import Data.List (intercalate)
 mkExpression :: String -> String
 mkExpression expr = "${{ " <> expr <> " }}"
 
-objectRefExpr :: [String] -> String
-objectRefExpr = intercalate "."
+objectPathExpr :: [String] -> String
+objectPathExpr = intercalate "."
 
 mkRefStepOutputExpression :: String -> String -> String
-mkRefStepOutputExpression stepId name = mkExpression $ objectRefExpr ["steps", stepId, "outputs", name]
+mkRefStepOutputExpression stepId name = mkExpression $ objectPathExpr ["steps", stepId, "outputs", name]
 
 mkNeedsOutputPath :: String -> String -> String
-mkNeedsOutputPath jobId name = objectRefExpr ["needs", jobId, "outputs", name]
+mkNeedsOutputPath jobId name = objectPathExpr ["needs", jobId, "outputs", name]
 
 mkNeedsOutputExpression :: String -> String -> String
 mkNeedsOutputExpression = mkExpression `compose2` mkNeedsOutputPath
 
 mkRefMatrixValueExpression :: String -> String
-mkRefMatrixValueExpression key = mkExpression $ objectRefExpr ["matrix", key]
+mkRefMatrixValueExpression key = mkExpression $ objectPathExpr ["matrix", key]
+
+runnerOsExpr :: String
+runnerOsExpr = "runner.os"
+
+runnerOs :: String
+runnerOs = mkExpression runnerOsExpr
+
+githubTokenExpr :: String
+githubTokenExpr = "secrets.GITHUB_TOKEN"
+
+githubToken :: String
+githubToken = mkExpression githubTokenExpr

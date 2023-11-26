@@ -1,6 +1,5 @@
 module CustomAction.CodeFormChecker (Script (..), step) where
 
-import Data.Map qualified as M
 import Workflow.GitHub.Actions qualified as GHA
 
 data Script = ScriptCodeFormCheck | ScriptVulnerabilitiesEliminator | ScriptTrailingNewlineChecker
@@ -11,4 +10,4 @@ scriptText ScriptVulnerabilitiesEliminator = "vulnerabilities_elliminator"
 scriptText ScriptTrailingNewlineChecker = "trailing_newline_checker"
 
 step :: Script -> GHA.Step
-step script = GHA.env "RUN_SCRIPT" (scriptText script) $ GHA.actionStep "./.github/actions/codeform-checker" M.empty
+step script = GHA.env "RUN_SCRIPT" (scriptText script) $ GHA.actionStep "./.github/actions/codeform-checker" mempty

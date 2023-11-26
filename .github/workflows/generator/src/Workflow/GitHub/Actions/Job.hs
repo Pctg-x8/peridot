@@ -26,7 +26,13 @@ import Workflow.GitHub.Actions.Permissions
     setPermissionTableEntry,
   )
 import Workflow.GitHub.Actions.Step (Step)
-import Workflow.GitHub.Actions.Strategy (Strategy, StrategyElement (..), emptyStrategy, maybeNonEmptyStrategy, strategyMatrixAddEntry)
+import Workflow.GitHub.Actions.Strategy
+  ( Strategy,
+    StrategyElement (..),
+    emptyStrategy,
+    maybeNonEmptyStrategy,
+    strategyMatrixAddEntry,
+  )
 
 data Job = Job
   { jobName :: Maybe String,
@@ -67,7 +73,10 @@ instance ToJSON Job where
           ("name" .=) <$> jobName,
           ("permissions" .=) <$> maybeNonEmptyPermissionTable jobPermissions,
           ("if" .=) <$> jobIf,
-          Just (if length jobRunsOn' == 1 then "runs-on" .= head jobRunsOn' else "runs-on" .= jobRunsOn'),
+          Just $ case jobRunsOn' of
+            -- single element
+            [first] -> "runs-on" .= first
+            xs -> "runs-on" .= xs,
           ("environment" .=) <$> jobEnvironment,
           ("concurrency" .=) <$> jobConcurrency,
           ("outputs" .=) <$> maybeNonEmptyMap jobOutputs,
@@ -99,7 +108,7 @@ instance StrategyElement Job where
   addStrategyMatrixEntry = updateLens jobStrategy (\s x -> s {jobStrategy = x}) `compose2` strategyMatrixAddEntry
 
 jobModifySteps :: ([Step] -> [Step]) -> Job -> Job
-jobModifySteps = updateLens jobSteps (\s x -> s {jobSteps = x})
+jobModifySteps = updateLens jobSteps \s x -> s {jobSteps = x}
 
 jobAppendSteps :: [Step] -> Job -> Job
 jobAppendSteps = jobModifySteps . flip (<>)

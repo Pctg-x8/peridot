@@ -31,8 +31,10 @@ instance Show MissingArgumentException where
 
 instance Exception MissingArgumentException
 
+throwIfNothing :: (Exception e) => e -> Maybe a -> IO a
+throwIfNothing e = maybe (throwIO e) pure
+
 main :: IO ()
-main = getBasePath >>= buildWorkflows
-  where
-    getBasePath = getArgs >>= maybe (throwIO BasePathRequired) pure . listToMaybe
-    buildWorkflows base = forM_ targets $ uncurry LBS8.writeFile . bimap (base </>) encode
+main = do
+  base <- getArgs >>= throwIfNothing BasePathRequired . listToMaybe
+  forM_ targets $ uncurry LBS8.writeFile . bimap (base </>) encode

@@ -42,10 +42,8 @@ withSlackNotification :: SlackNotificationProvider -> Eff (SlackNotifyContext : 
 withSlackNotification = runReader
 
 slackNotifySteps :: (Member SlackNotifyContext r) => SlackReport -> Eff r [GHA.Step]
-slackNotifySteps ReportSuccess = reader $ \provider ->
-  [configureSlackNotification, buildSuccessReportStep provider]
-slackNotifySteps (ReportFailure jobName) = reader $ \provider ->
-  [configureSlackNotification, buildFailureReportStep provider jobName]
+slackNotifySteps ReportSuccess = reader \p -> [configureSlackNotification, buildSuccessReportStep p]
+slackNotifySteps (ReportFailure jobName) = reader \p -> [configureSlackNotification, buildFailureReportStep p jobName]
 
 reportJobFailure :: (Member SlackNotifyContext r) => GHA.Job -> Eff r GHA.Job
 reportJobFailure job =

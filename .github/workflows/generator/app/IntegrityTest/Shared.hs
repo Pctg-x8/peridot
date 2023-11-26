@@ -16,11 +16,11 @@ module IntegrityTest.Shared
 where
 
 import Control.Eff (Eff, Member)
+import CustomAction.CheckBuildBaseLayer qualified as CheckBuildBaseLayerAction
 import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import Data.Function ((&))
 import Data.Functor ((<&>))
-import Data.Map qualified as M
 import SlackNotification (SlackNotifyContext, SlackReport (ReportSuccess), reportJobFailure, slackNotifySteps)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
@@ -41,7 +41,7 @@ preconditionRecordBeginTimeStamp =
       GHA.runStep "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
 
 preconditionBeginTimestampOutputDef :: GHA.Job -> GHA.Job
-preconditionBeginTimestampOutputDef = GHA.jobOutput "begintime" $ GHA.mkRefStepOutputExpression "begintime" "begintime"
+preconditionBeginTimestampOutputDef = GHA.jobForwardingStepOutput "begintime" "begintime"
 
 checkoutStep, checkoutHeadStep :: GHA.Step
 checkoutStep = GHA.namedAs "Checking out" $ Checkout.step Nothing
@@ -51,14 +51,11 @@ rustCacheStep, llvmCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
     CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target"] $
-      os <> "-cargo-" <> hash
+      GHA.runnerOs <> "-cargo-" <> hash
   where
-    os = GHA.mkExpression "runner.os"
     hash = GHA.mkExpression "hashFiles('**/Cargo.lock')"
 llvmCacheStep =
-  GHA.namedAs "Initialize LLVM Cache" $
-    CacheAction.step ["./llvm"] $
-      GHA.mkExpression "runner.os" <> "-llvm-11"
+  GHA.namedAs "Initialize LLVM Cache" $ CacheAction.step ["./llvm"] $ GHA.runnerOs <> "-llvm-11"
 
 checkFormats :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkFormats precondition =
@@ -68,9 +65,12 @@ checkFormats precondition =
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
-                  GHA.namedAs "Running Check - Line Width" $ CodeFormCheckerAction.step CodeFormCheckerAction.ScriptCodeFormCheck,
-                  GHA.namedAs "Running Check - Debugging Weaks" $ CodeFormCheckerAction.step CodeFormCheckerAction.ScriptVulnerabilitiesEliminator,
-                  GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $ CodeFormCheckerAction.step CodeFormCheckerAction.ScriptTrailingNewlineChecker
+                  GHA.namedAs "Running Check - Line Width" $
+                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptCodeFormCheck,
+                  GHA.namedAs "Running Check - Debugging Weaks" $
+                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptVulnerabilitiesEliminator,
+                  GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
+                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptTrailingNewlineChecker
                 ]
         )
 
@@ -82,7 +82,7 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
         <$> [ checkoutHeadStep,
               checkoutStep,
               rustCacheStep,
-              GHA.namedAs "Building as Checking" $ GHA.actionStep "./.github/actions/checkbuild-baselayer" M.empty
+              GHA.namedAs "Building as Checking" CheckBuildBaseLayerAction.step
             ]
 
 checkTools :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
@@ -119,19 +119,18 @@ withBuilderEnv = setCradleBase . setBuiltinAssetsPath
 
 checkCradleWindows :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleWindows precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(Windows)", GHA.jobRunsOn ["windows-latest"]] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  cliBuildStep,
-                  GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
-                  GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
-                ]
-        )
+  reportJobFailure $ GHA.namedAs "Cradle(Windows)" $ GHA.jobRunsOn ["windows-latest"] $ GHA.job steps
   where
+    steps =
+      GHA.withCondition precondition
+        <$> [ checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              cliBuildStep,
+              GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
+              GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
+            ]
+
     integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . GHA.runStep
 
     integratedTestNormalScript =
@@ -145,27 +144,27 @@ checkCradleWindows precondition =
 
 checkCradleMacos :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkCradleMacos precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(macOS)", GHA.jobRunsOn ["macos-latest"]] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  cliBuildStep,
-                  archiverBuildStep,
-                  GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
-                  integratedTestStep
-                ]
-        )
+  reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ GHA.job steps
   where
+    steps =
+      GHA.withCondition precondition
+        <$> [ checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              cliBuildStep,
+              archiverBuildStep,
+              GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
+              integratedTestStep
+            ]
+
     integratedTestStep =
       applyModifiers
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
           GHA.env "VULKAN_SDK" "/Users",
           withBuilderEnv,
-          GHA.env "PERIDOT_CLI_ARCHIVER_PATH" $ GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
+          GHA.env "PERIDOT_CLI_ARCHIVER_PATH" $
+            GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
@@ -179,23 +178,22 @@ aptInstallStep packages =
       "sudo apt-get update && sudo apt-get install -y " <> unwords packages
 
 checkCradleLinux :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
-checkCradleLinux precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(Linux)"] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
-                  GHA.namedAs "Install extra packages" $ aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
-                  checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  GHA.identifiedAs llvmCacheStepId llvmCacheStep,
-                  llvmInstallStep,
-                  cliBuildStep,
-                  integratedTestStep
-                ]
-        )
+checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $ GHA.job steps
   where
+    steps =
+      GHA.withCondition precondition
+        <$> [ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
+              GHA.namedAs "Install extra packages" $
+                aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
+              checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              GHA.identifiedAs llvmCacheStepId llvmCacheStep,
+              llvmInstallStep,
+              cliBuildStep,
+              integratedTestStep
+            ]
+
     llvmCacheStepId = "llvm-cache"
     llvmInstallStep =
       GHA.namedAs "Install LLVM" $
@@ -210,25 +208,23 @@ checkCradleLinux precondition =
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleAndroid :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
-checkCradleAndroid precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Cradle(Android)"] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  GHA.namedAs "Setup Rust for Android" $
-                    RustToolchainAction.step
-                      & RustToolchainAction.useStable
-                      & RustToolchainAction.forTarget "aarch64-linux-android",
-                  GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" & SetupJavaAction.javaVersion "17",
-                  GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
-                  cliBuildStep,
-                  integratedTestStep
-                ]
-        )
+checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android)" $ GHA.job steps
   where
+    steps =
+      GHA.withCondition precondition
+        <$> [ checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              GHA.namedAs "Setup Rust for Android" $
+                RustToolchainAction.step
+                  & RustToolchainAction.useStable
+                  & RustToolchainAction.forTarget "aarch64-linux-android",
+              GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" & SetupJavaAction.javaVersion "17",
+              GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
+              cliBuildStep,
+              integratedTestStep
+            ]
+
     integratedTestStep =
       applyModifiers
         [ GHA.namedAs "cargo check",

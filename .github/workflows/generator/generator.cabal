@@ -58,6 +58,7 @@ library
       MonoLocalBinds
       RecordWildCards
       OverloadedStrings
+      BlockArguments
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       aeson
@@ -74,6 +75,7 @@ executable generator-exe
   main-is: Main.hs
   other-modules:
       AutoDeliveryDev
+      CustomAction.CheckBuildBaseLayer
       CustomAction.CheckBuildSubdirectory
       CustomAction.CodeFormChecker
       CustomAction.CreateDevDeliverPRs
@@ -96,6 +98,7 @@ executable generator-exe
       MonoLocalBinds
       RecordWildCards
       OverloadedStrings
+      BlockArguments
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
@@ -124,6 +127,7 @@ test-suite generator-test
       MonoLocalBinds
       RecordWildCards
       OverloadedStrings
+      BlockArguments
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson

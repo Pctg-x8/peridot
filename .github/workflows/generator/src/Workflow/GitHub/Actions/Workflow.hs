@@ -88,19 +88,19 @@ workflowRunName :: String -> Workflow -> Workflow
 workflowRunName runName self = self {workflowRunName' = Just runName}
 
 workflowModifyPermissionTable :: (PermissionTable -> PermissionTable) -> Workflow -> Workflow
-workflowModifyPermissionTable = updateLens workflowPermissions $ \s x -> s {workflowPermissions = x}
+workflowModifyPermissionTable = updateLens workflowPermissions \s x -> s {workflowPermissions = x}
 
 workflowModifyEnvironmentMap :: (Map String String -> Map String String) -> Workflow -> Workflow
-workflowModifyEnvironmentMap = updateLens workflowEnv $ \s x -> s {workflowEnv = x}
+workflowModifyEnvironmentMap = updateLens workflowEnv \s x -> s {workflowEnv = x}
 
 workflowMergeEnvs :: Map String String -> Workflow -> Workflow
 workflowMergeEnvs = workflowModifyEnvironmentMap . (<>)
 
 workflowReplaceEnvironmentMap :: Map String String -> Workflow -> Workflow
-workflowReplaceEnvironmentMap = workflowModifyEnvironmentMap . const
+workflowReplaceEnvironmentMap m self = self {workflowEnv = m}
 
 workflowModifyJobs :: (Map String Job -> Map String Job) -> Workflow -> Workflow
-workflowModifyJobs = updateLens workflowJobs $ \s x -> s {workflowJobs = x}
+workflowModifyJobs = updateLens workflowJobs \s x -> s {workflowJobs = x}
 
 workflowJob :: String -> Job -> Workflow -> Workflow
 workflowJob = workflowModifyJobs `compose2` M.insert
@@ -109,4 +109,4 @@ workflowMergeJobs :: Map String Job -> Workflow -> Workflow
 workflowMergeJobs = workflowModifyJobs . (<>)
 
 workflowReplaceJobs :: Map String Job -> Workflow -> Workflow
-workflowReplaceJobs = workflowModifyJobs . const
+workflowReplaceJobs jobs self = self {workflowJobs = jobs}
