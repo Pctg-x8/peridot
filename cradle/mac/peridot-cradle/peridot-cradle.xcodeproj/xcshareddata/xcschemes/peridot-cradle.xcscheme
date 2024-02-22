@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1010"
+   LastUpgradeVersion = "1320"
    version = "1.3">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -63,7 +63,7 @@
       <EnvironmentVariables>
          <EnvironmentVariable
             key = "VK_ICD_FILENAMES"
-            value = "$HOME/vulkansdk-macos-1.1.130.0/macOS/etc/vulkan/icd.d/MoltenVK_icd.json"
+            value = "$HOME/VulkanSDK/1.3.204.1/macOS/share/vulkan/icd.d/MoltenVK_icd.json"
             isEnabled = "NO">
          </EnvironmentVariable>
          <EnvironmentVariable

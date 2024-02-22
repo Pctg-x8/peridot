@@ -1,0 +1,29 @@
+[package]
+name = "peridot"
+description = "Peridot Engine"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+[features]
+debug = ["bedrock/VK_EXT_debug_utils"]
+derive = ["peridot-derive"]
+mt = []
+
+[dependencies]
+pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
+log = "*"
+libc = "*"
+rayon = "1.0"
+num_cpus = "1.0"
+num = "*"
+parking_lot = "0.12"
+
+peridot-archive = { path = "../modules/archive" }
+peridot-math = { path = "../modules/math" }
+peridot-derive = { path = "../derive", optional = true }
+cfg-if = "1.0.0"
+
+[dependencies.bedrock]
+workspace = true
+features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "Multithreaded"]

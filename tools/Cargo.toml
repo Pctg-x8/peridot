@@ -1,0 +1,5 @@
+[workspace]
+members = ["archiver", "cli", "shaderbuild"]
+
+[workspace.dependencies]
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }

@@ -1,23 +1,28 @@
-name: Document Continuous Deployment(for dev)
+jobs:
+  doc-gen-deploy:
+    environment: dev-document
+    name: Doc Generate and Deploy
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/checkout@v3"
+        with:
+          ref: dev
+      - uses: "google-github-actions/auth@v1"
+        with:
+          service_account: "dev-autocd-deployer@docs-peridot.iam.gserviceaccount.com"
+          workload_identity_provider: projects/488336166113/locations/global/workloadIdentityPools/github-actions-oidc-federation/providers/github-actions
+      - name: Build docs
+        uses: "./.github/actions/build-doc"
+      - name: Deploy
+        uses: "./.github/actions/deployment-dev"
+name: "Document Continuous Deployment (for dev)"
 on:
   push:
     branches:
       - dev
     paths:
-      - "**.rs"
       - "**.toml"
-jobs:
-  doc-gen-deploy:
-    name: Doc Generate and Deploy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checking out
-        uses: actions/checkout@v2
-        with:
-          ref: dev
-      - name: Build docs
-        uses: ./.github/actions/build-doc
-      - name: Deployment to Firebase Hosting(for dev)
-        uses: ./.github/actions/deployment-dev
-        env:
-          FIREBASE_TOKEN: ${{ secrets.DOC_HOST_FIREBASE_TOKEN }}
+      - "**.rs"

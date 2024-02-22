@@ -1,183 +1,291 @@
-
-#[macro_use] extern crate log;
-
-use std::fs::File;
+use input::PointerPositionProvider;
+use peridot::{
+    mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef},
+    EngineEvents, FeatureRequests, NativeLinker,
+};
+use presenter::PresenterProvider;
+use sound_backend::SoundBackend;
 use std::path::PathBuf;
-use std::io::Result as IOResult;
-use std::rc::Rc;
-use bedrock as br;
-use peridot::{EngineEvents, FeatureRequests};
+use std::{fs::File, os::fd::AsRawFd};
+use std::{io::Result as IOResult, os::fd::RawFd};
+use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
+mod sound_backend;
+
+use crate::presenter::{wayland::Wayland, xcb::X11, BorrowFd, EventProcessor, WindowBackend};
+mod epoll;
+mod input;
+mod kernel_input;
+mod presenter;
+mod udev;
 mod userlib;
 
-pub struct PlatformAssetLoader { basedir: PathBuf }
-impl PlatformAssetLoader
-{
-    fn new() -> Self
-    {
-        #[cfg(feature = "UseExternalAssetPath")] let basedir = PathBuf::from(env!("PERIDOT_EXTERNAL_ASSET_PATH"));
-        #[cfg(not(feature = "UseExternalAssetPath"))] let basedir =
-        {
+pub struct PlatformAssetLoader {
+    basedir: PathBuf,
+    #[cfg(feature = "IterationBuild")]
+    builtin_asset_basedir: PathBuf,
+}
+impl PlatformAssetLoader {
+    fn new() -> Self {
+        #[cfg(feature = "UseExternalAssetPath")]
+        let basedir = PathBuf::from(env!("PERIDOT_EXTERNAL_ASSET_PATH"));
+        #[cfg(not(feature = "UseExternalAssetPath"))]
+        let basedir = {
             let mut binloc = std::env::current_exe().expect("Getting exe directory");
-            binloc.pop(); binloc.push("assets"); binloc
+            binloc.pop();
+            binloc.push("assets");
+            binloc
         };
 
-        trace!("Using Assets in {}", basedir.display());
-        PlatformAssetLoader { basedir }
+        tracing::trace!("Using Assets in {}", basedir.display());
+        PlatformAssetLoader {
+            basedir,
+            #[cfg(feature = "IterationBuild")]
+            builtin_asset_basedir: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH")),
+        }
     }
 }
-impl peridot::PlatformAssetLoader for PlatformAssetLoader
-{
+impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = File;
     type StreamingAsset = File;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>
-    {
+    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
+        #[allow(unused_mut)]
+        let mut path_segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if path_segments.peek().map_or(false, |&s| s == "builtin") {
+            // Switch base to external builtin path
+            path_segments.next();
+            let mut apath = self.builtin_asset_basedir.clone();
+            apath.extend(path_segments);
+            apath.set_extension(ext);
+
+            return File::open(apath);
+        }
+
         let mut apath = self.basedir.clone();
-        apath.push(path.replace(".", "/")); apath.set_extension(ext);
-        return File::open(apath);
+        apath.extend(path_segments);
+        apath.set_extension(ext);
+
+        File::open(apath)
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> { self.get(path, ext) }
-}
-pub struct PlatformInputHandler { processor: Option<Rc<peridot::InputProcess>> }
-impl PlatformInputHandler
-{
-    fn new() -> Self
-    {
-        PlatformInputHandler { processor: None }
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
+        self.get(path, ext)
     }
 }
-impl peridot::InputProcessPlugin for PlatformInputHandler
-{
-    fn on_start_handle(&mut self, processor: &Rc<peridot::InputProcess>)
-    {
-        self.processor = Some(processor.clone());
-    }
+
+pub struct NativeLink<PP: PresenterProvider> {
+    al: PlatformAssetLoader,
+    pp: PP,
 }
-pub struct WindowHandler { dp: *mut xcb::ffi::xcb_connection_t, vis: xcb::Visualid, wid: xcb::Window }
-impl peridot::PlatformRenderTarget for WindowHandler
-{
-    fn surface_extension_name(&self) -> &'static str { "VK_KHR_xcb_surface" }
-    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-        -> br::Result<peridot::SurfaceInfo>
-    {
-        if !pd.xcb_presentation_support(renderer_queue_family, self.dp, self.vis)
-        {
-            panic!("Vulkan Presentation is not supported");
-        }
-        let so = br::Surface::new_xcb(&vi, self.dp, self.wid)?;
-        if !pd.surface_support(renderer_queue_family, &so)?
-        {
-            panic!("Vulkan Surface is not supported");
-        }
-        return peridot::SurfaceInfo::gather_info(pd, so);
-    }
-    fn current_geometry_extent(&self) -> (usize, usize)
-    {
-        (120, 120)
-    }
-}
-pub struct NativeLink { al: PlatformAssetLoader, wh: WindowHandler, ip: PlatformInputHandler }
-impl peridot::NativeLinker for NativeLink
-{
+impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
     type AssetLoader = PlatformAssetLoader;
-    type RenderTargetProvider = WindowHandler;
-    type InputProcessor = PlatformInputHandler;
+    type Presenter = PP::Presenter;
 
-    fn asset_loader(&self) -> &PlatformAssetLoader { &self.al }
-    fn render_target_provider(&self) -> &WindowHandler { &self.wh }
-    fn input_processor_mut(&mut self) -> &mut PlatformInputHandler { &mut self.ip }
+    fn instance_extensions(&self) -> Vec<&str> {
+        vec!["VK_KHR_surface", PP::SURFACE_EXT_NAME]
+    }
+    fn device_extensions(&self) -> Vec<&str> {
+        vec!["VK_KHR_swapchain"]
+    }
+
+    fn asset_loader(&self) -> &PlatformAssetLoader {
+        &self.al
+    }
+    fn new_presenter(&self, g: &peridot::Graphics) -> Self::Presenter {
+        self.pp.create(g)
+    }
 }
 
-#[allow(dead_code)]
-struct X11
+pub struct GameDriver<NL: NativeLinker> {
+    engine: peridot::Engine<NL>,
+    usercode: userlib::Game<NL>,
+    _snd: Box<dyn SoundBackend>,
+}
+impl<PP> GameDriver<NativeLink<SharedMutableRef<PP>>>
+where
+    SharedMutableRef<PP>: PresenterProvider + PointerPositionProvider + 'static,
+    PP: Send + Sync,
 {
-    con: xcb::Connection, wm_protocols: xcb::Atom, wm_delete_window: xcb::Atom, vis: xcb::Visualid,
-    mainwnd_id: xcb::Window
-}
-impl X11
-{
-    fn init() -> Self {
-        let (con, screen_index) = xcb::Connection::connect(None).expect("Connecting with xcb");
-        let s0 = con.get_setup().roots().nth(screen_index as _).expect("No screen");
-        let vis = s0.root_visual();
-
-        let wm_protocols = xcb::intern_atom_unchecked(&con, false, "WM_PROTOCOLS");
-        let wm_delete_window = xcb::intern_atom_unchecked(&con, false, "WM_DELETE_WINDOW");
-        con.flush();
-        let wm_protocols = wm_protocols.get_reply().expect("No WM_PROTOCOLS").atom();
-        let wm_delete_window = wm_delete_window.get_reply().expect("No WM_DELETE_WINDOW").atom();
-
-        let title = format!("{} v{}.{}.{}",
-            userlib::Game::<NativeLink>::NAME,
-            userlib::Game::<NativeLink>::VERSION.0,
-            userlib::Game::<NativeLink>::VERSION.1,
-            userlib::Game::<NativeLink>::VERSION.2
-        );
-        let mainwnd_id = con.generate_id();
-        xcb::create_window(&con, s0.root_depth(), mainwnd_id, s0.root(), 0, 0, 640, 480, 0,
-            xcb::WINDOW_CLASS_INPUT_OUTPUT as _, vis, &[]);
-        xcb::change_property(&con, xcb::PROP_MODE_REPLACE as _,
-            mainwnd_id, xcb::ATOM_WM_NAME, xcb::ATOM_STRING, 8, title.as_bytes());
-        xcb::change_property(&con, xcb::PROP_MODE_APPEND as _,
-            mainwnd_id, wm_protocols, xcb::ATOM_ATOM, 32, &[wm_delete_window]);
-        con.flush();
-
-        X11 { con, wm_protocols, wm_delete_window, vis, mainwnd_id }
-    }
-    fn show(&self) {
-        xcb::map_window(&self.con, self.mainwnd_id);
-        self.con.flush();
-    }
-    /// Returns false if application has beed exited
-    fn process_all_events(&self) -> bool {
-        while let Some(ev) = self.con.poll_for_event()
-        {
-            if (ev.response_type() & 0x7f) == xcb::CLIENT_MESSAGE
-            {
-                let e: &xcb::ClientMessageEvent = unsafe { xcb::cast_event(&ev) };
-                if e.data().data32()[0] == self.wm_delete_window { return false; }
-            }
-            else
-            {
-                debug!("Generic Event: {:?}", ev.response_type());
-            }
-        }
-        return true;
-    }
-}
-
-pub struct GameDriver {
-    engine: peridot::Engine<NativeLink>,
-    usercode: userlib::Game<NativeLink>
-}
-impl GameDriver {
-    fn new(wh: WindowHandler) -> Self {
+    fn new(pp: SharedMutableRef<PP>) -> Self {
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
-            wh,
-            ip: PlatformInputHandler::new()
+            pp: pp.clone(),
         };
         let mut engine = peridot::Engine::new(
-            userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
-            nl, userlib::Game::<NativeLink>::requested_features()
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
+            nl,
+            userlib::Game::<NativeLink<SharedMutableRef<PP>>>::requested_features(),
         );
-        let usercode = userlib::Game::init(&engine);
-        engine.postinit();
+        let usercode = userlib::Game::init(&mut engine);
+        engine
+            .input_mut()
+            .set_nativelink(Box::new(input::InputNativeLink::new(pp)));
+        engine.post_init();
+        let _snd = if sound_backend::pipewire::NativeAudioEngine::is_available() {
+            Box::new(sound_backend::pipewire::NativeAudioEngine::new(
+                engine.audio_mixer(),
+            )) as Box<dyn SoundBackend>
+        } else {
+            // fallback
+            Box::new(sound_backend::pa::NativeAudioEngine::new(
+                engine.audio_mixer(),
+            ))
+        };
 
-        GameDriver { engine, usercode }
+        Self {
+            engine,
+            usercode,
+            _snd,
+        }
     }
 
-    fn update(&mut self) { self.engine.do_update(&mut self.usercode); }
+    fn update(&mut self) {
+        self.engine.do_update(&mut self.usercode);
+    }
+
+    fn resize(&mut self, newsize: peridot::math::Vector2<usize>) {
+        self.engine
+            .do_resize_back_buffer(newsize, &mut self.usercode);
+    }
+}
+
+pub struct EpollTemporaryAddFd<'e> {
+    instance: &'e epoll::Epoll,
+    fd: RawFd,
+}
+impl<'e> EpollTemporaryAddFd<'e> {
+    pub fn add(
+        instance: &'e epoll::Epoll,
+        fd: RawFd,
+        events: u32,
+        extras: u64,
+    ) -> std::io::Result<Self> {
+        instance.add_fd(fd, events, extras)?;
+        Ok(Self { instance, fd })
+    }
+}
+impl Drop for EpollTemporaryAddFd<'_> {
+    fn drop(&mut self) {
+        self.instance
+            .remove_fd(self.fd)
+            .expect("Failed to remove fd from epoll instance");
+    }
+}
+
+fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
+where
+    W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
+    SharedMutableRef<W>: PresenterProvider + PointerPositionProvider,
+{
+    let mut gd = GameDriver::new(window_backend.clone());
+
+    let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
+    let mut input = input::InputSystem::new(&ep, 1, 2);
+
+    window_backend.borrow_mut().show();
+    gd.engine
+        .audio_mixer()
+        .write()
+        .expect("Failed to mutate audio mixer")
+        .start();
+    let mut events = Vec::new();
+    let mut last_drawn_geometry = window_backend.borrow().geometry();
+    while !window_backend.borrow().has_close_requested() {
+        if events.len() != 2 + input.managed_devices_count() {
+            // resize
+            events.resize(2 + input.managed_devices_count(), unsafe {
+                std::mem::MaybeUninit::zeroed().assume_init()
+            });
+        }
+
+        let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
+        let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
+            &ep,
+            window_backend_readiness_guard.borrow_fd().as_raw_fd(),
+            libc::EPOLLIN as _,
+            0,
+        );
+
+        let count = ep
+            .wait(&mut events, Some(1))
+            .expect("Failed to waiting epoll");
+        drop(window_backend_temporary_epoll);
+
+        // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
+        if count == 0 {
+            drop(window_backend_readiness_guard);
+            if last_drawn_geometry != window_backend.borrow().geometry() {
+                last_drawn_geometry = window_backend.borrow().geometry();
+                gd.resize(last_drawn_geometry);
+            }
+            gd.update();
+            continue;
+        }
+
+        let mut rg = Some(window_backend_readiness_guard);
+        for e in &events[..count as usize] {
+            if e.u64 == 0 {
+                window_backend
+                    .borrow_mut()
+                    .process_all_events(rg.take().expect("window events signaled twice"));
+            } else if e.u64 == 1 {
+                input.process_monitor_event(&ep);
+            } else {
+                input.process_device_event(
+                    &mut gd.engine.input_mut().make_event_receiver(),
+                    e.u64,
+                    &*window_backend.borrow(),
+                );
+            }
+        }
+    }
+    gd.engine
+        .audio_mixer()
+        .write()
+        .expect("Failed to mutate audio mixer")
+        .stop();
+    tracing::trace!("Terminating Program...");
 }
 
 fn main() {
-    env_logger::init();
-    let x11 = X11::init();
+    let fmt = tracing_subscriber::fmt::layer().pretty();
+    let env_filter = tracing_subscriber::filter::EnvFilter::from_default_env();
+    tracing_subscriber::registry()
+        .with(fmt)
+        .with(env_filter)
+        .init();
 
-    let mut gd = GameDriver::new(WindowHandler { dp: x11.con.get_raw_conn(), vis: x11.vis, wid: x11.mainwnd_id });
+    if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
+        if backend_name == "wayland" {
+            run_with_window_backend(make_shared_mutable_ref(
+                Wayland::try_init().expect("Failed to initialize wayland backend"),
+            ));
+            return;
+        }
+        if backend_name == "xcb" {
+            run_with_window_backend(make_shared_mutable_ref(
+                X11::try_init().expect("Failed to initialize xcb backend"),
+            ));
+            return;
+        }
 
-    x11.show();
-    while x11.process_all_events() { gd.update(); }
-    println!("Terminating Program...");
+        tracing::warn!(
+            { backend = backend_name },
+            "unknown backend specified, ignoring"
+        );
+    }
+
+    if let Some(x) = Wayland::try_init() {
+        run_with_window_backend(make_shared_mutable_ref(x));
+        return;
+    }
+    if let Some(x) = X11::try_init() {
+        run_with_window_backend(make_shared_mutable_ref(x));
+        return;
+    }
+
+    panic!("No suitable window backend");
 }

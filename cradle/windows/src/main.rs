@@ -1,221 +1,369 @@
-use winapi::um::winuser::{
-    DefWindowProcA, CreateWindowExA, PeekMessageA, DispatchMessageA, TranslateMessage, WNDCLASSEXA, RegisterClassExA,
-    AdjustWindowRectEx, WS_OVERLAPPEDWINDOW, WS_EX_APPWINDOW, CW_USEDEFAULT, ShowWindow, SW_SHOWNORMAL, WM_SIZE,
-    PostQuitMessage, PM_REMOVE,
-    LoadCursorA, IDC_ARROW, SetWindowLongPtrA, GetWindowLongPtrA, GWLP_USERDATA
-};
-use winapi::um::shellscalingapi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
-use winapi::um::winuser::{WM_DESTROY, WM_QUIT};
-use winapi::um::libloaderapi::GetModuleHandleA;
-use winapi::shared::windef::{RECT, HWND};
-use winapi::shared::minwindef::{LRESULT, WPARAM, LPARAM, UINT, HINSTANCE, LOWORD, HIWORD};
-
 use std::mem::MaybeUninit;
-#[macro_use] extern crate log;
+mod audio;
+use audio::NativeAudioEngine;
+use log::*;
+mod input;
 mod userlib;
+use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
+use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
+    GetWindowLongPtrA, LoadCursorW, PeekMessageA, PostQuitMessage, RegisterClassExA,
+    SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW,
+    PM_REMOVE, SW_SHOWNORMAL, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW,
+    WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+};
 
-const LPSZCLASSNAME: &str = concat!(env!("PERIDOT_WINDOWS_APPID"), ".mainWindow\0");
+mod presenter;
+use self::presenter::Presenter;
 
-fn module_handle() -> HINSTANCE { unsafe { GetModuleHandleA(std::ptr::null()) } }
+const LPSZCLASSNAME: &'static str = "mainWindow\0";
 
-pub struct GameDriver
-{
-    base: peridot::Engine<NativeLink>,
-    usercode: userlib::Game<NativeLink>,
-    current_size: peridot::math::Vector2<usize>
+#[inline]
+const fn loword(dw: usize) -> u16 {
+    (dw & 0xffff) as _
 }
-impl GameDriver
-{
-    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self
-    {
-        let nl = NativeLink
-        {
-            al: AssetProvider::new(),
-            prt: RenderTargetProvider(window),
-            input: InputHandler::new()
-        };
-        let mut base = peridot::Engine::new(
-            userlib::Game::<NativeLink>::NAME, userlib::Game::<NativeLink>::VERSION,
-            nl, userlib::Game::<NativeLink>::requested_features()
-        );
-        let usercode = userlib::Game::init(&base);
-        base.postinit();
+#[inline]
+const fn hiword(dw: usize) -> u16 {
+    ((dw >> 16) & 0xffff) as _
+}
 
-        GameDriver
-        {
-            base, usercode, current_size: init_size
+#[inline]
+fn module_handle() -> HINSTANCE {
+    unsafe { core::mem::transmute(GetModuleHandleA(None).expect("Failed to get module handle")) }
+}
+
+struct CoScopeGuard;
+impl CoScopeGuard {
+    fn init(apartment: COINIT) -> windows::core::Result<Self> {
+        unsafe { CoInitializeEx(None, apartment).map(|_| Self) }
+    }
+}
+impl Drop for CoScopeGuard {
+    fn drop(&mut self) {
+        unsafe { CoUninitialize() }
+    }
+}
+
+pub struct ThreadsafeWindowOps(HWND);
+unsafe impl Sync for ThreadsafeWindowOps {}
+unsafe impl Send for ThreadsafeWindowOps {}
+impl ThreadsafeWindowOps {
+    #[inline]
+    pub fn map_points_from_desktop(&self, p: &mut [POINT]) {
+        unsafe {
+            MapWindowPoints(None, self.0, p);
         }
     }
 
-    fn update(&mut self)
-    {
+    #[inline]
+    pub fn get_client_rect(&self) -> RECT {
+        let mut rc = std::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(self.0, rc.as_mut_ptr()).expect("Failed to get client rect");
+            rc.assume_init()
+        }
+    }
+}
+
+pub struct GameDriver {
+    base: peridot::Engine<NativeLink>,
+    usercode: userlib::Game<NativeLink>,
+    _snd: NativeAudioEngine,
+    current_size: peridot::math::Vector2<usize>,
+    ri_handler: self::input::RawInputHandler,
+}
+impl GameDriver {
+    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
+        let window = SharedRef::new(ThreadsafeWindowOps(window));
+
+        let nl = NativeLink {
+            al: AssetProvider::new(),
+            window: window.clone(),
+        };
+        let mut base = peridot::Engine::new(
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
+            nl,
+            userlib::Game::<NativeLink>::requested_features(),
+        );
+        let usercode = userlib::Game::init(&mut base);
+        let ri_handler = self::input::RawInputHandler::init();
+        base.input_mut()
+            .set_nativelink(Box::new(self::input::NativeInputHandler::new(
+                window.clone(),
+            )));
+        base.post_init();
+        let _snd =
+            NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
+
+        /*let mut ap = PSGSine::new();
+        ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
+        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap)));
+        let mut ap2 = PSGSine::new();
+        ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
+        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap2)));*/
+
+        Self {
+            base,
+            usercode,
+            _snd,
+            current_size: init_size,
+            ri_handler,
+        }
+    }
+
+    fn update(&mut self) {
         self.base.do_update(&mut self.usercode);
     }
-    fn resize(&mut self, size: peridot::math::Vector2<usize>)
-    {
-        self.base.do_resize_backbuffer(size, &mut self.usercode);
+    fn resize(&mut self, size: peridot::math::Vector2<usize>) {
+        self.base.do_resize_back_buffer(size, &mut self.usercode);
     }
 }
 
-fn main()
-{
-    env_logger::init();
+fn main() {
+    let fmt = tracing_subscriber::fmt::layer().pretty();
+    let filter = tracing_subscriber::filter::EnvFilter::from_default_env();
+    tracing_subscriber::registry().with(fmt).with(filter).init();
 
-    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE); }
+    let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
+
+    unsafe {
+        SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).expect("Failed to set dpi awareness");
+    }
 
     let wca = WNDCLASSEXA {
-        cbSize: std::mem::size_of::<WNDCLASSEXA>() as _, hInstance: module_handle(),
-        lpszClassName: LPSZCLASSNAME.as_ptr() as *const _,
+        cbSize: std::mem::size_of::<WNDCLASSEXA>() as _,
+        hInstance: module_handle(),
+        lpszClassName: windows::core::PCSTR(LPSZCLASSNAME.as_ptr() as *const _),
         lpfnWndProc: Some(window_callback),
-        hCursor: unsafe { LoadCursorA(std::ptr::null_mut(), IDC_ARROW as _) },
-        .. unsafe { MaybeUninit::zeroed().assume_init() }
+        hCursor: unsafe { LoadCursorW(None, IDC_ARROW).expect("Failed to load default cursor") },
+        ..unsafe { MaybeUninit::zeroed().assume_init() }
     };
     let wcatom = unsafe { RegisterClassExA(&wca) };
-    if wcatom <= 0 { panic!("Register Class Failed!"); }
+    if wcatom <= 0 {
+        panic!("Register Class Failed!");
+    }
 
-    let wname = format!("{} v{}.{}.{}",
-        userlib::Game::<NativeLink>::NAME,
-        userlib::Game::<NativeLink>::VERSION.0,
-        userlib::Game::<NativeLink>::VERSION.1,
-        userlib::Game::<NativeLink>::VERSION.2);
-    let wname_c = std::ffi::CString::new(wname).expect("Unable to generate a c-style string");
-
-    let style = WS_OVERLAPPEDWINDOW;
-    let mut wrect = RECT { left: 0, top: 0, right: 640, bottom: 480 };
-    unsafe { AdjustWindowRectEx(&mut wrect, style, false as _, WS_EX_APPWINDOW); }
-    let w = unsafe {
-        CreateWindowExA(WS_EX_APPWINDOW, wcatom as _, wname_c.as_ptr(), style,
-            CW_USEDEFAULT, CW_USEDEFAULT, wrect.right - wrect.left, wrect.bottom - wrect.top,
-            std::ptr::null_mut(), std::ptr::null_mut(), wca.hInstance, std::ptr::null_mut())
+    let wname_c =
+        std::ffi::CString::new(userlib::APP_TITLE).expect("Unable to generate a c-style string");
+    let wsex = if cfg!(feature = "transparent") {
+        WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP
+    } else {
+        WS_EX_APPWINDOW
     };
-    if w.is_null() { panic!("Create Window Failed!"); }
-    
+    let style = WS_OVERLAPPEDWINDOW;
+    let mut wrect = RECT {
+        left: 0,
+        top: 0,
+        right: 640,
+        bottom: 480,
+    };
+    unsafe {
+        AdjustWindowRectEx(&mut wrect, style, false, WS_EX_APPWINDOW)
+            .expect("Failed to calculate window geometry");
+    }
+    let w = unsafe {
+        CreateWindowExA(
+            wsex,
+            windows::core::PCSTR(std::mem::transmute(wcatom as usize)),
+            windows::core::PCSTR(wname_c.as_ptr() as _),
+            style,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            wrect.right - wrect.left,
+            wrect.bottom - wrect.top,
+            None,
+            None,
+            wca.hInstance,
+            None,
+        )
+    };
+    if w.0 == 0 {
+        panic!("Create Window Failed!");
+    }
+
     let mut driver = GameDriver::new(w, peridot::math::Vector2(640, 480));
-    unsafe { SetWindowLongPtrA(w, GWLP_USERDATA, &mut driver as *mut GameDriver as _); }
-    unsafe { ShowWindow(w, SW_SHOWNORMAL); }
+    unsafe {
+        SetWindowLongPtrA(w, GWLP_USERDATA, &mut driver as *mut GameDriver as _);
+    }
+    unsafe {
+        ShowWindow(w, SW_SHOWNORMAL);
+    }
 
-    while process_message_all() { driver.update(); }
+    while process_message_all() {
+        driver.update();
+    }
 }
-extern "system" fn window_callback(w: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT
-{
-    match msg
-    {
-        WM_DESTROY => unsafe { PostQuitMessage(0); return 0; },
-        WM_SIZE => unsafe
-        {
-            let p = GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver;
-            if let Some(driver) = p.as_mut()
-            {
-                let (w, h) = (LOWORD(lparam as _), HIWORD(lparam as _));
-                let size = peridot::math::Vector2(w as usize, h as usize);
-                if driver.current_size != size {
-                    driver.current_size = size.clone();
-                    driver.resize(size);
-                    driver.update();
-                }
+
+extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_DESTROY {
+        unsafe {
+            PostQuitMessage(0);
+        }
+        return LRESULT(0);
+    }
+
+    if msg == WM_SIZE {
+        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+        if let Some(driver) = unsafe { p.as_mut() } {
+            let (w, h) = (loword(lparam.0 as _), hiword(lparam.0 as _));
+            let size = peridot::math::Vector2(w as usize, h as usize);
+            if driver.current_size != size {
+                driver.current_size = size.clone();
+                driver.resize(size);
+                driver.update();
             }
-            return 0;
-        },
-        _ => unsafe { DefWindowProcA(w, msg, wparam, lparam) }
+        }
+
+        return LRESULT(0);
     }
+
+    if msg == WM_INPUT {
+        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+        if let Some(driver) = unsafe { p.as_mut() } {
+            driver
+                .ri_handler
+                .handle_wm_input(driver.base.input_mut(), lparam);
+        }
+
+        return LRESULT(0);
+    }
+
+    unsafe { DefWindowProcA(w, msg, wparam, lparam) }
 }
 
-fn process_message_all() -> bool
-{
+fn process_message_all() -> bool {
     let mut msg = MaybeUninit::uninit();
-    while unsafe { PeekMessageA(msg.as_mut_ptr(), std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 }
-    {
-        if unsafe { (*msg.as_ptr()).message } == WM_QUIT { return false; }
-        unsafe { TranslateMessage(msg.as_mut_ptr()); DispatchMessageA(msg.as_mut_ptr()); }
+    while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).as_bool() } {
+        if unsafe { (*msg.as_ptr()).message } == WM_QUIT {
+            return false;
+        }
+        unsafe {
+            TranslateMessage(msg.as_ptr());
+            DispatchMessageA(msg.as_ptr());
+        }
     }
-    
+
     true
 }
 
-use std::rc::Rc;
-use bedrock as br;
 use std::path::PathBuf;
 
-struct AssetProvider { base: PathBuf }
-impl AssetProvider
-{
-    fn new() -> Self
-    {
-        #[cfg(feature = "UseExternalAssetPath")] let base = PathBuf::from(env!("PERIDOT_EXTERNAL_ASSET_PATH"));
-        #[cfg(not(feature = "UseExternalAssetPath"))] let base =
-        {
-            let mut exe = std::env::current_exe().expect("Unable to determine the location of exe file");
-            exe.pop(); exe.push("/assets"); exe
+struct AssetProvider {
+    base: PathBuf,
+    #[cfg(feature = "IterationBuild")]
+    builtin_assets_base: PathBuf,
+}
+impl AssetProvider {
+    fn new() -> Self {
+        #[cfg(feature = "UseExternalAssetPath")]
+        let base = PathBuf::from(env!("PERIDOT_EXTERNAL_ASSET_PATH"));
+        #[cfg(not(feature = "UseExternalAssetPath"))]
+        let base = {
+            let mut exe =
+                std::env::current_exe().expect("Unable to determine the location of exe file");
+            exe.pop();
+            exe.push("/assets");
+            exe
         };
         trace!("Asset BaseDirectory={}", base.display());
-        AssetProvider { base }
+        AssetProvider {
+            base,
+            #[cfg(feature = "IterationBuild")]
+            builtin_assets_base: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH")),
+        }
     }
 }
-impl peridot::PlatformAssetLoader for AssetProvider
-{
+impl peridot::PlatformAssetLoader for AssetProvider {
     type Asset = std::fs::File;
     type StreamingAsset = std::fs::File;
 
-    fn get(&self, path: &str, ext: &str) -> std::io::Result<Self::Asset>
-    {
-        let mut p = self.base.clone();
-        p.push(path.replace('.', "/"));
-        p.set_extension(ext);
-        return std::fs::File::open(&p);
-    }
-    fn get_streaming(&self, path: &str, ext: &str) -> std::io::Result<Self::StreamingAsset>
-    {
-        let mut p = self.base.clone();
-        p.push(path.replace('.', "/"));
-        p.set_extension(ext);
-        return std::fs::File::open(&p);
-    }
-}
-struct RenderTargetProvider(HWND);
-impl peridot::PlatformRenderTarget for RenderTargetProvider
-{
-    fn surface_extension_name(&self) -> &'static str { "VK_KHR_win32_surface" }
-    fn create_surface(&self, vi: &br::Instance, pd: &br::PhysicalDevice, renderer_queue_family: u32)
-        -> br::Result<peridot::SurfaceInfo>
-    {
-        if !pd.win32_presentation_support(renderer_queue_family)
-        {
-            panic!("WindowSubsystem does not support Vulkan rendering");
-        }
-        let s = br::Surface::new_win32(vi, module_handle(), self.0)?;
-        if !pd.surface_support(renderer_queue_family, &s)?
-        {
-            panic!("Vulkan does not support this surface to render");
+    fn get(&self, path: &str, ext: &str) -> std::io::Result<Self::Asset> {
+        #[allow(unused_mut)]
+        let mut segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if segments.peek().map_or(false, |&s| s == "builtin") {
+            let _ = segments.next();
+
+            let mut p = self.builtin_assets_base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+            log::debug!("Loading Builtin Asset: {:?}", p);
+
+            return std::fs::File::open(&p);
         }
 
-        peridot::SurfaceInfo::gather_info(pd, s)
+        let mut p = self.base.clone();
+        p.extend(segments);
+        p.set_extension(ext);
+        log::debug!("Loading Asset: {:?}", p);
+
+        std::fs::File::open(&p)
     }
-    fn current_geometry_extent(&self) -> (usize, usize) { (0, 0) }
-}
-struct InputHandler(Option<Rc<peridot::InputProcess>>);
-impl InputHandler
-{
-    fn new() -> Self
-    {
-        InputHandler(None)
+    fn get_streaming(&self, path: &str, ext: &str) -> std::io::Result<Self::StreamingAsset> {
+        #[allow(unused_mut)]
+        let mut segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if segments.peek().map_or(false, |&s| s == "builtin") {
+            let _ = segments.next();
+
+            let mut p = self.builtin_assets_base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+
+            return std::fs::File::open(&p);
+        }
+
+        let mut p = self.base.clone();
+        p.extend(segments);
+        p.set_extension(ext);
+
+        std::fs::File::open(&p)
     }
 }
-impl peridot::InputProcessPlugin for InputHandler
-{
-    fn on_start_handle(&mut self, processor: &Rc<peridot::InputProcess>)
-    {
-        self.0 = Some(processor.clone());
-    }
+
+struct NativeLink {
+    al: AssetProvider,
+    window: SharedRef<ThreadsafeWindowOps>,
 }
-struct NativeLink { al: AssetProvider, prt: RenderTargetProvider, input: InputHandler }
-impl peridot::NativeLinker for NativeLink
-{
+impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;
-    type RenderTargetProvider = RenderTargetProvider;
-    type InputProcessor = InputHandler;
+    type Presenter = Presenter;
 
-    fn asset_loader(&self) -> &AssetProvider { &self.al }
-    fn render_target_provider(&self) -> &RenderTargetProvider { &self.prt }
-    fn input_processor_mut(&mut self) -> &mut InputHandler { &mut self.input }
+    #[cfg(not(feature = "transparent"))]
+    fn instance_extensions(&self) -> Vec<&str> {
+        vec!["VK_KHR_surface", "VK_KHR_win32_surface"]
+    }
+    #[cfg(feature = "transparent")]
+    fn instance_extensions(&self) -> Vec<&str> {
+        vec![]
+    }
+    #[cfg(not(feature = "transparent"))]
+    fn device_extensions(&self) -> Vec<&str> {
+        vec!["VK_KHR_swapchain"]
+    }
+    #[cfg(feature = "transparent")]
+    fn device_extensions(&self) -> Vec<&str> {
+        vec![
+            "VK_KHR_external_memory_win32",
+            "VK_KHR_external_semaphore_win32",
+        ]
+    }
+
+    fn asset_loader(&self) -> &AssetProvider {
+        &self.al
+    }
+    fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
+        Presenter::new(g, self.window.clone())
+    }
 }
