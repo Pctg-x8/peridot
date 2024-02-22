@@ -97,8 +97,8 @@ impl<Device: br::Device> br::PipelineShaderStageProvider
     for PvpShaderModulesStageProvider<'_, Device>
 {
     type ExtraStorage = (
-        Option<br::vk::VkSpecializationInfo>,
-        Option<br::vk::VkSpecializationInfo>,
+        Option<Box<br::vk::VkSpecializationInfo>>,
+        Option<Box<br::vk::VkSpecializationInfo>>,
     );
 
     fn base_struct(
@@ -115,7 +115,7 @@ impl<Device: br::Device> br::PipelineShaderStageProvider
             pSpecializationInfo: extra_storage
                 .0
                 .as_ref()
-                .map_or_else(core::ptr::null, |x| x as _),
+                .map_or_else(core::ptr::null, |x| x.as_ref() as _),
         }];
 
         if let Some(ref f) = self.fragment {
@@ -131,7 +131,7 @@ impl<Device: br::Device> br::PipelineShaderStageProvider
                 pSpecializationInfo: extra_storage
                     .1
                     .as_ref()
-                    .map_or_else(core::ptr::null, |x| x as _),
+                    .map_or_else(core::ptr::null, |x| x.as_ref() as _),
             });
         }
 
@@ -139,22 +139,22 @@ impl<Device: br::Device> br::PipelineShaderStageProvider
     }
     fn make_extras(&self) -> Self::ExtraStorage {
         (
-            self.vertex_spec_constants
-                .as_ref()
-                .map(|c| br::vk::VkSpecializationInfo {
+            self.vertex_spec_constants.as_ref().map(|c| {
+                Box::new(br::vk::VkSpecializationInfo {
                     mapEntryCount: c.0.len() as _,
                     pMapEntries: c.0.as_ptr(),
                     dataSize: c.1.len(),
                     pData: c.1.as_ptr() as *const _ as _,
-                }),
-            self.fragment_spec_constants
-                .as_ref()
-                .map(|c| br::vk::VkSpecializationInfo {
+                })
+            }),
+            self.fragment_spec_constants.as_ref().map(|c| {
+                Box::new(br::vk::VkSpecializationInfo {
                     mapEntryCount: c.0.len() as _,
                     pMapEntries: c.0.as_ptr(),
                     dataSize: c.1.len(),
                     pData: c.1.as_ptr() as *const _ as _,
-                }),
+                })
+            }),
         )
     }
 }
