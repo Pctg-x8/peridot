@@ -1,15 +1,14 @@
-use image::codecs::hdr::{HdrDecoder, HdrMetadata, Rgbe8Pixel};
+use image::codecs::hdr::{HdrDecoder, HdrMetadata};
 use image::{ImageDecoder, ImageError, ImageResult};
 use peridot::{DecodedPixelData, FromAsset, LDRImageAsset, LogicalAssetData, PixelFormat};
 use std::io::{BufReader, Read, Seek};
 
-fn load_image<'d, D>(decoder: D) -> ImageResult<DecodedPixelData>
+fn load_image<D>(decoder: D) -> ImageResult<DecodedPixelData>
 where
-    D: ImageDecoder<'d>,
+    D: ImageDecoder,
 {
     let color = decoder.color_type();
     let (w, h) = decoder.dimensions();
-    let stride = decoder.scanline_bytes();
     let mut pixels = Vec::with_capacity(decoder.total_bytes() as _);
     unsafe {
         pixels.set_len(decoder.total_bytes() as _);
@@ -20,14 +19,15 @@ where
         pixels,
         size: peridot::math::Vector2(w as _, h as _),
         format: format_map(color),
-        stride: stride as _,
+        stride: w as _,
     })
 }
 fn format_map(fmt: image::ColorType) -> PixelFormat {
     match fmt {
         image::ColorType::Rgb8 => PixelFormat::RGB24,
         image::ColorType::Rgba8 => PixelFormat::RGBA32,
-        _ => unimplemented!("unsupported color type: {:?}", fmt),
+        image::ColorType::Rgb32F => PixelFormat::RGB96F,
+        _ => unimplemented!("unsupported color type: {fmt:?}"),
     }
 }
 
@@ -42,8 +42,8 @@ pub struct WebP(pub DecodedPixelData);
 #[repr(transparent)]
 pub struct BMP(pub DecodedPixelData);
 pub struct HDR {
-    pub info: HdrMetadata,
-    pub pixels: Vec<Rgbe8Pixel>,
+    pub pixel_data: DecodedPixelData,
+    pub hdr_metadata: HdrMetadata
 }
 
 impl LogicalAssetData for PNG {
@@ -68,7 +68,7 @@ impl FromAsset for PNG {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::png::PngDecoder::new(asset)
+        image::codecs::png::PngDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(PNG)
     }
@@ -77,7 +77,7 @@ impl FromAsset for TGA {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::tga::TgaDecoder::new(asset)
+        image::codecs::tga::TgaDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(TGA)
     }
@@ -86,7 +86,7 @@ impl FromAsset for TIFF {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::tiff::TiffDecoder::new(asset)
+        image::codecs::tiff::TiffDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(TIFF)
     }
@@ -95,7 +95,7 @@ impl FromAsset for WebP {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::webp::WebPDecoder::new(asset)
+        image::codecs::webp::WebPDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(WebP)
     }
@@ -104,7 +104,7 @@ impl FromAsset for BMP {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::bmp::BmpDecoder::new(asset)
+        image::codecs::bmp::BmpDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(BMP)
     }
@@ -113,11 +113,12 @@ impl FromAsset for HDR {
     type Error = ImageError;
 
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        let ireader = HdrDecoder::new(BufReader::new(asset))?;
-        let meta = ireader.metadata();
-        let pixels = ireader.read_image_native()?;
+        let reader = HdrDecoder::new(BufReader::new(asset))?;
 
-        Ok(HDR { info: meta, pixels })
+        Ok(Self {
+            hdr_metadata: reader.metadata(),
+            pixel_data: load_image(reader)?,
+        })
     }
 }
 

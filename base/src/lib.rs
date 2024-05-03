@@ -341,7 +341,7 @@ impl<PL: NativeLinker> Engine<PL> {
         let dt = self.game_timer.delta_time();
 
         let bb_index = match self.presenter.next_back_buffer_index() {
-            Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize and do nothing
                 self.do_resize_back_buffer(self.presenter.current_geometry_extent(), callback);
                 return;
@@ -379,7 +379,7 @@ impl<PL: NativeLinker> Engine<PL> {
         }
 
         match pr {
-            Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                 // Fire resize
                 self.request_resize = true;
 

@@ -26,14 +26,14 @@ pub use self::async_fence_driver::*;
 
 #[derive(Debug)]
 pub enum GraphicsInitializationError {
-    LayerEnumerationFailed(br::VkResultBox),
-    ExtensionEnumerationFailed(br::VkResultBox),
-    VulkanError(br::VkResultBox),
+    LayerEnumerationFailed(br::vk::VkResult),
+    ExtensionEnumerationFailed(br::vk::VkResult),
+    VulkanError(br::vk::VkResult),
     NoPhysicalDevices,
     NoSuitableGraphicsQueue,
 }
-impl From<br::VkResultBox> for GraphicsInitializationError {
-    fn from(value: br::VkResultBox) -> Self {
+impl From<br::vk::VkResult> for GraphicsInitializationError {
+    fn from(value: br::vk::VkResult) -> Self {
         Self::VulkanError(value)
     }
 }
