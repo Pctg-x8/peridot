@@ -25,7 +25,7 @@ pub enum PixelFormat {
     RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
     BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
     RGBA64F = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-    RGB96F = br::vk::VK_FORMAT_R32G32B32_SFLOAT
+    RGB96F = br::vk::VK_FORMAT_R32G32B32_SFLOAT,
 }
 impl PixelFormat {
     /// Bits per pixel for each format enums
@@ -34,16 +34,18 @@ impl PixelFormat {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
             PixelFormat::RGBA64F => 64,
-            PixelFormat::RGB96F => 96
+            PixelFormat::RGB96F => 96,
         }
     }
 
     /// Optimal alignment for the format
     pub const fn alignment(self) -> usize {
         match self {
-            PixelFormat::RGBA32 | PixelFormat::BGRA32 | PixelFormat::RGB24 | PixelFormat::BGR24 | PixelFormat::RGB96F => {
-                4
-            }
+            PixelFormat::RGBA32
+            | PixelFormat::BGRA32
+            | PixelFormat::RGB24
+            | PixelFormat::BGR24
+            | PixelFormat::RGB96F => 4,
             PixelFormat::RGBA64F => 8,
         }
     }
