@@ -648,7 +648,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 br::ImageDesc::new(
                     back_buffer_size.clone(),
                     br::vk::VK_FORMAT_S8_UINT,
-                    br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                    br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
                     br::ImageLayout::Undefined,
                 ),
             )
@@ -939,7 +939,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 br::ImageDesc::new(
                     peridot::math::Vector2(new_size.0 as u32, new_size.1 as u32),
                     br::vk::VK_FORMAT_S8_UINT,
-                    br::ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                    br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
                     br::ImageLayout::Undefined,
                 ),
             )
