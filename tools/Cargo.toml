@@ -1,5 +1,6 @@
 [workspace]
-members = ["archiver", "cli", "shaderbuild"]
+members = ["archiver", "cli", "marble-editor-win", "shaderbuild"]
+resolver = "2"
 
 [workspace.dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
