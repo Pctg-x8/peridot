@@ -152,7 +152,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 br::ImageDesc::new(
                     image_data.0.size,
                     image_data.0.format as _,
-                    br::ImageUsage::SAMPLED.transfer_dest(),
+                    br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST,
                     br::ImageLayout::Preinitialized,
                 ),
             )

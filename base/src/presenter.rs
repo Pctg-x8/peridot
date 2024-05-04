@@ -84,7 +84,7 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             buffer_count,
             surface_info.fmt.clone(),
             ext,
-            br::ImageUsage::COLOR_ATTACHMENT,
+            br::ImageUsageFlags::COLOR_ATTACHMENT,
         )
         .present_mode(surface_info.pres_mode)
         .composite_alpha(surface_info.available_composite_alpha)
@@ -325,7 +325,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         self.swapchain.get_mut_lw().swapchain.queue_present(
             g.graphics_queue.q.get_mut(),
             bb_index,
-            &[&self.present_order],
+            &[self.present_order.as_transparent_ref()],
         )
     }
 

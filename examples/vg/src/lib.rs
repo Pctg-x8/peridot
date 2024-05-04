@@ -162,7 +162,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 br::ImageDesc::new(
                     rt_size.clone(),
                     e.back_buffer_format(),
-                    br::ImageUsage::COLOR_ATTACHMENT.transient_attachment(),
+                    br::ImageUsageFlags::COLOR_ATTACHMENT
+                        | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     br::ImageLayout::Undefined,
                 )
                 .sample_counts(msaa_count),
@@ -527,7 +528,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 br::ImageDesc::new(
                     rt_size.clone(),
                     e.back_buffer_format(),
-                    br::ImageUsage::COLOR_ATTACHMENT.transient_attachment(),
+                    br::ImageUsageFlags::COLOR_ATTACHMENT
+                        | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
                     br::ImageLayout::Undefined,
                 )
                 .sample_counts(msaa_count),

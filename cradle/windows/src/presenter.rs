@@ -233,7 +233,7 @@ impl InteropBackbufferResource {
         let image = br::ImageDesc::new(
             size,
             format,
-            br::ImageUsage::COLOR_ATTACHMENT,
+            br::ImageUsageFlags::COLOR_ATTACHMENT,
             br::ImageLayout::Preinitialized,
         )
         .exportable_as(vk_shared_handle.0.into())

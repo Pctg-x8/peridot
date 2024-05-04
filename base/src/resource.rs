@@ -25,6 +25,7 @@ pub enum PixelFormat {
     RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
     BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
     RGBA64F = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
+    RGB96F = br::vk::VK_FORMAT_R32G32B32_SFLOAT,
 }
 impl PixelFormat {
     /// Bits per pixel for each format enums
@@ -33,15 +34,18 @@ impl PixelFormat {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
             PixelFormat::RGBA64F => 64,
+            PixelFormat::RGB96F => 96,
         }
     }
 
     /// Optimal alignment for the format
     pub const fn alignment(self) -> usize {
         match self {
-            PixelFormat::RGBA32 | PixelFormat::BGRA32 | PixelFormat::RGB24 | PixelFormat::BGR24 => {
-                4
-            }
+            PixelFormat::RGBA32
+            | PixelFormat::BGRA32
+            | PixelFormat::RGB24
+            | PixelFormat::BGR24
+            | PixelFormat::RGB96F => 4,
             PixelFormat::RGBA64F => 8,
         }
     }
@@ -64,7 +68,7 @@ impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
         let idesc = br::ImageDesc::new(
             size.clone(),
             format as _,
-            br::ImageUsage::SAMPLED.transfer_dest(),
+            br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST,
             br::ImageLayout::Preinitialized,
         );
         let bytes_per_pixel = (format.bpp() >> 3) as u64;
@@ -420,7 +424,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector2<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture2DRef {
         self.planes.push(br::ImageDesc::new(
             size,
@@ -436,7 +440,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector3<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture3DRef {
         self.volumes.push(br::ImageDesc::new(
             size,
@@ -452,7 +456,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector2<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
     ) -> DeviceWorkingCubeTextureRef {
         let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
@@ -467,7 +471,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector2<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
         mipmaps: u32,
     ) -> DeviceWorkingCubeTextureRef {
         let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
