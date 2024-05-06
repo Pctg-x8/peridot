@@ -6,8 +6,14 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[dev-dependencies]
+windows-bindgen = "0.56"
+
 [build-dependencies]
 winres = "0.1"
+
+[dependencies]
+windows-core = "0.56.0"
 
 [dependencies.windows]
 version = "0.56.0"
@@ -16,6 +22,7 @@ features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Composition",
     "Win32_Graphics_Direct3D",
@@ -24,10 +31,13 @@ features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dwm",
     "Foundation_Numerics",
     "Foundation_Collections",
     "System",
     "UI_Composition",
     "UI_Composition_Desktop",
     "Graphics_DirectX",
+    "Graphics_Effects",
+    "implement",
 ]

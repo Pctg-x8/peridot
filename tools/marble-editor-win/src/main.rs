@@ -1,14 +1,15 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use windows::{
-    core::{h, s, w, Interface, PCSTR, PCWSTR},
+    core::*,
     Foundation::{
         Numerics::{Vector2, Vector3},
-        Size, TimeSpan,
+        Size, TimeSpan, TypedEventHandler,
     },
     Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat},
+    System::DispatcherQueueTimer,
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
             Direct2D::{
                 Common::{D2D1_COLOR_F, D2D_POINT_2F},
@@ -26,8 +27,9 @@ use windows::{
                 DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_METRICS,
             },
+            Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::IDXGIDevice,
-            Gdi::HBRUSH,
+            Gdi::{MapWindowPoints, HBRUSH},
         },
         System::{
             LibraryLoader::GetModuleHandleA,
@@ -42,25 +44,33 @@ use windows::{
         },
         UI::{
             HiDpi::GetDpiForWindow,
+            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CreateWindowExA, DefWindowProcA, DispatchMessageA, GetMessageA, GetWindowLongPtrA,
                 LoadCursorA, LoadIconA, PostQuitMessage, RegisterClassExA, SetWindowLongPtrA,
-                ShowWindow, TranslateMessage, CW_USEDEFAULT, IDC_ARROW, IDI_APPLICATION, MSG,
-                SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEMOVE, WNDCLASSEXA, WNDCLASS_STYLES, WS_EX_APPWINDOW,
-                WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+                SetWindowPos, ShowWindow, TranslateMessage, CW_USEDEFAULT, HCURSOR, HICON,
+                IDC_ARROW, IDI_APPLICATION, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+                SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WNDCLASSEXA, WNDCLASS_STYLES, WS_EX_APPWINDOW,
+                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
+                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
     UI::{
         Color,
         Composition::{
-            CompositionColorBrush, CompositionDrawingSurface, CompositionGraphicsDevice,
-            CompositionLinearGradientBrush, CompositionSurfaceBrush, ContainerVisual, LayerVisual,
-            ScalarKeyFrameAnimation, ShapeVisual,
+            AnimationIterationBehavior, CompositionAnimationGroup, CompositionColorBrush,
+            CompositionDrawingSurface, CompositionEasingFunction, CompositionEasingFunctionMode,
+            CompositionEffectSourceParameter, CompositionGraphicsDevice,
+            CompositionLinearGradientBrush, CompositionSurfaceBrush, ContainerVisual,
+            Desktop::DesktopWindowTarget, LayerVisual, ScalarKeyFrameAnimation, ShapeVisual,
+            SpriteVisual,
         },
     },
 };
+
+mod bindgen;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
@@ -299,6 +309,27 @@ pub struct ViewContext<'r> {
     common: &'r UICommonObjects,
     text_format_stock: &'r mut TextFormatStock,
     text_surface_stock: &'r mut TextSurfaceStock,
+    hittest_tree_parent: &'r core::cell::RefCell<HitTestTree>,
+    hittest_context: &'r mut HitTestTreeContext,
+}
+impl<'r> ViewContext<'r> {
+    pub fn on_new_hittest_tree<'r1>(
+        &'r1 mut self,
+        new_parent: &'r1 core::cell::RefCell<HitTestTree>,
+    ) -> ViewContext<'r1> {
+        ViewContext {
+            compositor: &self.compositor,
+            common: &self.common,
+            text_format_stock: &mut self.text_format_stock,
+            text_surface_stock: &mut self.text_surface_stock,
+            hittest_tree_parent: new_parent,
+            hittest_context: &mut self.hittest_context,
+        }
+    }
+
+    pub fn hittest_tree_parent_mut(&self) -> core::cell::RefMut<HitTestTree> {
+        self.hittest_tree_parent.borrow_mut()
+    }
 }
 
 const TAB_MARGIN_X: f32 = 10.0;
@@ -318,9 +349,34 @@ const TAB_ACTIVE_BASE_COLOR: Color = Color {
 };
 
 pub trait InputEventHandler {
-    fn on_pointer_enter(&self, view_ctx: &mut ViewContext) {}
-    fn on_pointer_leave(&self, view_ctx: &mut ViewContext) {}
-    fn on_click(&self, view_ctx: &mut ViewContext) {}
+    fn on_pointer_enter(&self, _view_ctx: &mut ViewContext) {}
+    fn on_pointer_leave(&self, _view_ctx: &mut ViewContext) {}
+    fn on_click(&self, _view_ctx: &mut ViewContext) {}
+    fn on_begin_drag(
+        &self,
+        _x: f32,
+        _y: f32,
+        _window: HWND,
+        _view_ctx: &mut ViewContext,
+        _pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+    }
+    fn on_drag_move(
+        &self,
+        _x: f32,
+        _y: f32,
+        _window: HWND,
+        _view_ctx: &mut ViewContext,
+        _pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+    }
+    fn on_end_drag(
+        &self,
+        _window: HWND,
+        _view_ctx: &mut ViewContext,
+        _pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+    }
 }
 impl<T: InputEventHandler> InputEventHandler for std::rc::Rc<T> {
     #[inline(always)]
@@ -337,83 +393,545 @@ impl<T: InputEventHandler> InputEventHandler for std::rc::Rc<T> {
     fn on_click(&self, view_ctx: &mut ViewContext) {
         T::on_click(&*self, view_ctx)
     }
+
+    #[inline(always)]
+    fn on_begin_drag(
+        &self,
+        x: f32,
+        y: f32,
+        window: HWND,
+        view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+        T::on_begin_drag(&*self, x, y, window, view_ctx, pane_group_docking_manager)
+    }
+
+    #[inline(always)]
+    fn on_drag_move(
+        &self,
+        x: f32,
+        y: f32,
+        window: HWND,
+        view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+        T::on_drag_move(&*self, x, y, window, view_ctx, pane_group_docking_manager)
+    }
+
+    #[inline(always)]
+    fn on_end_drag(
+        &self,
+        window: HWND,
+        view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+        T::on_end_drag(&*self, window, view_ctx, pane_group_docking_manager)
+    }
 }
 impl InputEventHandler for () {}
 
-struct PaneGroupView {
+pub enum PaneDockState {
+    Left(
+        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        f32,
+        Box<PaneDockState>,
+    ),
+    Right(
+        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        f32,
+        Box<PaneDockState>,
+    ),
+    Top(
+        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        f32,
+        Box<PaneDockState>,
+    ),
+    Bottom(
+        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        f32,
+        Box<PaneDockState>,
+    ),
+    Fill(std::rc::Rc<core::cell::RefCell<PaneGroupView>>),
+}
+
+pub struct PaneGroupDockingManager {
+    docks: Option<PaneDockState>,
+    floating_preview_window: HWND,
+    _floating_preview_window_target: DesktopWindowTarget,
+    pane_drag_preview: SpriteVisual,
+    pane_drag_preview_color_tint: SpriteVisual,
+    pane_drag_preview_animation: ScalarKeyFrameAnimation,
+    pane_drag_preview_show_animation: CompositionAnimationGroup,
+    pane_drag_preview_hide_animation: CompositionAnimationGroup,
+    pane_drag_preview_hide_delay_timer:
+        std::sync::Arc<std::sync::RwLock<Option<DispatcherQueueTimer>>>,
+}
+impl PaneGroupDockingManager {
+    fn new(ctx: &mut ViewContext) -> windows::core::Result<Self> {
+        extern "system" fn window_callback(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+            unsafe { DefWindowProcA(h, m, w, l) }
+        }
+
+        let floating_preview_window_cls = WNDCLASSEXA {
+            cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            style: WNDCLASS_STYLES(0),
+            lpfnWndProc: Some(window_callback),
+            hInstance: unsafe { windows::Win32::Foundation::HINSTANCE(GetModuleHandleA(None)?.0) },
+            hIcon: HICON(0),
+            hCursor: HCURSOR(0),
+            hbrBackground: HBRUSH(0),
+            lpszMenuName: PCSTR::null(),
+            lpszClassName: s!("io.ct2.peridot.marble_editor.overlay.floating_preview"),
+            hIconSm: HICON(0),
+        };
+        let floating_preview_window_atom =
+            unsafe { RegisterClassExA(&floating_preview_window_cls) };
+        if floating_preview_window_atom == 0 {
+            return Err(windows::core::Error::from_win32());
+        }
+        let floating_preview_window = unsafe {
+            CreateWindowExA(
+                WS_EX_NOREDIRECTIONBITMAP
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_TOPMOST
+                    | WS_EX_TRANSPARENT
+                    | WS_EX_LAYERED,
+                PCSTR(floating_preview_window_atom as _),
+                s!(""),
+                WS_POPUP,
+                0,
+                0,
+                1,
+                1,
+                None,
+                None,
+                floating_preview_window_cls.hInstance,
+                None,
+            )
+        };
+        if floating_preview_window.0 == 0 {
+            return Err(windows::core::Error::from_win32());
+        }
+        let floating_preview_window_target = unsafe {
+            ctx.compositor
+                .cast::<ICompositorDesktopInterop>()?
+                .CreateDesktopWindowTarget(floating_preview_window, true)?
+        };
+
+        let pane_drag_preview = ctx.compositor.CreateSpriteVisual()?;
+        pane_drag_preview.SetCenterPoint(Vector3 {
+            X: 0.5,
+            Y: 0.5,
+            Z: 0.5,
+        })?;
+        pane_drag_preview.SetAnchorPoint(Vector2 { X: 0.5, Y: 0.5 })?;
+        pane_drag_preview.SetRelativeOffsetAdjustment(Vector3 {
+            X: 0.5,
+            Y: 0.5,
+            Z: 0.0,
+        })?;
+        let fx = bindgen::GaussianBlurEffect::new()?;
+        fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
+        fx.SetOptimization(bindgen::EffectOptimization::Quality)?;
+        let effect_factory = ctx.compositor.CreateEffectFactory(&fx)?;
+        let backdrop_brush = ctx.compositor.CreateBackdropBrush()?;
+        let blur_brush = effect_factory.CreateBrush()?;
+        blur_brush.SetSourceParameter(h!("source"), &backdrop_brush)?;
+        pane_drag_preview.SetBrush(&blur_brush)?;
+        let pane_drag_preview_color_tint = ctx.compositor.CreateSpriteVisual()?;
+        pane_drag_preview_color_tint.SetBrush(&ctx.compositor.CreateColorBrushWithColor(
+            Color {
+                A: 128,
+                R: 16,
+                G: 192,
+                B: 255,
+            },
+        )?)?;
+        pane_drag_preview_color_tint.SetRelativeOffsetAdjustment(Vector3::zero())?;
+        pane_drag_preview_color_tint.SetRelativeSizeAdjustment(Vector2::one())?;
+        pane_drag_preview
+            .Children()?
+            .InsertAtTop(&pane_drag_preview_color_tint)?;
+        let shadow = ctx.compositor.CreateDropShadow()?;
+        shadow.SetBlurRadius(32.0)?;
+        shadow.SetOffset(Vector3 {
+            X: 0.0,
+            Y: 16.0,
+            Z: 0.0,
+        })?;
+        shadow.SetOpacity(0.3)?;
+        pane_drag_preview.SetShadow(&shadow)?;
+        let pane_drag_preview_animation = ctx.compositor.CreateScalarKeyFrameAnimation()?;
+        let linear_fn = ctx.compositor.CreateLinearEasingFunction()?;
+        pane_drag_preview_animation.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
+        pane_drag_preview_animation.InsertKeyFrame(0.0, 1.0)?;
+        pane_drag_preview_animation.InsertKeyFrameWithEasingFunction(0.5, 0.75, &linear_fn)?;
+        pane_drag_preview_animation.InsertKeyFrameWithEasingFunction(1.0, 1.0, &linear_fn)?;
+        pane_drag_preview_animation.SetDuration(TimeSpan {
+            Duration: 10_000 * 2600,
+        })?;
+
+        let pane_drag_preview_show_animation = ctx.compositor.CreateAnimationGroup()?;
+        pane_drag_preview_show_animation.Add(&{
+            let a = ctx.compositor.CreateScalarKeyFrameAnimation()?;
+            a.InsertKeyFrame(0.0, 0.0)?;
+            a.InsertKeyFrameWithEasingFunction(
+                1.0,
+                1.0,
+                &ctx.compositor.CreateLinearEasingFunction()?,
+            )?;
+            a.SetDuration(TimeSpan {
+                Duration: 10_000 * 100,
+            })?;
+            a.SetTarget(h!("Opacity"))?;
+            a
+        })?;
+        pane_drag_preview_show_animation.Add(&{
+            let a = ctx.compositor.CreateVector3KeyFrameAnimation()?;
+            a.InsertKeyFrame(
+                0.0,
+                Vector3 {
+                    X: 0.8,
+                    Y: 0.8,
+                    Z: 1.0,
+                },
+            )?;
+            a.InsertKeyFrameWithEasingFunction(
+                1.0,
+                Vector3::one(),
+                &CompositionEasingFunction::CreateBackEasingFunction(
+                    ctx.compositor,
+                    CompositionEasingFunctionMode::Out,
+                    1.1,
+                )?,
+            )?;
+            a.SetDuration(TimeSpan {
+                Duration: 10_000 * 100,
+            })?;
+            a.SetTarget(h!("Scale"))?;
+            a
+        })?;
+        let pane_drag_preview_hide_animation = ctx.compositor.CreateAnimationGroup()?;
+        pane_drag_preview_hide_animation.Add(&{
+            let a = ctx.compositor.CreateScalarKeyFrameAnimation()?;
+            a.InsertKeyFrame(0.0, 1.0)?;
+            a.InsertKeyFrameWithEasingFunction(
+                1.0,
+                0.0,
+                &ctx.compositor.CreateLinearEasingFunction()?,
+            )?;
+            a.SetDuration(TimeSpan {
+                Duration: 10_000 * 100,
+            })?;
+            a.SetTarget(h!("Opacity"))?;
+            a
+        })?;
+        pane_drag_preview_hide_animation.Add(&{
+            let a = ctx.compositor.CreateVector3KeyFrameAnimation()?;
+            a.InsertKeyFrame(0.0, Vector3::one())?;
+            a.InsertKeyFrameWithEasingFunction(
+                1.0,
+                Vector3 {
+                    X: 0.9,
+                    Y: 0.9,
+                    Z: 1.0,
+                },
+                &ctx.compositor.CreateLinearEasingFunction()?,
+            )?;
+            a.SetDuration(TimeSpan {
+                Duration: 10_000 * 100,
+            })?;
+            a.SetTarget(h!("Scale"))?;
+            a
+        })?;
+
+        floating_preview_window_target.SetRoot(&pane_drag_preview)?;
+
+        Ok(Self {
+            docks: None,
+            floating_preview_window,
+            _floating_preview_window_target: floating_preview_window_target,
+            pane_drag_preview,
+            pane_drag_preview_color_tint,
+            pane_drag_preview_animation,
+            pane_drag_preview_show_animation,
+            pane_drag_preview_hide_animation,
+            pane_drag_preview_hide_delay_timer: std::sync::Arc::new(std::sync::RwLock::new(None)),
+        })
+    }
+
+    fn show_preview(&self) -> windows::core::Result<()> {
+        drop(
+            self.pane_drag_preview_hide_delay_timer
+                .write()
+                .unwrap()
+                .take(),
+        );
+
+        unsafe {
+            let _ = ShowWindow(self.floating_preview_window, SW_SHOWNA);
+        }
+        self.pane_drag_preview_color_tint
+            .StartAnimation(h!("Opacity"), &self.pane_drag_preview_animation)?;
+        self.pane_drag_preview
+            .StartAnimationGroup(&self.pane_drag_preview_show_animation)?;
+
+        Ok(())
+    }
+
+    fn hide_preview(&self) -> windows::core::Result<()> {
+        self.pane_drag_preview
+            .StartAnimationGroup(&self.pane_drag_preview_hide_animation)?;
+        let delay_hide = self.pane_drag_preview.DispatcherQueue()?.CreateTimer()?;
+        delay_hide.SetInterval(TimeSpan {
+            Duration: 10_000 * 100,
+        })?;
+        let tint = self.pane_drag_preview_color_tint.clone();
+        let delay_timer = self.pane_drag_preview_hide_delay_timer.clone();
+        let w = self.floating_preview_window;
+        delay_hide.Tick(&TypedEventHandler::new(move |_, _| {
+            tint.StopAnimation(h!("Opacity"))?;
+            unsafe {
+                let _ = ShowWindow(w, SW_HIDE);
+            }
+            drop(delay_timer.write().unwrap().take());
+
+            Ok(())
+        }))?;
+        *self.pane_drag_preview_hide_delay_timer.write().unwrap() = Some(delay_hide);
+
+        Ok(())
+    }
+
+    fn set_preview_pos(&self, left: f32, top: f32) -> windows::core::Result<()> {
+        unsafe {
+            SetWindowPos(
+                self.floating_preview_window,
+                None,
+                left as i32 - 32,
+                top as i32 - 32,
+                0,
+                0,
+                SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn set_preview_rect(
+        &self,
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+    ) -> windows::core::Result<()> {
+        self.pane_drag_preview.SetSize(Vector2 {
+            X: width,
+            Y: height,
+        })?;
+
+        unsafe {
+            SetWindowPos(
+                self.floating_preview_window,
+                None,
+                left as i32 - 32,
+                top as i32 - 32,
+                width as i32 + 64,
+                height as i32 + 64,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct PaneGroupView {
     root: ContainerVisual,
+    content_area: ContainerVisual,
+    content_area_base: SpriteVisual,
     ht_ref: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
+    ht_ref_content: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
     current_active: usize,
-    tabs: Vec<std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>>,
+    tab_height: f32,
+    width: f32,
+    height: f32,
+    tabs: Vec<(
+        std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>,
+        std::rc::Rc<core::cell::RefCell<dyn PaneTabContentPresenter>>,
+    )>,
+    drag_base_point: Option<(f32, f32, f32, f32)>,
 }
 impl PaneGroupView {
     pub fn new(
         ctx: &mut ViewContext,
-        ht_parent: &mut HitTestTree,
-        ht_ctx: &mut HitTestTreeContext,
     ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
         let root = ctx.compositor.CreateContainerVisual()?;
+        root.SetSize(Vector2 { X: 128.0, Y: 128.0 })?;
+        let content_area = ctx.compositor.CreateContainerVisual()?;
+        content_area.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
+        root.Children()?.InsertAtBottom(&content_area)?;
+        let content_area_base = ctx.compositor.CreateSpriteVisual()?;
+        content_area_base.SetBrush(&{
+            let b = ctx.compositor.CreateColorBrush()?;
+            b.SetColor(Color {
+                A: 255,
+                R: 64,
+                G: 64,
+                B: 72,
+            })?;
+            b
+        })?;
+        content_area_base.SetRelativeOffsetAdjustment(Vector3 {
+            X: 0.0,
+            Y: 0.0,
+            Z: 0.0,
+        })?;
+        content_area_base.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
+        root.Children()?.InsertAtBottom(&content_area_base)?;
+        root.SetClip(
+            &ctx.compositor
+                .CreateInsetClipWithInsets(0.0, 0.0, 0.0, 0.0)?,
+        )?;
 
-        let ht = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new_unsized(
-            Box::new(()),
-            ht_ctx.new_id(),
-            0.0,
-            0.0,
-        )));
-        ht_parent.add_child(&ht);
+        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
+            |wthis| {
+                let ht = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
+                    Box::new(wthis.clone()),
+                    ctx.hittest_context.new_id(),
+                    0.0,
+                    0.0,
+                    128.0,
+                    128.0,
+                )));
+                ctx.hittest_tree_parent_mut().add_child(&ht);
+                let ht_content = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
+                    Box::new(wthis.clone()),
+                    ctx.hittest_context.new_id(),
+                    0.0,
+                    0.0,
+                    128.0,
+                    128.0,
+                )));
+                ht.borrow_mut().add_child(&ht_content);
 
-        Ok(std::rc::Rc::new(core::cell::RefCell::new(Self {
-            root,
-            ht_ref: ht,
-            current_active: 0,
-            tabs: Vec::new(),
-        })))
+                core::cell::RefCell::new(Self {
+                    root,
+                    content_area,
+                    content_area_base,
+                    ht_ref: ht,
+                    ht_ref_content: ht_content,
+                    current_active: 0,
+                    tab_height: 0.0,
+                    width: 128.0,
+                    height: 128.0,
+                    tabs: Vec::new(),
+                    drag_base_point: None,
+                })
+            },
+        ))
     }
 
-    pub fn add_tab(
+    pub fn add_tab<T: PaneTabPresenter + 'static>(
         this: &std::rc::Rc<core::cell::RefCell<Self>>,
-        title: impl Into<Cow<'static, str>>,
         ctx: &mut ViewContext,
-        ht_ctx: &mut HitTestTreeContext,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>> {
+    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<T>>> {
         let mut thisref = this.borrow_mut();
         let header_view = PaneTabHeaderView::new(
             this,
             thisref.tabs.len(),
-            title,
+            T::INIT_TAB_NAME,
             thisref.tabs.is_empty(),
-            ctx,
-            &mut thisref.ht_ref.borrow_mut(),
-            ht_ctx,
+            &mut ctx.on_new_hittest_tree(&thisref.ht_ref),
         )?;
-        thisref.tabs.push(header_view.clone());
+        let content_presenter = std::rc::Rc::new(core::cell::RefCell::new(T::new(&header_view)));
+        thisref
+            .tabs
+            .push((header_view.clone(), content_presenter.clone()));
         thisref
             .root
             .Children()?
             .InsertAtTop(&header_view.borrow().visual)?;
 
-        Ok(header_view)
+        if thisref.tabs.len() == 1 {
+            // first tab
+            thisref.tabs[0].1.borrow_mut().build_content_view(
+                &thisref.content_area,
+                &mut ctx.on_new_hittest_tree(&thisref.ht_ref_content),
+            )?;
+        }
+
+        Ok(content_presenter)
+    }
+
+    fn readjust_content_area(&mut self) -> windows::core::Result<()> {
+        self.content_area.SetOffset(Vector3 {
+            X: 0.0,
+            Y: self.tab_height,
+            Z: 0.0,
+        })?;
+        self.content_area.SetSize(Vector2 {
+            X: self.width,
+            Y: (self.height - self.tab_height).max(0.0),
+        })?;
+        self.content_area_base.SetOffset(Vector3 {
+            X: 0.0,
+            Y: self.tab_height,
+            Z: 0.0,
+        })?;
+        self.content_area_base.SetSize(Vector2 {
+            X: self.width,
+            Y: (self.height - self.tab_height).max(0.0),
+        })?;
+
+        self.ht_ref_content.borrow_mut().top = self.tab_height;
+        self.ht_ref_content.borrow_mut().width = self.width;
+        self.ht_ref_content.borrow_mut().height = (self.height - self.tab_height).max(0.0);
+        Ok(())
     }
 
     pub fn rearrange(&mut self) {
         let mut offset = 0.0;
+        self.tab_height = 0.0f32;
         for v in self.tabs.iter() {
-            v.borrow()
+            v.0.borrow()
                 .set_offset(offset, 0.0)
                 .expect("Failed to set tab offset");
-            offset += v.borrow().width;
+            offset += v.0.borrow().width;
+            self.tab_height = self.tab_height.max(v.0.borrow().height);
         }
+
+        self.readjust_content_area()
+            .expect("Failed to readjust content area");
     }
 
-    pub fn set_offset(&self, left: f32, top: f32) -> windows::core::Result<()> {
+    pub fn set_offset_size(
+        &mut self,
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+    ) -> windows::core::Result<()> {
         self.root.SetOffset(Vector3 {
             X: left,
             Y: top,
             Z: 0.0,
         })?;
+        self.root.SetSize(Vector2 {
+            X: width,
+            Y: height,
+        })?;
         self.ht_ref.borrow_mut().left = left;
         self.ht_ref.borrow_mut().top = top;
+        self.ht_ref.borrow_mut().width = width;
+        self.ht_ref.borrow_mut().height = height;
+        self.width = width;
+        self.height = height;
 
+        self.readjust_content_area()?;
         Ok(())
     }
 
@@ -429,20 +947,118 @@ impl PaneGroupView {
         }
 
         self.tabs[self.current_active]
+            .1
+            .borrow_mut()
+            .on_hide_content_view(view_ctx)?;
+        self.tabs[self.current_active]
+            .0
             .borrow_mut()
             .set_active(false, view_ctx)?;
+        self.content_area.Children()?.RemoveAll()?;
         self.current_active = new_active;
         self.tabs[self.current_active]
+            .1
+            .borrow_mut()
+            .build_content_view(
+                &self.content_area,
+                &mut view_ctx.on_new_hittest_tree(&self.ht_ref_content),
+            )?;
+        self.tabs[self.current_active]
+            .0
             .borrow_mut()
             .set_active(true, view_ctx)?;
 
         Ok(())
     }
 }
+impl InputEventHandler for std::rc::Weak<core::cell::RefCell<PaneGroupView>> {
+    fn on_begin_drag(
+        &self,
+        x: f32,
+        y: f32,
+        window: HWND,
+        _view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+        if let Some(t) = self.upgrade() {
+            pane_group_docking_manager
+                .borrow()
+                .show_preview()
+                .expect("Failed to show floating preview");
+            let mut thisref = t.borrow_mut();
+            let HitTestTree {
+                left,
+                top,
+                width,
+                height,
+                ..
+            } = *thisref.ht_ref.borrow();
+            let dpi = unsafe { GetDpiForWindow(window) as f32 };
+            thisref.drag_base_point = Some((x, y, left, top));
+            let mut loc = [POINT {
+                x: (left * dpi / 96.0) as _,
+                y: (top * dpi / 96.0) as _,
+            }];
+            unsafe { MapWindowPoints(window, None, &mut loc) };
+            pane_group_docking_manager
+                .borrow()
+                .set_preview_rect(
+                    loc[0].x as _,
+                    loc[0].y as _,
+                    width * dpi / 96.0,
+                    height * dpi / 96.0,
+                )
+                .expect("Failed to update preview rect");
+            unsafe {
+                SetCapture(window);
+            }
+        }
+    }
+    fn on_drag_move(
+        &self,
+        x: f32,
+        y: f32,
+        window: HWND,
+        _view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+        let Some(thisref) = self.upgrade() else {
+            return;
+        };
+        let Some((bx, by, ox, oy)) = thisref.borrow().drag_base_point else {
+            return;
+        };
 
-struct PaneTabHeaderView {
-    group_view: std::rc::Weak<core::cell::RefCell<PaneGroupView>>,
-    index_in_group: usize,
+        let dpi = unsafe { GetDpiForWindow(window) as f32 };
+        let mut loc = [POINT {
+            x: ((ox + (x - bx)) * dpi / 96.0) as _,
+            y: ((oy + (y - by)) * dpi / 96.0) as _,
+        }];
+        unsafe { MapWindowPoints(window, None, &mut loc) };
+        pane_group_docking_manager
+            .borrow()
+            .set_preview_pos(loc[0].x as _, loc[0].y as _)
+            .expect("Failed to update preview rect");
+    }
+    fn on_end_drag(
+        &self,
+        _window: HWND,
+        _view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
+        if let Some(_) = self.upgrade() {
+            pane_group_docking_manager
+                .borrow()
+                .hide_preview()
+                .expect("Failed to show floating preview");
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+        }
+    }
+}
+
+pub struct PaneTabHeaderView {
     label: Cow<'static, str>,
     visual: LayerVisual,
     bg_visual: ShapeVisual,
@@ -465,8 +1081,6 @@ impl PaneTabHeaderView {
         title: impl Into<Cow<'static, str>>,
         init_active: bool,
         ctx: &mut ViewContext,
-        ht_parent: &mut HitTestTree,
-        ht_ctx: &mut HitTestTreeContext,
     ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
         let base = ctx.compositor.CreateLayerVisual()?;
         let title = title.into();
@@ -549,7 +1163,7 @@ impl PaneTabHeaderView {
 
         Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
             |wthis| {
-                let ht_id = ht_ctx.new_id();
+                let ht_id = ctx.hittest_context.new_id();
                 let ht_self = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
                     Box::new(PaneTabHeaderViewInputEventHandler {
                         group_view: group_view.clone(),
@@ -562,11 +1176,9 @@ impl PaneTabHeaderView {
                     view_size.X,
                     view_size.Y,
                 )));
-                ht_parent.add_child(&ht_self);
+                ctx.hittest_tree_parent_mut().add_child(&ht_self);
 
                 core::cell::RefCell::new(Self {
-                    group_view: std::rc::Rc::downgrade(group_view),
-                    index_in_group,
                     label: title,
                     visual: base,
                     bg_visual: bg,
@@ -703,11 +1315,119 @@ impl InputEventHandler for PaneTabHeaderViewInputEventHandler {
     }
 }
 
+pub trait PaneTabContentPresenter {
+    fn build_content_view(
+        &mut self,
+        onto: &ContainerVisual,
+        view_context: &mut ViewContext,
+    ) -> windows::core::Result<()>;
+    fn on_hide_content_view(&mut self, view_context: &mut ViewContext)
+        -> windows::core::Result<()>;
+}
+pub trait PaneTabPresenter: PaneTabContentPresenter {
+    const INIT_TAB_NAME: &'static str;
+    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self;
+}
+
+pub struct InspectorTabPresenter {}
+impl PaneTabContentPresenter for InspectorTabPresenter {
+    fn build_content_view(
+        &mut self,
+        onto: &ContainerVisual,
+        view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        let ui_font =
+            view_context
+                .text_format_stock
+                .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let label_surface = view_context
+            .text_surface_stock
+            .get(&ui_font, "Inspector Pane")?;
+        let brush = view_context
+            .compositor
+            .CreateSurfaceBrushWithSurface(&label_surface.surface)?;
+        let label_visual = view_context.compositor.CreateSpriteVisual()?;
+        label_visual.SetBrush(&brush)?;
+        label_visual.SetSize(label_surface.visual_size())?;
+        onto.Children()?.InsertAtTop(&label_visual)?;
+
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+impl PaneTabPresenter for InspectorTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Inspector";
+
+    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+        Self {}
+    }
+}
+
+pub struct ProjectSettingsTabPresenter {}
+impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
+    fn build_content_view(
+        &mut self,
+        _onto: &ContainerVisual,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+impl PaneTabPresenter for ProjectSettingsTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Project Settings";
+
+    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+        Self {}
+    }
+}
+
+pub struct TimelineTabPresenter {}
+impl PaneTabContentPresenter for TimelineTabPresenter {
+    fn build_content_view(
+        &mut self,
+        _onto: &ContainerVisual,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+impl PaneTabPresenter for TimelineTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Timeline";
+
+    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+        Self {}
+    }
+}
+
 const DRAG_THRESHOLD_DIST2: f32 = 5.0 * 5.0;
 struct InputState {
     ht_tree: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
     mouse_current_enter_element: Option<std::rc::Weak<core::cell::RefCell<HitTestTree>>>,
-    mouse_down_point: Option<(f32, f32)>,
+    mouse_down_point: Option<(
+        f32,
+        f32,
+        Option<std::rc::Weak<core::cell::RefCell<HitTestTree>>>,
+    )>,
     is_mouse_dragging: bool,
 }
 impl InputState {
@@ -722,7 +1442,12 @@ impl InputState {
 
     fn update_mouse_pos(&mut self, x: f32, y: f32, view_ctx: &mut ViewContext) {
         let over_tree = HitTestTree::check(&self.ht_tree, x, y);
-        let mut left = false;
+        let over_changes = over_tree.as_ref().map(|x| x.borrow().id)
+            != self
+                .mouse_current_enter_element
+                .as_ref()
+                .and_then(std::rc::Weak::upgrade)
+                .map(|x| x.borrow().id);
         if let Some(x) = self
             .mouse_current_enter_element
             .as_ref()
@@ -731,11 +1456,10 @@ impl InputState {
             if Some(x.borrow().id) != over_tree.as_ref().map(|x| x.borrow().id) {
                 // leave
                 x.borrow().eh.on_pointer_leave(view_ctx);
-                left = true;
             }
         }
         self.mouse_current_enter_element = over_tree.as_ref().map(std::rc::Rc::downgrade);
-        if left {
+        if over_changes {
             if let Some(x) = self
                 .mouse_current_enter_element
                 .as_ref()
@@ -746,15 +1470,39 @@ impl InputState {
         }
     }
 
-    fn on_mouse_move(&mut self, x: f32, y: f32, view_ctx: &mut ViewContext) {
+    fn on_mouse_move(
+        &mut self,
+        x: f32,
+        y: f32,
+        window: HWND,
+        view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
         self.update_mouse_pos(x, y, view_ctx);
 
-        if let Some((dx, dy)) = self.mouse_down_point {
+        if let Some((dx, dy, down_element)) = self.mouse_down_point.as_ref() {
             if !self.is_mouse_dragging {
                 // 閾値を超えた後は永続的にドラッグ状態になる
                 let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
                 if dist2 >= DRAG_THRESHOLD_DIST2 {
                     self.is_mouse_dragging = true;
+                    if let Some(e) = down_element.as_ref().and_then(std::rc::Weak::upgrade) {
+                        e.borrow().eh.on_begin_drag(
+                            x,
+                            y,
+                            window,
+                            view_ctx,
+                            pane_group_docking_manager,
+                        );
+                    }
+                }
+            }
+
+            if self.is_mouse_dragging {
+                if let Some(e) = down_element.as_ref().and_then(std::rc::Weak::upgrade) {
+                    e.borrow()
+                        .eh
+                        .on_drag_move(x, y, window, view_ctx, pane_group_docking_manager);
                 }
             }
         }
@@ -762,11 +1510,18 @@ impl InputState {
 
     fn on_mouse_down(&mut self, x: f32, y: f32, view_ctx: &mut ViewContext) {
         self.update_mouse_pos(x, y, view_ctx);
-        self.mouse_down_point = Some((x, y));
+        self.mouse_down_point = Some((x, y, self.mouse_current_enter_element.clone()));
         self.is_mouse_dragging = false;
     }
 
-    fn on_mouse_up(&mut self, x: f32, y: f32, view_ctx: &mut ViewContext) {
+    fn on_mouse_up(
+        &mut self,
+        x: f32,
+        y: f32,
+        window: HWND,
+        view_ctx: &mut ViewContext,
+        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
+    ) {
         self.update_mouse_pos(x, y, view_ctx);
 
         if !self.is_mouse_dragging {
@@ -776,6 +1531,17 @@ impl InputState {
                 .and_then(std::rc::Weak::upgrade)
             {
                 x.borrow().eh.on_click(view_ctx);
+            }
+        } else {
+            if let Some(x) = self
+                .mouse_down_point
+                .as_ref()
+                .and_then(|x| x.2.as_ref())
+                .and_then(std::rc::Weak::upgrade)
+            {
+                x.borrow()
+                    .eh
+                    .on_end_drag(window, view_ctx, pane_group_docking_manager);
             }
         }
         self.mouse_down_point = None;
@@ -840,6 +1606,18 @@ impl HitTestTree {
         }
     }
 }
+impl core::fmt::Debug for HitTestTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HitTestTree")
+            .field("id", &self.id)
+            .field("left", &self.left)
+            .field("top", &self.top)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("children", &self.children)
+            .finish_non_exhaustive()
+    }
+}
 pub struct HitTestTreeContext {
     current_id: usize,
 }
@@ -854,12 +1632,18 @@ impl HitTestTreeContext {
     }
 }
 
+struct WindowState<'r> {
+    input_state: InputState,
+    view_context: ViewContext<'r>,
+    pane_group_docking_manager: core::cell::RefCell<PaneGroupDockingManager>,
+}
+
 fn main() {
     let instance_handle = unsafe { GetModuleHandleA(None).expect("Failed to get instance handle") };
     let wndclass = WNDCLASSEXA {
         cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
         cbClsExtra: 0,
-        cbWndExtra: core::mem::size_of::<[usize; 2]>() as _,
+        cbWndExtra: core::mem::size_of::<usize>() as _,
         style: WNDCLASS_STYLES(0),
         lpfnWndProc: Some(window_proc),
         hInstance: instance_handle.into(),
@@ -902,6 +1686,17 @@ fn main() {
     };
     if window_handle.0 == 0 {
         panic!("Failed to create main window");
+    }
+
+    unsafe {
+        let attr: BOOL = BOOL(1);
+        DwmSetWindowAttribute(
+            window_handle,
+            DWMWINDOWATTRIBUTE(20),
+            &attr as *const _ as _,
+            core::mem::size_of::<BOOL>() as _,
+        )
+        .expect("Failed to set window attribute");
     }
 
     let _dispatcher_queue_controller = unsafe {
@@ -1064,6 +1859,25 @@ fn main() {
         .InsertAtTop(&title_label)
         .expect("Failed to insert title label visual");
 
+    let ui_layer = compositor
+        .CreateContainerVisual()
+        .expect("Failed to create ui layer");
+    let overlay_layer = compositor
+        .CreateContainerVisual()
+        .expect("Failed to create overlay layer");
+    {
+        let children = composition_root
+            .Children()
+            .expect("Failed to get children collection");
+
+        children
+            .InsertAtTop(&ui_layer)
+            .expect("Failed to insert ui layer");
+        children
+            .InsertAtTop(&overlay_layer)
+            .expect("Failed to insert overlay layer");
+    }
+
     let common_objects = UICommonObjects {
         tab_base_brush: compositor
             .CreateColorBrushWithColor(Color {
@@ -1211,13 +2025,6 @@ fn main() {
         },
     };
 
-    let mut view_context = ViewContext {
-        compositor: &compositor,
-        common: &common_objects,
-        text_format_stock: &mut text_format_stock,
-        text_surface_stock: &mut text_surface_stock,
-    };
-
     let hittest_tree_root = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new_unsized(
         Box::new(()),
         0,
@@ -1226,55 +2033,48 @@ fn main() {
     )));
     let mut hittest_context = HitTestTreeContext::new();
 
-    let pane_group1 = PaneGroupView::new(
-        &mut view_context,
-        &mut hittest_tree_root.borrow_mut(),
-        &mut hittest_context,
-    )
-    .expect("Failed to create PaneGroupView");
-    PaneGroupView::add_tab(
-        &pane_group1,
-        "Inspector",
-        &mut view_context,
-        &mut hittest_context,
-    )
-    .expect("Failed to create InspectorPaneTabHeader");
-    PaneGroupView::add_tab(
-        &pane_group1,
-        "Project Settings",
-        &mut view_context,
-        &mut hittest_context,
-    )
-    .expect("Failed to create ProjectSettingsPaneTabHeader");
-    PaneGroupView::add_tab(
-        &pane_group1,
-        "Timeline",
-        &mut view_context,
-        &mut hittest_context,
-    )
-    .expect("Failed to create SceneViewPaneTabHeader");
+    let mut view_context = ViewContext {
+        compositor: &compositor,
+        common: &common_objects,
+        text_format_stock: &mut text_format_stock,
+        text_surface_stock: &mut text_surface_stock,
+        hittest_tree_parent: &hittest_tree_root,
+        hittest_context: &mut hittest_context,
+    };
+
+    let pane_group_docking_manager = PaneGroupDockingManager::new(&mut view_context)
+        .expect("Failed to initialize docking manager");
+
+    let pane_group1 =
+        PaneGroupView::new(&mut view_context).expect("Failed to create PaneGroupView");
+    PaneGroupView::add_tab::<InspectorTabPresenter>(&pane_group1, &mut view_context)
+        .expect("Failed to create InspectorPaneTabHeader");
+    PaneGroupView::add_tab::<ProjectSettingsTabPresenter>(&pane_group1, &mut view_context)
+        .expect("Failed to create ProjectSettingsPaneTabHeader");
+    PaneGroupView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context)
+        .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange();
     pane_group1
-        .borrow()
-        .set_offset(100.0, 100.0)
+        .borrow_mut()
+        .set_offset_size(0.0, 36.0, 640.0, 128.0)
         .expect("Failed to set page group offset");
-    composition_root
+
+    ui_layer
         .Children()
         .expect("Failed to get children collection")
         .InsertAtTop(&pane_group1.borrow().root)
         .expect("Failed to insert inspector pane visual");
 
-    let mut input_state = InputState::new(&hittest_tree_root);
+    let mut ws = WindowState {
+        input_state: InputState::new(&hittest_tree_root),
+        view_context,
+        pane_group_docking_manager: core::cell::RefCell::new(pane_group_docking_manager),
+    };
     unsafe {
         SetWindowLongPtrA(
             window_handle,
             WINDOW_LONG_PTR_INDEX(0),
-            &mut input_state as *mut _ as _,
-        );
-        SetWindowLongPtrA(
-            window_handle,
-            WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
-            &mut view_context as *mut _ as _,
+            &mut ws as *mut _ as _,
         );
 
         let _ = ShowWindow(window_handle, SW_SHOWNORMAL);
@@ -1302,67 +2102,56 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
     }
     if msg == WM_MOUSEMOVE {
         let Some(state) = (unsafe {
-            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut InputState).as_mut()
-        }) else {
-            return LRESULT(0);
-        };
-        let Some(view_context) = (unsafe {
-            (GetWindowLongPtrA(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
-            ) as *mut ViewContext)
-                .as_mut()
+            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
         }) else {
             return LRESULT(0);
         };
 
         let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        state.on_mouse_move(x as f32 * 96.0 / dpi, y as f32 * 96.0 / dpi, view_context);
+        state.input_state.on_mouse_move(
+            x as f32 * 96.0 / dpi,
+            y as f32 * 96.0 / dpi,
+            hwnd,
+            &mut state.view_context,
+            &state.pane_group_docking_manager,
+        );
 
         return LRESULT(0);
     }
     if msg == WM_LBUTTONDOWN {
         let Some(state) = (unsafe {
-            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut InputState).as_mut()
-        }) else {
-            return LRESULT(0);
-        };
-        let Some(view_context) = (unsafe {
-            (GetWindowLongPtrA(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
-            ) as *mut ViewContext)
-                .as_mut()
+            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
         }) else {
             return LRESULT(0);
         };
 
         let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        state.on_mouse_down(x as f32 * 96.0 / dpi, y as f32 * 96.0 / dpi, view_context);
+        state.input_state.on_mouse_down(
+            x as f32 * 96.0 / dpi,
+            y as f32 * 96.0 / dpi,
+            &mut state.view_context,
+        );
 
         return LRESULT(0);
     }
     if msg == WM_LBUTTONUP {
         let Some(state) = (unsafe {
-            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut InputState).as_mut()
-        }) else {
-            return LRESULT(0);
-        };
-        let Some(view_context) = (unsafe {
-            (GetWindowLongPtrA(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
-            ) as *mut ViewContext)
-                .as_mut()
+            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
         }) else {
             return LRESULT(0);
         };
 
         let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        state.on_mouse_up(x as f32 * 96.0 / dpi, y as f32 * 96.0 / dpi, view_context);
+        state.input_state.on_mouse_up(
+            x as f32 * 96.0 / dpi,
+            y as f32 * 96.0 / dpi,
+            hwnd,
+            &mut state.view_context,
+            &state.pane_group_docking_manager,
+        );
 
         return LRESULT(0);
     }
