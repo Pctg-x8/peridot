@@ -1,20 +1,19 @@
 use std::{borrow::Cow, collections::HashMap};
 
+use object_cache::{TextFormatStock, TextSurfaceStock};
+use uikit::{InputEventHandler, ViewContext};
 use windows::{
     core::*,
     Foundation::{
         Numerics::{Vector2, Vector3},
-        Size, TimeSpan, TypedEventHandler,
+        TimeSpan, TypedEventHandler,
     },
-    Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat},
     System::DispatcherQueueTimer,
     Win32::{
         Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
             Direct2D::{
-                Common::{D2D1_COLOR_F, D2D_POINT_2F},
-                D2D1CreateFactory, ID2D1DeviceContext, ID2D1Factory1, D2D1_DEBUG_LEVEL_WARNING,
-                D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
+                D2D1CreateFactory, ID2D1Factory1, D2D1_DEBUG_LEVEL_WARNING, D2D1_FACTORY_OPTIONS,
                 D2D1_FACTORY_TYPE_SINGLE_THREADED,
             },
             Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL},
@@ -23,9 +22,8 @@ use windows::{
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
             },
             DirectWrite::{
-                DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-                DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_METRICS,
+                DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
             },
             Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::IDXGIDevice,
@@ -34,10 +32,7 @@ use windows::{
         System::{
             LibraryLoader::GetModuleHandleA,
             WinRT::{
-                Composition::{
-                    ICompositionDrawingSurfaceInterop, ICompositorDesktopInterop,
-                    ICompositorInterop,
-                },
+                Composition::{ICompositorDesktopInterop, ICompositorInterop},
                 CreateDispatcherQueueController, DispatcherQueueOptions, DQTAT_COM_ASTA,
                 DQTYPE_THREAD_CURRENT,
             },
@@ -46,291 +41,36 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
-                CreateWindowExA, DefWindowProcA, DispatchMessageA, GetMessageA, GetWindowLongPtrA,
-                LoadCursorA, LoadIconA, PostQuitMessage, RegisterClassExA, SetWindowLongPtrA,
-                SetWindowPos, ShowWindow, TranslateMessage, CW_USEDEFAULT, HCURSOR, HICON,
-                IDC_ARROW, IDI_APPLICATION, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
-                SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WNDCLASSEXA, WNDCLASS_STYLES, WS_EX_APPWINDOW,
-                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                DefWindowProcA, DispatchMessageA, GetMessageA, GetWindowLongPtrA, LoadCursorA,
+                LoadIconA, PostQuitMessage, SetWindowLongPtrA, SetWindowPos, ShowWindow,
+                TranslateMessage, HCURSOR, HICON, IDC_ARROW, IDI_APPLICATION, MSG, SWP_NOACTIVATE,
+                SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX,
+                WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WNDCLASSEXA,
+                WNDCLASS_STYLES,
             },
         },
     },
     UI::{
         Color,
         Composition::{
-            AnimationIterationBehavior, CompositionAnimationGroup, CompositionColorBrush,
-            CompositionDrawingSurface, CompositionEasingFunction, CompositionEasingFunctionMode,
-            CompositionEffectSourceParameter, CompositionGraphicsDevice,
-            CompositionLinearGradientBrush, CompositionSurfaceBrush, ContainerVisual,
-            Desktop::DesktopWindowTarget, LayerVisual, ScalarKeyFrameAnimation, ShapeVisual,
-            SpriteVisual,
+            AnimationIterationBehavior, CompositionAnimationGroup, CompositionEasingFunction,
+            CompositionEasingFunctionMode, CompositionEffectSourceParameter,
+            CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget, LayerVisual,
+            ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
         },
     },
 };
 
+use crate::{
+    uikit::UICommonObjects,
+    winapi_extras::{register_window_class, WindowBuilder},
+};
+
 mod bindgen;
-
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
-struct SafeF32(f32);
-impl SafeF32 {
-    #[inline(always)]
-    pub fn new(value: f32) -> Self {
-        assert!(!value.is_nan(), "NaN value is not allowed");
-
-        Self(value)
-    }
-
-    #[inline(always)]
-    pub const fn value(&self) -> f32 {
-        self.0
-    }
-}
-impl From<f32> for SafeF32 {
-    fn from(value: f32) -> Self {
-        Self::new(value)
-    }
-}
-impl From<SafeF32> for f32 {
-    fn from(value: SafeF32) -> Self {
-        value.0
-    }
-}
-impl core::cmp::Eq for SafeF32 {}
-impl core::cmp::Ord for SafeF32 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        unsafe { self.partial_cmp(other).unwrap_unchecked() }
-    }
-}
-impl core::hash::Hash for SafeF32 {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_ne_bytes().hash(state)
-    }
-}
-
-#[derive(PartialEq, Eq)]
-struct TextFormatStockKey {
-    family_name: Cow<'static, str>,
-    size: SafeF32,
-    weight: DWRITE_FONT_WEIGHT,
-}
-impl core::hash::Hash for TextFormatStockKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (&self.family_name, self.size, self.weight.0).hash(state)
-    }
-}
-struct TextFormatStock {
-    factory: IDWriteFactory,
-    formats: HashMap<TextFormatStockKey, IDWriteTextFormat>,
-}
-impl TextFormatStock {
-    pub fn new(factory: &IDWriteFactory) -> Self {
-        Self {
-            factory: factory.clone(),
-            formats: HashMap::new(),
-        }
-    }
-
-    pub fn get(
-        &mut self,
-        family_name: impl Into<Cow<'static, str>>,
-        size: impl Into<SafeF32>,
-        weight: DWRITE_FONT_WEIGHT,
-    ) -> windows::core::Result<IDWriteTextFormat> {
-        let key = TextFormatStockKey {
-            family_name: family_name.into(),
-            size: size.into(),
-            weight,
-        };
-
-        match self.formats.entry(key) {
-            std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                let family_name_widechars = e
-                    .key()
-                    .family_name
-                    .encode_utf16()
-                    .chain(core::iter::once(0))
-                    .collect::<Vec<_>>();
-                let format = unsafe {
-                    self.factory.CreateTextFormat(
-                        PCWSTR(family_name_widechars.as_ptr()),
-                        None,
-                        weight,
-                        DWRITE_FONT_STYLE_NORMAL,
-                        DWRITE_FONT_STRETCH_NORMAL,
-                        e.key().size.value(),
-                        w!("ja-JP"),
-                    )?
-                };
-
-                Ok(e.insert(format).clone())
-            }
-        }
-    }
-}
-
-#[derive(Clone)]
-struct TextSurface {
-    surface: CompositionDrawingSurface,
-    interop: ICompositionDrawingSurfaceInterop,
-    width: f32,
-    height: f32,
-}
-impl TextSurface {
-    #[inline]
-    pub const fn visual_size(&self) -> Vector2 {
-        Vector2 {
-            X: self.width,
-            Y: self.height,
-        }
-    }
-}
-struct TextSurfaceStock {
-    dwrite_factory: IDWriteFactory,
-    composition_graphics_device: CompositionGraphicsDevice,
-    target_window_dpi: f32,
-    surfaces: HashMap<(*const IDWriteTextFormat, Cow<'static, str>), TextSurface>,
-}
-impl TextSurfaceStock {
-    pub fn new(
-        dwrite_factory: &IDWriteFactory,
-        composition_graphics_device: &CompositionGraphicsDevice,
-        current_window_dpi: f32,
-    ) -> Self {
-        Self {
-            dwrite_factory: dwrite_factory.clone(),
-            composition_graphics_device: composition_graphics_device.clone(),
-            target_window_dpi: current_window_dpi,
-            surfaces: HashMap::new(),
-        }
-    }
-
-    pub fn get(
-        &mut self,
-        fmt: &IDWriteTextFormat,
-        text: impl Into<Cow<'static, str>>,
-    ) -> windows::core::Result<TextSurface> {
-        match self.surfaces.entry((fmt as *const _, text.into())) {
-            std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                let text_layout = unsafe {
-                    self.dwrite_factory.CreateTextLayout(
-                        &e.key().1.encode_utf16().collect::<Vec<_>>(),
-                        &*e.key().0,
-                        core::f32::MAX,
-                        core::f32::MAX,
-                    )?
-                };
-                let mut text_metrics = core::mem::MaybeUninit::<DWRITE_TEXT_METRICS>::uninit();
-                unsafe { text_layout.GetMetrics(text_metrics.as_mut_ptr())? };
-                let text_metrics = unsafe { text_metrics.assume_init() };
-                let size = Size {
-                    Width: text_metrics.width * self.target_window_dpi / 96.0,
-                    Height: text_metrics.height * self.target_window_dpi / 96.0,
-                };
-                let surface = self.composition_graphics_device.CreateDrawingSurface(
-                    size,
-                    DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                    DirectXAlphaMode::Premultiplied,
-                )?;
-
-                let surface_interop = surface.cast::<ICompositionDrawingSurfaceInterop>()?;
-                let mut offset = core::mem::MaybeUninit::<POINT>::uninit();
-                let dc: ID2D1DeviceContext =
-                    unsafe { surface_interop.BeginDraw(None, offset.as_mut_ptr())? };
-                let offset = unsafe { offset.assume_init() };
-                let res = 'drawing_block: {
-                    unsafe {
-                        dc.SetDpi(self.target_window_dpi, self.target_window_dpi);
-
-                        let clear_color = D2D1_COLOR_F {
-                            a: 0.0,
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                        };
-                        let text_color = D2D1_COLOR_F {
-                            a: 1.0,
-                            r: 1.0,
-                            g: 1.0,
-                            b: 1.0,
-                        };
-
-                        let brush = match dc.CreateSolidColorBrush(&text_color, None) {
-                            Ok(b) => b,
-                            Err(e) => break 'drawing_block Err(e),
-                        };
-
-                        dc.Clear(Some(&clear_color));
-                        dc.DrawTextLayout(
-                            D2D_POINT_2F {
-                                x: offset.x as f32 * 96.0 / self.target_window_dpi,
-                                y: offset.y as f32 * 96.0 / self.target_window_dpi,
-                            },
-                            &text_layout,
-                            &brush,
-                            D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        );
-
-                        Ok(())
-                    }
-                };
-                unsafe { surface_interop.EndDraw()? };
-                res?;
-
-                Ok(e.insert(TextSurface {
-                    surface,
-                    interop: surface_interop,
-                    width: text_metrics.width,
-                    height: text_metrics.height,
-                })
-                .clone())
-            }
-        }
-    }
-}
-
-struct UICommonObjects {
-    tab_base_brush: CompositionColorBrush,
-    tab_active_overlay_brush: CompositionLinearGradientBrush,
-    tab_title_font: IDWriteTextFormat,
-    tab_active_title_font: IDWriteTextFormat,
-    tab_hover_animation: ScalarKeyFrameAnimation,
-    tab_hover_end_animation: ScalarKeyFrameAnimation,
-    tab_active_overlay_enter_animation: ScalarKeyFrameAnimation,
-    tab_active_overlay_leave_animation: ScalarKeyFrameAnimation,
-}
-
-pub struct ViewContext<'r> {
-    compositor: &'r windows::UI::Composition::Compositor,
-    common: &'r UICommonObjects,
-    text_format_stock: &'r mut TextFormatStock,
-    text_surface_stock: &'r mut TextSurfaceStock,
-    hittest_tree_parent: &'r core::cell::RefCell<HitTestTree>,
-    hittest_context: &'r mut HitTestTreeContext,
-}
-impl<'r> ViewContext<'r> {
-    pub fn on_new_hittest_tree<'r1>(
-        &'r1 mut self,
-        new_parent: &'r1 core::cell::RefCell<HitTestTree>,
-    ) -> ViewContext<'r1> {
-        ViewContext {
-            compositor: &self.compositor,
-            common: &self.common,
-            text_format_stock: &mut self.text_format_stock,
-            text_surface_stock: &mut self.text_surface_stock,
-            hittest_tree_parent: new_parent,
-            hittest_context: &mut self.hittest_context,
-        }
-    }
-
-    pub fn hittest_tree_parent_mut(&self) -> core::cell::RefMut<HitTestTree> {
-        self.hittest_tree_parent.borrow_mut()
-    }
-}
+mod object_cache;
+mod uikit;
+mod winapi_extras;
+mod utils;
 
 const TAB_MARGIN_X: f32 = 10.0;
 const TAB_MARGIN_Y: f32 = 2.0;
@@ -347,88 +87,6 @@ const TAB_ACTIVE_BASE_COLOR: Color = Color {
     G: 160,
     B: 255,
 };
-
-pub trait InputEventHandler {
-    fn on_pointer_enter(&self, _view_ctx: &mut ViewContext) {}
-    fn on_pointer_leave(&self, _view_ctx: &mut ViewContext) {}
-    fn on_click(&self, _view_ctx: &mut ViewContext) {}
-    fn on_begin_drag(
-        &self,
-        _x: f32,
-        _y: f32,
-        _window: HWND,
-        _view_ctx: &mut ViewContext,
-        _pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-    }
-    fn on_drag_move(
-        &self,
-        _x: f32,
-        _y: f32,
-        _window: HWND,
-        _view_ctx: &mut ViewContext,
-        _pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-    }
-    fn on_end_drag(
-        &self,
-        _window: HWND,
-        _view_ctx: &mut ViewContext,
-        _pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-    }
-}
-impl<T: InputEventHandler> InputEventHandler for std::rc::Rc<T> {
-    #[inline(always)]
-    fn on_pointer_enter(&self, view_ctx: &mut ViewContext) {
-        T::on_pointer_enter(&*self, view_ctx)
-    }
-
-    #[inline(always)]
-    fn on_pointer_leave(&self, view_ctx: &mut ViewContext) {
-        T::on_pointer_leave(&*self, view_ctx)
-    }
-
-    #[inline(always)]
-    fn on_click(&self, view_ctx: &mut ViewContext) {
-        T::on_click(&*self, view_ctx)
-    }
-
-    #[inline(always)]
-    fn on_begin_drag(
-        &self,
-        x: f32,
-        y: f32,
-        window: HWND,
-        view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        T::on_begin_drag(&*self, x, y, window, view_ctx, pane_group_docking_manager)
-    }
-
-    #[inline(always)]
-    fn on_drag_move(
-        &self,
-        x: f32,
-        y: f32,
-        window: HWND,
-        view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        T::on_drag_move(&*self, x, y, window, view_ctx, pane_group_docking_manager)
-    }
-
-    #[inline(always)]
-    fn on_end_drag(
-        &self,
-        window: HWND,
-        view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        T::on_end_drag(&*self, window, view_ctx, pane_group_docking_manager)
-    }
-}
-impl InputEventHandler for () {}
 
 pub enum PaneDockState {
     Left(
@@ -486,34 +144,17 @@ impl PaneGroupDockingManager {
             lpszClassName: s!("io.ct2.peridot.marble_editor.overlay.floating_preview"),
             hIconSm: HICON(0),
         };
-        let floating_preview_window_atom =
-            unsafe { RegisterClassExA(&floating_preview_window_cls) };
-        if floating_preview_window_atom == 0 {
-            return Err(windows::core::Error::from_win32());
-        }
-        let floating_preview_window = unsafe {
-            CreateWindowExA(
-                WS_EX_NOREDIRECTIONBITMAP
-                    | WS_EX_NOACTIVATE
-                    | WS_EX_TOPMOST
-                    | WS_EX_TRANSPARENT
-                    | WS_EX_LAYERED,
-                PCSTR(floating_preview_window_atom as _),
-                s!(""),
-                WS_POPUP,
-                0,
-                0,
-                1,
-                1,
-                None,
-                None,
-                floating_preview_window_cls.hInstance,
-                None,
-            )
-        };
-        if floating_preview_window.0 == 0 {
-            return Err(windows::core::Error::from_win32());
-        }
+        let floating_preview_window = WindowBuilder::new(
+            floating_preview_window_cls.hInstance,
+            register_window_class(&floating_preview_window_cls)?,
+            s!(""),
+        )
+        .no_activate()
+        .no_redirection_bitmap()
+        .transparent()
+        .topmost()
+        .popup()
+        .create()?;
         let floating_preview_window_target = unsafe {
             ctx.compositor
                 .cast::<ICompositorDesktopInterop>()?
@@ -888,8 +529,9 @@ impl PaneGroupView {
         })?;
 
         self.ht_ref_content.borrow_mut().top = self.tab_height;
-        self.ht_ref_content.borrow_mut().width = self.width;
-        self.ht_ref_content.borrow_mut().height = (self.height - self.tab_height).max(0.0);
+        self.ht_ref_content
+            .borrow_mut()
+            .set_size(self.width, (self.height - self.tab_height).max(0.0));
         Ok(())
     }
 
@@ -924,10 +566,7 @@ impl PaneGroupView {
             X: width,
             Y: height,
         })?;
-        self.ht_ref.borrow_mut().left = left;
-        self.ht_ref.borrow_mut().top = top;
-        self.ht_ref.borrow_mut().width = width;
-        self.ht_ref.borrow_mut().height = height;
+        self.ht_ref.borrow_mut().set_rect(left, top, width, height);
         self.width = width;
         self.height = height;
 
@@ -1236,8 +875,7 @@ impl PaneTabHeaderView {
             Y: top,
             Z: 0.0,
         })?;
-        self.hittest_tree_self.borrow_mut().left = left;
-        self.hittest_tree_self.borrow_mut().top = top;
+        self.hittest_tree_self.borrow_mut().set_offset(left, top);
 
         Ok(())
     }
@@ -1587,6 +1225,24 @@ impl HitTestTree {
         self.children.insert(child.borrow().id, child.clone());
     }
 
+    #[inline]
+    pub fn set_rect(&mut self, left: f32, top: f32, width: f32, height: f32) {
+        self.left = left;
+        self.top = top;
+        self.width = width;
+        self.height = height;
+    }
+    #[inline]
+    pub fn set_size(&mut self, width: f32, height: f32) {
+        self.width = width;
+        self.height = height;
+    }
+    #[inline]
+    pub fn set_offset(&mut self, left: f32, top: f32) {
+        self.left = left;
+        self.top = top;
+    }
+
     pub fn check(
         this: &std::rc::Rc<core::cell::RefCell<Self>>,
         x: f32,
@@ -1663,30 +1319,16 @@ fn main() {
                 .expect("Failed to load app small icon")
         },
     };
-    let atom = unsafe { RegisterClassExA(&wndclass) };
-    if atom == 0 {
-        panic!("Failed to register window class");
-    }
-
-    let window_handle = unsafe {
-        CreateWindowExA(
-            WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP,
-            PCSTR(atom as _),
-            s!("Peridot Marble Editor"),
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            None,
-            None,
-            instance_handle,
-            None,
-        )
-    };
-    if window_handle.0 == 0 {
-        panic!("Failed to create main window");
-    }
+    let window_handle = WindowBuilder::new(
+        instance_handle.into(),
+        register_window_class(&wndclass).expect("Failed to register window class"),
+        s!("Peridot Marble Editor"),
+    )
+    .no_redirection_bitmap()
+    .app_window()
+    .overlapped_window()
+    .create()
+    .expect("Failed to create window");
 
     unsafe {
         let attr: BOOL = BOOL(1);
