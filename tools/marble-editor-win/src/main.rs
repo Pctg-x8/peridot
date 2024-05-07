@@ -362,10 +362,10 @@ impl InputEventHandler for core::cell::RefCell<PaneSplitterView> {
 
         let dpi = unsafe { GetDpiForWindow(window) as f32 };
         let new_size = match &*target_dock.borrow() {
-            PaneDockState::Left(_, _, _, _) => bs + (x - bx) * 96.0 / dpi,
-            PaneDockState::Top(_, _, _, _) => bs + (y - by) * 96.0 / dpi,
-            PaneDockState::Right(_, _, _, _) => bs - (x - bx) * 96.0 / dpi,
-            PaneDockState::Bottom(_, _, _, _) => bs - (y - by) * 96.0 / dpi,
+            PaneDockState::Left { .. } => bs + (x - bx) * 96.0 / dpi,
+            PaneDockState::Top { .. } => bs + (y - by) * 96.0 / dpi,
+            PaneDockState::Right { .. } => bs - (x - bx) * 96.0 / dpi,
+            PaneDockState::Bottom { .. } => bs - (y - by) * 96.0 / dpi,
             PaneDockState::Fill(_) => bs,
         };
         let (x, y) = target_dock
@@ -384,175 +384,206 @@ impl InputEventHandler for core::cell::RefCell<PaneSplitterView> {
 }
 
 pub enum PaneDockState {
-    Left(
-        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
-        Rect,
-        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
-    ),
-    Right(
-        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
-        Rect,
-        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
-    ),
-    Top(
-        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
-        Rect,
-        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
-    ),
-    Bottom(
-        std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
-        Rect,
-        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
-    ),
-    Fill(std::rc::Rc<core::cell::RefCell<PaneGroupView>>),
+    Left {
+        group_view: SharedMut<PaneGroupView>,
+        splitter: SharedMut<PaneSplitterView>,
+        container_region: Rect,
+        rest: SharedMut<PaneDockState>,
+    },
+    Right {
+        group_view: SharedMut<PaneGroupView>,
+        splitter: SharedMut<PaneSplitterView>,
+        container_region: Rect,
+        rest: SharedMut<PaneDockState>,
+    },
+    Top {
+        group_view: SharedMut<PaneGroupView>,
+        splitter: SharedMut<PaneSplitterView>,
+        container_region: Rect,
+        rest: SharedMut<PaneDockState>,
+    },
+    Bottom {
+        group_view: SharedMut<PaneGroupView>,
+        splitter: SharedMut<PaneSplitterView>,
+        container_region: Rect,
+        rest: SharedMut<PaneDockState>,
+    },
+    Fill(SharedMut<PaneGroupView>),
 }
 impl PaneDockState {
     fn new_on_left(
         ctx: &mut impl ViewContext,
-        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
-        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
+        group_view: &SharedMut<PaneGroupView>,
+        rest: &SharedMut<Self>,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let splitter = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
 
-        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
-            |wthis| {
-                splitter_view.borrow_mut().bind_dock_layer(wthis);
+        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+            splitter.borrow_mut().bind_dock_layer(wthis);
 
-                core::cell::RefCell::new(Self::Left(
-                    group_view.clone(),
-                    splitter_view,
-                    Rect {
-                        X: 0.0,
-                        Y: 0.0,
-                        Width: 0.0,
-                        Height: 0.0,
-                    },
-                    rest.clone(),
-                ))
-            },
-        ))
+            RefCell::new(Self::Left {
+                group_view: group_view.clone(),
+                splitter,
+                container_region: Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 0.0,
+                    Height: 0.0,
+                },
+                rest: rest.clone(),
+            })
+        }))
     }
     fn new_on_right(
         ctx: &mut impl ViewContext,
-        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
-        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
+        group_view: &SharedMut<PaneGroupView>,
+        rest: &SharedMut<Self>,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let splitter = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
 
-        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
-            |wthis| {
-                splitter_view.borrow_mut().bind_dock_layer(wthis);
+        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+            splitter.borrow_mut().bind_dock_layer(wthis);
 
-                core::cell::RefCell::new(Self::Right(
-                    group_view.clone(),
-                    splitter_view,
-                    Rect {
-                        X: 0.0,
-                        Y: 0.0,
-                        Width: 0.0,
-                        Height: 0.0,
-                    },
-                    rest.clone(),
-                ))
-            },
-        ))
+            RefCell::new(Self::Right {
+                group_view: group_view.clone(),
+                splitter,
+                container_region: Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 0.0,
+                    Height: 0.0,
+                },
+                rest: rest.clone(),
+            })
+        }))
     }
     fn new_on_top(
         ctx: &mut impl ViewContext,
-        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
-        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
+        group_view: &SharedMut<PaneGroupView>,
+        rest: &SharedMut<Self>,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let splitter = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
 
-        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
-            |wthis| {
-                splitter_view.borrow_mut().bind_dock_layer(wthis);
+        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+            splitter.borrow_mut().bind_dock_layer(wthis);
 
-                core::cell::RefCell::new(Self::Top(
-                    group_view.clone(),
-                    splitter_view,
-                    Rect {
-                        X: 0.0,
-                        Y: 0.0,
-                        Width: 0.0,
-                        Height: 0.0,
-                    },
-                    rest.clone(),
-                ))
-            },
-        ))
+            RefCell::new(Self::Top {
+                group_view: group_view.clone(),
+                splitter,
+                container_region: Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 0.0,
+                    Height: 0.0,
+                },
+                rest: rest.clone(),
+            })
+        }))
     }
     fn new_on_bottom(
         ctx: &mut impl ViewContext,
-        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
-        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
+        group_view: &SharedMut<PaneGroupView>,
+        rest: &SharedMut<Self>,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let splitter = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
 
-        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
-            |wthis| {
-                splitter_view.borrow_mut().bind_dock_layer(wthis);
+        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+            splitter.borrow_mut().bind_dock_layer(wthis);
 
-                core::cell::RefCell::new(Self::Bottom(
-                    group_view.clone(),
-                    splitter_view,
-                    Rect {
-                        X: 0.0,
-                        Y: 0.0,
-                        Width: 0.0,
-                        Height: 0.0,
-                    },
-                    rest.clone(),
-                ))
-            },
-        ))
+            RefCell::new(Self::Bottom {
+                group_view: group_view.clone(),
+                splitter,
+                container_region: Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 0.0,
+                    Height: 0.0,
+                },
+                rest: rest.clone(),
+            })
+        }))
     }
-    fn new_filled(
-        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-    ) -> std::rc::Rc<core::cell::RefCell<Self>> {
-        std::rc::Rc::new(core::cell::RefCell::new(Self::Fill(group_view.clone())))
+    fn new_filled(group_view: &SharedMut<PaneGroupView>) -> SharedMut<Self> {
+        Rc::new(RefCell::new(Self::Fill(group_view.clone())))
     }
 
     pub fn dock_size(&self) -> f32 {
         match self {
-            Self::Left(g, _, _, _) | Self::Right(g, _, _, _) => g.borrow().width,
-            Self::Top(g, _, _, _) | Self::Bottom(g, _, _, _) => g.borrow().height,
+            Self::Left { group_view, .. } | Self::Right { group_view, .. } => {
+                group_view.borrow().width
+            }
+            Self::Top { group_view, .. } | Self::Bottom { group_view, .. } => {
+                group_view.borrow().height
+            }
             Self::Fill(_) => 0.0,
         }
     }
     /// returns new split bar position
     pub fn set_dock_size(&mut self, size: f32) -> windows::core::Result<(f32, f32)> {
         match self {
-            Self::Left(g, _, r, c) => {
-                g.borrow_mut().set_width(size)?;
-                c.borrow_mut().layout(Self::right_region(r.clone(), size))?;
+            Self::Left {
+                group_view,
+                container_region,
+                rest,
+                ..
+            } => {
+                group_view.borrow_mut().set_width(size)?;
+                rest.borrow_mut()
+                    .layout(Self::right_region(container_region.clone(), size))?;
 
-                Ok((r.X + size, r.Y))
+                Ok((container_region.X + size, container_region.Y))
             }
-            Self::Right(g, _, r, c) => {
-                g.borrow_mut()
-                    .set_offset_size(r.Width - size, r.Y, size, r.Height)?;
-                c.borrow_mut().layout(Self::left_region(r.clone(), size))?;
+            Self::Right {
+                group_view,
+                container_region,
+                rest,
+                ..
+            } => {
+                group_view.borrow_mut().set_offset_size(
+                    container_region.Width - size,
+                    container_region.Y,
+                    size,
+                    container_region.Height,
+                )?;
+                rest.borrow_mut()
+                    .layout(Self::left_region(container_region.clone(), size))?;
 
-                Ok((r.X + r.Width - size - PANE_SPLITTER_GAP, r.Y))
+                Ok((
+                    container_region.X + container_region.Width - size - PANE_SPLITTER_GAP,
+                    container_region.Y,
+                ))
             }
-            Self::Top(g, _, r, c) => {
-                g.borrow_mut().set_height(size)?;
-                c.borrow_mut()
-                    .layout(Self::bottom_region(r.clone(), size))?;
+            Self::Top {
+                group_view,
+                container_region,
+                rest,
+                ..
+            } => {
+                group_view.borrow_mut().set_height(size)?;
+                rest.borrow_mut()
+                    .layout(Self::bottom_region(container_region.clone(), size))?;
 
-                Ok((r.X, r.Y + size))
+                Ok((container_region.X, container_region.Y + size))
             }
-            Self::Bottom(g, _, r, c) => {
-                g.borrow_mut()
-                    .set_offset_size(r.X, r.Height - size, r.Width, size)?;
-                c.borrow_mut().layout(Self::top_region(r.clone(), size))?;
+            Self::Bottom {
+                group_view,
+                container_region,
+                rest,
+                ..
+            } => {
+                group_view.borrow_mut().set_offset_size(
+                    container_region.X,
+                    container_region.Height - size,
+                    container_region.Width,
+                    size,
+                )?;
+                rest.borrow_mut()
+                    .layout(Self::top_region(container_region.clone(), size))?;
 
-                Ok((r.X, r.Y + r.Height - size - PANE_SPLITTER_GAP))
+                Ok((
+                    container_region.X,
+                    container_region.Y + container_region.Height - size - PANE_SPLITTER_GAP,
+                ))
             }
             Self::Fill(_) => {
                 // nop for filling container
@@ -594,13 +625,33 @@ impl PaneDockState {
 
     fn place_recursive(&self, onto: &VisualCollection) -> windows::core::Result<()> {
         match self {
-            Self::Left(g, sp, _, c)
-            | Self::Right(g, sp, _, c)
-            | Self::Top(g, sp, _, c)
-            | Self::Bottom(g, sp, _, c) => {
-                onto.InsertAtTop(&g.borrow().root)?;
-                onto.InsertAtTop(&sp.borrow().visual)?;
-                c.borrow().place_recursive(onto)
+            Self::Left {
+                group_view,
+                splitter,
+                rest,
+                ..
+            }
+            | Self::Right {
+                group_view,
+                splitter,
+                rest,
+                ..
+            }
+            | Self::Top {
+                group_view,
+                splitter,
+                rest,
+                ..
+            }
+            | Self::Bottom {
+                group_view,
+                splitter,
+                rest,
+                ..
+            } => {
+                onto.InsertAtTop(&group_view.borrow().root)?;
+                onto.InsertAtTop(&splitter.borrow().visual)?;
+                rest.borrow().place_recursive(onto)
             }
             Self::Fill(g) => onto.InsertAtTop(&g.borrow().root),
         }
@@ -608,69 +659,97 @@ impl PaneDockState {
 
     fn layout(&mut self, region: Rect) -> windows::core::Result<()> {
         match self {
-            Self::Left(g, sp, r, c) => {
-                *r = region.clone();
-                let w = g.borrow().width;
-                g.borrow_mut()
-                    .set_offset_size(region.X, region.Y, w, region.Height.max(1.0))?;
-                sp.borrow().set_rect(
+            Self::Left {
+                group_view,
+                splitter,
+                container_region,
+                rest,
+            } => {
+                *container_region = region.clone();
+                let w = group_view.borrow().width;
+                group_view.borrow_mut().set_offset_size(
+                    region.X,
+                    region.Y,
+                    w,
+                    region.Height.max(1.0),
+                )?;
+                splitter.borrow().set_rect(
                     region.X + w,
                     region.Y,
                     PANE_SPLITTER_GAP,
                     region.Height.max(1.0),
                 )?;
 
-                c.borrow_mut().layout(Self::right_region(region, w))
+                rest.borrow_mut().layout(Self::right_region(region, w))
             }
-            Self::Right(g, sp, r, c) => {
-                *r = region.clone();
-                let w = g.borrow().width;
-                g.borrow_mut().set_offset_size(
+            Self::Right {
+                group_view,
+                splitter,
+                container_region,
+                rest,
+            } => {
+                *container_region = region.clone();
+                let w = group_view.borrow().width;
+                group_view.borrow_mut().set_offset_size(
                     region.X + region.Width - w,
                     region.Y,
                     w,
                     region.Height.max(1.0),
                 )?;
-                sp.borrow().set_rect(
+                splitter.borrow().set_rect(
                     region.X + region.Width - w - PANE_SPLITTER_GAP,
                     region.Y,
                     PANE_SPLITTER_GAP,
                     region.Height.max(1.0),
                 )?;
 
-                c.borrow_mut().layout(Self::left_region(region, w))
+                rest.borrow_mut().layout(Self::left_region(region, w))
             }
-            Self::Top(g, sp, r, c) => {
-                *r = region;
-                let h = g.borrow().height;
-                g.borrow_mut()
-                    .set_offset_size(region.X, region.Y, region.Width.max(1.0), h)?;
-                sp.borrow().set_rect(
+            Self::Top {
+                group_view,
+                splitter,
+                container_region,
+                rest,
+            } => {
+                *container_region = region;
+                let h = group_view.borrow().height;
+                group_view.borrow_mut().set_offset_size(
+                    region.X,
+                    region.Y,
+                    region.Width.max(1.0),
+                    h,
+                )?;
+                splitter.borrow().set_rect(
                     region.X,
                     region.Y + h,
                     region.Width.max(1.0),
                     PANE_SPLITTER_GAP,
                 )?;
 
-                c.borrow_mut().layout(Self::bottom_region(region, h))
+                rest.borrow_mut().layout(Self::bottom_region(region, h))
             }
-            Self::Bottom(g, sp, r, c) => {
-                *r = region;
-                let h = g.borrow().height;
-                g.borrow_mut().set_offset_size(
+            Self::Bottom {
+                group_view,
+                splitter,
+                container_region,
+                rest,
+            } => {
+                *container_region = region;
+                let h = group_view.borrow().height;
+                group_view.borrow_mut().set_offset_size(
                     region.X,
                     region.Y + region.Height - h,
                     region.Width.max(1.0),
                     h,
                 )?;
-                sp.borrow().set_rect(
+                splitter.borrow().set_rect(
                     region.X,
                     region.Y + region.Height - h - PANE_SPLITTER_GAP,
                     region.Width.max(1.0),
                     PANE_SPLITTER_GAP,
                 )?;
 
-                c.borrow_mut().layout(Self::top_region(region, h))
+                rest.borrow_mut().layout(Self::top_region(region, h))
             }
             Self::Fill(g) => {
                 g.borrow_mut()
@@ -2361,41 +2440,6 @@ fn main() {
         .expect("Failed to get children collection")
         .InsertAtBottom(&bg)
         .expect("Failed to insert bg");
-
-    // let ui_font = text_format_stock
-    //     .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)
-    //     .expect("Failed to create default ui format");
-    // let title_text_surface = text_surface_stock
-    //     .get(&ui_font, "New Project - Peridot Marble Editor v0.1.0")
-    //     .expect("Failed to create title text surface");
-
-    // let title_label = compositor
-    //     .CreateSpriteVisual()
-    //     .expect("Failed to create title label visual");
-    // let title_label_brush = compositor
-    //     .CreateSurfaceBrushWithSurface(&title_text_surface.surface)
-    //     .expect("Failed to create surface brush");
-    // title_label
-    //     .SetBrush(&title_label_brush)
-    //     .expect("Failed to set surface brush");
-    // title_label
-    //     .SetSize(Vector2 {
-    //         X: title_text_surface.width as _,
-    //         Y: title_text_surface.height as _,
-    //     })
-    //     .expect("Failed to set title label size");
-    // title_label
-    //     .SetOffset(Vector3 {
-    //         X: 28.0,
-    //         Y: 8.0,
-    //         Z: 0.0,
-    //     })
-    //     .expect("Failed to set title label offset");
-    // composition_root
-    //     .Children()
-    //     .expect("Failed to get children collection")
-    //     .InsertAtTop(&title_label)
-    //     .expect("Failed to insert title label visual");
 
     let overlay_layer = compositor
         .CreateContainerVisual()
