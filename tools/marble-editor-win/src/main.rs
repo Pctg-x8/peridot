@@ -6,7 +6,7 @@ use windows::{
     core::*,
     Foundation::{
         Numerics::{Vector2, Vector3},
-        TimeSpan, TypedEventHandler,
+        Rect, TimeSpan, TypedEventHandler,
     },
     System::DispatcherQueueTimer,
     Win32::{
@@ -41,12 +41,12 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
-                DefWindowProcA, DispatchMessageA, GetMessageA, GetWindowLongPtrA, LoadCursorA,
-                LoadIconA, PostQuitMessage, SetWindowLongPtrA, SetWindowPos, ShowWindow,
-                TranslateMessage, HCURSOR, HICON, IDC_ARROW, IDI_APPLICATION, MSG, SWP_NOACTIVATE,
-                SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX,
-                WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WNDCLASSEXA,
-                WNDCLASS_STYLES,
+                DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA, GetWindowLongPtrA,
+                LoadCursorA, LoadIconA, PostQuitMessage, SetWindowLongPtrA, SetWindowPos,
+                ShowWindow, TranslateMessage, HCURSOR, HICON, IDC_ARROW, IDI_APPLICATION, MSG,
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL,
+                WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                WM_SIZE, WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -55,8 +55,9 @@ use windows::{
         Composition::{
             AnimationIterationBehavior, CompositionAnimationGroup, CompositionEasingFunction,
             CompositionEasingFunctionMode, CompositionEffectSourceParameter,
-            CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget, LayerVisual,
-            ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
+            CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget,
+            ICompositionAnimation2, KeyFrameAnimation, LayerVisual, ScalarKeyFrameAnimation,
+            ShapeVisual, SpriteVisual, Vector3KeyFrameAnimation, VisualCollection,
         },
     },
 };
@@ -69,8 +70,8 @@ use crate::{
 mod bindgen;
 mod object_cache;
 mod uikit;
-mod winapi_extras;
 mod utils;
+mod winapi_extras;
 
 const TAB_MARGIN_X: f32 = 10.0;
 const TAB_MARGIN_Y: f32 = 2.0;
@@ -87,6 +88,113 @@ const TAB_ACTIVE_BASE_COLOR: Color = Color {
     G: 160,
     B: 255,
 };
+
+#[repr(transparent)]
+pub struct KeyFrameAnimationPropertySetter<'r, T: 'r + Interface>(&'r T);
+impl<T: Interface> KeyFrameAnimationPropertySetter<'_, T> {
+    #[inline]
+    pub fn duration(&self, duration: TimeSpan) -> windows::core::Result<&Self> {
+        self.0
+            .cast::<KeyFrameAnimation>()?
+            .SetDuration(duration)
+            .map(|_| self)
+    }
+
+    #[inline]
+    pub fn target(&self, target: &HSTRING) -> windows::core::Result<&Self> {
+        let this = self.0.cast::<ICompositionAnimation2>()?;
+        unsafe {
+            (this.vtable().SetTarget)(this.as_raw(), core::mem::transmute_copy(target))
+                .ok()
+                .map(|_| self)
+        }
+    }
+}
+
+pub trait KeyFrameAnimationExtension {
+    type Element;
+
+    fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self>;
+    fn interpolate(
+        &self,
+        to: f32,
+        to_value: Self::Element,
+        f: impl windows_core::Param<CompositionEasingFunction>,
+    ) -> windows::core::Result<&Self>;
+}
+impl KeyFrameAnimationExtension for ScalarKeyFrameAnimation {
+    type Element = f32;
+
+    fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self> {
+        self.InsertKeyFrame(at, value).map(|_| self)
+    }
+    fn interpolate(
+        &self,
+        to: f32,
+        to_value: Self::Element,
+        f: impl windows_core::Param<CompositionEasingFunction>,
+    ) -> windows::core::Result<&Self> {
+        self.InsertKeyFrameWithEasingFunction(to, to_value, f)
+            .map(|_| self)
+    }
+}
+impl KeyFrameAnimationExtension for Vector3KeyFrameAnimation {
+    type Element = Vector3;
+
+    fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self> {
+        self.InsertKeyFrame(at, value).map(|_| self)
+    }
+    fn interpolate(
+        &self,
+        to: f32,
+        to_value: Self::Element,
+        f: impl windows_core::Param<CompositionEasingFunction>,
+    ) -> windows::core::Result<&Self> {
+        self.InsertKeyFrameWithEasingFunction(to, to_value, f)
+            .map(|_| self)
+    }
+}
+
+pub trait KeyFrameAnimationPropertySetterExtension: Interface {
+    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self>;
+}
+impl KeyFrameAnimationPropertySetterExtension for KeyFrameAnimation {
+    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
+        KeyFrameAnimationPropertySetter(self)
+    }
+}
+impl KeyFrameAnimationPropertySetterExtension for ScalarKeyFrameAnimation {
+    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
+        KeyFrameAnimationPropertySetter(self)
+    }
+}
+impl KeyFrameAnimationPropertySetterExtension for Vector3KeyFrameAnimation {
+    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
+        KeyFrameAnimationPropertySetter(self)
+    }
+}
+
+pub trait Vector2Extension {
+    fn scalar(v: f32) -> Self;
+    fn with_z(self, z: f32) -> Vector3;
+}
+impl Vector2Extension for Vector2 {
+    #[inline(always)]
+    fn scalar(v: f32) -> Self {
+        Vector2 { X: v, Y: v }
+    }
+
+    #[inline(always)]
+    fn with_z(self, z: f32) -> Vector3 {
+        Vector3 {
+            X: self.X,
+            Y: self.Y,
+            Z: z,
+        }
+    }
+}
+
+const PANE_SPLITTER_GAP: f32 = 4.0;
 
 pub enum PaneDockState {
     Left(
@@ -111,9 +219,87 @@ pub enum PaneDockState {
     ),
     Fill(std::rc::Rc<core::cell::RefCell<PaneGroupView>>),
 }
+impl PaneDockState {
+    fn place_recursive(&self, onto: &VisualCollection) -> windows::core::Result<()> {
+        match self {
+            Self::Left(g, _, c)
+            | Self::Right(g, _, c)
+            | Self::Top(g, _, c)
+            | Self::Bottom(g, _, c) => {
+                onto.InsertAtTop(&g.borrow().root)?;
+                c.place_recursive(onto)
+            }
+            Self::Fill(g) => onto.InsertAtTop(&g.borrow().root),
+        }
+    }
+
+    fn layout(&self, region: Rect) -> windows::core::Result<()> {
+        match self {
+            &Self::Left(ref g, w, ref c) => {
+                g.borrow_mut().set_offset_size(
+                    region.X,
+                    region.Y,
+                    w.max(1.0),
+                    region.Height.max(1.0),
+                )?;
+                let left_region = Rect {
+                    X: region.X + w + PANE_SPLITTER_GAP,
+                    Width: region.Width - w - PANE_SPLITTER_GAP,
+                    ..region
+                };
+                c.layout(left_region)
+            }
+            &Self::Right(ref g, w, ref c) => {
+                g.borrow_mut().set_offset_size(
+                    region.X + region.Width - w,
+                    region.Y,
+                    w.max(1.0),
+                    region.Height.max(1.0),
+                )?;
+                let left_region = Rect {
+                    Width: region.Width - w - PANE_SPLITTER_GAP,
+                    ..region
+                };
+                c.layout(left_region)
+            }
+            &Self::Top(ref g, h, ref c) => {
+                g.borrow_mut().set_offset_size(
+                    region.X,
+                    region.Y,
+                    region.Width.max(1.0),
+                    h.max(1.0),
+                )?;
+                let left_region = Rect {
+                    Y: region.Y + h + PANE_SPLITTER_GAP,
+                    Height: region.Height - h - PANE_SPLITTER_GAP,
+                    ..region
+                };
+                c.layout(left_region)
+            }
+            &Self::Bottom(ref g, h, ref c) => {
+                g.borrow_mut().set_offset_size(
+                    region.X,
+                    region.Y + region.Height - h,
+                    region.Width.max(1.0),
+                    h.max(1.0),
+                )?;
+                let left_region = Rect {
+                    Height: region.Height - h - PANE_SPLITTER_GAP,
+                    ..region
+                };
+                c.layout(left_region)
+            }
+            Self::Fill(g) => {
+                g.borrow_mut()
+                    .set_offset_size(region.X, region.Y, region.Width, region.Height)
+            }
+        }
+    }
+}
 
 pub struct PaneGroupDockingManager {
     docks: Option<PaneDockState>,
+    placement_visual: ContainerVisual,
     floating_preview_window: HWND,
     _floating_preview_window_target: DesktopWindowTarget,
     pane_drag_preview: SpriteVisual,
@@ -125,6 +311,10 @@ pub struct PaneGroupDockingManager {
         std::sync::Arc<std::sync::RwLock<Option<DispatcherQueueTimer>>>,
 }
 impl PaneGroupDockingManager {
+    const FLOATING_PREVIEW_INOUT_DURATION: TimeSpan = TimeSpan {
+        Duration: 10_000 * 100,
+    };
+
     fn new(ctx: &mut ViewContext) -> windows::core::Result<Self> {
         extern "system" fn window_callback(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
             unsafe { DefWindowProcA(h, m, w, l) }
@@ -175,7 +365,8 @@ impl PaneGroupDockingManager {
         })?;
         let fx = bindgen::GaussianBlurEffect::new()?;
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
-        fx.SetOptimization(bindgen::EffectOptimization::Quality)?;
+        fx.SetBlurAmount(16.0)?;
+        fx.SetOptimization(bindgen::EffectOptimization::Balanced)?;
         let effect_factory = ctx.compositor.CreateEffectFactory(&fx)?;
         let backdrop_brush = ctx.compositor.CreateBackdropBrush()?;
         let blur_brush = effect_factory.CreateBrush()?;
@@ -215,83 +406,66 @@ impl PaneGroupDockingManager {
         })?;
 
         let pane_drag_preview_show_animation = ctx.compositor.CreateAnimationGroup()?;
+        let linear_easing = ctx.compositor.CreateLinearEasingFunction()?;
         pane_drag_preview_show_animation.Add(&{
             let a = ctx.compositor.CreateScalarKeyFrameAnimation()?;
-            a.InsertKeyFrame(0.0, 0.0)?;
-            a.InsertKeyFrameWithEasingFunction(
-                1.0,
-                1.0,
-                &ctx.compositor.CreateLinearEasingFunction()?,
-            )?;
-            a.SetDuration(TimeSpan {
-                Duration: 10_000 * 100,
-            })?;
-            a.SetTarget(h!("Opacity"))?;
+            a.set_properties()
+                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
+                .target(h!("Opacity"))?;
+            a.keyframe(0.0, 0.0)?
+                .interpolate(1.0, 1.0, &linear_easing)?;
+
             a
         })?;
         pane_drag_preview_show_animation.Add(&{
             let a = ctx.compositor.CreateVector3KeyFrameAnimation()?;
-            a.InsertKeyFrame(
-                0.0,
-                Vector3 {
-                    X: 0.8,
-                    Y: 0.8,
-                    Z: 1.0,
-                },
-            )?;
-            a.InsertKeyFrameWithEasingFunction(
-                1.0,
-                Vector3::one(),
-                &CompositionEasingFunction::CreateBackEasingFunction(
-                    ctx.compositor,
-                    CompositionEasingFunctionMode::Out,
-                    1.1,
-                )?,
-            )?;
-            a.SetDuration(TimeSpan {
-                Duration: 10_000 * 100,
-            })?;
-            a.SetTarget(h!("Scale"))?;
+            a.set_properties()
+                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
+                .target(h!("Scale"))?;
+            a.keyframe(0.0, Vector2::scalar(0.9).with_z(1.0))?
+                .interpolate(
+                    1.0,
+                    Vector3::one(),
+                    &CompositionEasingFunction::CreateBackEasingFunction(
+                        ctx.compositor,
+                        CompositionEasingFunctionMode::Out,
+                        1.1,
+                    )?,
+                )?;
+
             a
         })?;
         let pane_drag_preview_hide_animation = ctx.compositor.CreateAnimationGroup()?;
         pane_drag_preview_hide_animation.Add(&{
             let a = ctx.compositor.CreateScalarKeyFrameAnimation()?;
-            a.InsertKeyFrame(0.0, 1.0)?;
-            a.InsertKeyFrameWithEasingFunction(
-                1.0,
-                0.0,
-                &ctx.compositor.CreateLinearEasingFunction()?,
-            )?;
-            a.SetDuration(TimeSpan {
-                Duration: 10_000 * 100,
-            })?;
-            a.SetTarget(h!("Opacity"))?;
+            a.set_properties()
+                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
+                .target(h!("Opacity"))?;
+            a.keyframe(0.0, 1.0)?
+                .interpolate(1.0, 0.0, &linear_easing)?;
+
             a
         })?;
         pane_drag_preview_hide_animation.Add(&{
             let a = ctx.compositor.CreateVector3KeyFrameAnimation()?;
-            a.InsertKeyFrame(0.0, Vector3::one())?;
-            a.InsertKeyFrameWithEasingFunction(
+            a.set_properties()
+                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
+                .target(h!("Scale"))?;
+            a.keyframe(0.0, Vector3::one())?.interpolate(
                 1.0,
-                Vector3 {
-                    X: 0.9,
-                    Y: 0.9,
-                    Z: 1.0,
-                },
-                &ctx.compositor.CreateLinearEasingFunction()?,
+                Vector2::scalar(0.9).with_z(1.0),
+                &linear_easing,
             )?;
-            a.SetDuration(TimeSpan {
-                Duration: 10_000 * 100,
-            })?;
-            a.SetTarget(h!("Scale"))?;
+
             a
         })?;
 
         floating_preview_window_target.SetRoot(&pane_drag_preview)?;
+        let placement_visual = ctx.compositor.CreateContainerVisual()?;
 
         Ok(Self {
             docks: None,
+            placement_visual,
             floating_preview_window,
             _floating_preview_window_target: floating_preview_window_target,
             pane_drag_preview,
@@ -301,6 +475,27 @@ impl PaneGroupDockingManager {
             pane_drag_preview_hide_animation,
             pane_drag_preview_hide_delay_timer: std::sync::Arc::new(std::sync::RwLock::new(None)),
         })
+    }
+
+    fn set_layout(&mut self, layout: PaneDockState) -> windows::core::Result<()> {
+        let children = self.placement_visual.Children()?;
+        children.RemoveAll()?;
+        layout.place_recursive(&children)?;
+
+        self.docks = Some(layout);
+        Ok(())
+    }
+    fn resize_root(&mut self, width: f32, height: f32) -> windows::core::Result<()> {
+        if let Some(ref docks) = self.docks {
+            docks.layout(Rect {
+                X: 0.0,
+                Y: 0.0,
+                Width: width,
+                Height: height,
+            })?;
+        }
+
+        Ok(())
     }
 
     fn show_preview(&self) -> windows::core::Result<()> {
@@ -326,9 +521,7 @@ impl PaneGroupDockingManager {
         self.pane_drag_preview
             .StartAnimationGroup(&self.pane_drag_preview_hide_animation)?;
         let delay_hide = self.pane_drag_preview.DispatcherQueue()?.CreateTimer()?;
-        delay_hide.SetInterval(TimeSpan {
-            Duration: 10_000 * 100,
-        })?;
+        delay_hide.SetInterval(Self::FLOATING_PREVIEW_INOUT_DURATION)?;
         let tint = self.pane_drag_preview_color_tint.clone();
         let delay_timer = self.pane_drag_preview_hide_delay_timer.clone();
         let w = self.floating_preview_window;
@@ -1057,6 +1250,56 @@ impl PaneTabPresenter for TimelineTabPresenter {
     }
 }
 
+pub struct StageTabPresenter {}
+impl PaneTabContentPresenter for StageTabPresenter {
+    fn build_content_view(
+        &mut self,
+        _onto: &ContainerVisual,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+impl PaneTabPresenter for StageTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Stage";
+
+    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+        Self {}
+    }
+}
+
+pub struct PreviewTabPresenter {}
+impl PaneTabContentPresenter for PreviewTabPresenter {
+    fn build_content_view(
+        &mut self,
+        _onto: &ContainerVisual,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &mut ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+impl PaneTabPresenter for PreviewTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Preview";
+
+    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+        Self {}
+    }
+}
+
 const DRAG_THRESHOLD_DIST2: f32 = 5.0 * 5.0;
 struct InputState {
     ht_tree: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
@@ -1466,44 +1709,41 @@ fn main() {
         .InsertAtBottom(&bg)
         .expect("Failed to insert bg");
 
-    let ui_font = text_format_stock
-        .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)
-        .expect("Failed to create default ui format");
-    let title_text_surface = text_surface_stock
-        .get(&ui_font, "New Project - Peridot Marble Editor v0.1.0")
-        .expect("Failed to create title text surface");
+    // let ui_font = text_format_stock
+    //     .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)
+    //     .expect("Failed to create default ui format");
+    // let title_text_surface = text_surface_stock
+    //     .get(&ui_font, "New Project - Peridot Marble Editor v0.1.0")
+    //     .expect("Failed to create title text surface");
 
-    let title_label = compositor
-        .CreateSpriteVisual()
-        .expect("Failed to create title label visual");
-    let title_label_brush = compositor
-        .CreateSurfaceBrushWithSurface(&title_text_surface.surface)
-        .expect("Failed to create surface brush");
-    title_label
-        .SetBrush(&title_label_brush)
-        .expect("Failed to set surface brush");
-    title_label
-        .SetSize(Vector2 {
-            X: title_text_surface.width as _,
-            Y: title_text_surface.height as _,
-        })
-        .expect("Failed to set title label size");
-    title_label
-        .SetOffset(Vector3 {
-            X: 28.0,
-            Y: 8.0,
-            Z: 0.0,
-        })
-        .expect("Failed to set title label offset");
-    composition_root
-        .Children()
-        .expect("Failed to get children collection")
-        .InsertAtTop(&title_label)
-        .expect("Failed to insert title label visual");
+    // let title_label = compositor
+    //     .CreateSpriteVisual()
+    //     .expect("Failed to create title label visual");
+    // let title_label_brush = compositor
+    //     .CreateSurfaceBrushWithSurface(&title_text_surface.surface)
+    //     .expect("Failed to create surface brush");
+    // title_label
+    //     .SetBrush(&title_label_brush)
+    //     .expect("Failed to set surface brush");
+    // title_label
+    //     .SetSize(Vector2 {
+    //         X: title_text_surface.width as _,
+    //         Y: title_text_surface.height as _,
+    //     })
+    //     .expect("Failed to set title label size");
+    // title_label
+    //     .SetOffset(Vector3 {
+    //         X: 28.0,
+    //         Y: 8.0,
+    //         Z: 0.0,
+    //     })
+    //     .expect("Failed to set title label offset");
+    // composition_root
+    //     .Children()
+    //     .expect("Failed to get children collection")
+    //     .InsertAtTop(&title_label)
+    //     .expect("Failed to insert title label visual");
 
-    let ui_layer = compositor
-        .CreateContainerVisual()
-        .expect("Failed to create ui layer");
     let overlay_layer = compositor
         .CreateContainerVisual()
         .expect("Failed to create overlay layer");
@@ -1512,9 +1752,6 @@ fn main() {
             .Children()
             .expect("Failed to get children collection");
 
-        children
-            .InsertAtTop(&ui_layer)
-            .expect("Failed to insert ui layer");
         children
             .InsertAtTop(&overlay_layer)
             .expect("Failed to insert overlay layer");
@@ -1684,28 +1921,61 @@ fn main() {
         hittest_context: &mut hittest_context,
     };
 
-    let pane_group_docking_manager = PaneGroupDockingManager::new(&mut view_context)
+    let mut pane_group_docking_manager = PaneGroupDockingManager::new(&mut view_context)
         .expect("Failed to initialize docking manager");
 
     let pane_group1 =
         PaneGroupView::new(&mut view_context).expect("Failed to create PaneGroupView");
-    PaneGroupView::add_tab::<InspectorTabPresenter>(&pane_group1, &mut view_context)
-        .expect("Failed to create InspectorPaneTabHeader");
-    PaneGroupView::add_tab::<ProjectSettingsTabPresenter>(&pane_group1, &mut view_context)
-        .expect("Failed to create ProjectSettingsPaneTabHeader");
     PaneGroupView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context)
         .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange();
-    pane_group1
-        .borrow_mut()
-        .set_offset_size(0.0, 36.0, 640.0, 128.0)
-        .expect("Failed to set page group offset");
 
-    ui_layer
+    let pane_group2 =
+        PaneGroupView::new(&mut view_context).expect("Failed to create PaneGroupView");
+    PaneGroupView::add_tab::<StageTabPresenter>(&pane_group2, &mut view_context)
+        .expect("Failed to create StagePaneTab");
+    PaneGroupView::add_tab::<PreviewTabPresenter>(&pane_group2, &mut view_context)
+        .expect("Failed to create PreviewPaneTab");
+    PaneGroupView::add_tab::<ProjectSettingsTabPresenter>(&pane_group2, &mut view_context)
+        .expect("Failed to create ProjectSettingsPaneTabHeader");
+    pane_group2.borrow_mut().rearrange();
+
+    let pane_group3 =
+        PaneGroupView::new(&mut view_context).expect("Failed to create PaneGroupView");
+    PaneGroupView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context)
+        .expect("Failed to create InspectorPaneTabHeader");
+    pane_group3.borrow_mut().rearrange();
+
+    pane_group_docking_manager
+        .set_layout(PaneDockState::Right(
+            pane_group3.clone(),
+            256.0,
+            Box::new(PaneDockState::Top(
+                pane_group1.clone(),
+                128.0,
+                Box::new(PaneDockState::Fill(pane_group2.clone())),
+            )),
+        ))
+        .expect("Failed to setup initial layout");
+
+    composition_root
         .Children()
         .expect("Failed to get children collection")
-        .InsertAtTop(&pane_group1.borrow().root)
-        .expect("Failed to insert inspector pane visual");
+        .InsertBelow(&pane_group_docking_manager.placement_visual, &overlay_layer)
+        .expect("Failed to insert placement visual");
+
+    let mut client_rect = core::mem::MaybeUninit::<windows::Win32::Foundation::RECT>::uninit();
+    unsafe {
+        GetClientRect(window_handle, client_rect.as_mut_ptr())
+            .expect("Failed to get initial client rect")
+    };
+    let client_rect = unsafe { client_rect.assume_init() };
+    let window_dpi = unsafe { GetDpiForWindow(window_handle) };
+    let client_width = (client_rect.right - client_rect.left) as f32 * 96.0 / window_dpi as f32;
+    let client_height = (client_rect.bottom - client_rect.top) as f32 * 96.0 / window_dpi as f32;
+    pane_group_docking_manager
+        .resize_root(client_width, client_height)
+        .expect("Failed to initial relayout");
 
     let mut ws = WindowState {
         input_state: InputState::new(&hittest_tree_root),
@@ -1794,6 +2064,28 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             &mut state.view_context,
             &state.pane_group_docking_manager,
         );
+
+        return LRESULT(0);
+    }
+    if msg == WM_SIZE {
+        let Some(state) = (unsafe {
+            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
+        }) else {
+            // not initialized
+            return LRESULT(0);
+        };
+
+        let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
+        let (w, h) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
+        let (w, h) = (
+            (w as f32 * 96.0 / dpi).max(64.0),
+            (h as f32 * 96.0 / dpi).max(64.0),
+        );
+        state
+            .pane_group_docking_manager
+            .borrow_mut()
+            .resize_root(w, h)
+            .expect("Failed to resize root");
 
         return LRESULT(0);
     }
