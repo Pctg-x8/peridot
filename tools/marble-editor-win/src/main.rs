@@ -1,7 +1,12 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    collections::HashMap,
+    rc::{Rc, Weak},
+};
 
 use object_cache::{TextFormatStock, TextSurfaceStock};
-use uikit::{InputEventHandler, ViewContext};
+use uikit::{CursorStyle, InputContext, InputEventHandler, ViewContext, ViewContextExtension};
 use windows::{
     core::*,
     Foundation::{
@@ -42,11 +47,12 @@ use windows::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA, GetWindowLongPtrA,
-                LoadCursorA, LoadIconA, PostQuitMessage, SetWindowLongPtrA, SetWindowPos,
-                ShowWindow, TranslateMessage, HCURSOR, HICON, IDC_ARROW, IDI_APPLICATION, MSG,
-                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL,
-                WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_SIZE, WNDCLASSEXA, WNDCLASS_STYLES,
+                LoadCursorA, LoadIconA, PostQuitMessage, SetCursor, SetWindowLongPtrA,
+                SetWindowPos, ShowWindow, TranslateMessage, HCURSOR, HICON, HTCLIENT, IDC_ARROW,
+                IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, MSG, SWP_NOACTIVATE, SWP_NOSIZE,
+                SWP_NOZORDER, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
+                WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -55,7 +61,7 @@ use windows::{
         Composition::{
             AnimationIterationBehavior, CompositionAnimationGroup, CompositionEasingFunction,
             CompositionEasingFunctionMode, CompositionEffectSourceParameter,
-            CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget,
+            CompositionSurfaceBrush, Compositor, ContainerVisual, Desktop::DesktopWindowTarget,
             ICompositionAnimation2, KeyFrameAnimation, LayerVisual, ScalarKeyFrameAnimation,
             ShapeVisual, SpriteVisual, Vector3KeyFrameAnimation, VisualCollection,
         },
@@ -63,7 +69,7 @@ use windows::{
 };
 
 use crate::{
-    uikit::UICommonObjects,
+    uikit::{UICommonObjects, ViewContext1},
     winapi_extras::{register_window_class, WindowBuilder},
 };
 
@@ -72,6 +78,9 @@ mod object_cache;
 mod uikit;
 mod utils;
 mod winapi_extras;
+
+type Shared<T> = Rc<T>;
+type SharedMut<T> = Rc<RefCell<T>>;
 
 const TAB_MARGIN_X: f32 = 10.0;
 const TAB_MARGIN_Y: f32 = 2.0;
@@ -194,100 +203,474 @@ impl Vector2Extension for Vector2 {
     }
 }
 
-const PANE_SPLITTER_GAP: f32 = 4.0;
+#[inline]
+pub const fn timespan_ms(ms: u32) -> TimeSpan {
+    TimeSpan {
+        Duration: (10_000 * ms) as _,
+    }
+}
+
+const PANE_SPLITTER_GAP: f32 = 5.0;
+
+#[derive(Clone, Copy)]
+pub enum SplitDirection {
+    Horizontal,
+    Vertical,
+}
+
+pub struct PaneSplitterView {
+    visual: SpriteVisual,
+    hover_animation: ScalarKeyFrameAnimation,
+    hover_end_animation: ScalarKeyFrameAnimation,
+    ht: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
+    dir: SplitDirection,
+    controlling_dock_layer: std::rc::Weak<core::cell::RefCell<PaneDockState>>,
+    drag_start_values: Option<(f32, f32, f32)>,
+}
+impl PaneSplitterView {
+    pub fn new(
+        ctx: &mut impl ViewContext,
+        dir: SplitDirection,
+    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
+        let visual = ctx.compositor().CreateSpriteVisual()?;
+        visual.SetBrush(&ctx.compositor().CreateColorBrushWithColor(Color {
+            A: 32,
+            R: 255,
+            G: 255,
+            B: 255,
+        })?)?;
+        visual.SetOpacity(0.0)?;
+        visual.SetSize(Vector2 {
+            X: PANE_SPLITTER_GAP,
+            Y: PANE_SPLITTER_GAP,
+        })?;
+
+        let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
+
+        let hover_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        hover_animation
+            .keyframe(0.0, 0.0)?
+            .interpolate(1.0, 1.0, &linear_easing)?
+            .set_properties()
+            .duration(timespan_ms(100))?;
+
+        let hover_end_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        hover_end_animation
+            .keyframe(0.0, 1.0)?
+            .interpolate(1.0, 0.0, &linear_easing)?
+            .set_properties()
+            .duration(timespan_ms(100))?;
+
+        Ok(std::rc::Rc::new_cyclic(
+            |wthis: &std::rc::Weak<core::cell::RefCell<Self>>| {
+                let ht = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
+                    wthis,
+                    ctx.hittest_context_mut().new_id(),
+                    0.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                )));
+                ctx.hittest_tree_parent().borrow_mut().add_child(&ht);
+
+                core::cell::RefCell::new(Self {
+                    visual,
+                    hover_animation,
+                    hover_end_animation,
+                    ht,
+                    dir,
+                    controlling_dock_layer: std::rc::Weak::new(),
+                    drag_start_values: None,
+                })
+            },
+        ))
+    }
+
+    fn bind_dock_layer(&mut self, layer: &std::rc::Weak<core::cell::RefCell<PaneDockState>>) {
+        self.controlling_dock_layer = layer.clone();
+    }
+
+    pub fn set_offset(&self, left: f32, top: f32) -> windows::core::Result<()> {
+        self.visual.SetOffset(Vector3 {
+            X: left,
+            Y: top,
+            Z: 0.0,
+        })?;
+        self.ht.borrow_mut().set_offset(left, top);
+
+        Ok(())
+    }
+    pub fn set_rect(
+        &self,
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+    ) -> windows::core::Result<()> {
+        self.visual.SetOffset(Vector3 {
+            X: left,
+            Y: top,
+            Z: 0.0,
+        })?;
+        self.visual.SetSize(Vector2 {
+            X: width,
+            Y: height,
+        })?;
+        self.ht.borrow_mut().set_rect(left, top, width, height);
+
+        Ok(())
+    }
+}
+impl InputEventHandler for core::cell::RefCell<PaneSplitterView> {
+    fn hover_cursor(&self) -> CursorStyle {
+        match self.borrow().dir {
+            SplitDirection::Horizontal => CursorStyle::SizeNS,
+            SplitDirection::Vertical => CursorStyle::SizeEW,
+        }
+    }
+
+    fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
+        self.borrow()
+            .visual
+            .StartAnimation(h!("Opacity"), &self.borrow().hover_animation)
+            .expect("Failed to start hover animation");
+    }
+
+    fn on_pointer_leave(&self, _view_ctx: &mut dyn InputContext) {
+        self.borrow()
+            .visual
+            .StartAnimation(h!("Opacity"), &self.borrow().hover_end_animation)
+            .expect("Failed to start hover end animation");
+    }
+
+    fn on_pointer_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        let Some(target_dock) = self.borrow().controlling_dock_layer.upgrade() else {
+            return;
+        };
+
+        self.borrow_mut().drag_start_values = Some((x, y, target_dock.borrow().dock_size()));
+        ctx.capture_mouse();
+    }
+
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
+        let Some(target_dock) = self.borrow().controlling_dock_layer.upgrade() else {
+            return;
+        };
+        let Some((bx, by, bs)) = self.borrow().drag_start_values else {
+            return;
+        };
+
+        let dpi = unsafe { GetDpiForWindow(window) as f32 };
+        let new_size = match &*target_dock.borrow() {
+            PaneDockState::Left(_, _, _, _) => bs + (x - bx) * 96.0 / dpi,
+            PaneDockState::Top(_, _, _, _) => bs + (y - by) * 96.0 / dpi,
+            PaneDockState::Right(_, _, _, _) => bs - (x - bx) * 96.0 / dpi,
+            PaneDockState::Bottom(_, _, _, _) => bs - (y - by) * 96.0 / dpi,
+            PaneDockState::Fill(_) => bs,
+        };
+        let (x, y) = target_dock
+            .borrow_mut()
+            .set_dock_size(new_size.max(1.0))
+            .expect("Failed to resize pane");
+        self.borrow_mut()
+            .set_offset(x, y)
+            .expect("Failed to set splitter position");
+    }
+
+    fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        self.borrow_mut().drag_start_values = None;
+        ctx.release_mouse_capture();
+    }
+}
 
 pub enum PaneDockState {
     Left(
         std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        f32,
-        Box<PaneDockState>,
+        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
+        Rect,
+        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
     ),
     Right(
         std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        f32,
-        Box<PaneDockState>,
+        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
+        Rect,
+        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
     ),
     Top(
         std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        f32,
-        Box<PaneDockState>,
+        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
+        Rect,
+        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
     ),
     Bottom(
         std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-        f32,
-        Box<PaneDockState>,
+        std::rc::Rc<core::cell::RefCell<PaneSplitterView>>,
+        Rect,
+        std::rc::Rc<core::cell::RefCell<PaneDockState>>,
     ),
     Fill(std::rc::Rc<core::cell::RefCell<PaneGroupView>>),
 }
 impl PaneDockState {
+    fn new_on_left(
+        ctx: &mut impl ViewContext,
+        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
+    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
+        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
+
+        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
+            |wthis| {
+                splitter_view.borrow_mut().bind_dock_layer(wthis);
+
+                core::cell::RefCell::new(Self::Left(
+                    group_view.clone(),
+                    splitter_view,
+                    Rect {
+                        X: 0.0,
+                        Y: 0.0,
+                        Width: 0.0,
+                        Height: 0.0,
+                    },
+                    rest.clone(),
+                ))
+            },
+        ))
+    }
+    fn new_on_right(
+        ctx: &mut impl ViewContext,
+        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
+    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
+        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
+
+        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
+            |wthis| {
+                splitter_view.borrow_mut().bind_dock_layer(wthis);
+
+                core::cell::RefCell::new(Self::Right(
+                    group_view.clone(),
+                    splitter_view,
+                    Rect {
+                        X: 0.0,
+                        Y: 0.0,
+                        Width: 0.0,
+                        Height: 0.0,
+                    },
+                    rest.clone(),
+                ))
+            },
+        ))
+    }
+    fn new_on_top(
+        ctx: &mut impl ViewContext,
+        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
+    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
+        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
+
+        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
+            |wthis| {
+                splitter_view.borrow_mut().bind_dock_layer(wthis);
+
+                core::cell::RefCell::new(Self::Top(
+                    group_view.clone(),
+                    splitter_view,
+                    Rect {
+                        X: 0.0,
+                        Y: 0.0,
+                        Width: 0.0,
+                        Height: 0.0,
+                    },
+                    rest.clone(),
+                ))
+            },
+        ))
+    }
+    fn new_on_bottom(
+        ctx: &mut impl ViewContext,
+        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        rest: &std::rc::Rc<core::cell::RefCell<Self>>,
+    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
+        let splitter_view = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
+
+        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
+            |wthis| {
+                splitter_view.borrow_mut().bind_dock_layer(wthis);
+
+                core::cell::RefCell::new(Self::Bottom(
+                    group_view.clone(),
+                    splitter_view,
+                    Rect {
+                        X: 0.0,
+                        Y: 0.0,
+                        Width: 0.0,
+                        Height: 0.0,
+                    },
+                    rest.clone(),
+                ))
+            },
+        ))
+    }
+    fn new_filled(
+        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+    ) -> std::rc::Rc<core::cell::RefCell<Self>> {
+        std::rc::Rc::new(core::cell::RefCell::new(Self::Fill(group_view.clone())))
+    }
+
+    pub fn dock_size(&self) -> f32 {
+        match self {
+            Self::Left(g, _, _, _) | Self::Right(g, _, _, _) => g.borrow().width,
+            Self::Top(g, _, _, _) | Self::Bottom(g, _, _, _) => g.borrow().height,
+            Self::Fill(_) => 0.0,
+        }
+    }
+    /// returns new split bar position
+    pub fn set_dock_size(&mut self, size: f32) -> windows::core::Result<(f32, f32)> {
+        match self {
+            Self::Left(g, _, r, c) => {
+                g.borrow_mut().set_width(size)?;
+                c.borrow_mut().layout(Self::right_region(r.clone(), size))?;
+
+                Ok((r.X + size, r.Y))
+            }
+            Self::Right(g, _, r, c) => {
+                g.borrow_mut()
+                    .set_offset_size(r.Width - size, r.Y, size, r.Height)?;
+                c.borrow_mut().layout(Self::left_region(r.clone(), size))?;
+
+                Ok((r.X + r.Width - size - PANE_SPLITTER_GAP, r.Y))
+            }
+            Self::Top(g, _, r, c) => {
+                g.borrow_mut().set_height(size)?;
+                c.borrow_mut()
+                    .layout(Self::bottom_region(r.clone(), size))?;
+
+                Ok((r.X, r.Y + size))
+            }
+            Self::Bottom(g, _, r, c) => {
+                g.borrow_mut()
+                    .set_offset_size(r.X, r.Height - size, r.Width, size)?;
+                c.borrow_mut().layout(Self::top_region(r.clone(), size))?;
+
+                Ok((r.X, r.Y + r.Height - size - PANE_SPLITTER_GAP))
+            }
+            Self::Fill(_) => {
+                // nop for filling container
+                Ok((0.0, 0.0))
+            }
+        }
+    }
+
+    #[inline]
+    fn right_region(r: Rect, left_width: f32) -> Rect {
+        Rect {
+            X: r.X + left_width + PANE_SPLITTER_GAP,
+            Width: r.Width - left_width - PANE_SPLITTER_GAP,
+            ..r
+        }
+    }
+    #[inline]
+    fn left_region(r: Rect, right_width: f32) -> Rect {
+        Rect {
+            Width: r.Width - right_width - PANE_SPLITTER_GAP,
+            ..r
+        }
+    }
+    #[inline]
+    fn bottom_region(r: Rect, top_height: f32) -> Rect {
+        Rect {
+            Y: r.Y + top_height + PANE_SPLITTER_GAP,
+            Height: r.Height - top_height - PANE_SPLITTER_GAP,
+            ..r
+        }
+    }
+    #[inline]
+    fn top_region(r: Rect, bottom_height: f32) -> Rect {
+        Rect {
+            Height: r.Height - bottom_height - PANE_SPLITTER_GAP,
+            ..r
+        }
+    }
+
     fn place_recursive(&self, onto: &VisualCollection) -> windows::core::Result<()> {
         match self {
-            Self::Left(g, _, c)
-            | Self::Right(g, _, c)
-            | Self::Top(g, _, c)
-            | Self::Bottom(g, _, c) => {
+            Self::Left(g, sp, _, c)
+            | Self::Right(g, sp, _, c)
+            | Self::Top(g, sp, _, c)
+            | Self::Bottom(g, sp, _, c) => {
                 onto.InsertAtTop(&g.borrow().root)?;
-                c.place_recursive(onto)
+                onto.InsertAtTop(&sp.borrow().visual)?;
+                c.borrow().place_recursive(onto)
             }
             Self::Fill(g) => onto.InsertAtTop(&g.borrow().root),
         }
     }
 
-    fn layout(&self, region: Rect) -> windows::core::Result<()> {
+    fn layout(&mut self, region: Rect) -> windows::core::Result<()> {
         match self {
-            &Self::Left(ref g, w, ref c) => {
-                g.borrow_mut().set_offset_size(
-                    region.X,
+            Self::Left(g, sp, r, c) => {
+                *r = region.clone();
+                let w = g.borrow().width;
+                g.borrow_mut()
+                    .set_offset_size(region.X, region.Y, w, region.Height.max(1.0))?;
+                sp.borrow().set_rect(
+                    region.X + w,
                     region.Y,
-                    w.max(1.0),
+                    PANE_SPLITTER_GAP,
                     region.Height.max(1.0),
                 )?;
-                let left_region = Rect {
-                    X: region.X + w + PANE_SPLITTER_GAP,
-                    Width: region.Width - w - PANE_SPLITTER_GAP,
-                    ..region
-                };
-                c.layout(left_region)
+
+                c.borrow_mut().layout(Self::right_region(region, w))
             }
-            &Self::Right(ref g, w, ref c) => {
+            Self::Right(g, sp, r, c) => {
+                *r = region.clone();
+                let w = g.borrow().width;
                 g.borrow_mut().set_offset_size(
                     region.X + region.Width - w,
                     region.Y,
-                    w.max(1.0),
+                    w,
                     region.Height.max(1.0),
                 )?;
-                let left_region = Rect {
-                    Width: region.Width - w - PANE_SPLITTER_GAP,
-                    ..region
-                };
-                c.layout(left_region)
-            }
-            &Self::Top(ref g, h, ref c) => {
-                g.borrow_mut().set_offset_size(
-                    region.X,
+                sp.borrow().set_rect(
+                    region.X + region.Width - w - PANE_SPLITTER_GAP,
                     region.Y,
-                    region.Width.max(1.0),
-                    h.max(1.0),
+                    PANE_SPLITTER_GAP,
+                    region.Height.max(1.0),
                 )?;
-                let left_region = Rect {
-                    Y: region.Y + h + PANE_SPLITTER_GAP,
-                    Height: region.Height - h - PANE_SPLITTER_GAP,
-                    ..region
-                };
-                c.layout(left_region)
+
+                c.borrow_mut().layout(Self::left_region(region, w))
             }
-            &Self::Bottom(ref g, h, ref c) => {
+            Self::Top(g, sp, r, c) => {
+                *r = region;
+                let h = g.borrow().height;
+                g.borrow_mut()
+                    .set_offset_size(region.X, region.Y, region.Width.max(1.0), h)?;
+                sp.borrow().set_rect(
+                    region.X,
+                    region.Y + h,
+                    region.Width.max(1.0),
+                    PANE_SPLITTER_GAP,
+                )?;
+
+                c.borrow_mut().layout(Self::bottom_region(region, h))
+            }
+            Self::Bottom(g, sp, r, c) => {
+                *r = region;
+                let h = g.borrow().height;
                 g.borrow_mut().set_offset_size(
                     region.X,
                     region.Y + region.Height - h,
                     region.Width.max(1.0),
-                    h.max(1.0),
+                    h,
                 )?;
-                let left_region = Rect {
-                    Height: region.Height - h - PANE_SPLITTER_GAP,
-                    ..region
-                };
-                c.layout(left_region)
+                sp.borrow().set_rect(
+                    region.X,
+                    region.Y + region.Height - h - PANE_SPLITTER_GAP,
+                    region.Width.max(1.0),
+                    PANE_SPLITTER_GAP,
+                )?;
+
+                c.borrow_mut().layout(Self::top_region(region, h))
             }
             Self::Fill(g) => {
                 g.borrow_mut()
@@ -298,7 +681,7 @@ impl PaneDockState {
 }
 
 pub struct PaneGroupDockingManager {
-    docks: Option<PaneDockState>,
+    docks: Option<std::rc::Rc<core::cell::RefCell<PaneDockState>>>,
     placement_visual: ContainerVisual,
     floating_preview_window: HWND,
     _floating_preview_window_target: DesktopWindowTarget,
@@ -315,7 +698,7 @@ impl PaneGroupDockingManager {
         Duration: 10_000 * 100,
     };
 
-    fn new(ctx: &mut ViewContext) -> windows::core::Result<Self> {
+    fn new(ctx: &mut impl ViewContext) -> windows::core::Result<Self> {
         extern "system" fn window_callback(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
             unsafe { DefWindowProcA(h, m, w, l) }
         }
@@ -331,7 +714,7 @@ impl PaneGroupDockingManager {
             hCursor: HCURSOR(0),
             hbrBackground: HBRUSH(0),
             lpszMenuName: PCSTR::null(),
-            lpszClassName: s!("io.ct2.peridot.marble_editor.overlay.floating_preview"),
+            lpszClassName: s!("io.ct2.peridot.marble.windows.overlays.floating_preview"),
             hIconSm: HICON(0),
         };
         let floating_preview_window = WindowBuilder::new(
@@ -346,12 +729,12 @@ impl PaneGroupDockingManager {
         .popup()
         .create()?;
         let floating_preview_window_target = unsafe {
-            ctx.compositor
+            ctx.compositor()
                 .cast::<ICompositorDesktopInterop>()?
                 .CreateDesktopWindowTarget(floating_preview_window, true)?
         };
 
-        let pane_drag_preview = ctx.compositor.CreateSpriteVisual()?;
+        let pane_drag_preview = ctx.compositor().CreateSpriteVisual()?;
         pane_drag_preview.SetCenterPoint(Vector3 {
             X: 0.5,
             Y: 0.5,
@@ -367,13 +750,13 @@ impl PaneGroupDockingManager {
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
         fx.SetBlurAmount(16.0)?;
         fx.SetOptimization(bindgen::EffectOptimization::Balanced)?;
-        let effect_factory = ctx.compositor.CreateEffectFactory(&fx)?;
-        let backdrop_brush = ctx.compositor.CreateBackdropBrush()?;
+        let effect_factory = ctx.compositor().CreateEffectFactory(&fx)?;
+        let backdrop_brush = ctx.compositor().CreateBackdropBrush()?;
         let blur_brush = effect_factory.CreateBrush()?;
         blur_brush.SetSourceParameter(h!("source"), &backdrop_brush)?;
         pane_drag_preview.SetBrush(&blur_brush)?;
-        let pane_drag_preview_color_tint = ctx.compositor.CreateSpriteVisual()?;
-        pane_drag_preview_color_tint.SetBrush(&ctx.compositor.CreateColorBrushWithColor(
+        let pane_drag_preview_color_tint = ctx.compositor().CreateSpriteVisual()?;
+        pane_drag_preview_color_tint.SetBrush(&ctx.compositor().CreateColorBrushWithColor(
             Color {
                 A: 128,
                 R: 16,
@@ -386,7 +769,7 @@ impl PaneGroupDockingManager {
         pane_drag_preview
             .Children()?
             .InsertAtTop(&pane_drag_preview_color_tint)?;
-        let shadow = ctx.compositor.CreateDropShadow()?;
+        let shadow = ctx.compositor().CreateDropShadow()?;
         shadow.SetBlurRadius(32.0)?;
         shadow.SetOffset(Vector3 {
             X: 0.0,
@@ -395,8 +778,8 @@ impl PaneGroupDockingManager {
         })?;
         shadow.SetOpacity(0.3)?;
         pane_drag_preview.SetShadow(&shadow)?;
-        let pane_drag_preview_animation = ctx.compositor.CreateScalarKeyFrameAnimation()?;
-        let linear_fn = ctx.compositor.CreateLinearEasingFunction()?;
+        let pane_drag_preview_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        let linear_fn = ctx.compositor().CreateLinearEasingFunction()?;
         pane_drag_preview_animation.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
         pane_drag_preview_animation.InsertKeyFrame(0.0, 1.0)?;
         pane_drag_preview_animation.InsertKeyFrameWithEasingFunction(0.5, 0.75, &linear_fn)?;
@@ -405,10 +788,10 @@ impl PaneGroupDockingManager {
             Duration: 10_000 * 2600,
         })?;
 
-        let pane_drag_preview_show_animation = ctx.compositor.CreateAnimationGroup()?;
-        let linear_easing = ctx.compositor.CreateLinearEasingFunction()?;
+        let pane_drag_preview_show_animation = ctx.compositor().CreateAnimationGroup()?;
+        let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
         pane_drag_preview_show_animation.Add(&{
-            let a = ctx.compositor.CreateScalarKeyFrameAnimation()?;
+            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
             a.set_properties()
                 .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
                 .target(h!("Opacity"))?;
@@ -418,26 +801,26 @@ impl PaneGroupDockingManager {
             a
         })?;
         pane_drag_preview_show_animation.Add(&{
-            let a = ctx.compositor.CreateVector3KeyFrameAnimation()?;
+            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
             a.set_properties()
                 .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
                 .target(h!("Scale"))?;
-            a.keyframe(0.0, Vector2::scalar(0.9).with_z(1.0))?
+            a.keyframe(0.0, Vector2::scalar(1.2).with_z(1.0))?
                 .interpolate(
                     1.0,
                     Vector3::one(),
-                    &CompositionEasingFunction::CreateBackEasingFunction(
-                        ctx.compositor,
+                    &CompositionEasingFunction::CreatePowerEasingFunction(
+                        ctx.compositor(),
                         CompositionEasingFunctionMode::Out,
-                        1.1,
+                        2.0,
                     )?,
                 )?;
 
             a
         })?;
-        let pane_drag_preview_hide_animation = ctx.compositor.CreateAnimationGroup()?;
+        let pane_drag_preview_hide_animation = ctx.compositor().CreateAnimationGroup()?;
         pane_drag_preview_hide_animation.Add(&{
-            let a = ctx.compositor.CreateScalarKeyFrameAnimation()?;
+            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
             a.set_properties()
                 .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
                 .target(h!("Opacity"))?;
@@ -447,7 +830,7 @@ impl PaneGroupDockingManager {
             a
         })?;
         pane_drag_preview_hide_animation.Add(&{
-            let a = ctx.compositor.CreateVector3KeyFrameAnimation()?;
+            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
             a.set_properties()
                 .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
                 .target(h!("Scale"))?;
@@ -461,7 +844,7 @@ impl PaneGroupDockingManager {
         })?;
 
         floating_preview_window_target.SetRoot(&pane_drag_preview)?;
-        let placement_visual = ctx.compositor.CreateContainerVisual()?;
+        let placement_visual = ctx.compositor().CreateContainerVisual()?;
 
         Ok(Self {
             docks: None,
@@ -477,17 +860,20 @@ impl PaneGroupDockingManager {
         })
     }
 
-    fn set_layout(&mut self, layout: PaneDockState) -> windows::core::Result<()> {
+    fn set_layout(
+        &mut self,
+        layout: &std::rc::Rc<core::cell::RefCell<PaneDockState>>,
+    ) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
-        layout.place_recursive(&children)?;
+        layout.borrow().place_recursive(&children)?;
 
-        self.docks = Some(layout);
+        self.docks = Some(layout.clone());
         Ok(())
     }
     fn resize_root(&mut self, width: f32, height: f32) -> windows::core::Result<()> {
         if let Some(ref docks) = self.docks {
-            docks.layout(Rect {
+            docks.borrow_mut().layout(Rect {
                 X: 0.0,
                 Y: 0.0,
                 Width: width,
@@ -584,6 +970,7 @@ impl PaneGroupDockingManager {
 }
 
 pub struct PaneGroupView {
+    docking_manager: std::rc::Weak<core::cell::RefCell<PaneGroupDockingManager>>,
     root: ContainerVisual,
     content_area: ContainerVisual,
     content_area_base: SpriteVisual,
@@ -601,16 +988,17 @@ pub struct PaneGroupView {
 }
 impl PaneGroupView {
     pub fn new(
-        ctx: &mut ViewContext,
+        docking_manager: &std::rc::Weak<core::cell::RefCell<PaneGroupDockingManager>>,
+        ctx: &mut impl ViewContext,
     ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
-        let root = ctx.compositor.CreateContainerVisual()?;
+        let root = ctx.compositor().CreateContainerVisual()?;
         root.SetSize(Vector2 { X: 128.0, Y: 128.0 })?;
-        let content_area = ctx.compositor.CreateContainerVisual()?;
+        let content_area = ctx.compositor().CreateContainerVisual()?;
         content_area.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
         root.Children()?.InsertAtBottom(&content_area)?;
-        let content_area_base = ctx.compositor.CreateSpriteVisual()?;
+        let content_area_base = ctx.compositor().CreateSpriteVisual()?;
         content_area_base.SetBrush(&{
-            let b = ctx.compositor.CreateColorBrush()?;
+            let b = ctx.compositor().CreateColorBrush()?;
             b.SetColor(Color {
                 A: 255,
                 R: 64,
@@ -627,24 +1015,24 @@ impl PaneGroupView {
         content_area_base.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
         root.Children()?.InsertAtBottom(&content_area_base)?;
         root.SetClip(
-            &ctx.compositor
+            &ctx.compositor()
                 .CreateInsetClipWithInsets(0.0, 0.0, 0.0, 0.0)?,
         )?;
 
         Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
             |wthis| {
                 let ht = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
-                    Box::new(wthis.clone()),
-                    ctx.hittest_context.new_id(),
+                    wthis,
+                    ctx.hittest_context_mut().new_id(),
                     0.0,
                     0.0,
                     128.0,
                     128.0,
                 )));
-                ctx.hittest_tree_parent_mut().add_child(&ht);
+                ctx.hittest_tree_parent().borrow_mut().add_child(&ht);
                 let ht_content = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
-                    Box::new(wthis.clone()),
-                    ctx.hittest_context.new_id(),
+                    wthis,
+                    ctx.hittest_context_mut().new_id(),
                     0.0,
                     0.0,
                     128.0,
@@ -653,6 +1041,7 @@ impl PaneGroupView {
                 ht.borrow_mut().add_child(&ht_content);
 
                 core::cell::RefCell::new(Self {
+                    docking_manager: docking_manager.clone(),
                     root,
                     content_area,
                     content_area_base,
@@ -671,7 +1060,7 @@ impl PaneGroupView {
 
     pub fn add_tab<T: PaneTabPresenter + 'static>(
         this: &std::rc::Rc<core::cell::RefCell<Self>>,
-        ctx: &mut ViewContext,
+        ctx: &mut impl ViewContext,
     ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<T>>> {
         let mut thisref = this.borrow_mut();
         let header_view = PaneTabHeaderView::new(
@@ -743,6 +1132,28 @@ impl PaneGroupView {
             .expect("Failed to readjust content area");
     }
 
+    pub fn set_width(&mut self, width: f32) -> windows::core::Result<()> {
+        self.root.SetSize(Vector2 {
+            X: width,
+            Y: self.height,
+        })?;
+        self.ht_ref.borrow_mut().set_size(width, self.height);
+        self.width = width;
+
+        self.readjust_content_area()?;
+        Ok(())
+    }
+    pub fn set_height(&mut self, height: f32) -> windows::core::Result<()> {
+        self.root.SetSize(Vector2 {
+            X: self.width,
+            Y: height,
+        })?;
+        self.ht_ref.borrow_mut().set_size(self.width, height);
+        self.height = height;
+
+        self.readjust_content_area()?;
+        Ok(())
+    }
     pub fn set_offset_size(
         &mut self,
         left: f32,
@@ -770,7 +1181,7 @@ impl PaneGroupView {
     pub fn switch_active(
         &mut self,
         new_active: usize,
-        view_ctx: &mut ViewContext,
+        mut view_ctx: impl ViewContext,
     ) -> windows::core::Result<()> {
         let new_active = new_active.min(self.tabs.len());
         if self.current_active == new_active {
@@ -781,11 +1192,11 @@ impl PaneGroupView {
         self.tabs[self.current_active]
             .1
             .borrow_mut()
-            .on_hide_content_view(view_ctx)?;
+            .on_hide_content_view(&mut view_ctx)?;
         self.tabs[self.current_active]
             .0
             .borrow_mut()
-            .set_active(false, view_ctx)?;
+            .set_active(false, &mut view_ctx)?;
         self.content_area.Children()?.RemoveAll()?;
         self.current_active = new_active;
         self.tabs[self.current_active]
@@ -798,99 +1209,82 @@ impl PaneGroupView {
         self.tabs[self.current_active]
             .0
             .borrow_mut()
-            .set_active(true, view_ctx)?;
+            .set_active(true, &mut view_ctx)?;
 
         Ok(())
     }
 }
-impl InputEventHandler for std::rc::Weak<core::cell::RefCell<PaneGroupView>> {
-    fn on_begin_drag(
-        &self,
-        x: f32,
-        y: f32,
-        window: HWND,
-        _view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        if let Some(t) = self.upgrade() {
-            pane_group_docking_manager
-                .borrow()
-                .show_preview()
-                .expect("Failed to show floating preview");
-            let mut thisref = t.borrow_mut();
-            let HitTestTree {
-                left,
-                top,
-                width,
-                height,
-                ..
-            } = *thisref.ht_ref.borrow();
-            let dpi = unsafe { GetDpiForWindow(window) as f32 };
-            thisref.drag_base_point = Some((x, y, left, top));
-            let mut loc = [POINT {
-                x: (left * dpi / 96.0) as _,
-                y: (top * dpi / 96.0) as _,
-            }];
-            unsafe { MapWindowPoints(window, None, &mut loc) };
-            pane_group_docking_manager
-                .borrow()
-                .set_preview_rect(
-                    loc[0].x as _,
-                    loc[0].y as _,
-                    width * dpi / 96.0,
-                    height * dpi / 96.0,
-                )
-                .expect("Failed to update preview rect");
-            unsafe {
-                SetCapture(window);
-            }
-        }
-    }
-    fn on_drag_move(
-        &self,
-        x: f32,
-        y: f32,
-        window: HWND,
-        _view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        let Some(thisref) = self.upgrade() else {
+impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
+    fn on_begin_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        let Some(docking_manager) = self.borrow().docking_manager.upgrade() else {
             return;
         };
-        let Some((bx, by, ox, oy)) = thisref.borrow().drag_base_point else {
+        docking_manager
+            .borrow()
+            .show_preview()
+            .expect("Failed to show floating preview");
+        let mut thisref = self.borrow_mut();
+        let HitTestTree {
+            left,
+            top,
+            width,
+            height,
+            ..
+        } = *thisref.ht_ref.borrow();
+        let dpi = unsafe { GetDpiForWindow(window) as f32 };
+        thisref.drag_base_point = Some((x, y, left, top));
+        let mut loc = [POINT {
+            x: (left * dpi / 96.0) as _,
+            y: (top * dpi / 96.0) as _,
+        }];
+        unsafe { MapWindowPoints(window, None, &mut loc) };
+        docking_manager
+            .borrow()
+            .set_preview_rect(
+                loc[0].x as _,
+                loc[0].y as _,
+                width * dpi / 96.0,
+                height * dpi / 96.0,
+            )
+            .expect("Failed to update preview rect");
+
+        ctx.capture_mouse();
+    }
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
+        let Some((bx, by, ox, oy)) = self.borrow().drag_base_point else {
+            return;
+        };
+        let Some(docking_manager) = self.borrow().docking_manager.upgrade() else {
             return;
         };
 
         let dpi = unsafe { GetDpiForWindow(window) as f32 };
         let mut loc = [POINT {
-            x: ((ox + (x - bx)) * dpi / 96.0) as _,
-            y: ((oy + (y - by)) * dpi / 96.0) as _,
+            x: ((ox + (x - bx) * 96.0 / dpi) * dpi / 96.0) as _,
+            y: ((oy + (y - by) * 96.0 / dpi) * dpi / 96.0) as _,
         }];
         unsafe { MapWindowPoints(window, None, &mut loc) };
-        pane_group_docking_manager
+        docking_manager
             .borrow()
             .set_preview_pos(loc[0].x as _, loc[0].y as _)
             .expect("Failed to update preview rect");
     }
-    fn on_end_drag(
-        &self,
-        _window: HWND,
-        _view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        if let Some(_) = self.upgrade() {
-            pane_group_docking_manager
-                .borrow()
-                .hide_preview()
-                .expect("Failed to show floating preview");
-            unsafe {
-                let _ = ReleaseCapture();
-            }
-        }
+    fn on_end_drag(&self, _window: HWND, ctx: &mut dyn InputContext) {
+        let Some(docking_manager) = self.borrow().docking_manager.upgrade() else {
+            return;
+        };
+
+        docking_manager
+            .borrow()
+            .hide_preview()
+            .expect("Failed to show floating preview");
+        ctx.release_mouse_capture();
     }
 }
 
 pub struct PaneTabHeaderView {
+    group_view: Weak<RefCell<PaneGroupView>>,
+    index_in_group: usize,
     label: Cow<'static, str>,
     visual: LayerVisual,
     bg_visual: ShapeVisual,
@@ -912,29 +1306,27 @@ impl PaneTabHeaderView {
         index_in_group: usize,
         title: impl Into<Cow<'static, str>>,
         init_active: bool,
-        ctx: &mut ViewContext,
+        ctx: &mut impl ViewContext,
     ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
-        let base = ctx.compositor.CreateLayerVisual()?;
+        let base = ctx.compositor().CreateLayerVisual()?;
         let title = title.into();
-        let title_text = ctx.text_surface_stock.get(
-            if init_active {
-                &ctx.common.tab_active_title_font
-            } else {
-                &ctx.common.tab_title_font
-            },
-            title.clone(),
-        )?;
+        let font = if init_active {
+            ctx.common().tab_active_title_font.clone()
+        } else {
+            ctx.common().tab_title_font.clone()
+        };
+        let title_text = ctx.text_surface_stock_mut().get(&font, title.clone())?;
         let view_size = Vector2 {
             X: title_text.width + TAB_MARGIN_X * 2.0,
             Y: title_text.height + TAB_MARGIN_Y * 2.0,
         };
         let label_content_brush = ctx
-            .compositor
+            .compositor()
             .CreateSurfaceBrushWithSurface(&title_text.surface)?;
         base.Children()
             .expect("Failed to get children collection")
             .InsertAtTop(&{
-                let v = ctx.compositor.CreateSpriteVisual()?;
+                let v = ctx.compositor().CreateSpriteVisual()?;
                 v.SetBrush(&label_content_brush)?;
                 v.SetSize(title_text.visual_size())?;
                 v.SetOffset(Vector3 {
@@ -948,7 +1340,7 @@ impl PaneTabHeaderView {
             .expect("Failed to insert visual");
 
         let geometry = {
-            let g = ctx.compositor.CreateRoundedRectangleGeometry()?;
+            let g = ctx.compositor().CreateRoundedRectangleGeometry()?;
             g.SetCornerRadius(Vector2 {
                 X: TAB_RADIUS,
                 Y: TAB_RADIUS,
@@ -963,19 +1355,19 @@ impl PaneTabHeaderView {
         };
 
         let bg = {
-            let shape = ctx.compositor.CreateSpriteShapeWithGeometry(&geometry)?;
-            shape.SetFillBrush(&ctx.common.tab_base_brush)?;
+            let shape = ctx.compositor().CreateSpriteShapeWithGeometry(&geometry)?;
+            shape.SetFillBrush(&ctx.common().tab_base_brush)?;
 
-            let v = ctx.compositor.CreateShapeVisual()?;
+            let v = ctx.compositor().CreateShapeVisual()?;
             v.Shapes()?.Append(&shape)?;
             v.SetSize(view_size.clone())?;
             v
         };
         let active_overlay = {
-            let shape = ctx.compositor.CreateSpriteShapeWithGeometry(&geometry)?;
-            shape.SetFillBrush(&ctx.common.tab_active_overlay_brush)?;
+            let shape = ctx.compositor().CreateSpriteShapeWithGeometry(&geometry)?;
+            shape.SetFillBrush(&ctx.common().tab_active_overlay_brush)?;
 
-            let v = ctx.compositor.CreateShapeVisual()?;
+            let v = ctx.compositor().CreateShapeVisual()?;
             v.Shapes()?.Append(&shape)?;
             v.SetSize(view_size.clone())?;
             v
@@ -995,35 +1387,33 @@ impl PaneTabHeaderView {
 
         Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
             |wthis| {
-                let ht_id = ctx.hittest_context.new_id();
+                let ht_id = ctx.hittest_context_mut().new_id();
                 let ht_self = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
-                    Box::new(PaneTabHeaderViewInputEventHandler {
-                        group_view: group_view.clone(),
-                        index_in_group,
-                        self_ref: wthis.clone(),
-                    }),
+                    wthis,
                     ht_id,
                     0.0,
                     0.0,
                     view_size.X,
                     view_size.Y,
                 )));
-                ctx.hittest_tree_parent_mut().add_child(&ht_self);
+                ctx.hittest_tree_parent().borrow_mut().add_child(&ht_self);
 
                 core::cell::RefCell::new(Self {
+                    group_view: Rc::downgrade(group_view),
+                    index_in_group,
                     label: title,
                     visual: base,
                     bg_visual: bg,
                     active_overlay_visual: active_overlay,
                     label_content_brush,
-                    bg_hover_animation: ctx.common.tab_hover_animation.clone(),
-                    bg_hover_end_animation: ctx.common.tab_hover_end_animation.clone(),
+                    bg_hover_animation: ctx.common().tab_hover_animation.clone(),
+                    bg_hover_end_animation: ctx.common().tab_hover_end_animation.clone(),
                     active_overlay_enter_animation: ctx
-                        .common
+                        .common()
                         .tab_active_overlay_enter_animation
                         .clone(),
                     active_overlay_leave_animation: ctx
-                        .common
+                        .common()
                         .tab_active_overlay_leave_animation
                         .clone(),
                     hittest_tree_self: ht_self,
@@ -1075,7 +1465,7 @@ impl PaneTabHeaderView {
     pub fn set_active(
         &mut self,
         is_active: bool,
-        view_ctx: &mut ViewContext,
+        view_ctx: &mut impl ViewContext,
     ) -> windows::core::Result<()> {
         let requires_transition = self.is_active != is_active;
         self.is_active = is_active;
@@ -1095,14 +1485,14 @@ impl PaneTabHeaderView {
                     &self.active_overlay_leave_animation
                 },
             )?;
-            let new_label_surface = view_ctx.text_surface_stock.get(
-                if is_active {
-                    &view_ctx.common.tab_active_title_font
-                } else {
-                    &view_ctx.common.tab_title_font
-                },
-                self.label.clone(),
-            )?;
+            let font = if is_active {
+                view_ctx.common().tab_active_title_font.clone()
+            } else {
+                view_ctx.common().tab_title_font.clone()
+            };
+            let new_label_surface = view_ctx
+                .text_surface_stock_mut()
+                .get(&font, self.label.clone())?;
             self.label_content_brush
                 .SetSurface(&new_label_surface.surface)?;
         }
@@ -1110,38 +1500,26 @@ impl PaneTabHeaderView {
         Ok(())
     }
 }
-pub struct PaneTabHeaderViewInputEventHandler {
-    // Note: アクティブ切り替え時にgroup_viewとselfを同時に見るのでgroup_viewの参照ルートを切り離す
-    // これが必要なのややこいのでうまい仕組み考えなおしたいな......
-    group_view: std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
-    index_in_group: usize,
-    self_ref: std::rc::Weak<core::cell::RefCell<PaneTabHeaderView>>,
-}
-impl InputEventHandler for PaneTabHeaderViewInputEventHandler {
-    fn on_pointer_enter(&self, _view_ctx: &mut ViewContext) {
-        let Some(x) = self.self_ref.upgrade() else {
-            return;
-        };
-
-        println!("MouseEnter: {}", x.borrow().hittest_tree_self.borrow().id);
-
-        x.borrow_mut().activate_bg().expect("Failed to activate bg");
+impl InputEventHandler for RefCell<PaneTabHeaderView> {
+    fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
+        self.borrow_mut()
+            .activate_bg()
+            .expect("Failed to activate bg");
     }
-    fn on_pointer_leave(&self, _view_ctx: &mut ViewContext) {
-        let Some(x) = self.self_ref.upgrade() else {
-            return;
-        };
-
-        println!("MouseLeave: {}", x.borrow().hittest_tree_self.borrow().id);
-
-        x.borrow_mut()
+    fn on_pointer_leave(&self, _view_ctx: &mut dyn InputContext) {
+        self.borrow_mut()
             .deactivate_bg()
             .expect("Failed to deactivate bg");
     }
-    fn on_click(&self, view_ctx: &mut ViewContext) {
-        self.group_view
-            .borrow_mut()
-            .switch_active(self.index_in_group, view_ctx)
+    fn on_click(&self, ctx: &mut dyn InputContext) {
+        // Note: selfを借りっぱなしにしないためにいったん切り出す
+        let Some(g) = self.borrow().group_view.upgrade() else {
+            return;
+        };
+        let index = self.borrow().index_in_group;
+
+        g.borrow_mut()
+            .switch_active(index, ctx)
             .expect("Failed to transition");
     }
 }
@@ -1150,10 +1528,12 @@ pub trait PaneTabContentPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
-        view_context: &mut ViewContext,
+        view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()>;
-    fn on_hide_content_view(&mut self, view_context: &mut ViewContext)
-        -> windows::core::Result<()>;
+    fn on_hide_content_view(
+        &mut self,
+        view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()>;
 }
 pub trait PaneTabPresenter: PaneTabContentPresenter {
     const INIT_TAB_NAME: &'static str;
@@ -1165,19 +1545,20 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
-        view_context: &mut ViewContext,
+        view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
-        let ui_font =
-            view_context
-                .text_format_stock
-                .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let ui_font = view_context.text_format_stock_mut().get(
+            "system-ui",
+            12.0,
+            DWRITE_FONT_WEIGHT_NORMAL,
+        )?;
         let label_surface = view_context
-            .text_surface_stock
+            .text_surface_stock_mut()
             .get(&ui_font, "Inspector Pane")?;
         let brush = view_context
-            .compositor
+            .compositor()
             .CreateSurfaceBrushWithSurface(&label_surface.surface)?;
-        let label_visual = view_context.compositor.CreateSpriteVisual()?;
+        let label_visual = view_context.compositor().CreateSpriteVisual()?;
         label_visual.SetBrush(&brush)?;
         label_visual.SetSize(label_surface.visual_size())?;
         onto.Children()?.InsertAtTop(&label_visual)?;
@@ -1187,7 +1568,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -1205,14 +1586,14 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -1230,14 +1611,14 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -1255,14 +1636,14 @@ impl PaneTabContentPresenter for StageTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -1280,14 +1661,14 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut ViewContext,
+        _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -1300,9 +1681,37 @@ impl PaneTabPresenter for PreviewTabPresenter {
     }
 }
 
+pub enum InputAction {
+    PointerLeave(Rc<dyn InputEventHandler>),
+    PointerEnter(Rc<dyn InputEventHandler>),
+    PointerDown(Rc<dyn InputEventHandler>),
+    PointerUp(Rc<dyn InputEventHandler>),
+    Click(Rc<dyn InputEventHandler>),
+    BeginDrag(Rc<dyn InputEventHandler>),
+    DragMove(Rc<dyn InputEventHandler>),
+    EndDrag(Rc<dyn InputEventHandler>),
+}
+impl InputAction {
+    #[inline]
+    pub fn execute(self, x: f32, y: f32, mut ctx: &mut dyn InputContext, window: HWND) {
+        match self {
+            Self::PointerLeave(e) => e.on_pointer_leave(&mut ctx),
+            Self::PointerEnter(e) => e.on_pointer_enter(ctx),
+            Self::PointerDown(e) => e.on_pointer_down(x, y, ctx),
+            Self::PointerUp(e) => e.on_pointer_up(x, y, ctx),
+            Self::Click(e) => e.on_click(&mut ctx),
+            Self::BeginDrag(e) => e.on_begin_drag(x, y, window, &mut ctx),
+            Self::DragMove(e) => e.on_drag_move(x, y, window, &mut ctx),
+            Self::EndDrag(e) => e.on_end_drag(window, &mut ctx),
+        }
+    }
+}
+
 const DRAG_THRESHOLD_DIST2: f32 = 5.0 * 5.0;
 struct InputState {
+    bound_window: HWND,
     ht_tree: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
+    mouse_capturing_element: Option<std::rc::Weak<core::cell::RefCell<HitTestTree>>>,
     mouse_current_enter_element: Option<std::rc::Weak<core::cell::RefCell<HitTestTree>>>,
     mouse_down_point: Option<(
         f32,
@@ -1312,16 +1721,18 @@ struct InputState {
     is_mouse_dragging: bool,
 }
 impl InputState {
-    fn new(ht_tree: &std::rc::Rc<core::cell::RefCell<HitTestTree>>) -> Self {
+    fn new(bound_window: HWND, ht_tree: &std::rc::Rc<core::cell::RefCell<HitTestTree>>) -> Self {
         Self {
+            bound_window,
             ht_tree: ht_tree.clone(),
+            mouse_capturing_element: None,
             mouse_current_enter_element: None,
             mouse_down_point: None,
             is_mouse_dragging: false,
         }
     }
 
-    fn update_mouse_pos(&mut self, x: f32, y: f32, view_ctx: &mut ViewContext) {
+    fn update_mouse_pos(&mut self, x: f32, y: f32, actions: &mut Vec<InputAction>) {
         let over_tree = HitTestTree::check(&self.ht_tree, x, y);
         let over_changes = over_tree.as_ref().map(|x| x.borrow().id)
             != self
@@ -1336,7 +1747,9 @@ impl InputState {
         {
             if Some(x.borrow().id) != over_tree.as_ref().map(|x| x.borrow().id) {
                 // leave
-                x.borrow().eh.on_pointer_leave(view_ctx);
+                if let Some(e) = x.borrow().eh.upgrade() {
+                    actions.push(InputAction::PointerLeave(e));
+                }
             }
         }
         self.mouse_current_enter_element = over_tree.as_ref().map(std::rc::Rc::downgrade);
@@ -1345,21 +1758,63 @@ impl InputState {
                 .mouse_current_enter_element
                 .as_ref()
                 .and_then(std::rc::Weak::upgrade)
+                .and_then(|e| e.borrow().eh.upgrade())
             {
-                x.borrow().eh.on_pointer_enter(view_ctx);
+                actions.push(InputAction::PointerEnter(x));
             }
         }
     }
 
-    fn on_mouse_move(
-        &mut self,
-        x: f32,
-        y: f32,
-        window: HWND,
-        view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        self.update_mouse_pos(x, y, view_ctx);
+    pub fn capture_mouse(&mut self) {
+        if self.mouse_current_enter_element.is_none() {
+            return;
+        }
+
+        self.mouse_capturing_element = self.mouse_current_enter_element.clone();
+        unsafe {
+            SetCapture(self.bound_window);
+        }
+    }
+
+    pub fn release_mouse_capture(&mut self) {
+        if self.mouse_capturing_element.is_none() {
+            return;
+        }
+
+        unsafe {
+            ReleaseCapture().expect("Failed to release captured mouse");
+        }
+        self.mouse_capturing_element = None;
+    }
+
+    fn on_mouse_move(&mut self, x: f32, y: f32) -> Vec<InputAction> {
+        let mut actions = Vec::with_capacity(16);
+
+        if let Some(e) = self
+            .mouse_capturing_element
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .and_then(|e| e.borrow().eh.upgrade())
+        {
+            if let Some((dx, dy, _)) = self.mouse_down_point.as_ref() {
+                if !self.is_mouse_dragging {
+                    // 閾値を超えた後は永続的にドラッグ状態になる
+                    let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
+                    if dist2 >= DRAG_THRESHOLD_DIST2 {
+                        self.is_mouse_dragging = true;
+                        actions.push(InputAction::BeginDrag(e.clone()));
+                    }
+                }
+
+                if self.is_mouse_dragging {
+                    actions.push(InputAction::DragMove(e));
+                }
+            }
+
+            return actions;
+        }
+
+        self.update_mouse_pos(x, y, &mut actions);
 
         if let Some((dx, dy, down_element)) = self.mouse_down_point.as_ref() {
             if !self.is_mouse_dragging {
@@ -1367,51 +1822,88 @@ impl InputState {
                 let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
                 if dist2 >= DRAG_THRESHOLD_DIST2 {
                     self.is_mouse_dragging = true;
-                    if let Some(e) = down_element.as_ref().and_then(std::rc::Weak::upgrade) {
-                        e.borrow().eh.on_begin_drag(
-                            x,
-                            y,
-                            window,
-                            view_ctx,
-                            pane_group_docking_manager,
-                        );
+                    if let Some(e) = down_element
+                        .as_ref()
+                        .and_then(std::rc::Weak::upgrade)
+                        .and_then(|e| e.borrow().eh.upgrade())
+                    {
+                        actions.push(InputAction::BeginDrag(e));
                     }
                 }
             }
 
             if self.is_mouse_dragging {
-                if let Some(e) = down_element.as_ref().and_then(std::rc::Weak::upgrade) {
-                    e.borrow()
-                        .eh
-                        .on_drag_move(x, y, window, view_ctx, pane_group_docking_manager);
+                if let Some(e) = down_element
+                    .as_ref()
+                    .and_then(std::rc::Weak::upgrade)
+                    .and_then(|e| e.borrow().eh.upgrade())
+                {
+                    actions.push(InputAction::DragMove(e));
                 }
             }
         }
+
+        actions
     }
 
-    fn on_mouse_down(&mut self, x: f32, y: f32, view_ctx: &mut ViewContext) {
-        self.update_mouse_pos(x, y, view_ctx);
+    fn on_mouse_down(&mut self, x: f32, y: f32) -> Vec<InputAction> {
+        let mut actions = Vec::with_capacity(16);
+
+        if let Some(e) = self
+            .mouse_capturing_element
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .and_then(|e| e.borrow().eh.upgrade())
+        {
+            actions.push(InputAction::PointerDown(e));
+            return actions;
+        }
+
+        self.update_mouse_pos(x, y, &mut actions);
         self.mouse_down_point = Some((x, y, self.mouse_current_enter_element.clone()));
         self.is_mouse_dragging = false;
+        if let Some(e) = self
+            .mouse_current_enter_element
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .and_then(|e| e.borrow().eh.upgrade())
+        {
+            actions.push(InputAction::PointerDown(e));
+        }
+
+        actions
     }
 
-    fn on_mouse_up(
-        &mut self,
-        x: f32,
-        y: f32,
-        window: HWND,
-        view_ctx: &mut ViewContext,
-        pane_group_docking_manager: &core::cell::RefCell<PaneGroupDockingManager>,
-    ) {
-        self.update_mouse_pos(x, y, view_ctx);
+    fn on_mouse_up(&mut self, x: f32, y: f32) -> Vec<InputAction> {
+        let mut actions = Vec::with_capacity(16);
+
+        if let Some(e) = self
+            .mouse_capturing_element
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .and_then(|e| e.borrow().eh.upgrade())
+        {
+            actions.push(InputAction::PointerUp(e.clone()));
+            if !self.is_mouse_dragging {
+                actions.push(InputAction::Click(e));
+            } else {
+                actions.push(InputAction::EndDrag(e));
+            }
+            self.mouse_down_point = None;
+
+            return actions;
+        }
+
+        self.update_mouse_pos(x, y, &mut actions);
 
         if !self.is_mouse_dragging {
             if let Some(x) = self
                 .mouse_current_enter_element
                 .as_ref()
                 .and_then(std::rc::Weak::upgrade)
+                .and_then(|e| e.borrow().eh.upgrade())
             {
-                x.borrow().eh.on_click(view_ctx);
+                actions.push(InputAction::Click(x));
             }
         } else {
             if let Some(x) = self
@@ -1419,18 +1911,69 @@ impl InputState {
                 .as_ref()
                 .and_then(|x| x.2.as_ref())
                 .and_then(std::rc::Weak::upgrade)
+                .and_then(|e| e.borrow().eh.upgrade())
             {
-                x.borrow()
-                    .eh
-                    .on_end_drag(window, view_ctx, pane_group_docking_manager);
+                actions.push(InputAction::EndDrag(x));
             }
         }
         self.mouse_down_point = None;
+
+        actions
+    }
+
+    fn set_cursor(&self) -> bool {
+        if let Some(e) = self
+            .mouse_capturing_element
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .and_then(|e| e.borrow().eh.upgrade())
+        {
+            // TODO: caching loaded cursors
+            let c = match e.hover_cursor() {
+                CursorStyle::Arrow => unsafe {
+                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
+                },
+                CursorStyle::SizeNS => unsafe {
+                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZENS))
+                },
+                CursorStyle::SizeEW => unsafe {
+                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZEWE))
+                },
+            };
+            unsafe { SetCursor(c.expect("Failed to load cursor")) };
+
+            return true;
+        }
+
+        if let Some(e) = self
+            .mouse_current_enter_element
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .and_then(|e| e.borrow().eh.upgrade())
+        {
+            // TODO: caching loaded cursors
+            let c = match e.hover_cursor() {
+                CursorStyle::Arrow => unsafe {
+                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
+                },
+                CursorStyle::SizeNS => unsafe {
+                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZENS))
+                },
+                CursorStyle::SizeEW => unsafe {
+                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZEWE))
+                },
+            };
+            unsafe { SetCursor(c.expect("Failed to load cursor")) };
+
+            true
+        } else {
+            false
+        }
     }
 }
 
 pub struct HitTestTree {
-    eh: Box<dyn InputEventHandler>,
+    eh: Weak<dyn InputEventHandler>,
     id: usize,
     left: f32,
     top: f32,
@@ -1441,7 +1984,7 @@ pub struct HitTestTree {
 impl HitTestTree {
     #[inline]
     pub fn new(
-        eh: Box<dyn InputEventHandler>,
+        eh: &Weak<impl InputEventHandler + 'static>,
         id: usize,
         left: f32,
         top: f32,
@@ -1449,7 +1992,7 @@ impl HitTestTree {
         height: f32,
     ) -> Self {
         Self {
-            eh,
+            eh: eh.clone(),
             id,
             left,
             top,
@@ -1459,7 +2002,12 @@ impl HitTestTree {
         }
     }
     #[inline]
-    pub fn new_unsized(eh: Box<dyn InputEventHandler>, id: usize, left: f32, top: f32) -> Self {
+    pub fn new_unsized(
+        eh: &Weak<impl InputEventHandler + 'static>,
+        id: usize,
+        left: f32,
+        top: f32,
+    ) -> Self {
         Self::new(eh, id, left, top, f32::MAX, f32::MAX)
     }
 
@@ -1531,10 +2079,113 @@ impl HitTestTreeContext {
     }
 }
 
-struct WindowState<'r> {
+struct AppWindowState<'r> {
     input_state: InputState,
-    view_context: ViewContext<'r>,
-    pane_group_docking_manager: core::cell::RefCell<PaneGroupDockingManager>,
+    compositor: Compositor,
+    ui_common_objects: &'r UICommonObjects,
+    text_format_stock: &'r mut TextFormatStock,
+    text_surface_stock: &'r mut TextSurfaceStock,
+    hittest_context: HitTestTreeContext,
+    pane_group_docking_manager: std::rc::Rc<core::cell::RefCell<PaneGroupDockingManager>>,
+}
+impl ViewContext for AppWindowState<'_> {
+    fn compositor(&self) -> &windows::UI::Composition::Compositor {
+        &self.compositor
+    }
+
+    fn common(&self) -> &UICommonObjects {
+        &self.ui_common_objects
+    }
+
+    fn text_format_stock_mut(&mut self) -> &mut TextFormatStock {
+        self.text_format_stock
+    }
+
+    fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock {
+        self.text_surface_stock
+    }
+
+    fn hittest_tree_parent(&self) -> &core::cell::RefCell<HitTestTree> {
+        &self.input_state.ht_tree
+    }
+
+    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
+        &mut self.hittest_context
+    }
+}
+impl InputContext for AppWindowState<'_> {
+    fn capture_mouse(&mut self) {
+        self.input_state.capture_mouse();
+    }
+
+    fn release_mouse_capture(&mut self) {
+        self.input_state.release_mouse_capture();
+    }
+}
+struct AppWindow {
+    handle: HWND,
+    current_dpi: f32,
+}
+impl AppWindow {
+    pub const WINDOW_EXTRA_SIZE: usize = core::mem::size_of::<usize>();
+    const STATE_STORE_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+
+    #[inline]
+    pub fn wrap(handle: HWND) -> Self {
+        Self {
+            handle,
+            current_dpi: unsafe { GetDpiForWindow(handle) as _ },
+        }
+    }
+
+    #[inline]
+    pub fn set_state_store(&mut self, state_ref: &mut AppWindowState) {
+        unsafe {
+            SetWindowLongPtrA(
+                self.handle,
+                Self::STATE_STORE_PTR_INDEX,
+                state_ref as *mut _ as _,
+            );
+        }
+    }
+
+    #[inline]
+    pub fn get_state_store(&self) -> Option<&mut AppWindowState> {
+        unsafe {
+            (GetWindowLongPtrA(self.handle, Self::STATE_STORE_PTR_INDEX) as *mut AppWindowState)
+                .as_mut()
+        }
+    }
+
+    #[inline]
+    pub fn pixels_to_dip(&self, pixels: f32) -> f32 {
+        pixels * 96.0 / self.current_dpi
+    }
+
+    #[inline]
+    pub fn client_size_pixels(&self) -> windows::core::Result<(u32, u32)> {
+        let mut sink = core::mem::MaybeUninit::<windows::Win32::Foundation::RECT>::uninit();
+        unsafe { GetClientRect(self.handle, sink.as_mut_ptr())? };
+        let rect = unsafe { sink.assume_init() };
+
+        Ok((
+            (rect.right - rect.left) as u32,
+            (rect.bottom - rect.top) as u32,
+        ))
+    }
+
+    #[inline]
+    pub fn client_size(&self) -> windows::core::Result<(f32, f32)> {
+        self.client_size_pixels()
+            .map(|(w, h)| (self.pixels_to_dip(w as _), self.pixels_to_dip(h as _)))
+    }
+
+    #[inline]
+    pub fn show(&self) {
+        unsafe {
+            let _ = ShowWindow(self.handle, SW_SHOWNORMAL);
+        }
+    }
 }
 
 fn main() {
@@ -1542,7 +2193,7 @@ fn main() {
     let wndclass = WNDCLASSEXA {
         cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
         cbClsExtra: 0,
-        cbWndExtra: core::mem::size_of::<usize>() as _,
+        cbWndExtra: AppWindow::WINDOW_EXTRA_SIZE as _,
         style: WNDCLASS_STYLES(0),
         lpfnWndProc: Some(window_proc),
         hInstance: instance_handle.into(),
@@ -1572,8 +2223,8 @@ fn main() {
     .overlapped_window()
     .create()
     .expect("Failed to create window");
-
     unsafe {
+        // set dark mode preference
         let attr: BOOL = BOOL(1);
         DwmSetWindowAttribute(
             window_handle,
@@ -1583,6 +2234,7 @@ fn main() {
         )
         .expect("Failed to set window attribute");
     }
+    let mut window_handle = AppWindow::wrap(window_handle);
 
     let _dispatcher_queue_controller = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
@@ -1647,7 +2299,7 @@ fn main() {
         .expect("This compositor does not support desktop interop");
     let desktop_window_target = unsafe {
         desktop_interop
-            .CreateDesktopWindowTarget(window_handle, false)
+            .CreateDesktopWindowTarget(window_handle.handle, false)
             .expect("Failed to create desktop window compositor target")
     };
 
@@ -1659,12 +2311,13 @@ fn main() {
             .CreateGraphicsDevice(&d2d1_device)
             .expect("Failed to create compositor graphics device")
     };
-    let mut text_surface_stock =
-        TextSurfaceStock::new(&dwrite_factory, &composition_graphics_device, unsafe {
-            GetDpiForWindow(window_handle) as _
-        });
+    let mut text_surface_stock = TextSurfaceStock::new(
+        &dwrite_factory,
+        &composition_graphics_device,
+        window_handle.current_dpi,
+    );
 
-    let app_global_scale = unsafe { GetDpiForWindow(window_handle) as f64 / 96.0 };
+    let app_global_scale = window_handle.current_dpi as f64 / 96.0;
     let composition_root = compositor
         .CreateContainerVisual()
         .expect("Failed to create root visual");
@@ -1905,14 +2558,14 @@ fn main() {
     };
 
     let hittest_tree_root = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new_unsized(
-        Box::new(()),
+        &Weak::<()>::new(),
         0,
         0.0,
         0.0,
     )));
     let mut hittest_context = HitTestTreeContext::new();
 
-    let mut view_context = ViewContext {
+    let mut view_context = ViewContext1 {
         compositor: &compositor,
         common: &common_objects,
         text_format_stock: &mut text_format_stock,
@@ -1921,17 +2574,25 @@ fn main() {
         hittest_context: &mut hittest_context,
     };
 
-    let mut pane_group_docking_manager = PaneGroupDockingManager::new(&mut view_context)
-        .expect("Failed to initialize docking manager");
+    let pane_group_docking_manager = std::rc::Rc::new(core::cell::RefCell::new(
+        PaneGroupDockingManager::new(&mut view_context)
+            .expect("Failed to initialize docking manager"),
+    ));
 
-    let pane_group1 =
-        PaneGroupView::new(&mut view_context).expect("Failed to create PaneGroupView");
+    let pane_group1 = PaneGroupView::new(
+        &std::rc::Rc::downgrade(&pane_group_docking_manager),
+        &mut view_context,
+    )
+    .expect("Failed to create PaneGroupView");
     PaneGroupView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context)
         .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange();
 
-    let pane_group2 =
-        PaneGroupView::new(&mut view_context).expect("Failed to create PaneGroupView");
+    let pane_group2 = PaneGroupView::new(
+        &std::rc::Rc::downgrade(&pane_group_docking_manager),
+        &mut view_context,
+    )
+    .expect("Failed to create PaneGroupView");
     PaneGroupView::add_tab::<StageTabPresenter>(&pane_group2, &mut view_context)
         .expect("Failed to create StagePaneTab");
     PaneGroupView::add_tab::<PreviewTabPresenter>(&pane_group2, &mut view_context)
@@ -1940,57 +2601,60 @@ fn main() {
         .expect("Failed to create ProjectSettingsPaneTabHeader");
     pane_group2.borrow_mut().rearrange();
 
-    let pane_group3 =
-        PaneGroupView::new(&mut view_context).expect("Failed to create PaneGroupView");
+    let pane_group3 = PaneGroupView::new(
+        &std::rc::Rc::downgrade(&pane_group_docking_manager),
+        &mut view_context,
+    )
+    .expect("Failed to create PaneGroupView");
     PaneGroupView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context)
         .expect("Failed to create InspectorPaneTabHeader");
     pane_group3.borrow_mut().rearrange();
+    pane_group3
+        .borrow_mut()
+        .set_offset_size(0.0, 0.0, 256.0, 256.0)
+        .expect("Failed to resize pane");
 
+    let layout = PaneDockState::new_on_top(
+        &mut view_context,
+        &pane_group1,
+        &PaneDockState::new_filled(&pane_group2),
+    )
+    .expect("Failed to create pane dock state");
+    let layout = PaneDockState::new_on_right(&mut view_context, &pane_group3, &layout)
+        .expect("Failed to create pane dock state");
     pane_group_docking_manager
-        .set_layout(PaneDockState::Right(
-            pane_group3.clone(),
-            256.0,
-            Box::new(PaneDockState::Top(
-                pane_group1.clone(),
-                128.0,
-                Box::new(PaneDockState::Fill(pane_group2.clone())),
-            )),
-        ))
+        .borrow_mut()
+        .set_layout(&layout)
         .expect("Failed to setup initial layout");
 
     composition_root
         .Children()
         .expect("Failed to get children collection")
-        .InsertBelow(&pane_group_docking_manager.placement_visual, &overlay_layer)
+        .InsertBelow(
+            &pane_group_docking_manager.borrow().placement_visual,
+            &overlay_layer,
+        )
         .expect("Failed to insert placement visual");
 
-    let mut client_rect = core::mem::MaybeUninit::<windows::Win32::Foundation::RECT>::uninit();
-    unsafe {
-        GetClientRect(window_handle, client_rect.as_mut_ptr())
-            .expect("Failed to get initial client rect")
-    };
-    let client_rect = unsafe { client_rect.assume_init() };
-    let window_dpi = unsafe { GetDpiForWindow(window_handle) };
-    let client_width = (client_rect.right - client_rect.left) as f32 * 96.0 / window_dpi as f32;
-    let client_height = (client_rect.bottom - client_rect.top) as f32 * 96.0 / window_dpi as f32;
+    let (client_width, client_height) = window_handle
+        .client_size()
+        .expect("Failed to get initial client size");
     pane_group_docking_manager
+        .borrow_mut()
         .resize_root(client_width, client_height)
         .expect("Failed to initial relayout");
 
-    let mut ws = WindowState {
-        input_state: InputState::new(&hittest_tree_root),
-        view_context,
-        pane_group_docking_manager: core::cell::RefCell::new(pane_group_docking_manager),
+    let mut ws = AppWindowState {
+        input_state: InputState::new(window_handle.handle, &hittest_tree_root),
+        compositor: compositor.clone(),
+        ui_common_objects: &common_objects,
+        text_format_stock: &mut text_format_stock,
+        text_surface_stock: &mut text_surface_stock,
+        hittest_context,
+        pane_group_docking_manager,
     };
-    unsafe {
-        SetWindowLongPtrA(
-            window_handle,
-            WINDOW_LONG_PTR_INDEX(0),
-            &mut ws as *mut _ as _,
-        );
-
-        let _ = ShowWindow(window_handle, SW_SHOWNORMAL);
-    }
+    window_handle.set_state_store(&mut ws);
+    window_handle.show();
 
     let mut msg = core::mem::MaybeUninit::<MSG>::uninit();
     while unsafe { GetMessageA(msg.as_mut_ptr(), None, 0, 0).0 > 0 } {
@@ -2013,74 +2677,64 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         return LRESULT(0);
     }
     if msg == WM_MOUSEMOVE {
-        let Some(state) = (unsafe {
-            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
-        }) else {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
             return LRESULT(0);
         };
 
-        let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        state.input_state.on_mouse_move(
-            x as f32 * 96.0 / dpi,
-            y as f32 * 96.0 / dpi,
-            hwnd,
-            &mut state.view_context,
-            &state.pane_group_docking_manager,
+        let actions = state.input_state.on_mouse_move(
+            app_window.pixels_to_dip(x as _),
+            app_window.pixels_to_dip(y as _),
         );
+        for a in actions {
+            a.execute(x as _, y as _, state, hwnd);
+        }
 
         return LRESULT(0);
     }
     if msg == WM_LBUTTONDOWN {
-        let Some(state) = (unsafe {
-            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
-        }) else {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
             return LRESULT(0);
         };
 
-        let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        state.input_state.on_mouse_down(
-            x as f32 * 96.0 / dpi,
-            y as f32 * 96.0 / dpi,
-            &mut state.view_context,
+        let actions = state.input_state.on_mouse_down(
+            app_window.pixels_to_dip(x as _),
+            app_window.pixels_to_dip(y as _),
         );
+        for a in actions {
+            a.execute(x as _, y as _, state, hwnd);
+        }
 
         return LRESULT(0);
     }
     if msg == WM_LBUTTONUP {
-        let Some(state) = (unsafe {
-            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
-        }) else {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
             return LRESULT(0);
         };
 
-        let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        state.input_state.on_mouse_up(
-            x as f32 * 96.0 / dpi,
-            y as f32 * 96.0 / dpi,
-            hwnd,
-            &mut state.view_context,
-            &state.pane_group_docking_manager,
+        let actions = state.input_state.on_mouse_up(
+            app_window.pixels_to_dip(x as _),
+            app_window.pixels_to_dip(y as _),
         );
+        for a in actions {
+            a.execute(x as _, y as _, state, hwnd);
+        }
 
         return LRESULT(0);
     }
-    if msg == WM_SIZE {
-        let Some(state) = (unsafe {
-            (GetWindowLongPtrA(hwnd, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState).as_mut()
-        }) else {
+    if msg == WM_WINDOWPOSCHANGED {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
             // not initialized
-            return LRESULT(0);
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
         };
 
-        let dpi = unsafe { GetDpiForWindow(hwnd) as f32 };
-        let (w, h) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        let (w, h) = (
-            (w as f32 * 96.0 / dpi).max(64.0),
-            (h as f32 * 96.0 / dpi).max(64.0),
-        );
+        let (w, h) = app_window.client_size().expect("Failed to get client size");
         state
             .pane_group_docking_manager
             .borrow_mut()
@@ -2088,6 +2742,24 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             .expect("Failed to resize root");
 
         return LRESULT(0);
+    }
+    if msg == WM_SETCURSOR {
+        if (lp.0 & 0xffff) as i16 as u32 != HTCLIENT {
+            // non-client area
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        }
+
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
+            // not initialized
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        };
+
+        if state.input_state.set_cursor() {
+            return LRESULT(1);
+        } else {
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        }
     }
 
     unsafe { DefWindowProcA(hwnd, msg, wp, lp) }
