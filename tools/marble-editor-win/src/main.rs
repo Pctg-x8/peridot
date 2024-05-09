@@ -1104,21 +1104,19 @@ impl PaneDockState {
 
     /// returns: relayout root
     pub fn undock(this: &SharedMut<Self>) -> SharedMut<Self> {
-        let parent = match &*this.borrow() {
-            PaneDockState::Fill { parent, .. }
-            | PaneDockState::Left { parent, .. }
-            | PaneDockState::Right { parent, .. }
-            | PaneDockState::Top { parent, .. }
-            | PaneDockState::Bottom { parent, .. } => parent.upgrade().unwrap(),
-            _ => unreachable!("illegal binding with dock layer"),
-        };
+        let parent = this
+            .borrow()
+            .parent()
+            .expect("illegal binding with dock layer")
+            .upgrade()
+            .expect("Parent has gone?");
 
         let relayout_root = match &mut *parent.borrow_mut() {
-            PaneDockState::EmptyRoot(rest, _) => {
+            Self::EmptyRoot(rest, _) => {
                 *rest = None;
                 parent.clone()
             }
-            PaneDockState::Left {
+            Self::Left {
                 docked,
                 rest,
                 parent: parent1,
@@ -1143,7 +1141,7 @@ impl PaneDockState {
                     .expect("Failed to unmounting splitter");
                 parent1.upgrade().unwrap()
             }
-            PaneDockState::Right {
+            Self::Right {
                 docked,
                 rest,
                 parent: parent1,
@@ -1168,7 +1166,7 @@ impl PaneDockState {
                     .expect("Failed to unmounting splitter");
                 parent1.upgrade().unwrap()
             }
-            PaneDockState::Top {
+            Self::Top {
                 docked,
                 rest,
                 parent: parent1,
@@ -1193,7 +1191,7 @@ impl PaneDockState {
                     .expect("Failed to unmounting splitter");
                 parent1.upgrade().unwrap()
             }
-            PaneDockState::Bottom {
+            Self::Bottom {
                 docked,
                 rest,
                 parent: parent1,
@@ -1218,7 +1216,7 @@ impl PaneDockState {
                     .expect("Failed to unmounting splitter");
                 parent1.upgrade().unwrap()
             }
-            PaneDockState::Fill { .. } => unreachable!("invalid structure"),
+            Self::Fill { .. } => unreachable!("invalid structure"),
         };
 
         relayout_root
