@@ -1,5 +1,6 @@
 use windows::{
     core::PCSTR,
+    Foundation::TimeSpan,
     Win32::{
         Foundation::{HINSTANCE, HWND},
         UI::WindowsAndMessaging::{
@@ -10,6 +11,9 @@ use windows::{
         },
     },
 };
+
+mod ui_composition;
+pub use self::ui_composition::*;
 
 #[derive(Clone, Copy)]
 pub enum WindowClass {
@@ -131,5 +135,12 @@ pub fn register_window_class(cls: &WNDCLASSEXA) -> windows::core::Result<u16> {
     match unsafe { RegisterClassExA(cls) } {
         0 => Err(windows::core::Error::from_win32()),
         x => Ok(x),
+    }
+}
+
+#[inline]
+pub const fn timespan_ms(ms: u32) -> TimeSpan {
+    TimeSpan {
+        Duration: (10_000 * ms) as _,
     }
 }

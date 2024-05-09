@@ -7,6 +7,10 @@ use std::{
 
 use object_cache::{TextFormatStock, TextSurfaceStock};
 use uikit::{CursorStyle, InputContext, InputEventHandler, ViewContext, ViewContextExtension};
+use winapi_extras::{
+    timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
+    VisualExtensions,
+};
 use windows::{
     core::*,
     Foundation::{
@@ -49,8 +53,8 @@ use windows::{
                 DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA, GetWindowLongPtrA,
                 LoadCursorA, LoadIconA, PostQuitMessage, SetCursor, SetWindowLongPtrA,
                 SetWindowPos, ShowWindow, TranslateMessage, HCURSOR, HICON, HTCLIENT, IDC_ARROW,
-                IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, MSG, SWP_NOACTIVATE, SWP_NOSIZE,
-                SWP_NOZORDER, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
+                IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
+                SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
                 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
                 WNDCLASSEXA, WNDCLASS_STYLES,
             },
@@ -62,15 +66,14 @@ use windows::{
             AnimationIterationBehavior, CompositionAnimationGroup, CompositionEasingFunction,
             CompositionEasingFunctionMode, CompositionEffectSourceParameter,
             CompositionSurfaceBrush, Compositor, ContainerVisual, Desktop::DesktopWindowTarget,
-            ICompositionAnimation2, KeyFrameAnimation, LayerVisual, ScalarKeyFrameAnimation,
-            ShapeVisual, SpriteVisual, Vector3KeyFrameAnimation, VisualCollection,
+            LayerVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
         },
     },
 };
 
 use crate::{
     uikit::{UICommonObjects, ViewContext1},
-    winapi_extras::{register_window_class, WindowBuilder},
+    winapi_extras::{register_window_class, Vector2Extension, WindowBuilder},
 };
 
 mod bindgen;
@@ -79,9 +82,21 @@ mod uikit;
 mod utils;
 mod winapi_extras;
 
-type Shared<T> = Rc<T>;
+// Note: Rcは特別なtraitがついてるようで、newtypeで包むことはできない（やるとSharedMut<T>をSharedMut<dyn Trait>にできなくなる）
 type SharedMut<T> = Rc<RefCell<T>>;
 type WeakMut<T> = Weak<RefCell<T>>;
+#[inline]
+fn new_shared_mut<T>(value: T) -> SharedMut<T> {
+    Rc::new(RefCell::new(value))
+}
+#[inline]
+fn new_cyclic_shared_mut<T>(ctor: impl FnOnce(&WeakMut<T>) -> T) -> SharedMut<T> {
+    Rc::new_cyclic(|w| RefCell::new(ctor(w)))
+}
+#[inline]
+const fn empty_weak_mut<T>() -> WeakMut<T> {
+    Weak::new()
+}
 
 const TAB_MARGIN_X: f32 = 10.0;
 const TAB_MARGIN_Y: f32 = 2.0;
@@ -99,118 +114,6 @@ const TAB_ACTIVE_BASE_COLOR: Color = Color {
     B: 255,
 };
 
-#[repr(transparent)]
-pub struct KeyFrameAnimationPropertySetter<'r, T: 'r + Interface>(&'r T);
-impl<T: Interface> KeyFrameAnimationPropertySetter<'_, T> {
-    #[inline]
-    pub fn duration(&self, duration: TimeSpan) -> windows::core::Result<&Self> {
-        self.0
-            .cast::<KeyFrameAnimation>()?
-            .SetDuration(duration)
-            .map(|_| self)
-    }
-
-    #[inline]
-    pub fn target(&self, target: &HSTRING) -> windows::core::Result<&Self> {
-        let this = self.0.cast::<ICompositionAnimation2>()?;
-        unsafe {
-            (this.vtable().SetTarget)(this.as_raw(), core::mem::transmute_copy(target))
-                .ok()
-                .map(|_| self)
-        }
-    }
-}
-
-pub trait KeyFrameAnimationExtension {
-    type Element;
-
-    fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self>;
-    fn interpolate(
-        &self,
-        to: f32,
-        to_value: Self::Element,
-        f: impl windows_core::Param<CompositionEasingFunction>,
-    ) -> windows::core::Result<&Self>;
-}
-impl KeyFrameAnimationExtension for ScalarKeyFrameAnimation {
-    type Element = f32;
-
-    fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self> {
-        self.InsertKeyFrame(at, value).map(|_| self)
-    }
-    fn interpolate(
-        &self,
-        to: f32,
-        to_value: Self::Element,
-        f: impl windows_core::Param<CompositionEasingFunction>,
-    ) -> windows::core::Result<&Self> {
-        self.InsertKeyFrameWithEasingFunction(to, to_value, f)
-            .map(|_| self)
-    }
-}
-impl KeyFrameAnimationExtension for Vector3KeyFrameAnimation {
-    type Element = Vector3;
-
-    fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self> {
-        self.InsertKeyFrame(at, value).map(|_| self)
-    }
-    fn interpolate(
-        &self,
-        to: f32,
-        to_value: Self::Element,
-        f: impl windows_core::Param<CompositionEasingFunction>,
-    ) -> windows::core::Result<&Self> {
-        self.InsertKeyFrameWithEasingFunction(to, to_value, f)
-            .map(|_| self)
-    }
-}
-
-pub trait KeyFrameAnimationPropertySetterExtension: Interface {
-    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self>;
-}
-impl KeyFrameAnimationPropertySetterExtension for KeyFrameAnimation {
-    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
-        KeyFrameAnimationPropertySetter(self)
-    }
-}
-impl KeyFrameAnimationPropertySetterExtension for ScalarKeyFrameAnimation {
-    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
-        KeyFrameAnimationPropertySetter(self)
-    }
-}
-impl KeyFrameAnimationPropertySetterExtension for Vector3KeyFrameAnimation {
-    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
-        KeyFrameAnimationPropertySetter(self)
-    }
-}
-
-pub trait Vector2Extension {
-    fn scalar(v: f32) -> Self;
-    fn with_z(self, z: f32) -> Vector3;
-}
-impl Vector2Extension for Vector2 {
-    #[inline(always)]
-    fn scalar(v: f32) -> Self {
-        Vector2 { X: v, Y: v }
-    }
-
-    #[inline(always)]
-    fn with_z(self, z: f32) -> Vector3 {
-        Vector3 {
-            X: self.X,
-            Y: self.Y,
-            Z: z,
-        }
-    }
-}
-
-#[inline]
-pub const fn timespan_ms(ms: u32) -> TimeSpan {
-    TimeSpan {
-        Duration: (10_000 * ms) as _,
-    }
-}
-
 const PANE_SPLITTER_GAP: f32 = 5.0;
 
 #[derive(Clone, Copy)]
@@ -223,28 +126,29 @@ pub struct PaneSplitterView {
     visual: SpriteVisual,
     hover_animation: ScalarKeyFrameAnimation,
     hover_end_animation: ScalarKeyFrameAnimation,
-    ht: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
+    ht: SharedMut<HitTestTree>,
     dir: SplitDirection,
-    controlling_dock_layer: std::rc::Weak<core::cell::RefCell<PaneDockState>>,
+    controlling_dock_layer: WeakMut<PaneDockState>,
     drag_start_values: Option<(f32, f32, f32)>,
 }
 impl PaneSplitterView {
+    const SURFACE_COLOR: Color = Color {
+        A: 32,
+        R: 255,
+        G: 255,
+        B: 255,
+    };
+
     pub fn new(
         ctx: &mut impl ViewContext,
         dir: SplitDirection,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
+    ) -> windows::core::Result<SharedMut<Self>> {
         let visual = ctx.compositor().CreateSpriteVisual()?;
-        visual.SetBrush(&ctx.compositor().CreateColorBrushWithColor(Color {
-            A: 32,
-            R: 255,
-            G: 255,
-            B: 255,
-        })?)?;
+        visual.SetBrush(
+            &ctx.compositor()
+                .CreateColorBrushWithColor(Self::SURFACE_COLOR)?,
+        )?;
         visual.SetOpacity(0.0)?;
-        visual.SetSize(Vector2 {
-            X: PANE_SPLITTER_GAP,
-            Y: PANE_SPLITTER_GAP,
-        })?;
 
         let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
 
@@ -262,32 +166,30 @@ impl PaneSplitterView {
             .set_properties()
             .duration(timespan_ms(100))?;
 
-        Ok(std::rc::Rc::new_cyclic(
-            |wthis: &std::rc::Weak<core::cell::RefCell<Self>>| {
-                let ht = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
-                    wthis,
-                    ctx.hittest_context_mut().new_id(),
-                    0.0,
-                    0.0,
-                    1.0,
-                    1.0,
-                )));
-                HitTestTree::add_child(ctx.hittest_tree_parent(), &ht);
+        Ok(new_cyclic_shared_mut(|wthis| {
+            let ht = HitTestTree::new(
+                wthis,
+                ctx.hittest_context_mut().new_id(),
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+            );
+            HitTestTree::add_child(ctx.hittest_tree_parent(), ht.clone());
 
-                core::cell::RefCell::new(Self {
-                    visual,
-                    hover_animation,
-                    hover_end_animation,
-                    ht,
-                    dir,
-                    controlling_dock_layer: std::rc::Weak::new(),
-                    drag_start_values: None,
-                })
-            },
-        ))
+            Self {
+                visual,
+                hover_animation,
+                hover_end_animation,
+                ht,
+                dir,
+                controlling_dock_layer: empty_weak_mut(),
+                drag_start_values: None,
+            }
+        }))
     }
 
-    fn bind_dock_layer(&mut self, layer: &std::rc::Weak<core::cell::RefCell<PaneDockState>>) {
+    fn bind_dock_layer(&mut self, layer: &WeakMut<PaneDockState>) {
         self.controlling_dock_layer = layer.clone();
     }
 
@@ -302,15 +204,7 @@ impl PaneSplitterView {
         Ok(())
     }
     pub fn set_rect(&self, rect: Rect) -> windows::core::Result<()> {
-        self.visual.SetOffset(Vector3 {
-            X: rect.X,
-            Y: rect.Y,
-            Z: 0.0,
-        })?;
-        self.visual.SetSize(Vector2 {
-            X: rect.Width,
-            Y: rect.Height,
-        })?;
+        self.visual.set_rect(rect.clone())?;
         self.ht
             .borrow_mut()
             .set_rect(rect.X, rect.Y, rect.Width, rect.Height);
@@ -320,6 +214,7 @@ impl PaneSplitterView {
 
     pub fn unmount(&self) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
+        // Note: if letでborrowしたやつはif文の中でも生きているらしいので個別にdropできるようにする
         let ht_ref = self.ht.borrow();
         if let Some(parent_ht) = ht_ref.parent.upgrade() {
             drop(ht_ref);
@@ -329,7 +224,7 @@ impl PaneSplitterView {
         Ok(())
     }
 }
-impl InputEventHandler for core::cell::RefCell<PaneSplitterView> {
+impl InputEventHandler for RefCell<PaneSplitterView> {
     fn hover_cursor(&self) -> CursorStyle {
         match self.borrow().dir {
             SplitDirection::Horizontal => CursorStyle::SizeNS,
@@ -393,10 +288,10 @@ impl InputEventHandler for core::cell::RefCell<PaneSplitterView> {
 }
 
 pub enum PaneDockingRecommendation {
-    Left(Weak<RefCell<PaneDockState>>),
-    Right(Weak<RefCell<PaneDockState>>),
-    Top(Weak<RefCell<PaneDockState>>),
-    Bottom(Weak<RefCell<PaneDockState>>),
+    Left(SharedMut<PaneDockState>),
+    Right(SharedMut<PaneDockState>),
+    Top(SharedMut<PaneDockState>),
+    Bottom(SharedMut<PaneDockState>),
     Free,
 }
 impl core::fmt::Debug for PaneDockingRecommendation {
@@ -413,7 +308,7 @@ impl core::fmt::Debug for PaneDockingRecommendation {
 impl PaneDockingRecommendation {
     pub fn dock_rect(&self, preview_rect: Rect) -> Option<Rect> {
         match self {
-            Self::Left(d) => d.upgrade().map(|d| Rect {
+            Self::Left(d) => Some(Rect {
                 X: d.borrow().controlling_rect_left(),
                 Y: d.borrow().controlling_rect_top(),
                 Width: preview_rect
@@ -421,7 +316,7 @@ impl PaneDockingRecommendation {
                     .min(d.borrow().controlling_rect_width() * 0.9),
                 Height: d.borrow().controlling_rect_height(),
             }),
-            Self::Right(d) => d.upgrade().map(|d| {
+            Self::Right(d) => Some({
                 let w = preview_rect
                     .Width
                     .min(d.borrow().controlling_rect_width() * 0.9);
@@ -433,7 +328,7 @@ impl PaneDockingRecommendation {
                     Height: d.borrow().controlling_rect_height(),
                 }
             }),
-            Self::Top(d) => d.upgrade().map(|d| Rect {
+            Self::Top(d) => Some(Rect {
                 X: d.borrow().controlling_rect_left(),
                 Y: d.borrow().controlling_rect_top(),
                 Width: d.borrow().controlling_rect_width(),
@@ -441,7 +336,7 @@ impl PaneDockingRecommendation {
                     .Height
                     .min(d.borrow().controlling_rect_height() * 0.9),
             }),
-            Self::Bottom(d) => d.upgrade().map(|d| {
+            Self::Bottom(d) => Some({
                 let h = preview_rect
                     .Height
                     .min(d.borrow().controlling_rect_height() * 0.9);
@@ -497,8 +392,8 @@ impl PaneDockState {
     fn new_root(
         content: impl FnOnce(&WeakMut<Self>) -> Option<SharedMut<Self>>,
     ) -> SharedMut<Self> {
-        Rc::<RefCell<Self>>::new_cyclic(|wthis| {
-            RefCell::new(Self::EmptyRoot(
+        new_cyclic_shared_mut(|wthis| {
+            Self::EmptyRoot(
                 content(wthis),
                 Rect {
                     X: 0.0,
@@ -506,7 +401,7 @@ impl PaneDockState {
                     Width: 0.0,
                     Height: 0.0,
                 },
-            ))
+            )
         })
     }
 
@@ -518,10 +413,10 @@ impl PaneDockState {
     ) -> windows::core::Result<SharedMut<Self>> {
         let splitter = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
 
-        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+        Ok(new_cyclic_shared_mut(|wthis| {
             splitter.borrow_mut().bind_dock_layer(wthis);
 
-            RefCell::new(Self::Left {
+            Self::Left {
                 docked: docked(wthis, ctx),
                 splitter,
                 container_region: Rect {
@@ -532,7 +427,7 @@ impl PaneDockState {
                 },
                 rest: rest(wthis, ctx),
                 parent: parent.clone(),
-            })
+            }
         }))
     }
     fn new_on_right<VC: ViewContext>(
@@ -543,10 +438,10 @@ impl PaneDockState {
     ) -> windows::core::Result<SharedMut<Self>> {
         let splitter = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
 
-        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+        Ok(new_cyclic_shared_mut(|wthis| {
             splitter.borrow_mut().bind_dock_layer(wthis);
 
-            RefCell::new(Self::Right {
+            Self::Right {
                 docked: docked(wthis, ctx),
                 splitter,
                 container_region: Rect {
@@ -557,7 +452,7 @@ impl PaneDockState {
                 },
                 rest: rest(wthis, ctx),
                 parent: parent.clone(),
-            })
+            }
         }))
     }
     fn new_on_top<VC: ViewContext>(
@@ -568,10 +463,10 @@ impl PaneDockState {
     ) -> windows::core::Result<SharedMut<Self>> {
         let splitter = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
 
-        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+        Ok(new_cyclic_shared_mut(|wthis| {
             splitter.borrow_mut().bind_dock_layer(wthis);
 
-            RefCell::new(Self::Top {
+            Self::Top {
                 docked: docked(wthis, ctx),
                 splitter,
                 container_region: Rect {
@@ -582,7 +477,7 @@ impl PaneDockState {
                 },
                 rest: rest(wthis, ctx),
                 parent: parent.clone(),
-            })
+            }
         }))
     }
     fn new_on_bottom<VC: ViewContext>(
@@ -593,10 +488,10 @@ impl PaneDockState {
     ) -> windows::core::Result<SharedMut<Self>> {
         let splitter = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
 
-        Ok(Rc::<RefCell<Self>>::new_cyclic(|wthis| {
+        Ok(new_cyclic_shared_mut(|wthis| {
             splitter.borrow_mut().bind_dock_layer(wthis);
 
-            RefCell::new(Self::Bottom {
+            Self::Bottom {
                 docked: docked(wthis, ctx),
                 splitter,
                 container_region: Rect {
@@ -607,20 +502,20 @@ impl PaneDockState {
                 },
                 rest: rest(wthis, ctx),
                 parent: parent.clone(),
-            })
+            }
         }))
     }
     fn new_filled(
         group_view: &SharedMut<PaneGroupView>,
         parent: &WeakMut<Self>,
     ) -> SharedMut<Self> {
-        Rc::new_cyclic(|wthis| {
+        new_cyclic_shared_mut(|wthis| {
             group_view.borrow_mut().bind_dock_layer(wthis);
 
-            RefCell::new(Self::Fill {
+            Self::Fill {
                 group_view: group_view.clone(),
                 parent: parent.clone(),
-            })
+            }
         })
     }
 
@@ -912,17 +807,7 @@ impl PaneDockState {
         }
     }
 
-    fn reparent(&mut self, new_parent: &SharedMut<Self>) {
-        match self {
-            Self::EmptyRoot(_, _) => (),
-            Self::Left { parent, .. } => *parent = Rc::downgrade(new_parent),
-            Self::Right { parent, .. } => *parent = Rc::downgrade(new_parent),
-            Self::Top { parent, .. } => *parent = Rc::downgrade(new_parent),
-            Self::Bottom { parent, .. } => *parent = Rc::downgrade(new_parent),
-            Self::Fill { parent, .. } => *parent = Rc::downgrade(new_parent),
-        }
-    }
-    fn reparent_weak(&mut self, new_parent: &Weak<RefCell<Self>>) {
+    fn reparent(&mut self, new_parent: &Weak<RefCell<Self>>) {
         match self {
             Self::EmptyRoot(_, _) => (),
             Self::Left { parent, .. } => *parent = new_parent.clone(),
@@ -1162,16 +1047,16 @@ impl PaneDockState {
                     {
                         // 一つ上のレベルでドックできるかも
                         if local_x < 8.0 {
-                            return PaneDockingRecommendation::Left(Rc::downgrade(&parent));
+                            return PaneDockingRecommendation::Left(parent);
                         }
                         if local_x > rect.Width - 8.0 {
-                            return PaneDockingRecommendation::Right(Rc::downgrade(&parent));
+                            return PaneDockingRecommendation::Right(parent);
                         }
                     }
 
                     match local_x / rect.Width {
-                        r if r <= 0.3 => PaneDockingRecommendation::Left(Rc::downgrade(this)),
-                        r if 0.7 <= r => PaneDockingRecommendation::Right(Rc::downgrade(this)),
+                        r if r <= 0.3 => PaneDockingRecommendation::Left(this.clone()),
+                        r if 0.7 <= r => PaneDockingRecommendation::Right(this.clone()),
                         _ => PaneDockingRecommendation::Free,
                     }
                 } else {
@@ -1182,16 +1067,16 @@ impl PaneDockState {
                     {
                         // 一つ上のレベルでドックできるかも
                         if local_y < 8.0 {
-                            return PaneDockingRecommendation::Top(Rc::downgrade(&parent));
+                            return PaneDockingRecommendation::Top(parent);
                         }
                         if local_y > rect.Width - 8.0 {
-                            return PaneDockingRecommendation::Bottom(Rc::downgrade(&parent));
+                            return PaneDockingRecommendation::Bottom(parent);
                         }
                     }
 
                     match local_y / rect.Height {
-                        r if r <= 0.3 => PaneDockingRecommendation::Top(Rc::downgrade(this)),
-                        r if 0.7 <= r => PaneDockingRecommendation::Bottom(Rc::downgrade(this)),
+                        r if r <= 0.3 => PaneDockingRecommendation::Top(this.clone()),
+                        r if 0.7 <= r => PaneDockingRecommendation::Bottom(this.clone()),
                         _ => PaneDockingRecommendation::Free,
                     }
                 }
@@ -1201,7 +1086,7 @@ impl PaneDockState {
 }
 
 pub struct PaneGroupDockingManager {
-    docks: Option<std::rc::Rc<core::cell::RefCell<PaneDockState>>>,
+    docks: SharedMut<PaneDockState>,
     placement_visual: ContainerVisual,
     floating_preview_window: HWND,
     _floating_preview_window_target: DesktopWindowTarget,
@@ -1214,9 +1099,7 @@ pub struct PaneGroupDockingManager {
         std::sync::Arc<std::sync::RwLock<Option<DispatcherQueueTimer>>>,
 }
 impl PaneGroupDockingManager {
-    const FLOATING_PREVIEW_INOUT_DURATION: TimeSpan = TimeSpan {
-        Duration: 10_000 * 100,
-    };
+    const FLOATING_PREVIEW_INOUT_DURATION: TimeSpan = timespan_ms(100);
 
     fn new(ctx: &mut impl ViewContext) -> windows::core::Result<Self> {
         extern "system" fn window_callback(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -1367,7 +1250,7 @@ impl PaneGroupDockingManager {
         let placement_visual = ctx.compositor().CreateContainerVisual()?;
 
         Ok(Self {
-            docks: None,
+            docks: PaneDockState::new_root(|_| None),
             placement_visual,
             floating_preview_window,
             _floating_preview_window_target: floating_preview_window_target,
@@ -1380,37 +1263,27 @@ impl PaneGroupDockingManager {
         })
     }
 
-    fn set_layout(
-        &mut self,
-        layout: &std::rc::Rc<core::cell::RefCell<PaneDockState>>,
-    ) -> windows::core::Result<()> {
+    fn set_layout(&mut self, layout: SharedMut<PaneDockState>) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
         layout.borrow().mount_recursive(&children)?;
 
-        self.docks = Some(layout.clone());
+        self.docks = layout;
         Ok(())
     }
     fn resize_root(&mut self, width: f32, height: f32) -> windows::core::Result<()> {
-        if let Some(ref docks) = self.docks {
-            docks.borrow_mut().layout(Rect {
-                X: 0.0,
-                Y: 0.0,
-                Width: width,
-                Height: height,
-            })?;
-        }
+        self.docks.borrow_mut().layout(Rect {
+            X: 0.0,
+            Y: 0.0,
+            Width: width,
+            Height: height,
+        })?;
 
         Ok(())
     }
 
     fn show_preview(&self) -> windows::core::Result<()> {
-        drop(
-            self.pane_drag_preview_hide_delay_timer
-                .write()
-                .unwrap()
-                .take(),
-        );
+        *self.pane_drag_preview_hide_delay_timer.write().unwrap() = None;
 
         unsafe {
             let _ = ShowWindow(self.floating_preview_window, SW_SHOWNA);
@@ -1445,22 +1318,6 @@ impl PaneGroupDockingManager {
         Ok(())
     }
 
-    fn set_preview_pos(&self, left: f32, top: f32) -> windows::core::Result<()> {
-        unsafe {
-            SetWindowPos(
-                self.floating_preview_window,
-                None,
-                left as i32 - 32,
-                top as i32 - 32,
-                0,
-                0,
-                SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE,
-            )?;
-        }
-
-        Ok(())
-    }
-
     fn set_preview_rect(
         &self,
         left: f32,
@@ -1489,43 +1346,41 @@ impl PaneGroupDockingManager {
     }
 
     fn compute_recommended_docking_destination(&self, x: f32, y: f32) -> PaneDockingRecommendation {
-        let Some(ref docks) = self.docks else {
-            return PaneDockingRecommendation::Free;
-        };
-
-        PaneDockState::compute_recommended_docking_destination(docks, x, y)
+        PaneDockState::compute_recommended_docking_destination(&self.docks, x, y)
     }
 }
 
 pub struct PaneGroupView {
-    docking_manager: std::rc::Weak<core::cell::RefCell<PaneGroupDockingManager>>,
-    bound_dock_layer: Weak<RefCell<PaneDockState>>,
+    docking_manager: WeakMut<PaneGroupDockingManager>,
+    bound_dock_layer: WeakMut<PaneDockState>,
     root: ContainerVisual,
     content_area: ContainerVisual,
     content_area_base: SpriteVisual,
-    ht_ref: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
-    ht_ref_content: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
+    ht_ref: SharedMut<HitTestTree>,
+    ht_ref_content: SharedMut<HitTestTree>,
     current_active: usize,
     tab_height: f32,
     width: f32,
     height: f32,
     tabs: Vec<(
-        std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>,
-        std::rc::Rc<core::cell::RefCell<dyn PaneTabContentPresenter>>,
+        SharedMut<PaneTabHeaderView>,
+        SharedMut<dyn PaneTabContentPresenter>,
     )>,
     drag_base_point: Option<(f32, f32, f32, f32)>,
     preview_rect: Rect,
 }
 impl PaneGroupView {
     pub fn new(
-        docking_manager: &std::rc::Weak<core::cell::RefCell<PaneGroupDockingManager>>,
+        docking_manager: &SharedMut<PaneGroupDockingManager>,
         ctx: &mut impl ViewContext,
     ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
         let root = ctx.compositor().CreateContainerVisual()?;
         root.SetSize(Vector2 { X: 128.0, Y: 128.0 })?;
+
         let content_area = ctx.compositor().CreateContainerVisual()?;
         content_area.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
         root.Children()?.InsertAtBottom(&content_area)?;
+
         let content_area_base = ctx.compositor().CreateSpriteVisual()?;
         content_area_base.SetBrush(&{
             let b = ctx.compositor().CreateColorBrush()?;
@@ -1549,59 +1404,57 @@ impl PaneGroupView {
                 .CreateInsetClipWithInsets(0.0, 0.0, 0.0, 0.0)?,
         )?;
 
-        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
-            |wthis| {
-                let ht = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
-                    wthis,
-                    ctx.hittest_context_mut().new_id(),
-                    0.0,
-                    0.0,
-                    128.0,
-                    128.0,
-                )));
-                HitTestTree::add_child(ctx.hittest_tree_parent(), &ht);
-                let ht_content = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
-                    wthis,
-                    ctx.hittest_context_mut().new_id(),
-                    0.0,
-                    0.0,
-                    128.0,
-                    128.0,
-                )));
-                HitTestTree::add_child(&ht, &ht_content);
+        Ok(new_cyclic_shared_mut(|wthis| {
+            let ht = HitTestTree::new(
+                wthis,
+                ctx.hittest_context_mut().new_id(),
+                0.0,
+                0.0,
+                128.0,
+                128.0,
+            );
+            HitTestTree::add_child(ctx.hittest_tree_parent(), ht.clone());
+            let ht_content = HitTestTree::new(
+                wthis,
+                ctx.hittest_context_mut().new_id(),
+                0.0,
+                0.0,
+                128.0,
+                128.0,
+            );
+            HitTestTree::add_child(&ht, ht_content.clone());
 
-                core::cell::RefCell::new(Self {
-                    docking_manager: docking_manager.clone(),
-                    bound_dock_layer: Weak::new(),
-                    root,
-                    content_area,
-                    content_area_base,
-                    ht_ref: ht,
-                    ht_ref_content: ht_content,
-                    current_active: 0,
-                    tab_height: 0.0,
-                    width: 128.0,
-                    height: 128.0,
-                    tabs: Vec::new(),
-                    drag_base_point: None,
-                    preview_rect: Rect {
-                        X: 0.0,
-                        Y: 0.0,
-                        Width: 0.0,
-                        Height: 0.0,
-                    },
-                })
-            },
-        ))
+            Self {
+                docking_manager: Rc::downgrade(docking_manager),
+                bound_dock_layer: empty_weak_mut(),
+                root,
+                content_area,
+                content_area_base,
+                ht_ref: ht,
+                ht_ref_content: ht_content,
+                current_active: 0,
+                tab_height: 0.0,
+                width: 128.0,
+                height: 128.0,
+                tabs: Vec::new(),
+                drag_base_point: None,
+                preview_rect: Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 0.0,
+                    Height: 0.0,
+                },
+            }
+        }))
     }
-    pub fn bind_dock_layer(&mut self, layer: &Weak<RefCell<PaneDockState>>) {
+    pub fn bind_dock_layer(&mut self, layer: &WeakMut<PaneDockState>) {
         self.bound_dock_layer = layer.clone();
     }
 
     pub fn add_tab<T: PaneTabPresenter + 'static>(
-        this: &std::rc::Rc<core::cell::RefCell<Self>>,
+        this: &SharedMut<Self>,
         ctx: &mut impl ViewContext,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<T>>> {
+    ) -> windows::core::Result<SharedMut<T>> {
         let mut thisref = this.borrow_mut();
         let header_view = PaneTabHeaderView::new(
             this,
@@ -1610,7 +1463,7 @@ impl PaneGroupView {
             thisref.tabs.is_empty(),
             &mut ctx.on_new_hittest_tree(&thisref.ht_ref),
         )?;
-        let content_presenter = std::rc::Rc::new(core::cell::RefCell::new(T::new(&header_view)));
+        let content_presenter = new_shared_mut(T::new(&header_view));
         thisref
             .tabs
             .push((header_view.clone(), content_presenter.clone()));
@@ -1631,23 +1484,17 @@ impl PaneGroupView {
     }
 
     fn readjust_content_area(&mut self) -> windows::core::Result<()> {
-        self.content_area.SetOffset(Vector3 {
+        self.content_area.set_rect(Rect {
             X: 0.0,
             Y: self.tab_height,
-            Z: 0.0,
+            Width: self.width,
+            Height: (self.height - self.tab_height).max(0.0),
         })?;
-        self.content_area.SetSize(Vector2 {
-            X: self.width,
-            Y: (self.height - self.tab_height).max(0.0),
-        })?;
-        self.content_area_base.SetOffset(Vector3 {
+        self.content_area_base.set_rect(Rect {
             X: 0.0,
             Y: self.tab_height,
-            Z: 0.0,
-        })?;
-        self.content_area_base.SetSize(Vector2 {
-            X: self.width,
-            Y: (self.height - self.tab_height).max(0.0),
+            Width: self.width,
+            Height: (self.height - self.tab_height).max(0.0),
         })?;
 
         self.ht_ref_content.borrow_mut().top = self.tab_height;
@@ -1701,14 +1548,11 @@ impl PaneGroupView {
         width: f32,
         height: f32,
     ) -> windows::core::Result<()> {
-        self.root.SetOffset(Vector3 {
+        self.root.set_rect(Rect {
             X: left,
             Y: top,
-            Z: 0.0,
-        })?;
-        self.root.SetSize(Vector2 {
-            X: width,
-            Y: height,
+            Width: width,
+            Height: height,
         })?;
         self.ht_ref.borrow_mut().set_rect(left, top, width, height);
         self.width = width;
@@ -1770,10 +1614,7 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
         let Some(docking_manager) = self.borrow().docking_manager.upgrade() else {
             return;
         };
-        docking_manager
-            .borrow()
-            .show_preview()
-            .expect("Failed to show floating preview");
+
         let mut thisref = self.borrow_mut();
         let HitTestTree {
             left,
@@ -1782,13 +1623,15 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
             height,
             ..
         } = *thisref.ht_ref.borrow();
-        let dpi = unsafe { GetDpiForWindow(window) as f32 };
-        thisref.drag_base_point = Some((x, y, left, top));
+
+        let app_window = AppWindow::wrap(window);
         let mut loc = [POINT {
-            x: (left * dpi / 96.0) as _,
-            y: (top * dpi / 96.0) as _,
+            x: app_window.dip_to_pixels(left) as _,
+            y: app_window.dip_to_pixels(top) as _,
         }];
-        unsafe { MapWindowPoints(window, None, &mut loc) };
+        app_window.map_points_to_desktop(&mut loc);
+
+        thisref.drag_base_point = Some((x, y, left, top));
         thisref.preview_rect = Rect {
             X: left,
             Y: top,
@@ -1797,11 +1640,15 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
         };
         docking_manager
             .borrow()
+            .show_preview()
+            .expect("Failed to show floating preview");
+        docking_manager
+            .borrow()
             .set_preview_rect(
                 loc[0].x as _,
                 loc[0].y as _,
-                width * dpi / 96.0,
-                height * dpi / 96.0,
+                app_window.dip_to_pixels(width),
+                app_window.dip_to_pixels(height),
             )
             .expect("Failed to update preview rect");
 
@@ -1910,7 +1757,7 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                             docked
                         };
 
-                        new_child.borrow_mut().reparent_weak(parent1);
+                        new_child.borrow_mut().reparent(parent1);
                         parent1
                             .upgrade()
                             .unwrap()
@@ -1935,7 +1782,7 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                             docked
                         };
 
-                        new_child.borrow_mut().reparent_weak(parent1);
+                        new_child.borrow_mut().reparent(parent1);
                         parent1
                             .upgrade()
                             .unwrap()
@@ -1960,7 +1807,7 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                             docked
                         };
 
-                        new_child.borrow_mut().reparent_weak(parent1);
+                        new_child.borrow_mut().reparent(parent1);
                         parent1
                             .upgrade()
                             .unwrap()
@@ -1985,7 +1832,7 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                             docked
                         };
 
-                        new_child.borrow_mut().reparent_weak(parent1);
+                        new_child.borrow_mut().reparent(parent1);
                         parent1
                             .upgrade()
                             .unwrap()
@@ -2020,7 +1867,7 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
 }
 
 pub struct PaneTabHeaderView {
-    group_view: Weak<RefCell<PaneGroupView>>,
+    group_view: WeakMut<PaneGroupView>,
     index_in_group: usize,
     label: Cow<'static, str>,
     visual: LayerVisual,
@@ -2031,7 +1878,7 @@ pub struct PaneTabHeaderView {
     bg_hover_end_animation: ScalarKeyFrameAnimation,
     active_overlay_enter_animation: ScalarKeyFrameAnimation,
     active_overlay_leave_animation: ScalarKeyFrameAnimation,
-    hittest_tree_self: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
+    hittest_tree_self: SharedMut<HitTestTree>,
     bg_active: bool,
     is_active: bool,
     width: f32,
@@ -2039,12 +1886,12 @@ pub struct PaneTabHeaderView {
 }
 impl PaneTabHeaderView {
     pub fn new(
-        group_view: &std::rc::Rc<core::cell::RefCell<PaneGroupView>>,
+        group_view: &SharedMut<PaneGroupView>,
         index_in_group: usize,
         title: impl Into<Cow<'static, str>>,
         init_active: bool,
         ctx: &mut impl ViewContext,
-    ) -> windows::core::Result<std::rc::Rc<core::cell::RefCell<Self>>> {
+    ) -> windows::core::Result<SharedMut<Self>> {
         let base = ctx.compositor().CreateLayerVisual()?;
         let title = title.into();
         let font = if init_active {
@@ -2066,11 +1913,8 @@ impl PaneTabHeaderView {
                 let v = ctx.compositor().CreateSpriteVisual()?;
                 v.SetBrush(&label_content_brush)?;
                 v.SetSize(title_text.visual_size())?;
-                v.SetOffset(Vector3 {
-                    X: TAB_MARGIN_X,
-                    Y: TAB_MARGIN_Y,
-                    Z: 0.0,
-                })?;
+                v.SetAnchorPoint(Vector2::scalar(0.5))?;
+                v.SetRelativeOffsetAdjustment(Vector2::scalar(0.5).with_z(0.0))?;
 
                 v
             })
@@ -2122,45 +1966,36 @@ impl PaneTabHeaderView {
         children.InsertAtBottom(&active_overlay)?;
         children.InsertAtBottom(&bg)?;
 
-        Ok(std::rc::Rc::<core::cell::RefCell<Self>>::new_cyclic(
-            |wthis| {
-                let ht_id = ctx.hittest_context_mut().new_id();
-                let ht_self = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new(
-                    wthis,
-                    ht_id,
-                    0.0,
-                    0.0,
-                    view_size.X,
-                    view_size.Y,
-                )));
-                HitTestTree::add_child(ctx.hittest_tree_parent(), &ht_self);
+        Ok(new_cyclic_shared_mut(|wthis| {
+            let ht_id = ctx.hittest_context_mut().new_id();
+            let ht_self = HitTestTree::new(wthis, ht_id, 0.0, 0.0, view_size.X, view_size.Y);
+            HitTestTree::add_child(ctx.hittest_tree_parent(), ht_self.clone());
 
-                core::cell::RefCell::new(Self {
-                    group_view: Rc::downgrade(group_view),
-                    index_in_group,
-                    label: title,
-                    visual: base,
-                    bg_visual: bg,
-                    active_overlay_visual: active_overlay,
-                    label_content_brush,
-                    bg_hover_animation: ctx.common().tab_hover_animation.clone(),
-                    bg_hover_end_animation: ctx.common().tab_hover_end_animation.clone(),
-                    active_overlay_enter_animation: ctx
-                        .common()
-                        .tab_active_overlay_enter_animation
-                        .clone(),
-                    active_overlay_leave_animation: ctx
-                        .common()
-                        .tab_active_overlay_leave_animation
-                        .clone(),
-                    hittest_tree_self: ht_self,
-                    bg_active: init_active,
-                    is_active: init_active,
-                    width: view_size.X,
-                    height: view_size.Y,
-                })
-            },
-        ))
+            Self {
+                group_view: Rc::downgrade(group_view),
+                index_in_group,
+                label: title,
+                visual: base,
+                bg_visual: bg,
+                active_overlay_visual: active_overlay,
+                label_content_brush,
+                bg_hover_animation: ctx.common().tab_hover_animation.clone(),
+                bg_hover_end_animation: ctx.common().tab_hover_end_animation.clone(),
+                active_overlay_enter_animation: ctx
+                    .common()
+                    .tab_active_overlay_enter_animation
+                    .clone(),
+                active_overlay_leave_animation: ctx
+                    .common()
+                    .tab_active_overlay_leave_animation
+                    .clone(),
+                hittest_tree_self: ht_self,
+                bg_active: init_active,
+                is_active: init_active,
+                width: view_size.X,
+                height: view_size.Y,
+            }
+        }))
     }
 
     fn activate_bg(&mut self) -> windows::core::Result<()> {
@@ -2243,7 +2078,7 @@ impl InputEventHandler for RefCell<PaneTabHeaderView> {
             .activate_bg()
             .expect("Failed to activate bg");
     }
-    fn on_pointer_leave(&self, _view_ctx: &mut dyn InputContext) {
+    fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {
         self.borrow_mut()
             .deactivate_bg()
             .expect("Failed to deactivate bg");
@@ -2272,9 +2107,9 @@ pub trait PaneTabContentPresenter {
         view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()>;
 }
-pub trait PaneTabPresenter: PaneTabContentPresenter {
+pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     const INIT_TAB_NAME: &'static str;
-    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self;
+    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self;
 }
 
 pub struct InspectorTabPresenter {}
@@ -2313,7 +2148,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
 impl PaneTabPresenter for InspectorTabPresenter {
     const INIT_TAB_NAME: &'static str = "Inspector";
 
-    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
         Self {}
     }
 }
@@ -2338,7 +2173,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
 impl PaneTabPresenter for ProjectSettingsTabPresenter {
     const INIT_TAB_NAME: &'static str = "Project Settings";
 
-    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
         Self {}
     }
 }
@@ -2363,7 +2198,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
 impl PaneTabPresenter for TimelineTabPresenter {
     const INIT_TAB_NAME: &'static str = "Timeline";
 
-    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
         Self {}
     }
 }
@@ -2388,7 +2223,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
 impl PaneTabPresenter for StageTabPresenter {
     const INIT_TAB_NAME: &'static str = "Stage";
 
-    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
         Self {}
     }
 }
@@ -2413,7 +2248,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
 impl PaneTabPresenter for PreviewTabPresenter {
     const INIT_TAB_NAME: &'static str = "Preview";
 
-    fn new(_tab_header_view: &std::rc::Rc<core::cell::RefCell<PaneTabHeaderView>>) -> Self {
+    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
         Self {}
     }
 }
@@ -2447,18 +2282,14 @@ impl InputAction {
 const DRAG_THRESHOLD_DIST2: f32 = 5.0 * 5.0;
 struct InputState {
     bound_window: HWND,
-    ht_tree: std::rc::Rc<core::cell::RefCell<HitTestTree>>,
-    mouse_capturing_element: Option<std::rc::Weak<core::cell::RefCell<HitTestTree>>>,
-    mouse_current_enter_element: Option<std::rc::Weak<core::cell::RefCell<HitTestTree>>>,
-    mouse_down_point: Option<(
-        f32,
-        f32,
-        Option<std::rc::Weak<core::cell::RefCell<HitTestTree>>>,
-    )>,
+    ht_tree: SharedMut<HitTestTree>,
+    mouse_capturing_element: Option<WeakMut<HitTestTree>>,
+    mouse_current_enter_element: Option<WeakMut<HitTestTree>>,
+    mouse_down_point: Option<(f32, f32, Option<WeakMut<HitTestTree>>)>,
     is_mouse_dragging: bool,
 }
 impl InputState {
-    fn new(bound_window: HWND, ht_tree: &std::rc::Rc<core::cell::RefCell<HitTestTree>>) -> Self {
+    fn new(bound_window: HWND, ht_tree: &SharedMut<HitTestTree>) -> Self {
         Self {
             bound_window,
             ht_tree: ht_tree.clone(),
@@ -2475,12 +2306,12 @@ impl InputState {
             != self
                 .mouse_current_enter_element
                 .as_ref()
-                .and_then(std::rc::Weak::upgrade)
+                .and_then(Weak::upgrade)
                 .map(|x| x.borrow().id);
         if let Some(x) = self
             .mouse_current_enter_element
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
         {
             if Some(x.borrow().id) != over_tree.as_ref().map(|x| x.borrow().id) {
                 // leave
@@ -2494,7 +2325,7 @@ impl InputState {
             if let Some(x) = self
                 .mouse_current_enter_element
                 .as_ref()
-                .and_then(std::rc::Weak::upgrade)
+                .and_then(Weak::upgrade)
                 .and_then(|e| e.borrow().eh.upgrade())
             {
                 actions.push(InputAction::PointerEnter(x));
@@ -2530,7 +2361,7 @@ impl InputState {
         if let Some(e) = self
             .mouse_capturing_element
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
             .and_then(|e| e.borrow().eh.upgrade())
         {
             if let Some((dx, dy, _)) = self.mouse_down_point.as_ref() {
@@ -2589,7 +2420,7 @@ impl InputState {
         if let Some(e) = self
             .mouse_capturing_element
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
             .and_then(|e| e.borrow().eh.upgrade())
         {
             actions.push(InputAction::PointerDown(e));
@@ -2602,7 +2433,7 @@ impl InputState {
         if let Some(e) = self
             .mouse_current_enter_element
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
             .and_then(|e| e.borrow().eh.upgrade())
         {
             actions.push(InputAction::PointerDown(e));
@@ -2617,7 +2448,7 @@ impl InputState {
         if let Some(e) = self
             .mouse_capturing_element
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
             .and_then(|e| e.borrow().eh.upgrade())
         {
             actions.push(InputAction::PointerUp(e.clone()));
@@ -2637,7 +2468,7 @@ impl InputState {
             if let Some(x) = self
                 .mouse_current_enter_element
                 .as_ref()
-                .and_then(std::rc::Weak::upgrade)
+                .and_then(Weak::upgrade)
                 .and_then(|e| e.borrow().eh.upgrade())
             {
                 actions.push(InputAction::Click(x));
@@ -2662,7 +2493,7 @@ impl InputState {
         if let Some(e) = self
             .mouse_capturing_element
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
             .and_then(|e| e.borrow().eh.upgrade())
         {
             // TODO: caching loaded cursors
@@ -2685,7 +2516,7 @@ impl InputState {
         if let Some(e) = self
             .mouse_current_enter_element
             .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+            .and_then(Weak::upgrade)
             .and_then(|e| e.borrow().eh.upgrade())
         {
             // TODO: caching loaded cursors
@@ -2716,8 +2547,8 @@ pub struct HitTestTree {
     top: f32,
     width: f32,
     height: f32,
-    parent: Weak<RefCell<HitTestTree>>,
-    children: HashMap<usize, std::rc::Rc<core::cell::RefCell<HitTestTree>>>,
+    parent: WeakMut<HitTestTree>,
+    children: HashMap<usize, SharedMut<HitTestTree>>,
 }
 impl HitTestTree {
     #[inline]
@@ -2728,17 +2559,17 @@ impl HitTestTree {
         top: f32,
         width: f32,
         height: f32,
-    ) -> Self {
-        Self {
+    ) -> SharedMut<Self> {
+        new_shared_mut(Self {
             eh: eh.clone(),
             id,
             left,
             top,
             width,
             height,
-            parent: Weak::new(),
+            parent: empty_weak_mut(),
             children: HashMap::new(),
-        }
+        })
     }
     #[inline]
     pub fn new_unsized(
@@ -2746,19 +2577,15 @@ impl HitTestTree {
         id: usize,
         left: f32,
         top: f32,
-    ) -> Self {
+    ) -> SharedMut<Self> {
         Self::new(eh, id, left, top, f32::MAX, f32::MAX)
     }
 
     #[inline]
-    pub fn add_child(
-        this: &SharedMut<Self>,
-        child: &std::rc::Rc<core::cell::RefCell<HitTestTree>>,
-    ) {
+    pub fn add_child(this: &SharedMut<Self>, child: SharedMut<HitTestTree>) {
         child.borrow_mut().parent = Rc::downgrade(this);
-        this.borrow_mut()
-            .children
-            .insert(child.borrow().id, child.clone());
+        let cid = child.borrow().id;
+        this.borrow_mut().children.insert(cid, child);
     }
 
     #[inline]
@@ -2787,11 +2614,7 @@ impl HitTestTree {
         self.top = top;
     }
 
-    pub fn check(
-        this: &std::rc::Rc<core::cell::RefCell<Self>>,
-        x: f32,
-        y: f32,
-    ) -> Option<std::rc::Rc<core::cell::RefCell<Self>>> {
+    pub fn check(this: &SharedMut<Self>, x: f32, y: f32) -> Option<SharedMut<Self>> {
         let this1 = this.borrow();
         if (this1.left..=(this1.left + this1.width)).contains(&x)
             && (this1.top..=(this1.top + this1.height)).contains(&y)
@@ -2839,7 +2662,7 @@ struct AppWindowState<'r> {
     text_format_stock: &'r mut TextFormatStock,
     text_surface_stock: &'r mut TextSurfaceStock,
     hittest_context: HitTestTreeContext,
-    pane_group_docking_manager: std::rc::Rc<core::cell::RefCell<PaneGroupDockingManager>>,
+    pane_group_docking_manager: SharedMut<PaneGroupDockingManager>,
 }
 impl ViewContext for AppWindowState<'_> {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
@@ -2858,7 +2681,7 @@ impl ViewContext for AppWindowState<'_> {
         self.text_surface_stock
     }
 
-    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>> {
+    fn hittest_tree_parent(&self) -> &SharedMut<HitTestTree> {
         &self.input_state.ht_tree
     }
 
@@ -2882,6 +2705,35 @@ struct AppWindow {
 impl AppWindow {
     pub const WINDOW_EXTRA_SIZE: usize = core::mem::size_of::<usize>();
     const STATE_STORE_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+
+    #[inline]
+    fn register_window_class() -> windows::core::Result<u16> {
+        let cls = WNDCLASSEXA {
+            cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
+            cbClsExtra: 0,
+            cbWndExtra: Self::WINDOW_EXTRA_SIZE as _,
+            style: WNDCLASS_STYLES(0),
+            lpfnWndProc: Some(window_proc),
+            hInstance: unsafe { GetModuleHandleA(None)?.into() },
+            hIcon: unsafe {
+                LoadIconA(None, core::mem::transmute::<_, PCSTR>(IDI_APPLICATION))
+                    .expect("Failed to load app icon")
+            },
+            hCursor: unsafe {
+                LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
+                    .expect("Failed to load default cursor")
+            },
+            hbrBackground: HBRUSH(0),
+            lpszMenuName: PCSTR::null(),
+            lpszClassName: s!("io.ct2.peridot.marble.windows"),
+            hIconSm: unsafe {
+                LoadIconA(None, core::mem::transmute::<_, PCSTR>(IDI_APPLICATION))
+                    .expect("Failed to load app small icon")
+            },
+        };
+
+        register_window_class(&cls)
+    }
 
     #[inline]
     pub fn wrap(handle: HWND) -> Self {
@@ -2954,32 +2806,9 @@ impl AppWindow {
 
 fn main() {
     let instance_handle = unsafe { GetModuleHandleA(None).expect("Failed to get instance handle") };
-    let wndclass = WNDCLASSEXA {
-        cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
-        cbClsExtra: 0,
-        cbWndExtra: AppWindow::WINDOW_EXTRA_SIZE as _,
-        style: WNDCLASS_STYLES(0),
-        lpfnWndProc: Some(window_proc),
-        hInstance: instance_handle.into(),
-        hIcon: unsafe {
-            LoadIconA(None, core::mem::transmute::<_, PCSTR>(IDI_APPLICATION))
-                .expect("Failed to load app icon")
-        },
-        hCursor: unsafe {
-            LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
-                .expect("Failed to load default cursor")
-        },
-        hbrBackground: HBRUSH(0),
-        lpszMenuName: PCSTR::null(),
-        lpszClassName: s!("io.ct2.peridot.marble.windows"),
-        hIconSm: unsafe {
-            LoadIconA(None, core::mem::transmute::<_, PCSTR>(IDI_APPLICATION))
-                .expect("Failed to load app small icon")
-        },
-    };
     let window_handle = WindowBuilder::new(
         instance_handle.into(),
-        register_window_class(&wndclass).expect("Failed to register window class"),
+        AppWindow::register_window_class().expect("Failed to register window class"),
         s!("Peridot Marble Editor"),
     )
     .no_redirection_bitmap()
@@ -3056,8 +2885,7 @@ fn main() {
     };
     let mut text_format_stock = TextFormatStock::new(&dwrite_factory);
 
-    let compositor =
-        windows::UI::Composition::Compositor::new().expect("Failed to create ui compositor");
+    let compositor = Compositor::new().expect("Failed to create ui compositor");
     let desktop_interop = compositor
         .cast::<ICompositorDesktopInterop>()
         .expect("This compositor does not support desktop interop");
@@ -3139,6 +2967,9 @@ fn main() {
             .expect("Failed to insert overlay layer");
     }
 
+    let linear_easing_fn = compositor
+        .CreateLinearEasingFunction()
+        .expect("Failed to create easing function");
     let common_objects = UICommonObjects {
         tab_base_brush: compositor
             .CreateColorBrushWithColor(Color {
@@ -3204,20 +3035,13 @@ fn main() {
             let a = compositor
                 .CreateScalarKeyFrameAnimation()
                 .expect("Failed to create hover animation");
-            a.InsertKeyFrame(0.0, 0.0)
-                .expect("Failed to insert keyframe");
-            a.InsertKeyFrameWithEasingFunction(
-                1.0,
-                1.0,
-                &compositor
-                    .CreateLinearEasingFunction()
-                    .expect("Failed to create easing function"),
-            )
-            .expect("Failed to insert keyframe");
-            a.SetDuration(TimeSpan {
-                Duration: 50 * 10_000,
-            })
-            .expect("Failed to set duration");
+            a.keyframe(0.0, 0.0)
+                .expect("Failed to insert keyframe")
+                .interpolate(1.0, 1.0, &linear_easing_fn)
+                .expect("Failed to insert keyframe")
+                .set_properties()
+                .duration(timespan_ms(50))
+                .expect("Failed to set duration");
 
             a
         },
@@ -3225,20 +3049,13 @@ fn main() {
             let a = compositor
                 .CreateScalarKeyFrameAnimation()
                 .expect("Failed to create hover animation");
-            a.InsertKeyFrame(0.0, 1.0)
-                .expect("Failed to insert keyframe");
-            a.InsertKeyFrameWithEasingFunction(
-                1.0,
-                0.0,
-                &compositor
-                    .CreateLinearEasingFunction()
-                    .expect("Failed to create easing function"),
-            )
-            .expect("Failed to insert keyframe");
-            a.SetDuration(TimeSpan {
-                Duration: 50 * 10_000,
-            })
-            .expect("Failed to set duration");
+            a.keyframe(0.0, 1.0)
+                .expect("Failed to insert keyframe")
+                .interpolate(1.0, 9.0, &linear_easing_fn)
+                .expect("Failed to insert keyframe")
+                .set_properties()
+                .duration(timespan_ms(50))
+                .expect("Failed to set duration");
 
             a
         },
@@ -3246,20 +3063,13 @@ fn main() {
             let a = compositor
                 .CreateScalarKeyFrameAnimation()
                 .expect("Failed to create hover animation");
-            a.InsertKeyFrame(0.0, 0.0)
-                .expect("Failed to insert keyframe");
-            a.InsertKeyFrameWithEasingFunction(
-                1.0,
-                1.0,
-                &compositor
-                    .CreateLinearEasingFunction()
-                    .expect("Failed to create easing function"),
-            )
-            .expect("Failed to insert keyframe");
-            a.SetDuration(TimeSpan {
-                Duration: 50 * 10_000,
-            })
-            .expect("Failed to set duration");
+            a.keyframe(0.0, 0.0)
+                .expect("Failed to insert keyframe")
+                .interpolate(1.0, 1.0, &linear_easing_fn)
+                .expect("Failed to insert keyframe")
+                .set_properties()
+                .duration(timespan_ms(50))
+                .expect("Failed to set duration");
 
             a
         },
@@ -3267,31 +3077,19 @@ fn main() {
             let a = compositor
                 .CreateScalarKeyFrameAnimation()
                 .expect("Failed to create hover animation");
-            a.InsertKeyFrame(0.0, 1.0)
-                .expect("Failed to insert keyframe");
-            a.InsertKeyFrameWithEasingFunction(
-                1.0,
-                0.0,
-                &compositor
-                    .CreateLinearEasingFunction()
-                    .expect("Failed to create easing function"),
-            )
-            .expect("Failed to insert keyframe");
-            a.SetDuration(TimeSpan {
-                Duration: 50 * 10_000,
-            })
-            .expect("Failed to set duration");
+            a.keyframe(0.0, 1.0)
+                .expect("Failed to insert keyframe")
+                .interpolate(1.0, 0.0, &linear_easing_fn)
+                .expect("Failed to insert keyframe")
+                .set_properties()
+                .duration(timespan_ms(50))
+                .expect("Failed to set duration");
 
             a
         },
     };
 
-    let hittest_tree_root = std::rc::Rc::new(core::cell::RefCell::new(HitTestTree::new_unsized(
-        &Weak::<()>::new(),
-        0,
-        0.0,
-        0.0,
-    )));
+    let hittest_tree_root = HitTestTree::new_unsized(&Weak::<()>::new(), 0, 0.0, 0.0);
     let mut hittest_context = HitTestTreeContext::new();
 
     let mut view_context = ViewContext1 {
@@ -3303,25 +3101,19 @@ fn main() {
         hittest_context: &mut hittest_context,
     };
 
-    let pane_group_docking_manager = std::rc::Rc::new(core::cell::RefCell::new(
+    let pane_group_docking_manager = new_shared_mut(
         PaneGroupDockingManager::new(&mut view_context)
             .expect("Failed to initialize docking manager"),
-    ));
+    );
 
-    let pane_group1 = PaneGroupView::new(
-        &std::rc::Rc::downgrade(&pane_group_docking_manager),
-        &mut view_context,
-    )
-    .expect("Failed to create PaneGroupView");
+    let pane_group1 = PaneGroupView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create PaneGroupView");
     PaneGroupView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context)
         .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange();
 
-    let pane_group2 = PaneGroupView::new(
-        &std::rc::Rc::downgrade(&pane_group_docking_manager),
-        &mut view_context,
-    )
-    .expect("Failed to create PaneGroupView");
+    let pane_group2 = PaneGroupView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create PaneGroupView");
     PaneGroupView::add_tab::<StageTabPresenter>(&pane_group2, &mut view_context)
         .expect("Failed to create StagePaneTab");
     PaneGroupView::add_tab::<PreviewTabPresenter>(&pane_group2, &mut view_context)
@@ -3330,11 +3122,8 @@ fn main() {
         .expect("Failed to create ProjectSettingsPaneTabHeader");
     pane_group2.borrow_mut().rearrange();
 
-    let pane_group3 = PaneGroupView::new(
-        &std::rc::Rc::downgrade(&pane_group_docking_manager),
-        &mut view_context,
-    )
-    .expect("Failed to create PaneGroupView");
+    let pane_group3 = PaneGroupView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create PaneGroupView");
     PaneGroupView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context)
         .expect("Failed to create InspectorPaneTabHeader");
     pane_group3.borrow_mut().rearrange();
@@ -3364,7 +3153,7 @@ fn main() {
     });
     pane_group_docking_manager
         .borrow_mut()
-        .set_layout(&layout)
+        .set_layout(layout)
         .expect("Failed to setup initial layout");
 
     composition_root
