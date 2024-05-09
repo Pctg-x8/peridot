@@ -175,7 +175,6 @@ impl PaneSplitterView {
                 1.0,
                 1.0,
             );
-            HitTestTree::add_child(ctx.hittest_tree_parent(), ht.clone());
 
             Self {
                 visual,
@@ -212,6 +211,16 @@ impl PaneSplitterView {
         Ok(())
     }
 
+    pub fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.visual)?;
+        HitTestTree::add_child(onto_ht, self.ht.clone());
+
+        Ok(())
+    }
     pub fn unmount(&self) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
         // Note: if letでborrowしたやつはif文の中でも生きているらしいので個別にdropできるようにする
@@ -868,11 +877,15 @@ impl PaneDockState {
         }
     }
 
-    fn mount_recursive(&self, onto: &VisualCollection) -> windows::core::Result<()> {
+    fn mount_recursive(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()> {
         match self {
             // no child
             Self::EmptyRoot(None, _) => Ok(()),
-            Self::EmptyRoot(Some(r), _) => r.borrow().mount_recursive(onto),
+            Self::EmptyRoot(Some(r), _) => r.borrow().mount_recursive(onto, onto_ht),
             Self::Left {
                 docked,
                 splitter,
@@ -897,9 +910,9 @@ impl PaneDockState {
                 rest,
                 ..
             } => {
-                docked.borrow().mount_recursive(onto)?;
-                onto.InsertAtTop(&splitter.borrow().visual)?;
-                rest.borrow().mount_recursive(onto)
+                docked.borrow().mount_recursive(onto, onto_ht)?;
+                splitter.borrow().mount(onto, onto_ht)?;
+                rest.borrow().mount_recursive(onto, onto_ht)
             }
             Self::Fill { group_view, .. } => onto.InsertAtTop(&group_view.borrow().root),
         }
@@ -1200,6 +1213,7 @@ impl PaneDockState {
 pub struct PaneGroupDockingManager {
     docks: SharedMut<PaneDockState>,
     placement_visual: ContainerVisual,
+    ht_placement_root: SharedMut<HitTestTree>,
     floating_preview_window: HWND,
     _floating_preview_window_target: DesktopWindowTarget,
     pane_drag_preview: SpriteVisual,
@@ -1364,6 +1378,7 @@ impl PaneGroupDockingManager {
         Ok(Self {
             docks: PaneDockState::new_root(|_| None),
             placement_visual,
+            ht_placement_root: ctx.hittest_tree_parent().clone(),
             floating_preview_window,
             _floating_preview_window_target: floating_preview_window_target,
             pane_drag_preview,
@@ -1378,7 +1393,10 @@ impl PaneGroupDockingManager {
     fn set_layout(&mut self, layout: SharedMut<PaneDockState>) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
-        layout.borrow().mount_recursive(&children)?;
+        // TODO: HitTestTreeのほうもきれいにする
+        layout
+            .borrow()
+            .mount_recursive(&children, &self.ht_placement_root)?;
 
         self.docks = layout;
         Ok(())
@@ -1399,10 +1417,9 @@ impl PaneGroupDockingManager {
             PaneDockState::Left { splitter, .. }
             | PaneDockState::Right { splitter, .. }
             | PaneDockState::Top { splitter, .. }
-            | PaneDockState::Bottom { splitter, .. } => self
-                .placement_visual
-                .Children()?
-                .InsertAtTop(&splitter.borrow().visual),
+            | PaneDockState::Bottom { splitter, .. } => splitter
+                .borrow()
+                .mount(&self.placement_visual.Children()?, &self.ht_placement_root),
             PaneDockState::Fill { .. } => Ok(()),
         }
     }
@@ -3240,7 +3257,8 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                             PaneDockState::Fill { .. } => unreachable!("invalid structure"),
                         };
 
-                        group_view.borrow()
+                        group_view
+                            .borrow()
                             .unmount()
                             .expect("Failed to unmount group view");
                         let relayout_rect = relayout_root.borrow().controlling_rect();
