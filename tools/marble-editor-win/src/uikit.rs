@@ -24,13 +24,13 @@ pub struct UICommonObjects {
 pub trait ViewContextExtension: ViewContext + Sized {
     fn on_new_hittest_tree<'r>(
         self,
-        new_parent: &'r core::cell::RefCell<HitTestTree>,
+        new_parent: &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
     ) -> ChildViewContext<'r, Self>;
 }
 impl<T: ViewContext> ViewContextExtension for &'_ mut T {
     fn on_new_hittest_tree<'r>(
         self,
-        new_parent: &'r core::cell::RefCell<HitTestTree>,
+        new_parent: &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
     ) -> ChildViewContext<'r, Self> {
         ChildViewContext(self, new_parent)
     }
@@ -41,7 +41,7 @@ pub trait ViewContext {
     fn common(&self) -> &UICommonObjects;
     fn text_format_stock_mut(&mut self) -> &mut TextFormatStock;
     fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock;
-    fn hittest_tree_parent(&self) -> &core::cell::RefCell<HitTestTree>;
+    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>>;
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext;
 }
 pub trait InputContext: ViewContext {
@@ -66,7 +66,7 @@ impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
         T::text_surface_stock_mut(*self)
     }
 
-    fn hittest_tree_parent(&self) -> &core::cell::RefCell<HitTestTree> {
+    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>> {
         T::hittest_tree_parent(*self)
     }
 
@@ -84,7 +84,10 @@ impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
     }
 }
 
-pub struct ChildViewContext<'r, Parent: ViewContext>(Parent, &'r core::cell::RefCell<HitTestTree>);
+pub struct ChildViewContext<'r, Parent: ViewContext>(
+    Parent,
+    &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
+);
 impl<'r, Parent: ViewContext> ViewContext for ChildViewContext<'r, Parent> {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
         self.0.compositor()
@@ -98,7 +101,7 @@ impl<'r, Parent: ViewContext> ViewContext for ChildViewContext<'r, Parent> {
     fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock {
         self.0.text_surface_stock_mut()
     }
-    fn hittest_tree_parent(&self) -> &core::cell::RefCell<HitTestTree> {
+    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>> {
         &self.1
     }
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
@@ -111,7 +114,7 @@ pub struct ViewContext1<'r> {
     pub common: &'r UICommonObjects,
     pub text_format_stock: &'r mut TextFormatStock,
     pub text_surface_stock: &'r mut TextSurfaceStock,
-    pub hittest_tree_parent: &'r core::cell::RefCell<HitTestTree>,
+    pub hittest_tree_parent: &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
     pub hittest_context: &'r mut HitTestTreeContext,
 }
 impl ViewContext for ViewContext1<'_> {
@@ -131,7 +134,7 @@ impl ViewContext for ViewContext1<'_> {
         self.text_surface_stock
     }
 
-    fn hittest_tree_parent(&self) -> &core::cell::RefCell<HitTestTree> {
+    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>> {
         &self.hittest_tree_parent
     }
 
@@ -158,7 +161,7 @@ pub trait InputEventHandler {
     fn on_click(&self, _ctx: &mut dyn InputContext) {}
     fn on_begin_drag(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
     fn on_drag_move(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
-    fn on_end_drag(&self, _window: HWND, _ctx: &mut dyn InputContext) {}
+    fn on_end_drag(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
 }
 impl<T: InputEventHandler> InputEventHandler for std::rc::Rc<T> {
     #[inline(always)]
@@ -202,8 +205,8 @@ impl<T: InputEventHandler> InputEventHandler for std::rc::Rc<T> {
     }
 
     #[inline(always)]
-    fn on_end_drag(&self, window: HWND, ctx: &mut dyn InputContext) {
-        T::on_end_drag(&*self, window, ctx)
+    fn on_end_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        T::on_end_drag(&*self, x, y, window, ctx)
     }
 }
 impl InputEventHandler for () {}

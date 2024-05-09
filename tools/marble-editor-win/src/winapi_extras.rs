@@ -90,19 +90,6 @@ impl WindowBuilder {
     }
 
     #[inline]
-    pub fn at(mut self, x: i32, y: i32) -> Self {
-        self.x = Some(x);
-        self.y = Some(y);
-        self
-    }
-    #[inline]
-    pub fn size(mut self, w: i32, h: i32) -> Self {
-        self.width = Some(w);
-        self.height = Some(h);
-        self
-    }
-
-    #[inline]
     pub fn popup(mut self) -> Self {
         self.style |= WS_POPUP;
         self
