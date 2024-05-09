@@ -107,7 +107,7 @@ pub struct TextSurfaceStock {
     dwrite_factory: IDWriteFactory,
     composition_graphics_device: CompositionGraphicsDevice,
     target_window_dpi: f32,
-    surfaces: HashMap<(*const IDWriteTextFormat, Cow<'static, str>), TextSurface>,
+    surfaces: HashMap<(*mut core::ffi::c_void, Cow<'static, str>), TextSurface>,
 }
 impl TextSurfaceStock {
     pub fn new(
@@ -128,13 +128,13 @@ impl TextSurfaceStock {
         fmt: &IDWriteTextFormat,
         text: impl Into<Cow<'static, str>>,
     ) -> windows::core::Result<TextSurface> {
-        match self.surfaces.entry((fmt as *const _, text.into())) {
+        match self.surfaces.entry((fmt.as_raw(), text.into())) {
             std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let text_layout = unsafe {
                     self.dwrite_factory.CreateTextLayout(
                         &e.key().1.encode_utf16().collect::<Vec<_>>(),
-                        &*e.key().0,
+                        fmt,
                         core::f32::MAX,
                         core::f32::MAX,
                     )?

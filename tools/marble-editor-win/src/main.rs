@@ -1914,7 +1914,11 @@ impl PaneTabHeaderView {
                 v.SetBrush(&label_content_brush)?;
                 v.SetSize(title_text.visual_size())?;
                 v.SetAnchorPoint(Vector2::scalar(0.5))?;
-                v.SetRelativeOffsetAdjustment(Vector2::scalar(0.5).with_z(0.0))?;
+                v.SetOffset(Vector3 {
+                    X: title_text.width * 0.5 + TAB_MARGIN_X,
+                    Y: title_text.height * 0.5 + TAB_MARGIN_Y,
+                    Z: 0.0,
+                })?;
 
                 v
             })
@@ -3051,7 +3055,7 @@ fn main() {
                 .expect("Failed to create hover animation");
             a.keyframe(0.0, 1.0)
                 .expect("Failed to insert keyframe")
-                .interpolate(1.0, 9.0, &linear_easing_fn)
+                .interpolate(1.0, 0.0, &linear_easing_fn)
                 .expect("Failed to insert keyframe")
                 .set_properties()
                 .duration(timespan_ms(50))
