@@ -140,7 +140,7 @@ impl PaneSplitterView {
     };
 
     pub fn new(
-        ctx: &mut impl ViewContext,
+        ctx: &mut (impl ViewContext + ?Sized),
         dir: SplitDirection,
     ) -> windows::core::Result<SharedMut<Self>> {
         let visual = ctx.compositor().CreateSpriteVisual()?;
@@ -168,7 +168,7 @@ impl PaneSplitterView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                wthis,
+                &Rc::new(wthis.clone()),
                 ctx.hittest_context_mut().new_id(),
                 0.0,
                 0.0,
@@ -224,42 +224,57 @@ impl PaneSplitterView {
         Ok(())
     }
 }
-impl InputEventHandler for RefCell<PaneSplitterView> {
+impl InputEventHandler for WeakMut<PaneSplitterView> {
     fn hover_cursor(&self) -> CursorStyle {
-        match self.borrow().dir {
-            SplitDirection::Horizontal => CursorStyle::SizeNS,
-            SplitDirection::Vertical => CursorStyle::SizeEW,
+        match self.upgrade().map(|x| x.borrow().dir) {
+            Some(SplitDirection::Horizontal) => CursorStyle::SizeNS,
+            Some(SplitDirection::Vertical) => CursorStyle::SizeEW,
+            None => CursorStyle::Arrow,
         }
     }
 
     fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
-        self.borrow()
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow()
             .visual
-            .StartAnimation(h!("Opacity"), &self.borrow().hover_animation)
+            .StartAnimation(h!("Opacity"), &this.borrow().hover_animation)
             .expect("Failed to start hover animation");
     }
 
     fn on_pointer_leave(&self, _view_ctx: &mut dyn InputContext) {
-        self.borrow()
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow()
             .visual
-            .StartAnimation(h!("Opacity"), &self.borrow().hover_end_animation)
+            .StartAnimation(h!("Opacity"), &this.borrow().hover_end_animation)
             .expect("Failed to start hover end animation");
     }
 
     fn on_pointer_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
-        let Some(target_dock) = self.borrow().controlling_dock_layer.upgrade() else {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(target_dock) = this.borrow().controlling_dock_layer.upgrade() else {
             return;
         };
 
-        self.borrow_mut().drag_start_values = Some((x, y, target_dock.borrow().dock_size()));
+        this.borrow_mut().drag_start_values = Some((x, y, target_dock.borrow().dock_size()));
         ctx.capture_mouse();
     }
 
     fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
-        let Some(target_dock) = self.borrow().controlling_dock_layer.upgrade() else {
+        let Some(this) = self.upgrade() else {
             return;
         };
-        let Some((bx, by, bs)) = self.borrow().drag_start_values else {
+        let Some(target_dock) = this.borrow().controlling_dock_layer.upgrade() else {
+            return;
+        };
+        let Some((bx, by, bs)) = this.borrow().drag_start_values else {
             return;
         };
 
@@ -276,13 +291,17 @@ impl InputEventHandler for RefCell<PaneSplitterView> {
             .borrow_mut()
             .set_dock_size(new_size.max(1.0))
             .expect("Failed to resize pane");
-        self.borrow_mut()
+        this.borrow_mut()
             .set_offset(x, y)
             .expect("Failed to set splitter position");
     }
 
     fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
-        self.borrow_mut().drag_start_values = None;
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow_mut().drag_start_values = None;
         ctx.release_mouse_capture();
     }
 }
@@ -405,7 +424,7 @@ impl PaneDockState {
         })
     }
 
-    fn new_on_left<VC: ViewContext>(
+    fn new_on_left<VC: ViewContext + ?Sized>(
         ctx: &mut VC,
         parent: &WeakMut<Self>,
         docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
@@ -886,6 +905,83 @@ impl PaneDockState {
         }
     }
 
+    fn relayout(&mut self) -> windows::core::Result<()> {
+        let region = self.controlling_rect();
+        match self {
+            // no child
+            Self::EmptyRoot(None, r) => {
+                *r = region;
+                Ok(())
+            }
+            Self::EmptyRoot(Some(r), rect) => {
+                *rect = region.clone();
+                r.borrow_mut().layout(region)
+            }
+            Self::Left {
+                docked,
+                splitter,
+                container_region,
+                rest,
+                ..
+            } => {
+                *container_region = region.clone();
+                let w = docked.borrow().controlling_rect_width();
+                let (docked_rect, splitter_rect, rest_rect) = Self::split_left(region, w);
+                docked.borrow_mut().layout(docked_rect)?;
+                splitter.borrow().set_rect(splitter_rect)?;
+                rest.borrow_mut().layout(rest_rect)
+            }
+            Self::Right {
+                docked,
+                splitter,
+                container_region,
+                rest,
+                ..
+            } => {
+                *container_region = region.clone();
+                let w = docked.borrow().controlling_rect_width();
+                let (docked_rect, splitter_rect, rest_rect) = Self::split_right(region, w);
+                docked.borrow_mut().layout(docked_rect)?;
+                splitter.borrow().set_rect(splitter_rect)?;
+                rest.borrow_mut().layout(rest_rect)
+            }
+            Self::Top {
+                docked,
+                splitter,
+                container_region,
+                rest,
+                ..
+            } => {
+                *container_region = region;
+                let h = docked.borrow().controlling_rect_height();
+                let (docked_rect, splitter_rect, rest_rect) = Self::split_top(region, h);
+                docked.borrow_mut().layout(docked_rect)?;
+                splitter.borrow().set_rect(splitter_rect)?;
+                rest.borrow_mut().layout(rest_rect)
+            }
+            Self::Bottom {
+                docked,
+                splitter,
+                container_region,
+                rest,
+                ..
+            } => {
+                *container_region = region;
+                let h = docked.borrow().controlling_rect_height();
+                let (docked_rect, splitter_rect, rest_rect) = Self::split_top(region, h);
+                docked.borrow_mut().layout(docked_rect)?;
+                splitter.borrow().set_rect(splitter_rect)?;
+                rest.borrow_mut().layout(rest_rect)
+            }
+            Self::Fill { group_view, .. } => group_view.borrow_mut().set_offset_size(
+                region.X,
+                region.Y,
+                region.Width,
+                region.Height,
+            ),
+        }
+    }
+
     fn layout(&mut self, region: Rect) -> windows::core::Result<()> {
         match self {
             // no child
@@ -1281,6 +1377,19 @@ impl PaneGroupDockingManager {
 
         Ok(())
     }
+    fn mount_splitter_only(&self, layout: &PaneDockState) -> windows::core::Result<()> {
+        match layout {
+            PaneDockState::EmptyRoot(_, _) => Ok(()),
+            PaneDockState::Left { splitter, .. }
+            | PaneDockState::Right { splitter, .. }
+            | PaneDockState::Top { splitter, .. }
+            | PaneDockState::Bottom { splitter, .. } => self
+                .placement_visual
+                .Children()?
+                .InsertAtTop(&splitter.borrow().visual),
+            PaneDockState::Fill { .. } => Ok(()),
+        }
+    }
 
     fn show_preview(&self) -> windows::core::Result<()> {
         *self.pane_drag_preview_hide_delay_timer.write().unwrap() = None;
@@ -1406,7 +1515,7 @@ impl PaneGroupView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                wthis,
+                &Rc::new(wthis.clone()),
                 ctx.hittest_context_mut().new_id(),
                 0.0,
                 0.0,
@@ -1415,7 +1524,7 @@ impl PaneGroupView {
             );
             HitTestTree::add_child(ctx.hittest_tree_parent(), ht.clone());
             let ht_content = HitTestTree::new(
-                wthis,
+                &Rc::new(wthis.clone()),
                 ctx.hittest_context_mut().new_id(),
                 0.0,
                 0.0,
@@ -1609,13 +1718,16 @@ impl PaneGroupView {
         Ok(())
     }
 }
-impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
+impl InputEventHandler for WeakMut<PaneGroupView> {
     fn on_begin_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
-        let Some(docking_manager) = self.borrow().docking_manager.upgrade() else {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(docking_manager) = this.borrow().docking_manager.upgrade() else {
             return;
         };
 
-        let mut thisref = self.borrow_mut();
+        let mut thisref = this.borrow_mut();
         let HitTestTree {
             left,
             top,
@@ -1655,10 +1767,13 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
         ctx.capture_mouse();
     }
     fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
-        let Some((bx, by, ox, oy)) = self.borrow().drag_base_point else {
+        let Some(this) = self.upgrade() else {
             return;
         };
-        let Some(docking_manager) = self.borrow().docking_manager.upgrade() else {
+        let Some((bx, by, ox, oy)) = this.borrow().drag_base_point else {
+            return;
+        };
+        let Some(docking_manager) = this.borrow().docking_manager.upgrade() else {
             return;
         };
 
@@ -1669,7 +1784,8 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                 window.pixels_to_dip(x),
                 window.pixels_to_dip(y),
             );
-        match recommended_dest.dock_rect(self.borrow().preview_rect.clone()) {
+        let preview_rect = this.borrow().preview_rect.clone();
+        match recommended_dest.dock_rect(preview_rect) {
             Some(new_rect) => {
                 let mut loc = [POINT {
                     x: window.dip_to_pixels(new_rect.X) as _,
@@ -1699,15 +1815,18 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                     .set_preview_rect(
                         loc[0].x as _,
                         loc[0].y as _,
-                        window.dip_to_pixels(self.borrow().preview_rect.Width),
-                        window.dip_to_pixels(self.borrow().preview_rect.Height),
+                        window.dip_to_pixels(this.borrow().preview_rect.Width),
+                        window.dip_to_pixels(this.borrow().preview_rect.Height),
                     )
                     .expect("Failed to update preview rect")
             }
         }
     }
     fn on_end_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
-        let Some(docking_manager) = self.borrow().docking_manager.upgrade() else {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(docking_manager) = this.borrow().docking_manager.upgrade() else {
             return;
         };
 
@@ -1719,22 +1838,8 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                 window.pixels_to_dip(y),
             );
         match recommended_dest {
-            PaneDockingRecommendation::Left(_d) => {
-                println!("TODO: relayout Left");
-            }
-            PaneDockingRecommendation::Right(_d) => {
-                println!("TODO: relayout Right");
-            }
-            PaneDockingRecommendation::Top(_d) => {
-                println!("TODO: relayout Top");
-            }
-            PaneDockingRecommendation::Bottom(_d) => {
-                println!("TODO: relayout Bottom");
-            }
-            PaneDockingRecommendation::Free => {
-                println!("TODO: floating");
-
-                let bound_dock_layer = self.borrow().bound_dock_layer.upgrade().unwrap();
+            PaneDockingRecommendation::Left(d) => {
+                let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 let parent = match &*bound_dock_layer.borrow() {
                     PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
                     _ => unreachable!("illegal binding with dock layer"),
@@ -1847,7 +1952,173 @@ impl InputEventHandler for core::cell::RefCell<PaneGroupView> {
                     PaneDockState::Fill { .. } => unreachable!("invalid structure"),
                 };
 
-                self.borrow()
+                let dest_parent = match &*d.borrow() {
+                    PaneDockState::Fill { parent, .. }
+                    | PaneDockState::Left { parent, .. }
+                    | PaneDockState::Right { parent, .. }
+                    | PaneDockState::Top { parent, .. }
+                    | PaneDockState::Bottom { parent, .. } => parent.clone(),
+                    PaneDockState::EmptyRoot(_, _) => unreachable!("Docking on root?"),
+                };
+                let new_layer = PaneDockState::new_on_left(
+                    &mut *ctx,
+                    &dest_parent,
+                    |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                    |parent, _ctx| {
+                        d.borrow_mut().reparent(parent);
+                        d.clone()
+                    },
+                )
+                .expect("Failed to create new dock layer");
+                this.borrow()
+                    .docking_manager
+                    .upgrade()
+                    .unwrap()
+                    .borrow()
+                    .mount_splitter_only(&new_layer.borrow())
+                    .expect("Failed to mount new splitter");
+                dest_parent
+                    .upgrade()
+                    .unwrap()
+                    .borrow_mut()
+                    .replace_child(&d, &new_layer);
+                dest_parent
+                    .upgrade()
+                    .unwrap()
+                    .borrow_mut()
+                    .relayout()
+                    .expect("Failed to relayout from new parent");
+                relayout_root
+                    .borrow_mut()
+                    .relayout()
+                    .expect("Failed to relayout from old parent");
+            }
+            PaneDockingRecommendation::Right(_d) => {
+                println!("TODO: relayout Right");
+            }
+            PaneDockingRecommendation::Top(_d) => {
+                println!("TODO: relayout Top");
+            }
+            PaneDockingRecommendation::Bottom(_d) => {
+                println!("TODO: relayout Bottom");
+            }
+            PaneDockingRecommendation::Free => {
+                println!("TODO: floating");
+
+                let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
+                let parent = match &*bound_dock_layer.borrow() {
+                    PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
+                    _ => unreachable!("illegal binding with dock layer"),
+                };
+                let relayout_root = match &mut *parent.borrow_mut() {
+                    PaneDockState::EmptyRoot(rest, _) => {
+                        *rest = None;
+                        parent.clone()
+                    }
+                    PaneDockState::Left {
+                        docked,
+                        rest,
+                        parent: parent1,
+                        splitter,
+                        ..
+                    } => {
+                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                            rest
+                        } else {
+                            docked
+                        };
+
+                        new_child.borrow_mut().reparent(parent1);
+                        parent1
+                            .upgrade()
+                            .unwrap()
+                            .borrow_mut()
+                            .replace_child(&parent, new_child);
+                        splitter
+                            .borrow()
+                            .unmount()
+                            .expect("Failed to unmounting splitter");
+                        parent1.upgrade().unwrap()
+                    }
+                    PaneDockState::Right {
+                        docked,
+                        rest,
+                        parent: parent1,
+                        splitter,
+                        ..
+                    } => {
+                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                            rest
+                        } else {
+                            docked
+                        };
+
+                        new_child.borrow_mut().reparent(parent1);
+                        parent1
+                            .upgrade()
+                            .unwrap()
+                            .borrow_mut()
+                            .replace_child(&parent, new_child);
+                        splitter
+                            .borrow()
+                            .unmount()
+                            .expect("Failed to unmounting splitter");
+                        parent1.upgrade().unwrap()
+                    }
+                    PaneDockState::Top {
+                        docked,
+                        rest,
+                        parent: parent1,
+                        splitter,
+                        ..
+                    } => {
+                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                            rest
+                        } else {
+                            docked
+                        };
+
+                        new_child.borrow_mut().reparent(parent1);
+                        parent1
+                            .upgrade()
+                            .unwrap()
+                            .borrow_mut()
+                            .replace_child(&parent, new_child);
+                        splitter
+                            .borrow()
+                            .unmount()
+                            .expect("Failed to unmounting splitter");
+                        parent1.upgrade().unwrap()
+                    }
+                    PaneDockState::Bottom {
+                        docked,
+                        rest,
+                        parent: parent1,
+                        splitter,
+                        ..
+                    } => {
+                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                            rest
+                        } else {
+                            docked
+                        };
+
+                        new_child.borrow_mut().reparent(parent1);
+                        parent1
+                            .upgrade()
+                            .unwrap()
+                            .borrow_mut()
+                            .replace_child(&parent, new_child);
+                        splitter
+                            .borrow()
+                            .unmount()
+                            .expect("Failed to unmounting splitter");
+                        parent1.upgrade().unwrap()
+                    }
+                    PaneDockState::Fill { .. } => unreachable!("invalid structure"),
+                };
+
+                this.borrow()
                     .unmount()
                     .expect("Failed to unmount group view");
                 let relayout_rect = relayout_root.borrow().controlling_rect();
@@ -1972,7 +2243,14 @@ impl PaneTabHeaderView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht_id = ctx.hittest_context_mut().new_id();
-            let ht_self = HitTestTree::new(wthis, ht_id, 0.0, 0.0, view_size.X, view_size.Y);
+            let ht_self = HitTestTree::new(
+                &Rc::new(wthis.clone()),
+                ht_id,
+                0.0,
+                0.0,
+                view_size.X,
+                view_size.Y,
+            );
             HitTestTree::add_child(ctx.hittest_tree_parent(), ht_self.clone());
 
             Self {
@@ -2076,23 +2354,35 @@ impl PaneTabHeaderView {
         Ok(())
     }
 }
-impl InputEventHandler for RefCell<PaneTabHeaderView> {
+impl InputEventHandler for WeakMut<PaneTabHeaderView> {
     fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
-        self.borrow_mut()
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow_mut()
             .activate_bg()
             .expect("Failed to activate bg");
     }
     fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {
-        self.borrow_mut()
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow_mut()
             .deactivate_bg()
             .expect("Failed to deactivate bg");
     }
     fn on_click(&self, ctx: &mut dyn InputContext) {
-        // Note: selfを借りっぱなしにしないためにいったん切り出す
-        let Some(g) = self.borrow().group_view.upgrade() else {
+        let Some(this) = self.upgrade() else {
             return;
         };
-        let index = self.borrow().index_in_group;
+
+        // Note: selfを借りっぱなしにしないためにいったん切り出す
+        let Some(g) = this.borrow().group_view.upgrade() else {
+            return;
+        };
+        let index = this.borrow().index_in_group;
 
         g.borrow_mut()
             .switch_active(index, ctx)
@@ -2319,20 +2609,17 @@ impl InputState {
         {
             if Some(x.borrow().id) != over_tree.as_ref().map(|x| x.borrow().id) {
                 // leave
-                if let Some(e) = x.borrow().eh.upgrade() {
-                    actions.push(InputAction::PointerLeave(e));
-                }
+                actions.push(InputAction::PointerLeave(x.borrow().eh.clone()));
             }
         }
-        self.mouse_current_enter_element = over_tree.as_ref().map(std::rc::Rc::downgrade);
+        self.mouse_current_enter_element = over_tree.as_ref().map(Rc::downgrade);
         if over_changes {
             if let Some(x) = self
                 .mouse_current_enter_element
                 .as_ref()
                 .and_then(Weak::upgrade)
-                .and_then(|e| e.borrow().eh.upgrade())
             {
-                actions.push(InputAction::PointerEnter(x));
+                actions.push(InputAction::PointerEnter(x.borrow().eh.clone()));
             }
         }
     }
@@ -2366,7 +2653,6 @@ impl InputState {
             .mouse_capturing_element
             .as_ref()
             .and_then(Weak::upgrade)
-            .and_then(|e| e.borrow().eh.upgrade())
         {
             if let Some((dx, dy, _)) = self.mouse_down_point.as_ref() {
                 if !self.is_mouse_dragging {
@@ -2374,12 +2660,12 @@ impl InputState {
                     let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
                     if dist2 >= DRAG_THRESHOLD_DIST2 {
                         self.is_mouse_dragging = true;
-                        actions.push(InputAction::BeginDrag(e.clone()));
+                        actions.push(InputAction::BeginDrag(e.borrow().eh.clone()));
                     }
                 }
 
                 if self.is_mouse_dragging {
-                    actions.push(InputAction::DragMove(e));
+                    actions.push(InputAction::DragMove(e.borrow().eh.clone()));
                 }
             }
 
@@ -2394,23 +2680,15 @@ impl InputState {
                 let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
                 if dist2 >= DRAG_THRESHOLD_DIST2 {
                     self.is_mouse_dragging = true;
-                    if let Some(e) = down_element
-                        .as_ref()
-                        .and_then(std::rc::Weak::upgrade)
-                        .and_then(|e| e.borrow().eh.upgrade())
-                    {
-                        actions.push(InputAction::BeginDrag(e));
+                    if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
+                        actions.push(InputAction::BeginDrag(e.borrow().eh.clone()));
                     }
                 }
             }
 
             if self.is_mouse_dragging {
-                if let Some(e) = down_element
-                    .as_ref()
-                    .and_then(std::rc::Weak::upgrade)
-                    .and_then(|e| e.borrow().eh.upgrade())
-                {
-                    actions.push(InputAction::DragMove(e));
+                if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
+                    actions.push(InputAction::DragMove(e.borrow().eh.clone()));
                 }
             }
         }
@@ -2425,9 +2703,8 @@ impl InputState {
             .mouse_capturing_element
             .as_ref()
             .and_then(Weak::upgrade)
-            .and_then(|e| e.borrow().eh.upgrade())
         {
-            actions.push(InputAction::PointerDown(e));
+            actions.push(InputAction::PointerDown(e.borrow().eh.clone()));
             return actions;
         }
 
@@ -2438,9 +2715,8 @@ impl InputState {
             .mouse_current_enter_element
             .as_ref()
             .and_then(Weak::upgrade)
-            .and_then(|e| e.borrow().eh.upgrade())
         {
-            actions.push(InputAction::PointerDown(e));
+            actions.push(InputAction::PointerDown(e.borrow().eh.clone()));
         }
 
         actions
@@ -2453,13 +2729,12 @@ impl InputState {
             .mouse_capturing_element
             .as_ref()
             .and_then(Weak::upgrade)
-            .and_then(|e| e.borrow().eh.upgrade())
         {
-            actions.push(InputAction::PointerUp(e.clone()));
+            actions.push(InputAction::PointerUp(e.borrow().eh.clone()));
             if !self.is_mouse_dragging {
-                actions.push(InputAction::Click(e));
+                actions.push(InputAction::Click(e.borrow().eh.clone()));
             } else {
-                actions.push(InputAction::EndDrag(e));
+                actions.push(InputAction::EndDrag(e.borrow().eh.clone()));
             }
             self.mouse_down_point = None;
 
@@ -2473,9 +2748,8 @@ impl InputState {
                 .mouse_current_enter_element
                 .as_ref()
                 .and_then(Weak::upgrade)
-                .and_then(|e| e.borrow().eh.upgrade())
             {
-                actions.push(InputAction::Click(x));
+                actions.push(InputAction::Click(x.borrow().eh.clone()));
             }
         } else {
             if let Some(x) = self
@@ -2483,9 +2757,8 @@ impl InputState {
                 .as_ref()
                 .and_then(|x| x.2.as_ref())
                 .and_then(std::rc::Weak::upgrade)
-                .and_then(|e| e.borrow().eh.upgrade())
             {
-                actions.push(InputAction::EndDrag(x));
+                actions.push(InputAction::EndDrag(x.borrow().eh.clone()));
             }
         }
         self.mouse_down_point = None;
@@ -2498,10 +2771,9 @@ impl InputState {
             .mouse_capturing_element
             .as_ref()
             .and_then(Weak::upgrade)
-            .and_then(|e| e.borrow().eh.upgrade())
         {
             // TODO: caching loaded cursors
-            let c = match e.hover_cursor() {
+            let c = match e.borrow().eh.hover_cursor() {
                 CursorStyle::Arrow => unsafe {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
                 },
@@ -2521,10 +2793,9 @@ impl InputState {
             .mouse_current_enter_element
             .as_ref()
             .and_then(Weak::upgrade)
-            .and_then(|e| e.borrow().eh.upgrade())
         {
             // TODO: caching loaded cursors
-            let c = match e.hover_cursor() {
+            let c = match e.borrow().eh.hover_cursor() {
                 CursorStyle::Arrow => unsafe {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
                 },
@@ -2545,7 +2816,7 @@ impl InputState {
 }
 
 pub struct HitTestTree {
-    eh: Weak<dyn InputEventHandler>,
+    eh: Rc<dyn InputEventHandler>,
     id: usize,
     left: f32,
     top: f32,
@@ -2557,7 +2828,7 @@ pub struct HitTestTree {
 impl HitTestTree {
     #[inline]
     pub fn new(
-        eh: &Weak<impl InputEventHandler + 'static>,
+        eh: &Rc<impl InputEventHandler + 'static>,
         id: usize,
         left: f32,
         top: f32,
@@ -2577,7 +2848,7 @@ impl HitTestTree {
     }
     #[inline]
     pub fn new_unsized(
-        eh: &Weak<impl InputEventHandler + 'static>,
+        eh: &Rc<impl InputEventHandler + 'static>,
         id: usize,
         left: f32,
         top: f32,
@@ -3093,7 +3364,7 @@ fn main() {
         },
     };
 
-    let hittest_tree_root = HitTestTree::new_unsized(&Weak::<()>::new(), 0, 0.0, 0.0);
+    let hittest_tree_root = HitTestTree::new_unsized(&Rc::new(()), 0, 0.0, 0.0);
     let mut hittest_context = HitTestTreeContext::new();
 
     let mut view_context = ViewContext1 {
