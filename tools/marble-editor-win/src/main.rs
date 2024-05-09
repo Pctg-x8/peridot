@@ -3,6 +3,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     rc::{Rc, Weak},
+    sync::{Arc, RwLock},
 };
 
 use object_cache::{TextFormatStock, TextSurfaceStock};
@@ -63,17 +64,19 @@ use windows::{
     UI::{
         Color,
         Composition::{
-            AnimationIterationBehavior, CompositionAnimationGroup, CompositionEasingFunction,
-            CompositionEasingFunctionMode, CompositionEffectSourceParameter,
-            CompositionSurfaceBrush, Compositor, ContainerVisual, Desktop::DesktopWindowTarget,
-            LayerVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
+            CompositionAnimationGroup, CompositionEasingFunction, CompositionEasingFunctionMode,
+            CompositionEffectSourceParameter, CompositionSurfaceBrush, Compositor, ContainerVisual,
+            Desktop::DesktopWindowTarget, LayerVisual, ScalarKeyFrameAnimation, ShapeVisual,
+            SpriteVisual, VisualCollection,
         },
     },
 };
 
 use crate::{
     uikit::{UICommonObjects, ViewContext1},
-    winapi_extras::{register_window_class, Vector2Extension, WindowBuilder},
+    winapi_extras::{
+        register_window_class, Vector2Extension, VectorScalarConstructor, WindowBuilder,
+    },
 };
 
 mod bindgen;
@@ -203,7 +206,7 @@ impl PaneSplitterView {
         Ok(())
     }
     pub fn set_rect(&self, rect: Rect) -> windows::core::Result<()> {
-        self.visual.set_rect(rect.clone())?;
+        self.visual.set_properties().rect(rect.clone())?;
         self.ht
             .borrow_mut()
             .set_rect(rect.X, rect.Y, rect.Width, rect.Height);
@@ -1210,29 +1213,31 @@ impl PaneDockState {
     }
 }
 
-pub struct PaneGroupDockingManager {
-    docks: SharedMut<PaneDockState>,
-    placement_visual: ContainerVisual,
-    ht_placement_root: SharedMut<HitTestTree>,
-    floating_preview_window: HWND,
-    _floating_preview_window_target: DesktopWindowTarget,
-    pane_drag_preview: SpriteVisual,
-    pane_drag_preview_color_tint: SpriteVisual,
-    pane_drag_preview_animation: ScalarKeyFrameAnimation,
-    pane_drag_preview_show_animation: CompositionAnimationGroup,
-    pane_drag_preview_hide_animation: CompositionAnimationGroup,
-    pane_drag_preview_hide_delay_timer:
-        std::sync::Arc<std::sync::RwLock<Option<DispatcherQueueTimer>>>,
+pub struct DockingPanePreview {
+    window: HWND,
+    _composition_target: DesktopWindowTarget,
+    root: SpriteVisual,
+    color_tint: SpriteVisual,
+    blink_animation: ScalarKeyFrameAnimation,
+    show_animation: CompositionAnimationGroup,
+    hide_animation: CompositionAnimationGroup,
+    hide_delay_timer: Arc<RwLock<Option<DispatcherQueueTimer>>>,
 }
-impl PaneGroupDockingManager {
-    const FLOATING_PREVIEW_INOUT_DURATION: TimeSpan = timespan_ms(100);
+impl DockingPanePreview {
+    const INOUT_DURATION: TimeSpan = timespan_ms(100);
+    const TINT_COLOR: Color = Color {
+        A: 64,
+        R: 16,
+        G: 176,
+        B: 255,
+    };
 
-    fn new(ctx: &mut impl ViewContext) -> windows::core::Result<Self> {
+    fn new(ctx: &mut (impl ViewContext + ?Sized)) -> windows::core::Result<Self> {
         extern "system" fn window_callback(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
             unsafe { DefWindowProcA(h, m, w, l) }
         }
 
-        let floating_preview_window_cls = WNDCLASSEXA {
+        let window_cls = WNDCLASSEXA {
             cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
             cbClsExtra: 0,
             cbWndExtra: 0,
@@ -1246,9 +1251,9 @@ impl PaneGroupDockingManager {
             lpszClassName: s!("io.ct2.peridot.marble.windows.overlays.floating_preview"),
             hIconSm: HICON(0),
         };
-        let floating_preview_window = WindowBuilder::new(
-            floating_preview_window_cls.hInstance,
-            register_window_class(&floating_preview_window_cls)?,
+        let window = WindowBuilder::new(
+            window_cls.hInstance,
+            register_window_class(&window_cls)?,
             s!(""),
         )
         .no_activate()
@@ -1257,24 +1262,12 @@ impl PaneGroupDockingManager {
         .topmost()
         .popup()
         .create()?;
-        let floating_preview_window_target = unsafe {
+        let composition_target = unsafe {
             ctx.compositor()
                 .cast::<ICompositorDesktopInterop>()?
-                .CreateDesktopWindowTarget(floating_preview_window, true)?
+                .CreateDesktopWindowTarget(window, true)?
         };
 
-        let pane_drag_preview = ctx.compositor().CreateSpriteVisual()?;
-        pane_drag_preview.SetCenterPoint(Vector3 {
-            X: 0.5,
-            Y: 0.5,
-            Z: 0.5,
-        })?;
-        pane_drag_preview.SetAnchorPoint(Vector2 { X: 0.5, Y: 0.5 })?;
-        pane_drag_preview.SetRelativeOffsetAdjustment(Vector3 {
-            X: 0.5,
-            Y: 0.5,
-            Z: 0.0,
-        })?;
         let fx = bindgen::GaussianBlurEffect::new()?;
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
         fx.SetBlurAmount(16.0)?;
@@ -1283,21 +1276,26 @@ impl PaneGroupDockingManager {
         let backdrop_brush = ctx.compositor().CreateBackdropBrush()?;
         let blur_brush = effect_factory.CreateBrush()?;
         blur_brush.SetSourceParameter(h!("source"), &backdrop_brush)?;
-        pane_drag_preview.SetBrush(&blur_brush)?;
-        let pane_drag_preview_color_tint = ctx.compositor().CreateSpriteVisual()?;
-        pane_drag_preview_color_tint.SetBrush(&ctx.compositor().CreateColorBrushWithColor(
-            Color {
-                A: 64,
-                R: 16,
-                G: 192,
-                B: 255,
-            },
-        )?)?;
-        pane_drag_preview_color_tint.SetRelativeOffsetAdjustment(Vector3::zero())?;
-        pane_drag_preview_color_tint.SetRelativeSizeAdjustment(Vector2::one())?;
-        pane_drag_preview
-            .Children()?
-            .InsertAtTop(&pane_drag_preview_color_tint)?;
+
+        let blur_visual = ctx.compositor().CreateSpriteVisual()?;
+        blur_visual
+            .set_properties()
+            .center_point(Vector3::scalar(0.5))?
+            .anchor_point(Vector2::scalar(0.5))?
+            .relative_offset_adjustment(Vector2::scalar(0.5).with_z(0.0))?
+            .brush(&blur_brush)?;
+
+        let color_tint = ctx.compositor().CreateSpriteVisual()?;
+        color_tint
+            .set_properties()
+            .brush(
+                &ctx.compositor()
+                    .CreateColorBrushWithColor(Self::TINT_COLOR)?,
+            )?
+            .relative_offset_adjustment(Vector3::zero())?
+            .relative_size_adjustment(Vector2::one())?;
+        blur_visual.Children()?.InsertAtTop(&color_tint)?;
+
         let shadow = ctx.compositor().CreateDropShadow()?;
         shadow.SetBlurRadius(32.0)?;
         shadow.SetOffset(Vector3 {
@@ -1306,34 +1304,32 @@ impl PaneGroupDockingManager {
             Z: 0.0,
         })?;
         shadow.SetOpacity(0.3)?;
-        pane_drag_preview.SetShadow(&shadow)?;
-        let pane_drag_preview_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-        let linear_fn = ctx.compositor().CreateLinearEasingFunction()?;
-        pane_drag_preview_animation.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
-        pane_drag_preview_animation.InsertKeyFrame(0.0, 1.0)?;
-        pane_drag_preview_animation.InsertKeyFrameWithEasingFunction(0.5, 0.75, &linear_fn)?;
-        pane_drag_preview_animation.InsertKeyFrameWithEasingFunction(1.0, 1.0, &linear_fn)?;
-        pane_drag_preview_animation.SetDuration(TimeSpan {
-            Duration: 10_000 * 2600,
-        })?;
+        blur_visual.SetShadow(&shadow)?;
 
-        let pane_drag_preview_show_animation = ctx.compositor().CreateAnimationGroup()?;
         let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
-        pane_drag_preview_show_animation.Add(&{
+
+        let blink_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        blink_animation
+            .iterate_forever()?
+            .keyframe(0.0, 1.0)?
+            .interpolate(0.5, 0.75, &linear_easing)?
+            .interpolate(1.0, 1.0, &linear_easing)?
+            .set_properties()
+            .duration(timespan_ms(2600))?;
+
+        let show_animation = ctx.compositor().CreateAnimationGroup()?;
+        show_animation.Add(&{
             let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-            a.set_properties()
-                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
-                .target(h!("Opacity"))?;
             a.keyframe(0.0, 0.0)?
-                .interpolate(1.0, 1.0, &linear_easing)?;
+                .interpolate(1.0, 1.0, &linear_easing)?
+                .set_properties()
+                .duration(Self::INOUT_DURATION)?
+                .target(h!("Opacity"))?;
 
             a
         })?;
-        pane_drag_preview_show_animation.Add(&{
+        show_animation.Add(&{
             let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
-            a.set_properties()
-                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
-                .target(h!("Scale"))?;
             a.keyframe(0.0, Vector2::scalar(1.2).with_z(1.0))?
                 .interpolate(
                     1.0,
@@ -1343,50 +1339,118 @@ impl PaneGroupDockingManager {
                         CompositionEasingFunctionMode::Out,
                         2.0,
                     )?,
-                )?;
-
-            a
-        })?;
-        let pane_drag_preview_hide_animation = ctx.compositor().CreateAnimationGroup()?;
-        pane_drag_preview_hide_animation.Add(&{
-            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-            a.set_properties()
-                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
-                .target(h!("Opacity"))?;
-            a.keyframe(0.0, 1.0)?
-                .interpolate(1.0, 0.0, &linear_easing)?;
-
-            a
-        })?;
-        pane_drag_preview_hide_animation.Add(&{
-            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
-            a.set_properties()
-                .duration(Self::FLOATING_PREVIEW_INOUT_DURATION)?
+                )?
+                .set_properties()
+                .duration(Self::INOUT_DURATION)?
                 .target(h!("Scale"))?;
-            a.keyframe(0.0, Vector3::one())?.interpolate(
-                1.0,
-                Vector2::scalar(0.9).with_z(1.0),
-                &linear_easing,
-            )?;
+
+            a
+        })?;
+        let hide_animation = ctx.compositor().CreateAnimationGroup()?;
+        hide_animation.Add(&{
+            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+            a.keyframe(0.0, 1.0)?
+                .interpolate(1.0, 0.0, &linear_easing)?
+                .set_properties()
+                .duration(Self::INOUT_DURATION)?
+                .target(h!("Opacity"))?;
+
+            a
+        })?;
+        hide_animation.Add(&{
+            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
+            a.keyframe(0.0, Vector3::one())?
+                .interpolate(1.0, Vector2::scalar(0.9).with_z(1.0), &linear_easing)?
+                .set_properties()
+                .duration(Self::INOUT_DURATION)?
+                .target(h!("Scale"))?;
 
             a
         })?;
 
-        floating_preview_window_target.SetRoot(&pane_drag_preview)?;
-        let placement_visual = ctx.compositor().CreateContainerVisual()?;
+        composition_target.SetRoot(&blur_visual)?;
 
         Ok(Self {
+            window,
+            _composition_target: composition_target,
+            root: blur_visual,
+            color_tint,
+            blink_animation,
+            show_animation,
+            hide_animation,
+            hide_delay_timer: Arc::new(RwLock::new(None)),
+        })
+    }
+
+    fn show(&self) -> windows::core::Result<()> {
+        *self.hide_delay_timer.write().unwrap() = None;
+
+        unsafe {
+            let _ = ShowWindow(self.window, SW_SHOWNA);
+        }
+        self.color_tint
+            .StartAnimation(h!("Opacity"), &self.blink_animation)?;
+        self.root.StartAnimationGroup(&self.show_animation)?;
+
+        Ok(())
+    }
+
+    fn hide(&self) -> windows::core::Result<()> {
+        self.root.StartAnimationGroup(&self.hide_animation)?;
+        let delay_hide = self.root.DispatcherQueue()?.CreateTimer()?;
+        delay_hide.SetInterval(Self::INOUT_DURATION)?;
+        let tint = self.color_tint.clone();
+        let delay_timer = self.hide_delay_timer.clone();
+        let w = self.window;
+        delay_hide.Tick(&TypedEventHandler::new(move |_, _| {
+            tint.StopAnimation(h!("Opacity"))?;
+            unsafe {
+                let _ = ShowWindow(w, SW_HIDE);
+            }
+            *delay_timer.write().unwrap() = None;
+
+            Ok(())
+        }))?;
+        *self.hide_delay_timer.write().unwrap() = Some(delay_hide);
+
+        Ok(())
+    }
+
+    fn set_rect(&self, left: f32, top: f32, width: f32, height: f32) -> windows::core::Result<()> {
+        self.root.SetSize(Vector2 {
+            X: width,
+            Y: height,
+        })?;
+
+        unsafe {
+            SetWindowPos(
+                self.window,
+                None,
+                left as i32 - 32,
+                top as i32 - 32,
+                width as i32 + 64,
+                height as i32 + 64,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct PaneGroupDockingManager {
+    docks: SharedMut<PaneDockState>,
+    placement_visual: ContainerVisual,
+    ht_placement_root: SharedMut<HitTestTree>,
+    floating_preview: DockingPanePreview,
+}
+impl PaneGroupDockingManager {
+    fn new(ctx: &mut impl ViewContext) -> windows::core::Result<Self> {
+        Ok(Self {
             docks: PaneDockState::new_root(|_| None),
-            placement_visual,
+            placement_visual: ctx.compositor().CreateContainerVisual()?,
             ht_placement_root: ctx.hittest_tree_parent().clone(),
-            floating_preview_window,
-            _floating_preview_window_target: floating_preview_window_target,
-            pane_drag_preview,
-            pane_drag_preview_color_tint,
-            pane_drag_preview_animation,
-            pane_drag_preview_show_animation,
-            pane_drag_preview_hide_animation,
-            pane_drag_preview_hide_delay_timer: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            floating_preview: DockingPanePreview::new(ctx)?,
         })
     }
 
@@ -1434,39 +1498,11 @@ impl PaneGroupDockingManager {
     }
 
     fn show_preview(&self) -> windows::core::Result<()> {
-        *self.pane_drag_preview_hide_delay_timer.write().unwrap() = None;
-
-        unsafe {
-            let _ = ShowWindow(self.floating_preview_window, SW_SHOWNA);
-        }
-        self.pane_drag_preview_color_tint
-            .StartAnimation(h!("Opacity"), &self.pane_drag_preview_animation)?;
-        self.pane_drag_preview
-            .StartAnimationGroup(&self.pane_drag_preview_show_animation)?;
-
-        Ok(())
+        self.floating_preview.show()
     }
 
     fn hide_preview(&self) -> windows::core::Result<()> {
-        self.pane_drag_preview
-            .StartAnimationGroup(&self.pane_drag_preview_hide_animation)?;
-        let delay_hide = self.pane_drag_preview.DispatcherQueue()?.CreateTimer()?;
-        delay_hide.SetInterval(Self::FLOATING_PREVIEW_INOUT_DURATION)?;
-        let tint = self.pane_drag_preview_color_tint.clone();
-        let delay_timer = self.pane_drag_preview_hide_delay_timer.clone();
-        let w = self.floating_preview_window;
-        delay_hide.Tick(&TypedEventHandler::new(move |_, _| {
-            tint.StopAnimation(h!("Opacity"))?;
-            unsafe {
-                let _ = ShowWindow(w, SW_HIDE);
-            }
-            drop(delay_timer.write().unwrap().take());
-
-            Ok(())
-        }))?;
-        *self.pane_drag_preview_hide_delay_timer.write().unwrap() = Some(delay_hide);
-
-        Ok(())
+        self.floating_preview.hide()
     }
 
     fn set_preview_rect(
@@ -1476,24 +1512,7 @@ impl PaneGroupDockingManager {
         width: f32,
         height: f32,
     ) -> windows::core::Result<()> {
-        self.pane_drag_preview.SetSize(Vector2 {
-            X: width,
-            Y: height,
-        })?;
-
-        unsafe {
-            SetWindowPos(
-                self.floating_preview_window,
-                None,
-                left as i32 - 32,
-                top as i32 - 32,
-                width as i32 + 64,
-                height as i32 + 64,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            )?;
-        }
-
-        Ok(())
+        self.floating_preview.set_rect(left, top, width, height)
     }
 
     fn compute_recommended_docking_destination(&self, x: f32, y: f32) -> PaneDockingRecommendation {
@@ -1705,13 +1724,13 @@ impl PaneGroupView {
     }
 
     fn readjust_content_area(&mut self) -> windows::core::Result<()> {
-        self.content_area.set_rect(Rect {
+        self.content_area.set_properties().rect(Rect {
             X: 0.0,
             Y: self.tab_height,
             Width: self.width,
             Height: (self.height - self.tab_height).max(0.0),
         })?;
-        self.content_area_base.set_rect(Rect {
+        self.content_area_base.set_properties().rect(Rect {
             X: 0.0,
             Y: self.tab_height,
             Width: self.width,
@@ -1770,7 +1789,7 @@ impl PaneGroupView {
         width: f32,
         height: f32,
     ) -> windows::core::Result<()> {
-        self.root.set_rect(Rect {
+        self.root.set_properties().rect(Rect {
             X: left,
             Y: top,
             Width: width,

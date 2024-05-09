@@ -4,9 +4,9 @@ use windows::{
         Rect, TimeSpan,
     },
     UI::Composition::{
-        CompositionEasingFunction, ContainerVisual, ICompositionAnimation2, IVisual,
-        KeyFrameAnimation, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
-        Vector3KeyFrameAnimation,
+        AnimationIterationBehavior, CompositionBrush, CompositionEasingFunction, ContainerVisual,
+        ICompositionAnimation2, IKeyFrameAnimation, IVisual, IVisual2, KeyFrameAnimation,
+        ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, Vector3KeyFrameAnimation,
     },
 };
 use windows_core::{Interface, HSTRING};
@@ -33,7 +33,7 @@ impl<T: Interface> KeyFrameAnimationPropertySetter<'_, T> {
     }
 }
 
-pub trait KeyFrameAnimationExtension {
+pub trait KeyFrameAnimationExtension: Interface {
     type Element;
 
     fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self>;
@@ -43,6 +43,16 @@ pub trait KeyFrameAnimationExtension {
         to_value: Self::Element,
         f: impl windows_core::Param<CompositionEasingFunction>,
     ) -> windows::core::Result<&Self>;
+
+    #[inline]
+    fn iterate_forever(&self) -> windows::core::Result<&Self> {
+        let x = self.cast::<IKeyFrameAnimation>()?;
+        unsafe {
+            (x.vtable().SetIterationBehavior)(x.as_raw(), AnimationIterationBehavior::Forever)
+                .ok()?;
+        }
+        Ok(self)
+    }
 }
 impl KeyFrameAnimationExtension for ScalarKeyFrameAnimation {
     type Element = f32;
@@ -96,9 +106,67 @@ impl KeyFrameAnimationPropertySetterExtension for Vector3KeyFrameAnimation {
     }
 }
 
-pub trait VisualExtensions: Interface {
-    fn set_rect(&self, rect: Rect) -> windows::core::Result<()> {
-        let x = self.cast::<IVisual>()?;
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct VisualPropertySetter<'a, T: Interface + ?Sized + 'a>(&'a T);
+impl<'a, T: Interface + ?Sized + 'a> VisualPropertySetter<'a, T> {
+    #[inline]
+    pub fn center_point(self, p: Vector3) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual>()?;
+        unsafe {
+            (x.vtable().SetCenterPoint)(x.as_raw(), p).ok()?;
+        }
+        Ok(self)
+    }
+
+    #[inline]
+    pub fn anchor_point(self, p: Vector2) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual>()?;
+        unsafe {
+            (x.vtable().SetAnchorPoint)(x.as_raw(), p).ok()?;
+        }
+        Ok(self)
+    }
+
+    #[inline]
+    pub fn relative_offset_adjustment(self, p: Vector3) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual2>()?;
+        unsafe {
+            (x.vtable().SetRelativeOffsetAdjustment)(x.as_raw(), p).ok()?;
+        }
+        Ok(self)
+    }
+
+    #[inline]
+    pub fn relative_size_adjustment(self, p: Vector2) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual2>()?;
+        unsafe {
+            (x.vtable().SetRelativeSizeAdjustment)(x.as_raw(), p).ok()?;
+        }
+        Ok(self)
+    }
+
+    #[inline]
+    pub fn offset(self, p: Vector3) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual>()?;
+        unsafe {
+            (x.vtable().SetOffset)(x.as_raw(), p).ok()?;
+        }
+        Ok(self)
+    }
+
+    #[inline]
+    pub fn size(self, p: Vector2) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual>()?;
+        unsafe {
+            (x.vtable().SetSize)(x.as_raw(), p).ok()?;
+        }
+        Ok(self)
+    }
+
+    #[inline]
+    pub fn rect(self, rect: Rect) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual>()?;
         let (vt, this) = (x.vtable(), x.as_raw());
         unsafe {
             (vt.SetOffset)(
@@ -120,23 +188,49 @@ pub trait VisualExtensions: Interface {
             .ok()?;
         }
 
-        Ok(())
+        Ok(self)
+    }
+}
+impl VisualPropertySetter<'_, SpriteVisual> {
+    #[inline]
+    pub fn brush(
+        self,
+        brush: impl windows::core::Param<CompositionBrush>,
+    ) -> windows::core::Result<Self> {
+        self.0.SetBrush(brush)?;
+        Ok(self)
+    }
+}
+
+pub trait VisualExtensions: Interface {
+    fn set_properties(&self) -> VisualPropertySetter<Self> {
+        VisualPropertySetter(self)
     }
 }
 impl VisualExtensions for ContainerVisual {}
 impl VisualExtensions for SpriteVisual {}
 impl VisualExtensions for ShapeVisual {}
 
-pub trait Vector2Extension {
+pub trait VectorScalarConstructor {
     fn scalar(v: f32) -> Self;
-    fn with_z(self, z: f32) -> Vector3;
 }
-impl Vector2Extension for Vector2 {
-    #[inline(always)]
+impl VectorScalarConstructor for Vector2 {
+    #[inline]
     fn scalar(v: f32) -> Self {
         Vector2 { X: v, Y: v }
     }
+}
+impl VectorScalarConstructor for Vector3 {
+    #[inline]
+    fn scalar(v: f32) -> Self {
+        Vector3 { X: v, Y: v, Z: v }
+    }
+}
 
+pub trait Vector2Extension {
+    fn with_z(self, z: f32) -> Vector3;
+}
+impl Vector2Extension for Vector2 {
     #[inline(always)]
     fn with_z(self, z: f32) -> Vector3 {
         Vector3 {
