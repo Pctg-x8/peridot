@@ -449,7 +449,7 @@ impl PaneDockState {
             }
         }))
     }
-    fn new_on_right<VC: ViewContext>(
+    fn new_on_right<VC: ViewContext + ?Sized>(
         ctx: &mut VC,
         parent: &WeakMut<Self>,
         docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
@@ -474,7 +474,7 @@ impl PaneDockState {
             }
         }))
     }
-    fn new_on_top<VC: ViewContext>(
+    fn new_on_top<VC: ViewContext + ?Sized>(
         ctx: &mut VC,
         parent: &WeakMut<Self>,
         docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
@@ -499,7 +499,7 @@ impl PaneDockState {
             }
         }))
     }
-    fn new_on_bottom<VC: ViewContext>(
+    fn new_on_bottom<VC: ViewContext + ?Sized>(
         ctx: &mut VC,
         parent: &WeakMut<Self>,
         docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
@@ -968,7 +968,7 @@ impl PaneDockState {
             } => {
                 *container_region = region;
                 let h = docked.borrow().controlling_rect_height();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_top(region, h);
+                let (docked_rect, splitter_rect, rest_rect) = Self::split_bottom(region, h);
                 docked.borrow_mut().layout(docked_rect)?;
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect)
@@ -1000,6 +1000,10 @@ impl PaneDockState {
                 rest,
                 ..
             } => {
+                if *container_region == region {
+                    return Ok(());
+                }
+
                 *container_region = region.clone();
                 let w = docked.borrow().controlling_rect_width();
                 let (docked_rect, splitter_rect, rest_rect) = Self::split_left(region, w);
@@ -1014,6 +1018,10 @@ impl PaneDockState {
                 rest,
                 ..
             } => {
+                if *container_region == region {
+                    return Ok(());
+                }
+
                 *container_region = region.clone();
                 let w = docked.borrow().controlling_rect_width();
                 let (docked_rect, splitter_rect, rest_rect) = Self::split_right(region, w);
@@ -1028,6 +1036,10 @@ impl PaneDockState {
                 rest,
                 ..
             } => {
+                if *container_region == region {
+                    return Ok(());
+                }
+
                 *container_region = region;
                 let h = docked.borrow().controlling_rect_height();
                 let (docked_rect, splitter_rect, rest_rect) = Self::split_top(region, h);
@@ -1042,9 +1054,13 @@ impl PaneDockState {
                 rest,
                 ..
             } => {
+                if *container_region == region {
+                    return Ok(());
+                }
+
                 *container_region = region;
                 let h = docked.borrow().controlling_rect_height();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_top(region, h);
+                let (docked_rect, splitter_rect, rest_rect) = Self::split_bottom(region, h);
                 docked.borrow_mut().layout(docked_rect)?;
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect)
@@ -1840,171 +1856,617 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
         match recommended_dest {
             PaneDockingRecommendation::Left(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
-                let parent = match &*bound_dock_layer.borrow() {
-                    PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
-                    _ => unreachable!("illegal binding with dock layer"),
-                };
-                let relayout_root = match &mut *parent.borrow_mut() {
-                    PaneDockState::EmptyRoot(rest, _) => {
-                        *rest = None;
-                        parent.clone()
-                    }
-                    PaneDockState::Left {
-                        docked,
-                        rest,
-                        parent: parent1,
-                        splitter,
-                        ..
-                    } => {
-                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
-                            rest
-                        } else {
-                            docked
-                        };
+                if !Rc::ptr_eq(&bound_dock_layer, &d) {
+                    let parent = match &*bound_dock_layer.borrow() {
+                        PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
+                        _ => unreachable!("illegal binding with dock layer"),
+                    };
+                    let relayout_root = match &mut *parent.borrow_mut() {
+                        PaneDockState::EmptyRoot(rest, _) => {
+                            *rest = None;
+                            parent.clone()
+                        }
+                        PaneDockState::Left {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
 
-                        new_child.borrow_mut().reparent(parent1);
-                        parent1
-                            .upgrade()
-                            .unwrap()
-                            .borrow_mut()
-                            .replace_child(&parent, new_child);
-                        splitter
-                            .borrow()
-                            .unmount()
-                            .expect("Failed to unmounting splitter");
-                        parent1.upgrade().unwrap()
-                    }
-                    PaneDockState::Right {
-                        docked,
-                        rest,
-                        parent: parent1,
-                        splitter,
-                        ..
-                    } => {
-                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
-                            rest
-                        } else {
-                            docked
-                        };
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Right {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
 
-                        new_child.borrow_mut().reparent(parent1);
-                        parent1
-                            .upgrade()
-                            .unwrap()
-                            .borrow_mut()
-                            .replace_child(&parent, new_child);
-                        splitter
-                            .borrow()
-                            .unmount()
-                            .expect("Failed to unmounting splitter");
-                        parent1.upgrade().unwrap()
-                    }
-                    PaneDockState::Top {
-                        docked,
-                        rest,
-                        parent: parent1,
-                        splitter,
-                        ..
-                    } => {
-                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
-                            rest
-                        } else {
-                            docked
-                        };
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Top {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
 
-                        new_child.borrow_mut().reparent(parent1);
-                        parent1
-                            .upgrade()
-                            .unwrap()
-                            .borrow_mut()
-                            .replace_child(&parent, new_child);
-                        splitter
-                            .borrow()
-                            .unmount()
-                            .expect("Failed to unmounting splitter");
-                        parent1.upgrade().unwrap()
-                    }
-                    PaneDockState::Bottom {
-                        docked,
-                        rest,
-                        parent: parent1,
-                        splitter,
-                        ..
-                    } => {
-                        let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
-                            rest
-                        } else {
-                            docked
-                        };
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Bottom {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
 
-                        new_child.borrow_mut().reparent(parent1);
-                        parent1
-                            .upgrade()
-                            .unwrap()
-                            .borrow_mut()
-                            .replace_child(&parent, new_child);
-                        splitter
-                            .borrow()
-                            .unmount()
-                            .expect("Failed to unmounting splitter");
-                        parent1.upgrade().unwrap()
-                    }
-                    PaneDockState::Fill { .. } => unreachable!("invalid structure"),
-                };
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Fill { .. } => unreachable!("invalid structure"),
+                    };
 
-                let dest_parent = match &*d.borrow() {
-                    PaneDockState::Fill { parent, .. }
-                    | PaneDockState::Left { parent, .. }
-                    | PaneDockState::Right { parent, .. }
-                    | PaneDockState::Top { parent, .. }
-                    | PaneDockState::Bottom { parent, .. } => parent.clone(),
-                    PaneDockState::EmptyRoot(_, _) => unreachable!("Docking on root?"),
-                };
-                let new_layer = PaneDockState::new_on_left(
-                    &mut *ctx,
-                    &dest_parent,
-                    |parent, _ctx| PaneDockState::new_filled(&this, parent),
-                    |parent, _ctx| {
-                        d.borrow_mut().reparent(parent);
-                        d.clone()
-                    },
-                )
-                .expect("Failed to create new dock layer");
-                this.borrow()
-                    .docking_manager
-                    .upgrade()
-                    .unwrap()
-                    .borrow()
-                    .mount_splitter_only(&new_layer.borrow())
-                    .expect("Failed to mount new splitter");
-                dest_parent
-                    .upgrade()
-                    .unwrap()
-                    .borrow_mut()
-                    .replace_child(&d, &new_layer);
-                dest_parent
-                    .upgrade()
-                    .unwrap()
-                    .borrow_mut()
-                    .relayout()
-                    .expect("Failed to relayout from new parent");
-                relayout_root
-                    .borrow_mut()
-                    .relayout()
-                    .expect("Failed to relayout from old parent");
+                    let dest_parent = match &*d.borrow() {
+                        PaneDockState::Fill { parent, .. }
+                        | PaneDockState::Left { parent, .. }
+                        | PaneDockState::Right { parent, .. }
+                        | PaneDockState::Top { parent, .. }
+                        | PaneDockState::Bottom { parent, .. } => {
+                            parent.upgrade().expect("Parent has gone?")
+                        }
+                        PaneDockState::EmptyRoot(_, _) => unreachable!("Docking on root?"),
+                    };
+                    let new_layer = PaneDockState::new_on_left(
+                        &mut *ctx,
+                        &Rc::downgrade(&dest_parent),
+                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| {
+                            d.borrow_mut().reparent(parent);
+                            d.clone()
+                        },
+                    )
+                    .expect("Failed to create new dock layer");
+                    this.borrow()
+                        .docking_manager
+                        .upgrade()
+                        .unwrap()
+                        .borrow()
+                        .mount_splitter_only(&new_layer.borrow())
+                        .expect("Failed to mount new splitter");
+                    dest_parent.borrow_mut().replace_child(&d, &new_layer);
+                    dest_parent
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from new parent");
+                    relayout_root
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from old parent");
+                }
             }
-            PaneDockingRecommendation::Right(_d) => {
-                println!("TODO: relayout Right");
+            PaneDockingRecommendation::Right(d) => {
+                let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
+                if !Rc::ptr_eq(&bound_dock_layer, &d) {
+                    let parent = match &*bound_dock_layer.borrow() {
+                        PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
+                        _ => unreachable!("illegal binding with dock layer"),
+                    };
+                    let relayout_root = match &mut *parent.borrow_mut() {
+                        PaneDockState::EmptyRoot(rest, _) => {
+                            *rest = None;
+                            parent.clone()
+                        }
+                        PaneDockState::Left {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Right {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Top {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Bottom {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Fill { .. } => unreachable!("invalid structure"),
+                    };
+
+                    let dest_parent = match &*d.borrow() {
+                        PaneDockState::Fill { parent, .. }
+                        | PaneDockState::Left { parent, .. }
+                        | PaneDockState::Right { parent, .. }
+                        | PaneDockState::Top { parent, .. }
+                        | PaneDockState::Bottom { parent, .. } => {
+                            parent.upgrade().expect("Parent has gone?")
+                        }
+                        PaneDockState::EmptyRoot(_, _) => unreachable!("Docking on root?"),
+                    };
+                    let new_layer = PaneDockState::new_on_right(
+                        &mut *ctx,
+                        &Rc::downgrade(&dest_parent),
+                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| {
+                            d.borrow_mut().reparent(parent);
+                            d.clone()
+                        },
+                    )
+                    .expect("Failed to create new dock layer");
+                    this.borrow()
+                        .docking_manager
+                        .upgrade()
+                        .unwrap()
+                        .borrow()
+                        .mount_splitter_only(&new_layer.borrow())
+                        .expect("Failed to mount new splitter");
+                    dest_parent.borrow_mut().replace_child(&d, &new_layer);
+                    dest_parent
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from new parent");
+                    relayout_root
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from old parent");
+                }
             }
-            PaneDockingRecommendation::Top(_d) => {
-                println!("TODO: relayout Top");
+            PaneDockingRecommendation::Top(d) => {
+                let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
+                if !Rc::ptr_eq(&bound_dock_layer, &d) {
+                    let parent = match &*bound_dock_layer.borrow() {
+                        PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
+                        _ => unreachable!("illegal binding with dock layer"),
+                    };
+                    let relayout_root = match &mut *parent.borrow_mut() {
+                        PaneDockState::EmptyRoot(rest, _) => {
+                            *rest = None;
+                            parent.clone()
+                        }
+                        PaneDockState::Left {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Right {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Top {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Bottom {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Fill { .. } => unreachable!("invalid structure"),
+                    };
+
+                    let dest_parent = match &*d.borrow() {
+                        PaneDockState::Fill { parent, .. }
+                        | PaneDockState::Left { parent, .. }
+                        | PaneDockState::Right { parent, .. }
+                        | PaneDockState::Top { parent, .. }
+                        | PaneDockState::Bottom { parent, .. } => {
+                            parent.upgrade().expect("Parent has gone?")
+                        }
+                        PaneDockState::EmptyRoot(_, _) => unreachable!("Docking on root?"),
+                    };
+                    let new_layer = PaneDockState::new_on_top(
+                        &mut *ctx,
+                        &Rc::downgrade(&dest_parent),
+                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| {
+                            d.borrow_mut().reparent(parent);
+                            d.clone()
+                        },
+                    )
+                    .expect("Failed to create new dock layer");
+                    this.borrow()
+                        .docking_manager
+                        .upgrade()
+                        .unwrap()
+                        .borrow()
+                        .mount_splitter_only(&new_layer.borrow())
+                        .expect("Failed to mount new splitter");
+                    dest_parent.borrow_mut().replace_child(&d, &new_layer);
+                    dest_parent
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from new parent");
+                    relayout_root
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from old parent");
+                }
             }
-            PaneDockingRecommendation::Bottom(_d) => {
-                println!("TODO: relayout Bottom");
+            PaneDockingRecommendation::Bottom(d) => {
+                let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
+                if !Rc::ptr_eq(&bound_dock_layer, &d) {
+                    let parent = match &*bound_dock_layer.borrow() {
+                        PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
+                        _ => unreachable!("illegal binding with dock layer"),
+                    };
+                    let relayout_root = match &mut *parent.borrow_mut() {
+                        PaneDockState::EmptyRoot(rest, _) => {
+                            *rest = None;
+                            parent.clone()
+                        }
+                        PaneDockState::Left {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Right {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Top {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Bottom {
+                            docked,
+                            rest,
+                            parent: parent1,
+                            splitter,
+                            ..
+                        } => {
+                            let new_child = if Rc::ptr_eq(docked, &bound_dock_layer) {
+                                rest
+                            } else {
+                                docked
+                            };
+
+                            new_child.borrow_mut().reparent(parent1);
+                            parent1
+                                .upgrade()
+                                .unwrap()
+                                .borrow_mut()
+                                .replace_child(&parent, new_child);
+                            splitter
+                                .borrow()
+                                .unmount()
+                                .expect("Failed to unmounting splitter");
+                            parent1.upgrade().unwrap()
+                        }
+                        PaneDockState::Fill { .. } => unreachable!("invalid structure"),
+                    };
+
+                    let dest_parent = match &*d.borrow() {
+                        PaneDockState::Fill { parent, .. }
+                        | PaneDockState::Left { parent, .. }
+                        | PaneDockState::Right { parent, .. }
+                        | PaneDockState::Top { parent, .. }
+                        | PaneDockState::Bottom { parent, .. } => {
+                            parent.upgrade().expect("Parent has gone?")
+                        }
+                        PaneDockState::EmptyRoot(_, _) => unreachable!("Docking on root?"),
+                    };
+                    let new_layer = PaneDockState::new_on_bottom(
+                        &mut *ctx,
+                        &Rc::downgrade(&dest_parent),
+                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| {
+                            d.borrow_mut().reparent(parent);
+                            d.clone()
+                        },
+                    )
+                    .expect("Failed to create new dock layer");
+                    this.borrow()
+                        .docking_manager
+                        .upgrade()
+                        .unwrap()
+                        .borrow()
+                        .mount_splitter_only(&new_layer.borrow())
+                        .expect("Failed to mount new splitter");
+                    dest_parent.borrow_mut().replace_child(&d, &new_layer);
+                    dest_parent
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from new parent");
+                    relayout_root
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout from old parent");
+                }
             }
             PaneDockingRecommendation::Free => {
-                println!("TODO: floating");
-
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 let parent = match &*bound_dock_layer.borrow() {
                     PaneDockState::Fill { parent, .. } => parent.upgrade().unwrap(),
@@ -2126,6 +2588,8 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
                     .borrow_mut()
                     .layout(relayout_rect)
                     .expect("Failed to relayout docks");
+
+                println!("TODO: floating");
             }
         }
 
