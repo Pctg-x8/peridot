@@ -12,12 +12,12 @@ use windows::{
 
 use crate::{
     empty_weak_mut, new_cyclic_shared_mut,
-    uikit::{CursorStyle, InputContext, InputEventHandler, ViewContext},
+    uikit::{CursorStyle, HitTestTree, InputContext, InputEventHandler, ViewContext},
     winapi_extras::{
         timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
         VisualExtensions,
     },
-    AppWindow, HitTestTree, PaneDockLayer, SharedMut, WeakMut,
+    AppWindow, PaneDockLayer, SharedMut, WeakMut,
 };
 
 #[derive(Clone, Copy)]
@@ -129,12 +129,7 @@ impl PaneSplitterView {
     }
     pub fn unmount(&self) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
-        // Note: if letでborrowしたやつはif文の中でも生きているらしいので個別にdropできるようにする
-        let ht_ref = self.ht.borrow();
-        if let Some(parent_ht) = ht_ref.parent.upgrade() {
-            drop(ht_ref);
-            parent_ht.borrow_mut().remove_child(&self.ht)
-        }
+        self.ht.borrow_mut().unmount();
 
         Ok(())
     }

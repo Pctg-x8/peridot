@@ -1,13 +1,14 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::HashMap,
     rc::{Rc, Weak},
 };
 
 use features::{DockingPanePreview, PaneSplitterView, SplitDirection};
 use object_cache::{TextFormatStock, TextSurfaceStock};
-use uikit::{CursorStyle, InputContext, InputEventHandler, ViewContext};
+use uikit::{
+    HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, ViewContext,
+};
 use utils::{rect_slice_bottom, rect_slice_left, rect_slice_right, rect_slice_top, RectExtensions};
 use winapi_extras::{
     timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
@@ -49,14 +50,12 @@ use windows::{
         },
         UI::{
             HiDpi::GetDpiForWindow,
-            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA, GetWindowLongPtrA,
-                LoadCursorA, LoadIconA, PostQuitMessage, SetCursor, SetWindowLongPtrA, ShowWindow,
-                TranslateMessage, HTCLIENT, IDC_ARROW, IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION,
-                MSG, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA,
-                WNDCLASS_STYLES,
+                LoadCursorA, LoadIconA, PostQuitMessage, SetWindowLongPtrA, ShowWindow,
+                TranslateMessage, HTCLIENT, IDC_ARROW, IDI_APPLICATION, MSG, SW_SHOWNORMAL,
+                WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -1327,7 +1326,7 @@ impl TabGroupPaneView {
     ) -> windows::core::Result<SharedMut<T>> {
         let header_view =
             PaneTabHeaderView::new(T::INIT_TAB_NAME, this.borrow().tabs.is_empty(), ctx)?;
-        let content_presenter = new_shared_mut(T::new(&header_view));
+        let content_presenter = new_shared_mut(T::new(&header_view, ctx));
         Self::add_tab_raw(this, &header_view, content_presenter.clone())?;
 
         let thisref = this.borrow();
@@ -1501,11 +1500,7 @@ impl TabGroupPaneView {
     }
     pub fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        let ht_ref = self.ht_ref.borrow();
-        if let Some(parent_ht) = ht_ref.parent.upgrade() {
-            drop(ht_ref);
-            parent_ht.borrow_mut().remove_child(&self.ht_ref);
-        }
+        self.ht_ref.borrow_mut().unmount();
 
         Ok(())
     }
@@ -1520,7 +1515,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
         };
 
         let mut thisref = this.borrow_mut();
-        let HitTestTree { rect, .. } = *thisref.ht_ref.borrow();
+        let rect = thisref.ht_ref.borrow().rect().clone();
 
         let app_window = AppWindow::wrap(window);
 
@@ -1931,11 +1926,7 @@ impl PaneTabHeaderView {
     }
     fn unmount(&self) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
-        let ht_ref = self.hittest_tree_self.borrow();
-        if let Some(ht_parent) = ht_ref.parent.upgrade() {
-            drop(ht_ref);
-            ht_parent.borrow_mut().remove_child(&self.hittest_tree_self);
-        }
+        self.hittest_tree_self.borrow_mut().unmount();
 
         Ok(())
     }
@@ -2115,7 +2106,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             return;
         };
 
-        let HitTestTree { rect, .. } = *group_view.borrow_mut().ht_ref.borrow();
+        let rect = group_view.borrow_mut().ht_ref.borrow().rect().clone();
 
         let app_window = AppWindow::wrap(window);
 
@@ -2484,7 +2475,10 @@ pub trait PaneTabContentPresenter {
 }
 pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     const INIT_TAB_NAME: &'static str;
-    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self;
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self;
 }
 
 pub struct InspectorTabPresenter {}
@@ -2495,21 +2489,8 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
         _onto_ht: &SharedMut<HitTestTree>,
         view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
-        let ui_font = view_context.text_format_stock_mut().get(
-            "system-ui",
-            12.0,
-            DWRITE_FONT_WEIGHT_NORMAL,
-        )?;
-        let label_surface = view_context
-            .text_surface_stock_mut()
-            .get(&ui_font, "Inspector Pane")?;
-        let brush = view_context
-            .compositor()
-            .CreateSurfaceBrushWithSurface(&label_surface.surface)?;
-        let label_visual = view_context.compositor().CreateSpriteVisual()?;
-        label_visual.SetBrush(&brush)?;
-        label_visual.SetSize(label_surface.visual_size())?;
-        onto.Children()?.InsertAtTop(&label_visual)?;
+        let label = LabelView::new("Inspector Pane", view_context)?;
+        label.mount(&onto.Children()?)?;
 
         Ok(())
     }
@@ -2524,7 +2505,10 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
 impl PaneTabPresenter for InspectorTabPresenter {
     const INIT_TAB_NAME: &'static str = "Inspector";
 
-    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
         Self {}
     }
 }
@@ -2550,7 +2534,10 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
 impl PaneTabPresenter for ProjectSettingsTabPresenter {
     const INIT_TAB_NAME: &'static str = "Project Settings";
 
-    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
         Self {}
     }
 }
@@ -2576,7 +2563,10 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
 impl PaneTabPresenter for TimelineTabPresenter {
     const INIT_TAB_NAME: &'static str = "Timeline";
 
-    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
         Self {}
     }
 }
@@ -2602,7 +2592,11 @@ impl PaneTabContentPresenter for StageTabPresenter {
 impl PaneTabPresenter for StageTabPresenter {
     const INIT_TAB_NAME: &'static str = "Stage";
 
-    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
+        view_ctx.compositor().CreateSurface
         Self {}
     }
 }
@@ -2628,391 +2622,105 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
 impl PaneTabPresenter for PreviewTabPresenter {
     const INIT_TAB_NAME: &'static str = "Preview";
 
-    fn new(_tab_header_view: &SharedMut<PaneTabHeaderView>) -> Self {
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
         Self {}
     }
 }
 
-pub enum InputAction {
-    PointerLeave(Rc<dyn InputEventHandler>),
-    PointerEnter(Rc<dyn InputEventHandler>),
-    PointerDown(Rc<dyn InputEventHandler>),
-    PointerUp(Rc<dyn InputEventHandler>),
-    Click(Rc<dyn InputEventHandler>),
-    BeginDrag(Rc<dyn InputEventHandler>),
-    DragMove(Rc<dyn InputEventHandler>),
-    EndDrag(Rc<dyn InputEventHandler>),
-}
-impl InputAction {
-    #[inline]
-    pub fn execute(self, x: f32, y: f32, mut ctx: &mut dyn InputContext, window: HWND) {
-        match self {
-            Self::PointerLeave(e) => e.on_pointer_leave(ctx),
-            Self::PointerEnter(e) => e.on_pointer_enter(ctx),
-            Self::PointerDown(e) => e.on_pointer_down(x, y, ctx),
-            Self::PointerUp(e) => e.on_pointer_up(x, y, ctx),
-            Self::Click(e) => e.on_click(&mut ctx),
-            Self::BeginDrag(e) => e.on_begin_drag(x, y, window, ctx),
-            Self::DragMove(e) => e.on_drag_move(x, y, window, ctx),
-            Self::EndDrag(e) => e.on_end_drag(x, y, window, ctx),
-        }
+pub struct ObjectTreeTabPresenter {}
+impl PaneTabContentPresenter for ObjectTreeTabPresenter {
+    fn build_content_view(
+        &mut self,
+        _onto: &ContainerVisual,
+        _onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
     }
 }
+impl PaneTabPresenter for ObjectTreeTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Object Tree";
 
-const DRAG_THRESHOLD_DIST2: f32 = 5.0 * 5.0;
-struct InputState {
-    bound_window: HWND,
-    ht_tree: SharedMut<HitTestTree>,
-    mouse_capturing_element: Option<WeakMut<HitTestTree>>,
-    mouse_current_enter_element: Option<WeakMut<HitTestTree>>,
-    mouse_down_point: Option<(f32, f32, Option<WeakMut<HitTestTree>>)>,
-    is_mouse_dragging: bool,
-}
-impl InputState {
-    fn new(bound_window: HWND, ht_tree: &SharedMut<HitTestTree>) -> Self {
-        Self {
-            bound_window,
-            ht_tree: ht_tree.clone(),
-            mouse_capturing_element: None,
-            mouse_current_enter_element: None,
-            mouse_down_point: None,
-            is_mouse_dragging: false,
-        }
-    }
-
-    fn update_mouse_pos(&mut self, x: f32, y: f32, actions: &mut Vec<InputAction>) {
-        let over_tree = HitTestTree::check(&self.ht_tree, x, y);
-        let over_changes = over_tree.as_ref().map(|x| x.borrow().id)
-            != self
-                .mouse_current_enter_element
-                .as_ref()
-                .and_then(Weak::upgrade)
-                .map(|x| x.borrow().id);
-        if let Some(x) = self
-            .mouse_current_enter_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            if Some(x.borrow().id) != over_tree.as_ref().map(|x| x.borrow().id) {
-                // leave
-                actions.push(InputAction::PointerLeave(x.borrow().eh.clone()));
-            }
-        }
-        self.mouse_current_enter_element = over_tree.as_ref().map(Rc::downgrade);
-        if over_changes {
-            if let Some(x) = self
-                .mouse_current_enter_element
-                .as_ref()
-                .and_then(Weak::upgrade)
-            {
-                actions.push(InputAction::PointerEnter(x.borrow().eh.clone()));
-            }
-        }
-    }
-
-    pub fn capture_mouse(&mut self) {
-        if self.mouse_current_enter_element.is_none() {
-            return;
-        }
-
-        self.mouse_capturing_element = self.mouse_current_enter_element.clone();
-        unsafe {
-            SetCapture(self.bound_window);
-        }
-    }
-
-    pub fn release_mouse_capture(&mut self) {
-        if self.mouse_capturing_element.is_none() {
-            return;
-        }
-
-        unsafe {
-            ReleaseCapture().expect("Failed to release captured mouse");
-        }
-        self.mouse_capturing_element = None;
-    }
-
-    fn on_mouse_move(&mut self, x: f32, y: f32) -> Vec<InputAction> {
-        let mut actions = Vec::with_capacity(16);
-
-        if let Some(e) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            if let Some((dx, dy, _)) = self.mouse_down_point.as_ref() {
-                if !self.is_mouse_dragging {
-                    // 閾値を超えた後は永続的にドラッグ状態になる
-                    let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
-                    if dist2 >= DRAG_THRESHOLD_DIST2 {
-                        self.is_mouse_dragging = true;
-                        actions.push(InputAction::BeginDrag(e.borrow().eh.clone()));
-                    }
-                }
-
-                if self.is_mouse_dragging {
-                    actions.push(InputAction::DragMove(e.borrow().eh.clone()));
-                }
-            }
-
-            return actions;
-        }
-
-        self.update_mouse_pos(x, y, &mut actions);
-
-        if let Some((dx, dy, down_element)) = self.mouse_down_point.as_ref() {
-            if !self.is_mouse_dragging {
-                // 閾値を超えた後は永続的にドラッグ状態になる
-                let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
-                if dist2 >= DRAG_THRESHOLD_DIST2 {
-                    self.is_mouse_dragging = true;
-                    if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
-                        actions.push(InputAction::BeginDrag(e.borrow().eh.clone()));
-                    }
-                }
-            }
-
-            if self.is_mouse_dragging {
-                if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
-                    actions.push(InputAction::DragMove(e.borrow().eh.clone()));
-                }
-            }
-        }
-
-        actions
-    }
-
-    fn on_mouse_down(&mut self, x: f32, y: f32) -> Vec<InputAction> {
-        let mut actions = Vec::with_capacity(16);
-
-        if let Some(e) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            actions.push(InputAction::PointerDown(e.borrow().eh.clone()));
-            return actions;
-        }
-
-        self.update_mouse_pos(x, y, &mut actions);
-        self.mouse_down_point = Some((x, y, self.mouse_current_enter_element.clone()));
-        self.is_mouse_dragging = false;
-        if let Some(e) = self
-            .mouse_current_enter_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            actions.push(InputAction::PointerDown(e.borrow().eh.clone()));
-        }
-
-        actions
-    }
-
-    fn on_mouse_up(&mut self, x: f32, y: f32) -> Vec<InputAction> {
-        let mut actions = Vec::with_capacity(16);
-
-        if let Some(e) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            actions.push(InputAction::PointerUp(e.borrow().eh.clone()));
-            if !self.is_mouse_dragging {
-                actions.push(InputAction::Click(e.borrow().eh.clone()));
-            } else {
-                actions.push(InputAction::EndDrag(e.borrow().eh.clone()));
-            }
-            self.mouse_down_point = None;
-
-            return actions;
-        }
-
-        self.update_mouse_pos(x, y, &mut actions);
-
-        if !self.is_mouse_dragging {
-            if let Some(x) = self
-                .mouse_current_enter_element
-                .as_ref()
-                .and_then(Weak::upgrade)
-            {
-                actions.push(InputAction::Click(x.borrow().eh.clone()));
-            }
-        } else {
-            if let Some(x) = self
-                .mouse_down_point
-                .as_ref()
-                .and_then(|x| x.2.as_ref())
-                .and_then(std::rc::Weak::upgrade)
-            {
-                actions.push(InputAction::EndDrag(x.borrow().eh.clone()));
-            }
-        }
-        self.mouse_down_point = None;
-
-        actions
-    }
-
-    fn set_cursor(&self) -> bool {
-        if let Some(e) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            // TODO: caching loaded cursors
-            let c = match e.borrow().eh.hover_cursor() {
-                CursorStyle::Arrow => unsafe {
-                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
-                },
-                CursorStyle::SizeNS => unsafe {
-                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZENS))
-                },
-                CursorStyle::SizeEW => unsafe {
-                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZEWE))
-                },
-            };
-            unsafe { SetCursor(c.expect("Failed to load cursor")) };
-
-            return true;
-        }
-
-        if let Some(e) = self
-            .mouse_current_enter_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            // TODO: caching loaded cursors
-            let c = match e.borrow().eh.hover_cursor() {
-                CursorStyle::Arrow => unsafe {
-                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
-                },
-                CursorStyle::SizeNS => unsafe {
-                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZENS))
-                },
-                CursorStyle::SizeEW => unsafe {
-                    LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZEWE))
-                },
-            };
-            unsafe { SetCursor(c.expect("Failed to load cursor")) };
-
-            true
-        } else {
-            false
-        }
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
+        Self {}
     }
 }
 
-pub struct HitTestTree {
-    eh: Rc<dyn InputEventHandler>,
-    id: usize,
-    rect: Rect,
-    parent: WeakMut<HitTestTree>,
-    children: HashMap<usize, SharedMut<HitTestTree>>,
+pub struct AssetExplorerTabPresenter {}
+impl PaneTabContentPresenter for AssetExplorerTabPresenter {
+    fn build_content_view(
+        &mut self,
+        _onto: &ContainerVisual,
+        _onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
 }
-impl HitTestTree {
-    #[inline]
+impl PaneTabPresenter for AssetExplorerTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Asset Explorer";
+
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
+        Self {}
+    }
+}
+
+pub struct LabelView {
+    pub root: SpriteVisual,
+}
+impl LabelView {
     pub fn new(
-        eh: &Rc<impl InputEventHandler + 'static>,
-        id: usize,
-        rect: Rect,
-    ) -> SharedMut<Self> {
-        new_shared_mut(Self {
-            eh: eh.clone(),
-            id,
-            rect,
-            parent: empty_weak_mut(),
-            children: HashMap::new(),
-        })
-    }
-    #[inline]
-    pub fn new_unsized(
-        eh: &Rc<impl InputEventHandler + 'static>,
-        id: usize,
-        left: f32,
-        top: f32,
-    ) -> SharedMut<Self> {
-        Self::new(
-            eh,
-            id,
-            Rect {
-                X: left,
-                Y: top,
-                Width: f32::MAX,
-                Height: f32::MAX,
-            },
-        )
+        text: impl Into<Cow<'static, str>>,
+        ctx: &mut (impl ViewContext + ?Sized),
+    ) -> windows::core::Result<Self> {
+        let root = ctx.compositor().CreateSpriteVisual()?;
+        let text_format =
+            ctx.text_format_stock_mut()
+                .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let text_surface = ctx.text_surface_stock_mut().get(&text_format, text)?;
+        let brush = ctx
+            .compositor()
+            .CreateSurfaceBrushWithSurface(&text_surface.surface)?;
+        root.set_properties().brush(&brush)?.size(Vector2 {
+            X: text_surface.width,
+            Y: text_surface.height,
+        })?;
+
+        Ok(Self { root })
     }
 
-    #[inline]
-    pub fn add_child(this: &SharedMut<Self>, child: SharedMut<HitTestTree>) {
-        child.borrow_mut().parent = Rc::downgrade(this);
-        let cid = child.borrow().id;
-        this.borrow_mut().children.insert(cid, child);
-    }
+    pub fn mount(&self, onto: &VisualCollection) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
 
-    #[inline]
-    pub fn remove_child(&mut self, child: &SharedMut<HitTestTree>) {
-        let cb = child.borrow();
-        self.children.remove(&cb.id);
-        drop(cb);
-        child.borrow_mut().parent = Weak::new();
+        Ok(())
     }
+    pub fn unmount(&self) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
 
-    #[inline]
-    pub fn set_rect(&mut self, left: f32, top: f32, width: f32, height: f32) {
-        self.rect = Rect {
-            X: left,
-            Y: top,
-            Width: width,
-            Height: height,
-        };
-    }
-    #[inline]
-    pub fn set_size(&mut self, width: f32, height: f32) {
-        self.rect.Width = width;
-        self.rect.Height = height;
-    }
-    #[inline]
-    pub fn set_offset(&mut self, left: f32, top: f32) {
-        self.rect.X = left;
-        self.rect.Y = top;
-    }
-
-    pub fn check(this: &SharedMut<Self>, x: f32, y: f32) -> Option<SharedMut<Self>> {
-        let this1 = this.borrow();
-        if this1.rect.contains_point(x, y) {
-            let child = this1
-                .children
-                .values()
-                .find_map(|c| Self::check(c, x - this1.rect.X, y - this1.rect.Y));
-            Some(child.unwrap_or(this.clone()))
-        } else {
-            None
-        }
-    }
-}
-impl core::fmt::Debug for HitTestTree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HitTestTree")
-            .field("id", &self.id)
-            .field("left", &self.rect.X)
-            .field("top", &self.rect.Y)
-            .field("width", &self.rect.Width)
-            .field("height", &self.rect.Height)
-            .field("children", &self.children)
-            .finish_non_exhaustive()
-    }
-}
-pub struct HitTestTreeContext {
-    current_id: usize,
-}
-impl HitTestTreeContext {
-    pub fn new() -> Self {
-        Self { current_id: 0 }
-    }
-
-    pub fn new_id(&mut self) -> usize {
-        self.current_id += 1;
-        self.current_id
+        Ok(())
     }
 }
 
@@ -3483,15 +3191,15 @@ fn main() {
         .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange();
 
-    let pane_group2 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+    let main_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<StageTabPresenter>(&pane_group2, &mut view_context)
+    TabGroupPaneView::add_tab::<StageTabPresenter>(&main_pane, &mut view_context)
         .expect("Failed to create StagePaneTab");
-    TabGroupPaneView::add_tab::<PreviewTabPresenter>(&pane_group2, &mut view_context)
+    TabGroupPaneView::add_tab::<PreviewTabPresenter>(&main_pane, &mut view_context)
         .expect("Failed to create PreviewPaneTab");
-    TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&pane_group2, &mut view_context)
+    TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&main_pane, &mut view_context)
         .expect("Failed to create ProjectSettingsPaneTabHeader");
-    pane_group2.borrow_mut().rearrange();
+    main_pane.borrow_mut().rearrange();
 
     let pane_group3 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
         .expect("Failed to create TabGroupPaneView");
@@ -3499,6 +3207,26 @@ fn main() {
         .expect("Failed to create InspectorPaneTabHeader");
     pane_group3.borrow_mut().rearrange();
     pane_group3
+        .borrow_mut()
+        .resize(256.0, 256.0)
+        .expect("Failed to resize pane");
+
+    let explorers_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create TabGroupPaneView");
+    TabGroupPaneView::add_tab::<AssetExplorerTabPresenter>(&explorers_pane, &mut view_context)
+        .expect("Failed to create AssetExplorerTab");
+    explorers_pane.borrow_mut().rearrange();
+    explorers_pane
+        .borrow_mut()
+        .resize(256.0, 256.0)
+        .expect("Failed to resize pane");
+
+    let scene_subinfo_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create TabGroupPaneView");
+    TabGroupPaneView::add_tab::<ObjectTreeTabPresenter>(&scene_subinfo_pane, &mut view_context)
+        .expect("Failed to create ObjectTreeTab");
+    scene_subinfo_pane.borrow_mut().rearrange();
+    scene_subinfo_pane
         .borrow_mut()
         .resize(256.0, 256.0)
         .expect("Failed to resize pane");
@@ -3514,7 +3242,25 @@ fn main() {
                         ctx,
                         parent,
                         |parent, _| PaneDockLayer::new_filled(&pane_group1, parent),
-                        |parent, _| PaneDockLayer::new_filled(&pane_group2, parent),
+                        |parent, ctx| {
+                            PaneDockLayer::new_on_bottom(
+                                ctx,
+                                parent,
+                                |parent, _| PaneDockLayer::new_filled(&explorers_pane, parent),
+                                |parent, ctx| {
+                                    PaneDockLayer::new_on_left(
+                                        ctx,
+                                        parent,
+                                        |parent, _| {
+                                            PaneDockLayer::new_filled(&scene_subinfo_pane, parent)
+                                        },
+                                        |parent, _| PaneDockLayer::new_filled(&main_pane, parent),
+                                    )
+                                    .expect("Failed to create pane dock layer")
+                                },
+                            )
+                            .expect("Failed to create pane dock layer")
+                        },
                     )
                     .expect("Failed to create pane dock state")
                 },

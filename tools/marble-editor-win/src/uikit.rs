@@ -5,10 +5,10 @@ use windows::{
     },
 };
 
-use crate::{
-    object_cache::{TextFormatStock, TextSurfaceStock},
-    HitTestTreeContext,
-};
+use crate::object_cache::{TextFormatStock, TextSurfaceStock};
+
+mod input;
+pub use self::input::*;
 
 pub struct UICommonObjects {
     pub tab_base_brush: CompositionColorBrush,
