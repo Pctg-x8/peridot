@@ -3,11 +3,12 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     rc::{Rc, Weak},
-    sync::{Arc, RwLock},
 };
 
+use features::{DockingPanePreview, PaneSplitterView, SplitDirection};
 use object_cache::{TextFormatStock, TextSurfaceStock};
-use uikit::{CursorStyle, InputContext, InputEventHandler, ViewContext, ViewContextExtension};
+use uikit::{CursorStyle, InputContext, InputEventHandler, ViewContext};
+use utils::{rect_slice_bottom, rect_slice_left, rect_slice_right, rect_slice_top, RectExtensions};
 use winapi_extras::{
     timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
     VisualExtensions,
@@ -16,9 +17,8 @@ use windows::{
     core::*,
     Foundation::{
         Numerics::{Vector2, Vector3},
-        Rect, TimeSpan, TypedEventHandler,
+        Rect,
     },
-    System::DispatcherQueueTimer,
     Win32::{
         Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
@@ -52,34 +52,31 @@ use windows::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA, GetWindowLongPtrA,
-                LoadCursorA, LoadIconA, PostQuitMessage, SetCursor, SetWindowLongPtrA,
-                SetWindowPos, ShowWindow, TranslateMessage, HCURSOR, HICON, HTCLIENT, IDC_ARROW,
-                IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
-                SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
-                WNDCLASSEXA, WNDCLASS_STYLES,
+                LoadCursorA, LoadIconA, PostQuitMessage, SetCursor, SetWindowLongPtrA, ShowWindow,
+                TranslateMessage, HTCLIENT, IDC_ARROW, IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION,
+                MSG, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA,
+                WNDCLASS_STYLES,
             },
         },
     },
     UI::{
         Color,
         Composition::{
-            CompositionAnimationGroup, CompositionEasingFunction, CompositionEasingFunctionMode,
-            CompositionEffectSourceParameter, CompositionSurfaceBrush, Compositor, ContainerVisual,
-            Desktop::DesktopWindowTarget, LayerVisual, ScalarKeyFrameAnimation, ShapeVisual,
-            SpriteVisual, VisualCollection,
+            CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, Compositor,
+            ContainerVisual, LayerVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
+            VisualCollection,
         },
     },
 };
 
 use crate::{
     uikit::{UICommonObjects, ViewContext1},
-    winapi_extras::{
-        register_window_class, Vector2Extension, VectorScalarConstructor, WindowBuilder,
-    },
+    winapi_extras::{register_window_class, VectorScalarConstructor, WindowBuilder},
 };
 
 mod bindgen;
+mod features;
 mod object_cache;
 mod uikit;
 mod utils;
@@ -119,210 +116,18 @@ const TAB_ACTIVE_BASE_COLOR: Color = Color {
 
 const PANE_SPLITTER_GAP: f32 = 5.0;
 
-#[derive(Clone, Copy)]
-pub enum SplitDirection {
-    Horizontal,
-    Vertical,
-}
-
-pub struct PaneSplitterView {
-    visual: SpriteVisual,
-    hover_animation: ScalarKeyFrameAnimation,
-    hover_end_animation: ScalarKeyFrameAnimation,
-    ht: SharedMut<HitTestTree>,
-    dir: SplitDirection,
-    controlling_dock_layer: WeakMut<PaneDockState>,
-    drag_start_values: Option<(f32, f32, f32)>,
-}
-impl PaneSplitterView {
-    const SURFACE_COLOR: Color = Color {
-        A: 32,
-        R: 255,
-        G: 255,
-        B: 255,
-    };
-
-    pub fn new(
-        ctx: &mut (impl ViewContext + ?Sized),
-        dir: SplitDirection,
-    ) -> windows::core::Result<SharedMut<Self>> {
-        let visual = ctx.compositor().CreateSpriteVisual()?;
-        visual.SetBrush(
-            &ctx.compositor()
-                .CreateColorBrushWithColor(Self::SURFACE_COLOR)?,
-        )?;
-        visual.SetOpacity(0.0)?;
-
-        let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
-
-        let hover_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-        hover_animation
-            .keyframe(0.0, 0.0)?
-            .interpolate(1.0, 1.0, &linear_easing)?
-            .set_properties()
-            .duration(timespan_ms(100))?;
-
-        let hover_end_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-        hover_end_animation
-            .keyframe(0.0, 1.0)?
-            .interpolate(1.0, 0.0, &linear_easing)?
-            .set_properties()
-            .duration(timespan_ms(100))?;
-
-        Ok(new_cyclic_shared_mut(|wthis| {
-            let ht = HitTestTree::new(
-                &Rc::new(wthis.clone()),
-                ctx.hittest_context_mut().new_id(),
-                0.0,
-                0.0,
-                1.0,
-                1.0,
-            );
-
-            Self {
-                visual,
-                hover_animation,
-                hover_end_animation,
-                ht,
-                dir,
-                controlling_dock_layer: empty_weak_mut(),
-                drag_start_values: None,
-            }
-        }))
-    }
-
-    fn bind_dock_layer(&mut self, layer: &WeakMut<PaneDockState>) {
-        self.controlling_dock_layer = layer.clone();
-    }
-
-    pub fn set_offset(&self, left: f32, top: f32) -> windows::core::Result<()> {
-        self.visual.SetOffset(Vector3 {
-            X: left,
-            Y: top,
-            Z: 0.0,
-        })?;
-        self.ht.borrow_mut().set_offset(left, top);
-
-        Ok(())
-    }
-    pub fn set_rect(&self, rect: Rect) -> windows::core::Result<()> {
-        self.visual.set_properties().rect(rect.clone())?;
-        self.ht
-            .borrow_mut()
-            .set_rect(rect.X, rect.Y, rect.Width, rect.Height);
-
-        Ok(())
-    }
-
-    pub fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
-    ) -> windows::core::Result<()> {
-        onto.InsertAtTop(&self.visual)?;
-        HitTestTree::add_child(onto_ht, self.ht.clone());
-
-        Ok(())
-    }
-    pub fn unmount(&self) -> windows::core::Result<()> {
-        self.visual.Parent()?.Children()?.Remove(&self.visual)?;
-        // Note: if letでborrowしたやつはif文の中でも生きているらしいので個別にdropできるようにする
-        let ht_ref = self.ht.borrow();
-        if let Some(parent_ht) = ht_ref.parent.upgrade() {
-            drop(ht_ref);
-            parent_ht.borrow_mut().remove_child(&self.ht)
-        }
-
-        Ok(())
-    }
-}
-impl InputEventHandler for WeakMut<PaneSplitterView> {
-    fn hover_cursor(&self) -> CursorStyle {
-        match self.upgrade().map(|x| x.borrow().dir) {
-            Some(SplitDirection::Horizontal) => CursorStyle::SizeNS,
-            Some(SplitDirection::Vertical) => CursorStyle::SizeEW,
-            None => CursorStyle::Arrow,
-        }
-    }
-
-    fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
-        let Some(this) = self.upgrade() else {
-            return;
-        };
-
-        this.borrow()
-            .visual
-            .StartAnimation(h!("Opacity"), &this.borrow().hover_animation)
-            .expect("Failed to start hover animation");
-    }
-
-    fn on_pointer_leave(&self, _view_ctx: &mut dyn InputContext) {
-        let Some(this) = self.upgrade() else {
-            return;
-        };
-
-        this.borrow()
-            .visual
-            .StartAnimation(h!("Opacity"), &this.borrow().hover_end_animation)
-            .expect("Failed to start hover end animation");
-    }
-
-    fn on_pointer_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
-        let Some(this) = self.upgrade() else {
-            return;
-        };
-        let Some(target_dock) = this.borrow().controlling_dock_layer.upgrade() else {
-            return;
-        };
-
-        this.borrow_mut().drag_start_values = Some((x, y, target_dock.borrow().dock_size()));
-        ctx.capture_mouse();
-    }
-
-    fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
-        let Some(this) = self.upgrade() else {
-            return;
-        };
-        let Some(target_dock) = this.borrow().controlling_dock_layer.upgrade() else {
-            return;
-        };
-        let Some((bx, by, bs)) = this.borrow().drag_start_values else {
-            return;
-        };
-
-        let dpi = unsafe { GetDpiForWindow(window) as f32 };
-        let new_size = match &*target_dock.borrow() {
-            PaneDockState::EmptyRoot(_, _) => bs,
-            PaneDockState::Left { .. } => bs + (x - bx) * 96.0 / dpi,
-            PaneDockState::Top { .. } => bs + (y - by) * 96.0 / dpi,
-            PaneDockState::Right { .. } => bs - (x - bx) * 96.0 / dpi,
-            PaneDockState::Bottom { .. } => bs - (y - by) * 96.0 / dpi,
-            PaneDockState::Fill { .. } => bs,
-        };
-        let (x, y) = target_dock
-            .borrow_mut()
-            .set_dock_size(new_size.max(1.0))
-            .expect("Failed to resize pane");
-        this.borrow_mut()
-            .set_offset(x, y)
-            .expect("Failed to set splitter position");
-    }
-
-    fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
-        let Some(this) = self.upgrade() else {
-            return;
-        };
-
-        this.borrow_mut().drag_start_values = None;
-        ctx.release_mouse_capture();
-    }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RedockingMode {
+    Pane,
+    Tab,
 }
 
 pub enum PaneDockingRecommendation {
-    Left(SharedMut<PaneDockState>),
-    Right(SharedMut<PaneDockState>),
-    Top(SharedMut<PaneDockState>),
-    Bottom(SharedMut<PaneDockState>),
+    Left(SharedMut<PaneDockLayer>),
+    Right(SharedMut<PaneDockLayer>),
+    Top(SharedMut<PaneDockLayer>),
+    Bottom(SharedMut<PaneDockLayer>),
+    MergeGroup(SharedMut<TabGroupPaneView>),
     Free,
 }
 impl core::fmt::Debug for PaneDockingRecommendation {
@@ -332,6 +137,7 @@ impl core::fmt::Debug for PaneDockingRecommendation {
             Self::Right(_) => f.write_str("Right"),
             Self::Top(_) => f.write_str("Top"),
             Self::Bottom(_) => f.write_str("Bottom"),
+            Self::MergeGroup(_) => f.write_str("MergeGroup"),
             Self::Free => f.write_str("Free"),
         }
     }
@@ -379,47 +185,48 @@ impl PaneDockingRecommendation {
                     Height: h,
                 }
             }),
+            Self::MergeGroup(view) => Some(view.borrow().view_rect.clone()),
             Self::Free => None,
         }
     }
 }
 
-pub enum PaneDockState {
-    EmptyRoot(Option<SharedMut<PaneDockState>>, Rect),
+pub enum PaneDockLayer {
+    EmptyRoot(Option<SharedMut<PaneDockLayer>>, Rect),
     Left {
-        docked: SharedMut<PaneDockState>,
+        docked: SharedMut<PaneDockLayer>,
         splitter: SharedMut<PaneSplitterView>,
         container_region: Rect,
-        rest: SharedMut<PaneDockState>,
-        parent: WeakMut<PaneDockState>,
+        rest: SharedMut<PaneDockLayer>,
+        parent: WeakMut<PaneDockLayer>,
     },
     Right {
-        docked: SharedMut<PaneDockState>,
+        docked: SharedMut<PaneDockLayer>,
         splitter: SharedMut<PaneSplitterView>,
         container_region: Rect,
-        rest: SharedMut<PaneDockState>,
-        parent: WeakMut<PaneDockState>,
+        rest: SharedMut<PaneDockLayer>,
+        parent: WeakMut<PaneDockLayer>,
     },
     Top {
-        docked: SharedMut<PaneDockState>,
+        docked: SharedMut<PaneDockLayer>,
         splitter: SharedMut<PaneSplitterView>,
         container_region: Rect,
-        rest: SharedMut<PaneDockState>,
-        parent: WeakMut<PaneDockState>,
+        rest: SharedMut<PaneDockLayer>,
+        parent: WeakMut<PaneDockLayer>,
     },
     Bottom {
-        docked: SharedMut<PaneDockState>,
+        docked: SharedMut<PaneDockLayer>,
         splitter: SharedMut<PaneSplitterView>,
         container_region: Rect,
-        rest: SharedMut<PaneDockState>,
-        parent: WeakMut<PaneDockState>,
+        rest: SharedMut<PaneDockLayer>,
+        parent: WeakMut<PaneDockLayer>,
     },
     Fill {
-        group_view: SharedMut<PaneGroupView>,
-        parent: WeakMut<PaneDockState>,
+        inner_view: SharedMut<TabGroupPaneView>,
+        parent: WeakMut<PaneDockLayer>,
     },
 }
-impl PaneDockState {
+impl PaneDockLayer {
     fn new_root(
         content: impl FnOnce(&WeakMut<Self>) -> Option<SharedMut<Self>>,
     ) -> SharedMut<Self> {
@@ -537,17 +344,22 @@ impl PaneDockState {
         }))
     }
     fn new_filled(
-        group_view: &SharedMut<PaneGroupView>,
+        inner_view: &SharedMut<TabGroupPaneView>,
         parent: &WeakMut<Self>,
     ) -> SharedMut<Self> {
         new_cyclic_shared_mut(|wthis| {
-            group_view.borrow_mut().bind_dock_layer(wthis);
+            inner_view.borrow_mut().bind_dock_layer(wthis);
 
             Self::Fill {
-                group_view: group_view.clone(),
+                inner_view: inner_view.clone(),
                 parent: parent.clone(),
             }
         })
+    }
+
+    #[inline(always)]
+    pub const fn is_empty_root(&self) -> bool {
+        matches!(self, Self::EmptyRoot(_, _))
     }
 
     #[inline]
@@ -577,12 +389,7 @@ impl PaneDockState {
             | Self::Bottom {
                 container_region, ..
             } => container_region.clone(),
-            Self::Fill { group_view, .. } => Rect {
-                X: group_view.borrow().ht_ref.borrow().left,
-                Y: group_view.borrow().ht_ref.borrow().top,
-                Width: group_view.borrow().ht_ref.borrow().width,
-                Height: group_view.borrow().ht_ref.borrow().height,
-            },
+            Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.clone(),
         }
     }
     pub fn controlling_rect_left(&self) -> f32 {
@@ -600,7 +407,7 @@ impl PaneDockState {
             | Self::Bottom {
                 container_region, ..
             } => container_region.X,
-            Self::Fill { group_view, .. } => group_view.borrow().ht_ref.borrow().left,
+            Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.X,
         }
     }
     pub fn controlling_rect_right(&self) -> f32 {
@@ -618,8 +425,8 @@ impl PaneDockState {
             | Self::Bottom {
                 container_region, ..
             } => container_region.X + container_region.Width,
-            Self::Fill { group_view, .. } => {
-                group_view.borrow().ht_ref.borrow().left + group_view.borrow().ht_ref.borrow().width
+            Self::Fill { inner_view, .. } => {
+                inner_view.borrow().view_rect.X + inner_view.borrow().view_rect.Width
             }
         }
     }
@@ -638,7 +445,7 @@ impl PaneDockState {
             | Self::Bottom {
                 container_region, ..
             } => container_region.Y,
-            Self::Fill { group_view, .. } => group_view.borrow().ht_ref.borrow().top,
+            Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.Y,
         }
     }
     pub fn controlling_rect_bottom(&self) -> f32 {
@@ -656,8 +463,8 @@ impl PaneDockState {
             | Self::Bottom {
                 container_region, ..
             } => container_region.Y + container_region.Height,
-            Self::Fill { group_view, .. } => {
-                group_view.borrow().ht_ref.borrow().top + group_view.borrow().ht_ref.borrow().height
+            Self::Fill { inner_view, .. } => {
+                inner_view.borrow().view_rect.Y + inner_view.borrow().view_rect.Height
             }
         }
     }
@@ -676,7 +483,7 @@ impl PaneDockState {
             | Self::Bottom {
                 container_region, ..
             } => container_region.Width,
-            Self::Fill { group_view, .. } => group_view.borrow().width,
+            Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.Width,
         }
     }
     pub fn controlling_rect_height(&self) -> f32 {
@@ -694,83 +501,35 @@ impl PaneDockState {
             | Self::Bottom {
                 container_region, ..
             } => container_region.Height,
-            Self::Fill { group_view, .. } => group_view.borrow().height,
+            Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.Height,
         }
     }
 
+    #[inline]
     fn split_left(region: Rect, docked_size: f32) -> (Rect, Rect, Rect) {
-        let docked_size = docked_size.max(1.0);
-        let docked = Rect {
-            Width: docked_size,
-            ..region.clone()
-        };
-        let splitter = Rect {
-            Width: PANE_SPLITTER_GAP,
-            X: region.X + docked_size,
-            ..region.clone()
-        };
-        let rest = Rect {
-            X: region.X + docked_size + PANE_SPLITTER_GAP,
-            Width: region.Width - docked_size - PANE_SPLITTER_GAP,
-            ..region
-        };
+        let (docked, a) = rect_slice_left(region, docked_size.max(1.0));
+        let (splitter, rest) = rect_slice_left(a, PANE_SPLITTER_GAP);
 
         (docked, splitter, rest)
     }
+    #[inline]
     fn split_right(region: Rect, docked_size: f32) -> (Rect, Rect, Rect) {
-        let docked_size = docked_size.max(1.0);
-        let docked = Rect {
-            X: region.X + region.Width - docked_size,
-            Width: docked_size,
-            ..region.clone()
-        };
-        let splitter = Rect {
-            X: docked.X - PANE_SPLITTER_GAP,
-            Width: PANE_SPLITTER_GAP,
-            ..region.clone()
-        };
-        let rest = Rect {
-            Width: region.Width - docked_size - PANE_SPLITTER_GAP,
-            ..region
-        };
+        let (docked, a) = rect_slice_right(region, docked_size.max(1.0));
+        let (splitter, rest) = rect_slice_right(a, PANE_SPLITTER_GAP);
 
         (docked, splitter, rest)
     }
+    #[inline]
     fn split_top(region: Rect, docked_size: f32) -> (Rect, Rect, Rect) {
-        let docked_size = docked_size.max(1.0);
-        let docked = Rect {
-            Height: docked_size,
-            ..region.clone()
-        };
-        let splitter = Rect {
-            Height: PANE_SPLITTER_GAP,
-            Y: docked.Y + docked.Height,
-            ..region.clone()
-        };
-        let rest = Rect {
-            Y: splitter.Y + splitter.Height,
-            Height: region.Height - docked.Height - splitter.Height,
-            ..region
-        };
+        let (docked, a) = rect_slice_top(region, docked_size.max(1.0));
+        let (splitter, rest) = rect_slice_top(a, PANE_SPLITTER_GAP);
 
         (docked, splitter, rest)
     }
+    #[inline]
     fn split_bottom(region: Rect, docked_size: f32) -> (Rect, Rect, Rect) {
-        let docked_size = docked_size.max(1.0);
-        let docked = Rect {
-            Height: docked_size,
-            Y: region.Y + region.Height - docked_size,
-            ..region.clone()
-        };
-        let splitter = Rect {
-            Y: docked.Y - PANE_SPLITTER_GAP,
-            Height: PANE_SPLITTER_GAP,
-            ..region.clone()
-        };
-        let rest = Rect {
-            Height: region.Height - docked.Height - splitter.Height,
-            ..region
-        };
+        let (docked, a) = rect_slice_bottom(region, docked_size.max(1.0));
+        let (splitter, rest) = rect_slice_bottom(a, PANE_SPLITTER_GAP);
 
         (docked, splitter, rest)
     }
@@ -929,7 +688,7 @@ impl PaneDockState {
                 splitter.borrow().mount(onto, onto_ht)?;
                 rest.borrow().mount_recursive(onto, onto_ht)
             }
-            Self::Fill { group_view, .. } => group_view.borrow().mount(onto, onto_ht),
+            Self::Fill { inner_view, .. } => inner_view.borrow().mount(onto, onto_ht),
         }
     }
 
@@ -1001,7 +760,7 @@ impl PaneDockState {
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect)
             }
-            Self::Fill { group_view, .. } => group_view.borrow_mut().set_offset_size(
+            Self::Fill { inner_view, .. } => inner_view.borrow_mut().set_offset_size(
                 region.X,
                 region.Y,
                 region.Width,
@@ -1093,7 +852,7 @@ impl PaneDockState {
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect)
             }
-            Self::Fill { group_view, .. } => group_view.borrow_mut().set_offset_size(
+            Self::Fill { inner_view, .. } => inner_view.borrow_mut().set_offset_size(
                 region.X,
                 region.Y,
                 region.Width,
@@ -1224,21 +983,23 @@ impl PaneDockState {
 
     pub fn compute_recommended_docking_destination(
         this: &SharedMut<Self>,
+        mode: RedockingMode,
         local_x: f32,
         local_y: f32,
     ) -> PaneDockingRecommendation {
         match &*this.borrow() {
             Self::EmptyRoot(None, _) => PaneDockingRecommendation::Free,
             Self::EmptyRoot(Some(r), _) => {
-                Self::compute_recommended_docking_destination(r, local_x, local_y)
+                Self::compute_recommended_docking_destination(r, mode, local_x, local_y)
             }
             Self::Left { docked, rest, .. } => {
                 let left_thres = docked.borrow().controlling_rect_width() + PANE_SPLITTER_GAP * 0.5;
                 if local_x < left_thres {
-                    Self::compute_recommended_docking_destination(docked, local_x, local_y)
+                    Self::compute_recommended_docking_destination(docked, mode, local_x, local_y)
                 } else {
                     Self::compute_recommended_docking_destination(
                         rest,
+                        mode,
                         local_x - docked.borrow().controlling_rect_width() - PANE_SPLITTER_GAP,
                         local_y,
                     )
@@ -1249,20 +1010,22 @@ impl PaneDockState {
                 if right_thres < local_x {
                     Self::compute_recommended_docking_destination(
                         docked,
+                        mode,
                         local_x - rest.borrow().controlling_rect_width() - PANE_SPLITTER_GAP,
                         local_y,
                     )
                 } else {
-                    Self::compute_recommended_docking_destination(rest, local_x, local_y)
+                    Self::compute_recommended_docking_destination(rest, mode, local_x, local_y)
                 }
             }
             Self::Top { docked, rest, .. } => {
                 let top_thres = docked.borrow().controlling_rect_height() + PANE_SPLITTER_GAP * 0.5;
                 if local_y < top_thres {
-                    Self::compute_recommended_docking_destination(docked, local_x, local_y)
+                    Self::compute_recommended_docking_destination(docked, mode, local_x, local_y)
                 } else {
                     Self::compute_recommended_docking_destination(
                         rest,
+                        mode,
                         local_x,
                         local_y - docked.borrow().controlling_rect_height() - PANE_SPLITTER_GAP,
                     )
@@ -1274,37 +1037,29 @@ impl PaneDockState {
                 if bottom_thres < local_y {
                     Self::compute_recommended_docking_destination(
                         docked,
+                        mode,
                         local_x,
                         local_y - rest.borrow().controlling_rect_height() - PANE_SPLITTER_GAP,
                     )
                 } else {
-                    Self::compute_recommended_docking_destination(rest, local_x, local_y)
+                    Self::compute_recommended_docking_destination(rest, mode, local_x, local_y)
                 }
             }
-            Self::Fill { group_view, parent } => {
-                let rect = Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: group_view.borrow().width,
-                    Height: group_view.borrow().height,
-                };
-                if rect.X > local_x
-                    || local_x > rect.X + rect.Width
-                    || rect.Y > local_y
-                    || local_y > rect.Y + rect.Height
-                {
+            Self::Fill { inner_view, parent } => {
+                let rect = inner_view.borrow().relative_rect();
+                if !rect.contains_point(local_x, local_y) {
                     // overflow
                     return PaneDockingRecommendation::Free;
                 }
 
-                let xd = local_x.min(rect.Width - local_x);
-                let yd = local_y.min(rect.Height - local_y);
-                if xd < yd {
+                if mode == RedockingMode::Tab && local_y <= inner_view.borrow().tab_height {
+                    // タブ領域にいる
+                    return PaneDockingRecommendation::MergeGroup(inner_view.clone());
+                }
+
+                if local_x.min(rect.Width - local_x) < local_y.min(rect.Height - local_y) {
                     // xのほうがエッジに近い
-                    if let Some(parent) = parent
-                        .upgrade()
-                        .filter(|x| !matches!(&*x.borrow(), Self::EmptyRoot(_, _)))
-                    {
+                    if let Some(parent) = parent.upgrade().filter(|x| !x.borrow().is_empty_root()) {
                         // 一つ上のレベルでドックできるかも
                         if local_x < 8.0 {
                             return PaneDockingRecommendation::Left(parent);
@@ -1321,10 +1076,7 @@ impl PaneDockState {
                     }
                 } else {
                     // yのほうがエッジに近い
-                    if let Some(parent) = parent
-                        .upgrade()
-                        .filter(|x| !matches!(&*x.borrow(), Self::EmptyRoot(_, _)))
-                    {
+                    if let Some(parent) = parent.upgrade().filter(|x| !x.borrow().is_empty_root()) {
                         // 一つ上のレベルでドックできるかも
                         if local_y < 8.0 {
                             return PaneDockingRecommendation::Top(parent);
@@ -1345,248 +1097,26 @@ impl PaneDockState {
     }
 }
 
-pub struct DockingPanePreview {
-    window: HWND,
-    _composition_target: DesktopWindowTarget,
-    root: SpriteVisual,
-    color_tint: SpriteVisual,
-    blink_animation: ScalarKeyFrameAnimation,
-    show_animation: CompositionAnimationGroup,
-    hide_animation: CompositionAnimationGroup,
-    hide_delay_timer: Arc<RwLock<Option<DispatcherQueueTimer>>>,
-}
-impl DockingPanePreview {
-    const INOUT_DURATION: TimeSpan = timespan_ms(100);
-    const TINT_COLOR: Color = Color {
-        A: 64,
-        R: 16,
-        G: 176,
-        B: 255,
-    };
-
-    fn new(ctx: &mut (impl ViewContext + ?Sized)) -> windows::core::Result<Self> {
-        extern "system" fn window_callback(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-            unsafe { DefWindowProcA(h, m, w, l) }
-        }
-
-        let window_cls = WNDCLASSEXA {
-            cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            style: WNDCLASS_STYLES(0),
-            lpfnWndProc: Some(window_callback),
-            hInstance: unsafe { GetModuleHandleA(None)?.into() },
-            hIcon: HICON(0),
-            hCursor: HCURSOR(0),
-            hbrBackground: HBRUSH(0),
-            lpszMenuName: PCSTR::null(),
-            lpszClassName: s!("io.ct2.peridot.marble.windows.overlays.floating_preview"),
-            hIconSm: HICON(0),
-        };
-        let window = WindowBuilder::new(
-            window_cls.hInstance,
-            register_window_class(&window_cls)?,
-            s!(""),
-        )
-        .no_activate()
-        .no_redirection_bitmap()
-        .transparent()
-        .topmost()
-        .popup()
-        .create()?;
-        let composition_target = unsafe {
-            ctx.compositor()
-                .cast::<ICompositorDesktopInterop>()?
-                .CreateDesktopWindowTarget(window, true)?
-        };
-
-        let fx = bindgen::GaussianBlurEffect::new()?;
-        fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
-        fx.SetBlurAmount(16.0)?;
-        fx.SetOptimization(bindgen::EffectOptimization::Balanced)?;
-        let effect_factory = ctx.compositor().CreateEffectFactory(&fx)?;
-        let backdrop_brush = ctx.compositor().CreateBackdropBrush()?;
-        let blur_brush = effect_factory.CreateBrush()?;
-        blur_brush.SetSourceParameter(h!("source"), &backdrop_brush)?;
-
-        let blur_visual = ctx.compositor().CreateSpriteVisual()?;
-        blur_visual
-            .set_properties()
-            .center_point(Vector3::scalar(0.5))?
-            .anchor_point(Vector2::scalar(0.5))?
-            .relative_offset_adjustment(Vector2::scalar(0.5).with_z(0.0))?
-            .brush(&blur_brush)?;
-
-        let color_tint = ctx.compositor().CreateSpriteVisual()?;
-        color_tint
-            .set_properties()
-            .brush(
-                &ctx.compositor()
-                    .CreateColorBrushWithColor(Self::TINT_COLOR)?,
-            )?
-            .relative_offset_adjustment(Vector3::zero())?
-            .relative_size_adjustment(Vector2::one())?;
-        blur_visual.Children()?.InsertAtTop(&color_tint)?;
-
-        let shadow = ctx.compositor().CreateDropShadow()?;
-        shadow.SetBlurRadius(32.0)?;
-        shadow.SetOffset(Vector3 {
-            X: 0.0,
-            Y: 16.0,
-            Z: 0.0,
-        })?;
-        shadow.SetOpacity(0.3)?;
-        blur_visual.SetShadow(&shadow)?;
-
-        let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
-
-        let blink_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-        blink_animation
-            .iterate_forever()?
-            .keyframe(0.0, 1.0)?
-            .interpolate(0.5, 0.75, &linear_easing)?
-            .interpolate(1.0, 1.0, &linear_easing)?
-            .set_properties()
-            .duration(timespan_ms(2600))?;
-
-        let show_animation = ctx.compositor().CreateAnimationGroup()?;
-        show_animation.Add(&{
-            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-            a.keyframe(0.0, 0.0)?
-                .interpolate(1.0, 1.0, &linear_easing)?
-                .set_properties()
-                .duration(Self::INOUT_DURATION)?
-                .target(h!("Opacity"))?;
-
-            a
-        })?;
-        show_animation.Add(&{
-            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
-            a.keyframe(0.0, Vector2::scalar(1.2).with_z(1.0))?
-                .interpolate(
-                    1.0,
-                    Vector3::one(),
-                    &CompositionEasingFunction::CreatePowerEasingFunction(
-                        ctx.compositor(),
-                        CompositionEasingFunctionMode::Out,
-                        2.0,
-                    )?,
-                )?
-                .set_properties()
-                .duration(Self::INOUT_DURATION)?
-                .target(h!("Scale"))?;
-
-            a
-        })?;
-        let hide_animation = ctx.compositor().CreateAnimationGroup()?;
-        hide_animation.Add(&{
-            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
-            a.keyframe(0.0, 1.0)?
-                .interpolate(1.0, 0.0, &linear_easing)?
-                .set_properties()
-                .duration(Self::INOUT_DURATION)?
-                .target(h!("Opacity"))?;
-
-            a
-        })?;
-        hide_animation.Add(&{
-            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
-            a.keyframe(0.0, Vector3::one())?
-                .interpolate(1.0, Vector2::scalar(0.9).with_z(1.0), &linear_easing)?
-                .set_properties()
-                .duration(Self::INOUT_DURATION)?
-                .target(h!("Scale"))?;
-
-            a
-        })?;
-
-        composition_target.SetRoot(&blur_visual)?;
-
-        Ok(Self {
-            window,
-            _composition_target: composition_target,
-            root: blur_visual,
-            color_tint,
-            blink_animation,
-            show_animation,
-            hide_animation,
-            hide_delay_timer: Arc::new(RwLock::new(None)),
-        })
-    }
-
-    fn show(&self) -> windows::core::Result<()> {
-        *self.hide_delay_timer.write().unwrap() = None;
-
-        unsafe {
-            let _ = ShowWindow(self.window, SW_SHOWNA);
-        }
-        self.color_tint
-            .StartAnimation(h!("Opacity"), &self.blink_animation)?;
-        self.root.StartAnimationGroup(&self.show_animation)?;
-
-        Ok(())
-    }
-
-    fn hide(&self) -> windows::core::Result<()> {
-        self.root.StartAnimationGroup(&self.hide_animation)?;
-        let delay_hide = self.root.DispatcherQueue()?.CreateTimer()?;
-        delay_hide.SetInterval(Self::INOUT_DURATION)?;
-        let tint = self.color_tint.clone();
-        let delay_timer = self.hide_delay_timer.clone();
-        let w = self.window;
-        delay_hide.Tick(&TypedEventHandler::new(move |_, _| {
-            tint.StopAnimation(h!("Opacity"))?;
-            unsafe {
-                let _ = ShowWindow(w, SW_HIDE);
-            }
-            *delay_timer.write().unwrap() = None;
-
-            Ok(())
-        }))?;
-        *self.hide_delay_timer.write().unwrap() = Some(delay_hide);
-
-        Ok(())
-    }
-
-    fn set_rect(&self, left: f32, top: f32, width: f32, height: f32) -> windows::core::Result<()> {
-        self.root.SetSize(Vector2 {
-            X: width,
-            Y: height,
-        })?;
-
-        unsafe {
-            SetWindowPos(
-                self.window,
-                None,
-                left as i32 - 32,
-                top as i32 - 32,
-                width as i32 + 64,
-                height as i32 + 64,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            )?;
-        }
-
-        Ok(())
-    }
-}
-
 pub struct PaneGroupDockingManager {
-    docks: SharedMut<PaneDockState>,
+    docks: SharedMut<PaneDockLayer>,
     placement_visual: ContainerVisual,
     ht_placement_root: SharedMut<HitTestTree>,
     floating_preview: DockingPanePreview,
 }
 impl PaneGroupDockingManager {
-    fn new(ctx: &mut impl ViewContext) -> windows::core::Result<Self> {
+    fn new(
+        ctx: &mut impl ViewContext,
+        ht_root: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<Self> {
         Ok(Self {
-            docks: PaneDockState::new_root(|_| None),
+            docks: PaneDockLayer::new_root(|_| None),
             placement_visual: ctx.compositor().CreateContainerVisual()?,
-            ht_placement_root: ctx.hittest_tree_parent().clone(),
+            ht_placement_root: ht_root.clone(),
             floating_preview: DockingPanePreview::new(ctx)?,
         })
     }
 
-    fn set_layout(&mut self, layout: SharedMut<PaneDockState>) -> windows::core::Result<()> {
+    fn set_layout(&mut self, layout: SharedMut<PaneDockLayer>) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
         // TODO: HitTestTreeのほうもきれいにする
@@ -1598,69 +1128,57 @@ impl PaneGroupDockingManager {
         Ok(())
     }
     fn resize_root(&mut self, width: f32, height: f32) -> windows::core::Result<()> {
-        self.docks.borrow_mut().layout(Rect {
-            X: 0.0,
-            Y: 0.0,
-            Width: width,
-            Height: height,
-        })?;
+        self.docks
+            .borrow_mut()
+            .layout(Rect::from_size(width, height))?;
 
         Ok(())
     }
-    fn mount_splitter_only(&self, layout: &PaneDockState) -> windows::core::Result<()> {
+    fn mount_splitter_only(&self, layout: &PaneDockLayer) -> windows::core::Result<()> {
         match layout {
-            PaneDockState::EmptyRoot(_, _) => Ok(()),
-            PaneDockState::Left { splitter, .. }
-            | PaneDockState::Right { splitter, .. }
-            | PaneDockState::Top { splitter, .. }
-            | PaneDockState::Bottom { splitter, .. } => splitter
+            PaneDockLayer::EmptyRoot(_, _) | PaneDockLayer::Fill { .. } => Ok(()),
+            PaneDockLayer::Left { splitter, .. }
+            | PaneDockLayer::Right { splitter, .. }
+            | PaneDockLayer::Top { splitter, .. }
+            | PaneDockLayer::Bottom { splitter, .. } => splitter
                 .borrow()
                 .mount(&self.placement_visual.Children()?, &self.ht_placement_root),
-            PaneDockState::Fill { .. } => Ok(()),
         }
     }
-    fn mount_filled(&self, layout: &PaneDockState) -> windows::core::Result<()> {
-        match layout {
-            PaneDockState::Fill { group_view, .. } => group_view
-                .borrow()
-                .mount(&self.placement_visual.Children()?, &self.ht_placement_root),
-            _ => Ok(()),
-        }
+    fn mount_filled(&self, layout: &PaneDockLayer) -> windows::core::Result<()> {
+        let PaneDockLayer::Fill { inner_view, .. } = layout else {
+            return Ok(());
+        };
+
+        inner_view
+            .borrow()
+            .mount(&self.placement_visual.Children()?, &self.ht_placement_root)
     }
 
-    fn show_preview_at(
-        &self,
-        left: f32,
-        top: f32,
-        width: f32,
-        height: f32,
-    ) -> windows::core::Result<()> {
+    fn show_preview_at(&self, rect: Rect) -> windows::core::Result<()> {
         self.floating_preview.show()?;
-        self.set_preview_rect(left, top, width, height)
+        self.set_preview_rect(rect)
     }
-
     fn hide_preview(&self) -> windows::core::Result<()> {
         self.floating_preview.hide()
     }
-
-    fn set_preview_rect(
-        &self,
-        left: f32,
-        top: f32,
-        width: f32,
-        height: f32,
-    ) -> windows::core::Result<()> {
-        self.floating_preview.set_rect(left, top, width, height)
+    fn set_preview_rect(&self, rect: Rect) -> windows::core::Result<()> {
+        self.floating_preview.set_rect(rect)
     }
 
-    fn compute_recommended_docking_destination(&self, x: f32, y: f32) -> PaneDockingRecommendation {
-        PaneDockState::compute_recommended_docking_destination(&self.docks, x, y)
+    fn compute_recommended_docking_destination(
+        &self,
+        mode: RedockingMode,
+        x: f32,
+        y: f32,
+    ) -> PaneDockingRecommendation {
+        PaneDockLayer::compute_recommended_docking_destination(&self.docks, mode, x, y)
     }
 }
 
-pub struct PaneGroupView {
+pub struct TabGroupPaneView {
     docking_manager: WeakMut<PaneGroupDockingManager>,
-    bound_dock_layer: WeakMut<PaneDockState>,
+    bound_dock_layer: WeakMut<PaneDockLayer>,
     root: ContainerVisual,
     content_area: ContainerVisual,
     content_area_base: SpriteVisual,
@@ -1668,8 +1186,7 @@ pub struct PaneGroupView {
     ht_ref_content: SharedMut<HitTestTree>,
     current_active: usize,
     tab_height: f32,
-    width: f32,
-    height: f32,
+    view_rect: Rect,
     tabs: Vec<(
         SharedMut<PaneTabHeaderView>,
         SharedMut<dyn PaneTabContentPresenter>,
@@ -1677,7 +1194,7 @@ pub struct PaneGroupView {
     drag_base_point: Option<(f32, f32, f32, f32)>,
     preview_rect: Rect,
 }
-impl PaneGroupView {
+impl TabGroupPaneView {
     const CONTENT_AREA_BASE_COLOR: Color = Color {
         A: 255,
         R: 64,
@@ -1738,8 +1255,12 @@ impl PaneGroupView {
                 ht_ref_content: ht_content,
                 current_active: 0,
                 tab_height: 0.0,
-                width: 128.0,
-                height: 128.0,
+                view_rect: Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 128.0,
+                    Height: 128.0,
+                },
                 tabs: Vec::new(),
                 drag_base_point: None,
                 preview_rect: Rect {
@@ -1751,56 +1272,67 @@ impl PaneGroupView {
             }
         }))
     }
-    pub fn bind_dock_layer(&mut self, layer: &WeakMut<PaneDockState>) {
+    pub fn bind_dock_layer(&mut self, layer: &WeakMut<PaneDockLayer>) {
         self.bound_dock_layer = layer.clone();
     }
 
-    pub fn split_group(
+    pub fn move_tab_into(
         &mut self,
-        split_header: &SharedMut<PaneTabHeaderView>,
+        tab: &SharedMut<PaneTabHeaderView>,
+        target: &SharedMut<Self>,
+        mut view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> windows::core::Result<()> {
+        let index = tab.borrow().index_in_group;
+
+        if tab.borrow().is_active && self.tabs.len() > 1 {
+            // アクティブを付け替える（0個になる場合はどのみち消されるのでなにもしない）
+            let new_active = if index == 0 { 1 } else { index - 1 };
+            self.switch_active(new_active, &mut view_ctx)?;
+        }
+        tab.borrow().unmount()?;
+        let (tab, content) = self.tabs.remove(index);
+
+        let new_tab_index = Self::add_tab_raw(target, &tab, content.clone())?;
+        // activate this tab
+        target.borrow_mut().switch_active(new_tab_index, view_ctx)?;
+
+        Ok(())
+    }
+
+    pub fn split_tab(
+        &mut self,
+        tab: &SharedMut<PaneTabHeaderView>,
         mut view_ctx: &mut (impl ViewContext + ?Sized),
     ) -> windows::core::Result<Option<SharedMut<Self>>> {
-        let Some(index) = self
-            .tabs
-            .iter()
-            .position(|(h, _)| Rc::ptr_eq(h, split_header))
-        else {
+        let Some(index) = self.tabs.iter().position(|(h, _)| Rc::ptr_eq(h, tab)) else {
             // 対応するタブがない
             return Ok(None);
         };
 
-        if split_header.borrow().is_active && self.tabs.len() > 1 {
+        if tab.borrow().is_active && self.tabs.len() > 1 {
             // アクティブを付け替える（0個になる場合はどのみち消されるので何もしない）
-            if index == 0 {
-                self.switch_active(index + 1, &mut view_ctx)
-                    .expect("Failed to switch nearest active");
-            } else {
-                self.switch_active(index - 1, &mut view_ctx)
-                    .expect("Failed to switch nearest active");
-            }
+            let new_active = if index == 0 { 1 } else { index - 1 };
+            self.switch_active(new_active, &mut view_ctx)?;
         }
-        split_header.borrow().unmount()?;
-        let pair = self.tabs.remove(index);
+        tab.borrow().unmount()?;
+        let (tab, content) = self.tabs.remove(index);
 
         let new_group = Self::new(
             &self
                 .docking_manager
                 .upgrade()
-                .expect("Docking Manager is dead"),
+                .expect("Docking Manager has dead"),
             &mut view_ctx,
         )?;
-        new_group.borrow_mut().tabs.push(pair.clone());
-        pair.0.borrow().mount(
-            &new_group.borrow().root.Children()?,
-            &new_group.borrow().ht_ref,
-        )?;
+        Self::add_tab_raw(&new_group, &tab, content.clone())?;
 
         // this is the first tab
-        pair.1.borrow_mut().build_content_view(
+        content.borrow_mut().build_content_view(
             &new_group.borrow().content_area,
-            &mut view_ctx.on_new_hittest_tree(&new_group.borrow().ht_ref_content),
+            &self.ht_ref_content,
+            &mut view_ctx,
         )?;
-        pair.0.borrow_mut().set_active_imm(true, &mut view_ctx)?;
+        tab.borrow_mut().set_active_imm(true, view_ctx)?;
 
         Ok(Some(new_group))
     }
@@ -1809,51 +1341,64 @@ impl PaneGroupView {
         this: &SharedMut<Self>,
         ctx: &mut impl ViewContext,
     ) -> windows::core::Result<SharedMut<T>> {
-        let mut thisref = this.borrow_mut();
         let header_view = PaneTabHeaderView::new(
             this,
-            thisref.tabs.len(),
+            this.borrow().tabs.len(),
             T::INIT_TAB_NAME,
-            thisref.tabs.is_empty(),
+            this.borrow().tabs.is_empty(),
             ctx,
         )?;
         let content_presenter = new_shared_mut(T::new(&header_view));
-        thisref
-            .tabs
-            .push((header_view.clone(), content_presenter.clone()));
-        header_view
-            .borrow()
-            .mount(&thisref.root.Children()?, &thisref.ht_ref)?;
+        Self::add_tab_raw(this, &header_view, content_presenter.clone())?;
 
+        let thisref = this.borrow();
         if thisref.tabs.len() == 1 {
             // first tab
-            thisref.tabs[0].1.borrow_mut().build_content_view(
+            content_presenter.borrow_mut().build_content_view(
                 &thisref.content_area,
-                &mut ctx.on_new_hittest_tree(&thisref.ht_ref_content),
+                &thisref.ht_ref_content,
+                ctx,
             )?;
         }
 
         Ok(content_presenter)
     }
 
+    fn add_tab_raw(
+        this: &SharedMut<Self>,
+        header: &SharedMut<PaneTabHeaderView>,
+        content: SharedMut<dyn PaneTabContentPresenter>,
+    ) -> windows::core::Result<usize> {
+        header.borrow_mut().bind_group_view(this);
+        let mut thisref = this.borrow_mut();
+        thisref.tabs.push((header.clone(), content));
+        header.borrow_mut().index_in_group = thisref.tabs.len() - 1;
+        header
+            .borrow()
+            .mount(&thisref.root.Children()?, &thisref.ht_ref)?;
+
+        Ok(thisref.tabs.len() - 1)
+    }
+
     fn readjust_content_area(&mut self) -> windows::core::Result<()> {
         self.content_area.set_properties().rect(Rect {
             X: 0.0,
             Y: self.tab_height,
-            Width: self.width,
-            Height: (self.height - self.tab_height).max(0.0),
+            Width: self.view_rect.Width,
+            Height: (self.view_rect.Height - self.tab_height).max(0.0),
         })?;
         self.content_area_base.set_properties().rect(Rect {
             X: 0.0,
             Y: self.tab_height,
-            Width: self.width,
-            Height: (self.height - self.tab_height).max(0.0),
+            Width: self.view_rect.Width,
+            Height: (self.view_rect.Height - self.tab_height).max(0.0),
         })?;
 
         self.ht_ref_content.borrow_mut().top = self.tab_height;
-        self.ht_ref_content
-            .borrow_mut()
-            .set_size(self.width, (self.height - self.tab_height).max(0.0));
+        self.ht_ref_content.borrow_mut().set_size(
+            self.view_rect.Width,
+            (self.view_rect.Height - self.tab_height).max(0.0),
+        );
         Ok(())
     }
 
@@ -1873,24 +1418,38 @@ impl PaneGroupView {
             .expect("Failed to readjust content area");
     }
 
+    #[inline]
+    pub const fn relative_rect(&self) -> Rect {
+        Rect {
+            X: 0.0,
+            Y: 0.0,
+            Width: self.view_rect.Width,
+            Height: self.view_rect.Height,
+        }
+    }
+
     pub fn set_width(&mut self, width: f32) -> windows::core::Result<()> {
         self.root.SetSize(Vector2 {
             X: width,
-            Y: self.height,
+            Y: self.view_rect.Height,
         })?;
-        self.ht_ref.borrow_mut().set_size(width, self.height);
-        self.width = width;
+        self.ht_ref
+            .borrow_mut()
+            .set_size(width, self.view_rect.Height);
+        self.view_rect.Width = width;
 
         self.readjust_content_area()?;
         Ok(())
     }
     pub fn set_height(&mut self, height: f32) -> windows::core::Result<()> {
         self.root.SetSize(Vector2 {
-            X: self.width,
+            X: self.view_rect.Width,
             Y: height,
         })?;
-        self.ht_ref.borrow_mut().set_size(self.width, height);
-        self.height = height;
+        self.ht_ref
+            .borrow_mut()
+            .set_size(self.view_rect.Width, height);
+        self.view_rect.Height = height;
 
         self.readjust_content_area()?;
         Ok(())
@@ -1909,8 +1468,12 @@ impl PaneGroupView {
             Height: height,
         })?;
         self.ht_ref.borrow_mut().set_rect(left, top, width, height);
-        self.width = width;
-        self.height = height;
+        self.view_rect = Rect {
+            X: left,
+            Y: top,
+            Width: width,
+            Height: height,
+        };
 
         self.readjust_content_area()?;
         Ok(())
@@ -1940,10 +1503,7 @@ impl PaneGroupView {
         self.tabs[self.current_active]
             .1
             .borrow_mut()
-            .build_content_view(
-                &self.content_area,
-                &mut view_ctx.on_new_hittest_tree(&self.ht_ref_content),
-            )?;
+            .build_content_view(&self.content_area, &self.ht_ref_content, &mut view_ctx)?;
         self.tabs[self.current_active]
             .0
             .borrow_mut()
@@ -1973,7 +1533,7 @@ impl PaneGroupView {
         Ok(())
     }
 }
-impl InputEventHandler for WeakMut<PaneGroupView> {
+impl InputEventHandler for WeakMut<TabGroupPaneView> {
     fn on_begin_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
             return;
@@ -2007,12 +1567,12 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
         };
         docking_manager
             .borrow()
-            .show_preview_at(
-                loc[0].x as _,
-                loc[0].y as _,
-                app_window.dip_to_pixels(width),
-                app_window.dip_to_pixels(height),
-            )
+            .show_preview_at(Rect {
+                X: loc[0].x as _,
+                Y: loc[0].y as _,
+                Width: app_window.dip_to_pixels(width),
+                Height: app_window.dip_to_pixels(height),
+            })
             .expect("Failed to show floating preview");
 
         ctx.capture_mouse();
@@ -2032,6 +1592,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
         let recommended_dest = docking_manager
             .borrow()
             .compute_recommended_docking_destination(
+                RedockingMode::Pane,
                 window.pixels_to_dip(x),
                 window.pixels_to_dip(y),
             );
@@ -2046,12 +1607,12 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
 
                 docking_manager
                     .borrow()
-                    .set_preview_rect(
-                        loc[0].x as _,
-                        loc[0].y as _,
-                        window.dip_to_pixels(new_rect.Width),
-                        window.dip_to_pixels(new_rect.Height),
-                    )
+                    .set_preview_rect(Rect {
+                        X: loc[0].x as _,
+                        Y: loc[0].y as _,
+                        Width: window.dip_to_pixels(new_rect.Width),
+                        Height: window.dip_to_pixels(new_rect.Height),
+                    })
                     .expect("Failed to update preview rect")
             }
             None => {
@@ -2063,12 +1624,12 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
 
                 docking_manager
                     .borrow()
-                    .set_preview_rect(
-                        loc[0].x as _,
-                        loc[0].y as _,
-                        window.dip_to_pixels(this.borrow().preview_rect.Width),
-                        window.dip_to_pixels(this.borrow().preview_rect.Height),
-                    )
+                    .set_preview_rect(Rect {
+                        X: loc[0].x as _,
+                        Y: loc[0].y as _,
+                        Width: window.dip_to_pixels(this.borrow().preview_rect.Width),
+                        Height: window.dip_to_pixels(this.borrow().preview_rect.Height),
+                    })
                     .expect("Failed to update preview rect")
             }
         }
@@ -2085,6 +1646,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
         let recommended_dest = docking_manager
             .borrow()
             .compute_recommended_docking_destination(
+                RedockingMode::Pane,
                 window.pixels_to_dip(x),
                 window.pixels_to_dip(y),
             );
@@ -2092,7 +1654,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
             PaneDockingRecommendation::Left(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -2100,10 +1662,10 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_left(
+                    let new_layer = PaneDockLayer::new_on_left(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
-                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
@@ -2128,7 +1690,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
             PaneDockingRecommendation::Right(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -2136,10 +1698,10 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_right(
+                    let new_layer = PaneDockLayer::new_on_right(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
-                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
@@ -2167,7 +1729,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
             PaneDockingRecommendation::Top(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -2175,10 +1737,10 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_top(
+                    let new_layer = PaneDockLayer::new_on_top(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
-                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
@@ -2206,7 +1768,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
             PaneDockingRecommendation::Bottom(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -2214,10 +1776,10 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_bottom(
+                    let new_layer = PaneDockLayer::new_on_bottom(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
-                        |parent, _ctx| PaneDockState::new_filled(&this, parent),
+                        |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
@@ -2244,7 +1806,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
             }
             PaneDockingRecommendation::Free => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
-                let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                 this.borrow()
                     .unmount()
@@ -2256,6 +1818,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
 
                 println!("TODO: floating");
             }
+            PaneDockingRecommendation::MergeGroup(_) => unreachable!(),
         }
 
         docking_manager
@@ -2267,7 +1830,7 @@ impl InputEventHandler for WeakMut<PaneGroupView> {
 }
 
 pub struct PaneTabHeaderView {
-    group_view: WeakMut<PaneGroupView>,
+    group_view: WeakMut<TabGroupPaneView>,
     index_in_group: usize,
     label: Cow<'static, str>,
     visual: LayerVisual,
@@ -2287,8 +1850,28 @@ pub struct PaneTabHeaderView {
     preview_rect: Rect,
 }
 impl PaneTabHeaderView {
+    fn create_geometry(
+        text_width: f32,
+        text_height: f32,
+        ctx: &mut impl ViewContext,
+    ) -> windows::core::Result<CompositionRoundedRectangleGeometry> {
+        let g = ctx.compositor().CreateRoundedRectangleGeometry()?;
+        g.SetCornerRadius(Vector2 {
+            X: TAB_RADIUS,
+            Y: TAB_RADIUS,
+        })
+        .expect("Failed to set corner radius");
+        g.SetSize(Vector2 {
+            X: text_width + TAB_MARGIN_X * 2.0,
+            // 高さ2倍にして下半分を見切れさせる（丸角にしない）
+            Y: (text_height + TAB_MARGIN_Y * 2.0) * 2.0,
+        })?;
+
+        Ok(g)
+    }
+
     pub fn new(
-        group_view: &SharedMut<PaneGroupView>,
+        init_group_view: &SharedMut<TabGroupPaneView>,
         index_in_group: usize,
         title: impl Into<Cow<'static, str>>,
         init_active: bool,
@@ -2326,21 +1909,7 @@ impl PaneTabHeaderView {
             })
             .expect("Failed to insert visual");
 
-        let geometry = {
-            let g = ctx.compositor().CreateRoundedRectangleGeometry()?;
-            g.SetCornerRadius(Vector2 {
-                X: TAB_RADIUS,
-                Y: TAB_RADIUS,
-            })
-            .expect("Failed to set corner radius");
-            g.SetSize(Vector2 {
-                X: title_text.width + TAB_MARGIN_X * 2.0,
-                Y: (title_text.height + TAB_MARGIN_Y * 2.0) * 2.0,
-            })?;
-
-            g
-        };
-
+        let geometry = Self::create_geometry(title_text.width, title_text.height, ctx)?;
         let bg = {
             let shape = ctx.compositor().CreateSpriteShapeWithGeometry(&geometry)?;
             shape.SetFillBrush(&ctx.common().tab_base_brush)?;
@@ -2383,7 +1952,7 @@ impl PaneTabHeaderView {
             );
 
             Self {
-                group_view: Rc::downgrade(group_view),
+                group_view: Rc::downgrade(init_group_view),
                 index_in_group,
                 label: title,
                 visual: base,
@@ -2414,6 +1983,9 @@ impl PaneTabHeaderView {
                 },
             }
         }))
+    }
+    pub fn bind_group_view(&mut self, group_view: &SharedMut<TabGroupPaneView>) {
+        self.group_view = Rc::downgrade(group_view);
     }
 
     fn mount(
@@ -2637,12 +2209,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
         };
         docking_manager
             .borrow()
-            .show_preview_at(
-                loc[0].x as _,
-                loc[0].y as _,
-                app_window.dip_to_pixels(width),
-                app_window.dip_to_pixels(height),
-            )
+            .show_preview_at(Rect {
+                X: loc[0].x as _,
+                Y: loc[0].y as _,
+                Width: app_window.dip_to_pixels(width),
+                Height: app_window.dip_to_pixels(height),
+            })
             .expect("Failed to show floating preview");
 
         ctx.capture_mouse();
@@ -2665,6 +2237,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
         let recommended_dest = docking_manager
             .borrow()
             .compute_recommended_docking_destination(
+                RedockingMode::Tab,
                 window.pixels_to_dip(x),
                 window.pixels_to_dip(y),
             );
@@ -2679,12 +2252,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                 docking_manager
                     .borrow()
-                    .set_preview_rect(
-                        loc[0].x as _,
-                        loc[0].y as _,
-                        window.dip_to_pixels(new_rect.Width),
-                        window.dip_to_pixels(new_rect.Height),
-                    )
+                    .set_preview_rect(Rect {
+                        X: loc[0].x as _,
+                        Y: loc[0].y as _,
+                        Width: window.dip_to_pixels(new_rect.Width),
+                        Height: window.dip_to_pixels(new_rect.Height),
+                    })
                     .expect("Failed to update preview rect")
             }
             None => {
@@ -2696,12 +2269,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                 docking_manager
                     .borrow()
-                    .set_preview_rect(
-                        loc[0].x as _,
-                        loc[0].y as _,
-                        window.dip_to_pixels(this.borrow().preview_rect.Width),
-                        window.dip_to_pixels(this.borrow().preview_rect.Height),
-                    )
+                    .set_preview_rect(Rect {
+                        X: loc[0].x as _,
+                        Y: loc[0].y as _,
+                        Width: window.dip_to_pixels(this.borrow().preview_rect.Width),
+                        Height: window.dip_to_pixels(this.borrow().preview_rect.Height),
+                    })
                     .expect("Failed to update preview rect")
             }
         }
@@ -2722,6 +2295,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
         let recommended_dest = docking_manager
             .borrow()
             .compute_recommended_docking_destination(
+                RedockingMode::Tab,
                 window.pixels_to_dip(x),
                 window.pixels_to_dip(y),
             );
@@ -2731,14 +2305,14 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_group(&this, ctx)
+                        .split_tab(&this, ctx)
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view.borrow_mut().rearrange();
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2757,11 +2331,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_left(
+                    let new_layer = PaneDockLayer::new_on_left(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
-                            let new_filled = PaneDockState::new_filled(&new_group_view, parent);
+                            let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
                             docking_manager
                                 .borrow()
                                 .mount_filled(&new_filled.borrow())
@@ -2790,14 +2364,14 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_group(&this, ctx)
+                        .split_tab(&this, ctx)
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view.borrow_mut().rearrange();
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2816,11 +2390,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_right(
+                    let new_layer = PaneDockLayer::new_on_right(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
-                            let new_filled = PaneDockState::new_filled(&new_group_view, parent);
+                            let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
                             docking_manager
                                 .borrow()
                                 .mount_filled(&new_filled.borrow())
@@ -2849,14 +2423,14 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_group(&this, ctx)
+                        .split_tab(&this, ctx)
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view.borrow_mut().rearrange();
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2875,11 +2449,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_top(
+                    let new_layer = PaneDockLayer::new_on_top(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
-                            let new_filled = PaneDockState::new_filled(&new_group_view, parent);
+                            let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
                             docking_manager
                                 .borrow()
                                 .mount_filled(&new_filled.borrow())
@@ -2908,14 +2482,14 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_group(&this, ctx)
+                        .split_tab(&this, ctx)
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view.borrow_mut().rearrange();
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2934,11 +2508,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockState::new_on_bottom(
+                    let new_layer = PaneDockLayer::new_on_bottom(
                         &mut *ctx,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
-                            let new_filled = PaneDockState::new_filled(&new_group_view, parent);
+                            let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
                             docking_manager
                                 .borrow()
                                 .mount_filled(&new_filled.borrow())
@@ -2964,7 +2538,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             }
             PaneDockingRecommendation::Free => {
                 let bound_dock_layer = group_view.borrow().bound_dock_layer.upgrade().unwrap();
-                let relayout_root = PaneDockState::undock(&bound_dock_layer);
+                let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                 group_view
                     .borrow()
@@ -2977,6 +2551,29 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                     .expect("Failed to relayout docks");
 
                 println!("TODO: floating");
+            }
+            PaneDockingRecommendation::MergeGroup(target_group) => {
+                let bound_dock_layer = group_view.borrow().bound_dock_layer.upgrade().unwrap();
+                group_view
+                    .borrow_mut()
+                    .move_tab_into(&this, &target_group, ctx)
+                    .expect("Failed to move tab");
+                target_group.borrow_mut().rearrange();
+
+                if group_view.borrow().tabs.is_empty() {
+                    // destroy group view
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                    group_view
+                        .borrow()
+                        .unmount()
+                        .expect("Failed to unmount group view");
+                    relayout_root
+                        .borrow_mut()
+                        .relayout()
+                        .expect("Failed to relayout docks");
+                } else {
+                    group_view.borrow_mut().rearrange();
+                }
             }
         }
 
@@ -2992,6 +2589,7 @@ pub trait PaneTabContentPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
+        onto_ht: &SharedMut<HitTestTree>,
         view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()>;
     fn on_hide_content_view(
@@ -3009,6 +2607,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
+        _onto_ht: &SharedMut<HitTestTree>,
         view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         let ui_font = view_context.text_format_stock_mut().get(
@@ -3050,6 +2649,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
+        _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3075,6 +2675,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
+        _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3100,6 +2701,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
+        _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3125,6 +2727,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
+        _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3554,10 +3157,6 @@ impl ViewContext for AppWindowState<'_> {
         self.text_surface_stock
     }
 
-    fn hittest_tree_parent(&self) -> &SharedMut<HitTestTree> {
-        &self.input_state.ht_tree
-    }
-
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
         &mut self.hittest_context
     }
@@ -3970,34 +3569,33 @@ fn main() {
         common: &common_objects,
         text_format_stock: &mut text_format_stock,
         text_surface_stock: &mut text_surface_stock,
-        hittest_tree_parent: &hittest_tree_root,
         hittest_context: &mut hittest_context,
     };
 
     let pane_group_docking_manager = new_shared_mut(
-        PaneGroupDockingManager::new(&mut view_context)
+        PaneGroupDockingManager::new(&mut view_context, &hittest_tree_root)
             .expect("Failed to initialize docking manager"),
     );
 
-    let pane_group1 = PaneGroupView::new(&pane_group_docking_manager, &mut view_context)
-        .expect("Failed to create PaneGroupView");
-    PaneGroupView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context)
+    let pane_group1 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create TabGroupPaneView");
+    TabGroupPaneView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context)
         .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange();
 
-    let pane_group2 = PaneGroupView::new(&pane_group_docking_manager, &mut view_context)
-        .expect("Failed to create PaneGroupView");
-    PaneGroupView::add_tab::<StageTabPresenter>(&pane_group2, &mut view_context)
+    let pane_group2 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create TabGroupPaneView");
+    TabGroupPaneView::add_tab::<StageTabPresenter>(&pane_group2, &mut view_context)
         .expect("Failed to create StagePaneTab");
-    PaneGroupView::add_tab::<PreviewTabPresenter>(&pane_group2, &mut view_context)
+    TabGroupPaneView::add_tab::<PreviewTabPresenter>(&pane_group2, &mut view_context)
         .expect("Failed to create PreviewPaneTab");
-    PaneGroupView::add_tab::<ProjectSettingsTabPresenter>(&pane_group2, &mut view_context)
+    TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&pane_group2, &mut view_context)
         .expect("Failed to create ProjectSettingsPaneTabHeader");
     pane_group2.borrow_mut().rearrange();
 
-    let pane_group3 = PaneGroupView::new(&pane_group_docking_manager, &mut view_context)
-        .expect("Failed to create PaneGroupView");
-    PaneGroupView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context)
+    let pane_group3 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+        .expect("Failed to create TabGroupPaneView");
+    TabGroupPaneView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context)
         .expect("Failed to create InspectorPaneTabHeader");
     pane_group3.borrow_mut().rearrange();
     pane_group3
@@ -4005,18 +3603,18 @@ fn main() {
         .set_offset_size(0.0, 0.0, 256.0, 256.0)
         .expect("Failed to resize pane");
 
-    let layout = PaneDockState::new_root(|parent| {
+    let layout = PaneDockLayer::new_root(|parent| {
         Some(
-            PaneDockState::new_on_right(
+            PaneDockLayer::new_on_right(
                 &mut view_context,
                 parent,
-                |parent, _| PaneDockState::new_filled(&pane_group3, parent),
+                |parent, _| PaneDockLayer::new_filled(&pane_group3, parent),
                 |parent, ctx| {
-                    PaneDockState::new_on_top(
+                    PaneDockLayer::new_on_top(
                         ctx,
                         parent,
-                        |parent, _| PaneDockState::new_filled(&pane_group1, parent),
-                        |parent, _| PaneDockState::new_filled(&pane_group2, parent),
+                        |parent, _| PaneDockLayer::new_filled(&pane_group1, parent),
+                        |parent, _| PaneDockLayer::new_filled(&pane_group2, parent),
                     )
                     .expect("Failed to create pane dock state")
                 },

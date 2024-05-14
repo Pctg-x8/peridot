@@ -35,3 +35,6 @@ impl core::hash::Hash for SafeF32 {
         self.0.to_ne_bytes().hash(state)
     }
 }
+
+mod rect_ops;
+pub use self::rect_ops::*;

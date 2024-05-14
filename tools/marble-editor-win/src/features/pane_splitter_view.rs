@@ -1,0 +1,221 @@
+use std::rc::Rc;
+
+use windows::{
+    core::h,
+    Foundation::{Numerics::Vector3, Rect},
+    Win32::Foundation::HWND,
+    UI::{
+        Color,
+        Composition::{ScalarKeyFrameAnimation, SpriteVisual, VisualCollection},
+    },
+};
+
+use crate::{
+    empty_weak_mut, new_cyclic_shared_mut,
+    uikit::{CursorStyle, InputContext, InputEventHandler, ViewContext},
+    winapi_extras::{
+        timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
+        VisualExtensions,
+    },
+    AppWindow, HitTestTree, PaneDockLayer, SharedMut, WeakMut,
+};
+
+#[derive(Clone, Copy)]
+pub enum SplitDirection {
+    Horizontal,
+    Vertical,
+}
+
+pub struct PaneSplitterView {
+    visual: SpriteVisual,
+    hover_animation: ScalarKeyFrameAnimation,
+    hover_end_animation: ScalarKeyFrameAnimation,
+    ht: SharedMut<HitTestTree>,
+    dir: SplitDirection,
+    controlling_dock_layer: WeakMut<PaneDockLayer>,
+    drag_start_values: Option<(f32, f32, f32)>,
+}
+impl PaneSplitterView {
+    const SURFACE_COLOR: Color = Color {
+        A: 32,
+        R: 255,
+        G: 255,
+        B: 255,
+    };
+
+    pub fn new(
+        ctx: &mut (impl ViewContext + ?Sized),
+        dir: SplitDirection,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let visual = ctx.compositor().CreateSpriteVisual()?;
+        visual.SetBrush(
+            &ctx.compositor()
+                .CreateColorBrushWithColor(Self::SURFACE_COLOR)?,
+        )?;
+        visual.SetOpacity(0.0)?;
+
+        let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
+
+        let hover_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        hover_animation
+            .keyframe(0.0, 0.0)?
+            .interpolate(1.0, 1.0, &linear_easing)?
+            .set_properties()
+            .duration(timespan_ms(100))?;
+
+        let hover_end_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        hover_end_animation
+            .keyframe(0.0, 1.0)?
+            .interpolate(1.0, 0.0, &linear_easing)?
+            .set_properties()
+            .duration(timespan_ms(100))?;
+
+        Ok(new_cyclic_shared_mut(|wthis| {
+            let ht = HitTestTree::new(
+                &Rc::new(wthis.clone()),
+                ctx.hittest_context_mut().new_id(),
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+            );
+
+            Self {
+                visual,
+                hover_animation,
+                hover_end_animation,
+                ht,
+                dir,
+                controlling_dock_layer: empty_weak_mut(),
+                drag_start_values: None,
+            }
+        }))
+    }
+
+    pub fn bind_dock_layer(&mut self, layer: &WeakMut<PaneDockLayer>) {
+        self.controlling_dock_layer = layer.clone();
+    }
+
+    pub fn set_offset(&self, left: f32, top: f32) -> windows::core::Result<()> {
+        self.visual.SetOffset(Vector3 {
+            X: left,
+            Y: top,
+            Z: 0.0,
+        })?;
+        self.ht.borrow_mut().set_offset(left, top);
+
+        Ok(())
+    }
+    pub fn set_rect(&self, rect: Rect) -> windows::core::Result<()> {
+        self.visual.set_properties().rect(rect.clone())?;
+        self.ht
+            .borrow_mut()
+            .set_rect(rect.X, rect.Y, rect.Width, rect.Height);
+
+        Ok(())
+    }
+
+    pub fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.visual)?;
+        HitTestTree::add_child(onto_ht, self.ht.clone());
+
+        Ok(())
+    }
+    pub fn unmount(&self) -> windows::core::Result<()> {
+        self.visual.Parent()?.Children()?.Remove(&self.visual)?;
+        // Note: if letでborrowしたやつはif文の中でも生きているらしいので個別にdropできるようにする
+        let ht_ref = self.ht.borrow();
+        if let Some(parent_ht) = ht_ref.parent.upgrade() {
+            drop(ht_ref);
+            parent_ht.borrow_mut().remove_child(&self.ht)
+        }
+
+        Ok(())
+    }
+}
+impl InputEventHandler for WeakMut<PaneSplitterView> {
+    fn hover_cursor(&self) -> CursorStyle {
+        match self.upgrade().map(|x| x.borrow().dir) {
+            Some(SplitDirection::Horizontal) => CursorStyle::SizeNS,
+            Some(SplitDirection::Vertical) => CursorStyle::SizeEW,
+            None => CursorStyle::Arrow,
+        }
+    }
+
+    fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow()
+            .visual
+            .StartAnimation(h!("Opacity"), &this.borrow().hover_animation)
+            .expect("Failed to start hover animation");
+    }
+
+    fn on_pointer_leave(&self, _view_ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow()
+            .visual
+            .StartAnimation(h!("Opacity"), &this.borrow().hover_end_animation)
+            .expect("Failed to start hover end animation");
+    }
+
+    fn on_pointer_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(target_dock) = this.borrow().controlling_dock_layer.upgrade() else {
+            return;
+        };
+
+        this.borrow_mut().drag_start_values = Some((x, y, target_dock.borrow().dock_size()));
+        ctx.capture_mouse();
+    }
+
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(target_dock) = this.borrow().controlling_dock_layer.upgrade() else {
+            return;
+        };
+        let Some((bx, by, bs)) = this.borrow().drag_start_values else {
+            return;
+        };
+
+        let app_window = AppWindow::wrap(window);
+        let new_size = match &*target_dock.borrow() {
+            PaneDockLayer::EmptyRoot(_, _) => return,
+            PaneDockLayer::Left { .. } => bs + app_window.pixels_to_dip(x - bx),
+            PaneDockLayer::Top { .. } => bs + app_window.pixels_to_dip(y - by),
+            PaneDockLayer::Right { .. } => bs - app_window.pixels_to_dip(x - bx),
+            PaneDockLayer::Bottom { .. } => bs - app_window.pixels_to_dip(y - by),
+            PaneDockLayer::Fill { .. } => return,
+        }
+        .max(1.0);
+        let (x, y) = target_dock
+            .borrow_mut()
+            .set_dock_size(new_size)
+            .expect("Failed to resize pane");
+        this.borrow_mut()
+            .set_offset(x, y)
+            .expect("Failed to set splitter position");
+    }
+
+    fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow_mut().drag_start_values = None;
+        ctx.release_mouse_capture();
+    }
+}

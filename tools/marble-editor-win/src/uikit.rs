@@ -7,7 +7,7 @@ use windows::{
 
 use crate::{
     object_cache::{TextFormatStock, TextSurfaceStock},
-    HitTestTree, HitTestTreeContext,
+    HitTestTreeContext,
 };
 
 pub struct UICommonObjects {
@@ -21,27 +21,11 @@ pub struct UICommonObjects {
     pub tab_active_overlay_leave_animation: ScalarKeyFrameAnimation,
 }
 
-pub trait ViewContextExtension: ViewContext + Sized {
-    fn on_new_hittest_tree<'r>(
-        self,
-        new_parent: &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
-    ) -> ChildViewContext<'r, Self>;
-}
-impl<T: ViewContext> ViewContextExtension for &'_ mut T {
-    fn on_new_hittest_tree<'r>(
-        self,
-        new_parent: &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
-    ) -> ChildViewContext<'r, Self> {
-        ChildViewContext(self, new_parent)
-    }
-}
-
 pub trait ViewContext {
     fn compositor(&self) -> &windows::UI::Composition::Compositor;
     fn common(&self) -> &UICommonObjects;
     fn text_format_stock_mut(&mut self) -> &mut TextFormatStock;
     fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock;
-    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>>;
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext;
 }
 pub trait InputContext: ViewContext {
@@ -66,10 +50,6 @@ impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
         T::text_surface_stock_mut(*self)
     }
 
-    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>> {
-        T::hittest_tree_parent(*self)
-    }
-
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
         T::hittest_context_mut(*self)
     }
@@ -84,37 +64,11 @@ impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
     }
 }
 
-pub struct ChildViewContext<'r, Parent: ViewContext>(
-    Parent,
-    &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
-);
-impl<'r, Parent: ViewContext> ViewContext for ChildViewContext<'r, Parent> {
-    fn compositor(&self) -> &windows::UI::Composition::Compositor {
-        self.0.compositor()
-    }
-    fn common(&self) -> &UICommonObjects {
-        self.0.common()
-    }
-    fn text_format_stock_mut(&mut self) -> &mut TextFormatStock {
-        self.0.text_format_stock_mut()
-    }
-    fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock {
-        self.0.text_surface_stock_mut()
-    }
-    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>> {
-        &self.1
-    }
-    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
-        self.0.hittest_context_mut()
-    }
-}
-
 pub struct ViewContext1<'r> {
     pub compositor: &'r windows::UI::Composition::Compositor,
     pub common: &'r UICommonObjects,
     pub text_format_stock: &'r mut TextFormatStock,
     pub text_surface_stock: &'r mut TextSurfaceStock,
-    pub hittest_tree_parent: &'r std::rc::Rc<core::cell::RefCell<HitTestTree>>,
     pub hittest_context: &'r mut HitTestTreeContext,
 }
 impl ViewContext for ViewContext1<'_> {
@@ -132,10 +86,6 @@ impl ViewContext for ViewContext1<'_> {
 
     fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock {
         self.text_surface_stock
-    }
-
-    fn hittest_tree_parent(&self) -> &std::rc::Rc<core::cell::RefCell<HitTestTree>> {
-        &self.hittest_tree_parent
     }
 
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {

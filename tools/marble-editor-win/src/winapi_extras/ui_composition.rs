@@ -240,3 +240,17 @@ impl Vector2Extension for Vector2 {
         }
     }
 }
+
+pub trait Vector3Extension {
+    fn down(y: f32) -> Vector3;
+}
+impl Vector3Extension for Vector3 {
+    #[inline(always)]
+    fn down(y: f32) -> Vector3 {
+        Vector3 {
+            X: 0.0,
+            Y: y,
+            Z: 0.0,
+        }
+    }
+}
