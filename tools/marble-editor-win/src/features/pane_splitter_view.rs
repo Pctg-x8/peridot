@@ -74,10 +74,12 @@ impl PaneSplitterView {
             let ht = HitTestTree::new(
                 &Rc::new(wthis.clone()),
                 ctx.hittest_context_mut().new_id(),
-                0.0,
-                0.0,
-                1.0,
-                1.0,
+                Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 1.0,
+                    Height: 1.0,
+                },
             );
 
             Self {
@@ -107,7 +109,7 @@ impl PaneSplitterView {
         Ok(())
     }
     pub fn set_rect(&self, rect: Rect) -> windows::core::Result<()> {
-        self.visual.set_properties().rect(rect.clone())?;
+        self.visual.set_properties().rect(&rect)?;
         self.ht
             .borrow_mut()
             .set_rect(rect.X, rect.Y, rect.Width, rect.Height);

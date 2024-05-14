@@ -143,7 +143,7 @@ impl core::fmt::Debug for PaneDockingRecommendation {
     }
 }
 impl PaneDockingRecommendation {
-    pub fn dock_rect(&self, preview_rect: Rect) -> Option<Rect> {
+    pub fn dock_rect(&self, preview_rect: &Rect) -> Option<Rect> {
         match self {
             Self::Left(d) => Some(Rect {
                 X: d.borrow().controlling_rect_left(),
@@ -760,12 +760,7 @@ impl PaneDockLayer {
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect)
             }
-            Self::Fill { inner_view, .. } => inner_view.borrow_mut().set_offset_size(
-                region.X,
-                region.Y,
-                region.Width,
-                region.Height,
-            ),
+            Self::Fill { inner_view, .. } => inner_view.borrow_mut().set_rect(region),
         }
     }
 
@@ -852,12 +847,7 @@ impl PaneDockLayer {
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect)
             }
-            Self::Fill { inner_view, .. } => inner_view.borrow_mut().set_offset_size(
-                region.X,
-                region.Y,
-                region.Width,
-                region.Height,
-            ),
+            Self::Fill { inner_view, .. } => inner_view.borrow_mut().set_rect(region),
         }
     }
 
@@ -1230,18 +1220,12 @@ impl TabGroupPaneView {
             let ht = HitTestTree::new(
                 &Rc::new(wthis.clone()),
                 ctx.hittest_context_mut().new_id(),
-                0.0,
-                0.0,
-                128.0,
-                128.0,
+                Rect::from_size(128.0, 128.0),
             );
             let ht_content = HitTestTree::new(
                 &Rc::new(wthis.clone()),
                 ctx.hittest_context_mut().new_id(),
-                0.0,
-                0.0,
-                128.0,
-                128.0,
+                Rect::from_size(128.0, 128.0),
             );
             HitTestTree::add_child(&ht, ht_content.clone());
 
@@ -1341,13 +1325,8 @@ impl TabGroupPaneView {
         this: &SharedMut<Self>,
         ctx: &mut impl ViewContext,
     ) -> windows::core::Result<SharedMut<T>> {
-        let header_view = PaneTabHeaderView::new(
-            this,
-            this.borrow().tabs.len(),
-            T::INIT_TAB_NAME,
-            this.borrow().tabs.is_empty(),
-            ctx,
-        )?;
+        let header_view =
+            PaneTabHeaderView::new(T::INIT_TAB_NAME, this.borrow().tabs.is_empty(), ctx)?;
         let content_presenter = new_shared_mut(T::new(&header_view));
         Self::add_tab_raw(this, &header_view, content_presenter.clone())?;
 
@@ -1369,36 +1348,36 @@ impl TabGroupPaneView {
         header: &SharedMut<PaneTabHeaderView>,
         content: SharedMut<dyn PaneTabContentPresenter>,
     ) -> windows::core::Result<usize> {
-        header.borrow_mut().bind_group_view(this);
+        let new_index = this.borrow().tabs.len();
+        header.borrow_mut().bind_group_view(this, new_index);
         let mut thisref = this.borrow_mut();
         thisref.tabs.push((header.clone(), content));
-        header.borrow_mut().index_in_group = thisref.tabs.len() - 1;
         header
             .borrow()
             .mount(&thisref.root.Children()?, &thisref.ht_ref)?;
 
-        Ok(thisref.tabs.len() - 1)
+        Ok(new_index)
     }
 
     fn readjust_content_area(&mut self) -> windows::core::Result<()> {
-        self.content_area.set_properties().rect(Rect {
+        let content_area = Rect {
             X: 0.0,
             Y: self.tab_height,
             Width: self.view_rect.Width,
             Height: (self.view_rect.Height - self.tab_height).max(0.0),
-        })?;
-        self.content_area_base.set_properties().rect(Rect {
-            X: 0.0,
-            Y: self.tab_height,
-            Width: self.view_rect.Width,
-            Height: (self.view_rect.Height - self.tab_height).max(0.0),
-        })?;
+        };
 
-        self.ht_ref_content.borrow_mut().top = self.tab_height;
-        self.ht_ref_content.borrow_mut().set_size(
-            self.view_rect.Width,
-            (self.view_rect.Height - self.tab_height).max(0.0),
+        self.content_area.set_properties().rect(&content_area)?;
+        self.content_area_base
+            .set_properties()
+            .rect(&content_area)?;
+        self.ht_ref_content.borrow_mut().set_rect(
+            content_area.X,
+            content_area.Y,
+            content_area.Width,
+            content_area.Height,
         );
+
         Ok(())
     }
 
@@ -1454,26 +1433,24 @@ impl TabGroupPaneView {
         self.readjust_content_area()?;
         Ok(())
     }
-    pub fn set_offset_size(
-        &mut self,
-        left: f32,
-        top: f32,
-        width: f32,
-        height: f32,
-    ) -> windows::core::Result<()> {
-        self.root.set_properties().rect(Rect {
-            X: left,
-            Y: top,
-            Width: width,
-            Height: height,
+    pub fn resize(&mut self, width: f32, height: f32) -> windows::core::Result<()> {
+        self.root.SetSize(Vector2 {
+            X: width,
+            Y: height,
         })?;
-        self.ht_ref.borrow_mut().set_rect(left, top, width, height);
-        self.view_rect = Rect {
-            X: left,
-            Y: top,
-            Width: width,
-            Height: height,
-        };
+        self.ht_ref.borrow_mut().set_size(width, height);
+        self.view_rect.Width = width;
+        self.view_rect.Height = height;
+
+        self.readjust_content_area()?;
+        Ok(())
+    }
+    pub fn set_rect(&mut self, rect: Rect) -> windows::core::Result<()> {
+        self.root.set_properties().rect(&rect)?;
+        self.ht_ref
+            .borrow_mut()
+            .set_rect(rect.X, rect.Y, rect.Width, rect.Height);
+        self.view_rect = rect;
 
         self.readjust_content_area()?;
         Ok(())
@@ -1543,36 +1520,15 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
         };
 
         let mut thisref = this.borrow_mut();
-        let HitTestTree {
-            left,
-            top,
-            width,
-            height,
-            ..
-        } = *thisref.ht_ref.borrow();
+        let HitTestTree { rect, .. } = *thisref.ht_ref.borrow();
 
         let app_window = AppWindow::wrap(window);
-        let mut loc = [POINT {
-            x: app_window.dip_to_pixels(left) as _,
-            y: app_window.dip_to_pixels(top) as _,
-        }];
-        app_window.map_points_to_desktop(&mut loc);
 
-        thisref.drag_base_point = Some((x, y, left, top));
-        thisref.preview_rect = Rect {
-            X: left,
-            Y: top,
-            Width: width,
-            Height: height,
-        };
+        thisref.drag_base_point = Some((x, y, rect.X, rect.Y));
+        thisref.preview_rect = rect.clone();
         docking_manager
             .borrow()
-            .show_preview_at(Rect {
-                X: loc[0].x as _,
-                Y: loc[0].y as _,
-                Width: app_window.dip_to_pixels(width),
-                Height: app_window.dip_to_pixels(height),
-            })
+            .show_preview_at(app_window.dip_rect_to_desktop_pixels_rect(&rect))
             .expect("Failed to show floating preview");
 
         ctx.capture_mouse();
@@ -1597,42 +1553,17 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                 window.pixels_to_dip(y),
             );
         let preview_rect = this.borrow().preview_rect.clone();
-        match recommended_dest.dock_rect(preview_rect) {
-            Some(new_rect) => {
-                let mut loc = [POINT {
-                    x: window.dip_to_pixels(new_rect.X) as _,
-                    y: window.dip_to_pixels(new_rect.Y) as _,
-                }];
-                window.map_points_to_desktop(&mut loc);
-
-                docking_manager
-                    .borrow()
-                    .set_preview_rect(Rect {
-                        X: loc[0].x as _,
-                        Y: loc[0].y as _,
-                        Width: window.dip_to_pixels(new_rect.Width),
-                        Height: window.dip_to_pixels(new_rect.Height),
-                    })
-                    .expect("Failed to update preview rect")
-            }
-            None => {
-                let mut loc = [POINT {
-                    x: window.dip_to_pixels(ox + window.pixels_to_dip(x - bx)) as _,
-                    y: window.dip_to_pixels(oy + window.pixels_to_dip(y - by)) as _,
-                }];
-                window.map_points_to_desktop(&mut loc);
-
-                docking_manager
-                    .borrow()
-                    .set_preview_rect(Rect {
-                        X: loc[0].x as _,
-                        Y: loc[0].y as _,
-                        Width: window.dip_to_pixels(this.borrow().preview_rect.Width),
-                        Height: window.dip_to_pixels(this.borrow().preview_rect.Height),
-                    })
-                    .expect("Failed to update preview rect")
-            }
-        }
+        let new_rect = recommended_dest
+            .dock_rect(&preview_rect)
+            .unwrap_or_else(|| Rect {
+                X: ox + window.pixels_to_dip(x - bx),
+                Y: oy + window.pixels_to_dip(y - by),
+                ..preview_rect.clone()
+            });
+        docking_manager
+            .borrow()
+            .set_preview_rect(window.dip_rect_to_desktop_pixels_rect(&new_rect))
+            .expect("Failed to update preview rect");
     }
     fn on_end_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
@@ -1871,8 +1802,6 @@ impl PaneTabHeaderView {
     }
 
     pub fn new(
-        init_group_view: &SharedMut<TabGroupPaneView>,
-        index_in_group: usize,
         title: impl Into<Cow<'static, str>>,
         init_active: bool,
         ctx: &mut impl ViewContext,
@@ -1945,15 +1874,12 @@ impl PaneTabHeaderView {
             let ht_self = HitTestTree::new(
                 &Rc::new(wthis.clone()),
                 ctx.hittest_context_mut().new_id(),
-                0.0,
-                0.0,
-                view_size.X,
-                view_size.Y,
+                Rect::from_size(view_size.X, view_size.Y),
             );
 
             Self {
-                group_view: Rc::downgrade(init_group_view),
-                index_in_group,
+                group_view: empty_weak_mut(),
+                index_in_group: 0,
                 label: title,
                 visual: base,
                 bg_visual: bg,
@@ -1984,8 +1910,13 @@ impl PaneTabHeaderView {
             }
         }))
     }
-    pub fn bind_group_view(&mut self, group_view: &SharedMut<TabGroupPaneView>) {
+    pub fn bind_group_view(
+        &mut self,
+        group_view: &SharedMut<TabGroupPaneView>,
+        index_in_group: usize,
+    ) {
         self.group_view = Rc::downgrade(group_view);
+        self.index_in_group = index_in_group;
     }
 
     fn mount(
@@ -2184,37 +2115,16 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             return;
         };
 
-        let HitTestTree {
-            left,
-            top,
-            width,
-            height,
-            ..
-        } = *group_view.borrow_mut().ht_ref.borrow();
+        let HitTestTree { rect, .. } = *group_view.borrow_mut().ht_ref.borrow();
 
         let app_window = AppWindow::wrap(window);
-        let mut loc = [POINT {
-            x: app_window.dip_to_pixels(left) as _,
-            y: app_window.dip_to_pixels(top) as _,
-        }];
-        app_window.map_points_to_desktop(&mut loc);
 
         let mut thisref = this.borrow_mut();
-        thisref.drag_base_point = Some((x, y, left, top));
-        thisref.preview_rect = Rect {
-            X: left,
-            Y: top,
-            Width: width,
-            Height: height,
-        };
+        thisref.drag_base_point = Some((x, y, rect.X, rect.Y));
+        thisref.preview_rect = rect.clone();
         docking_manager
             .borrow()
-            .show_preview_at(Rect {
-                X: loc[0].x as _,
-                Y: loc[0].y as _,
-                Width: app_window.dip_to_pixels(width),
-                Height: app_window.dip_to_pixels(height),
-            })
+            .show_preview_at(app_window.dip_rect_to_desktop_pixels_rect(&rect))
             .expect("Failed to show floating preview");
 
         ctx.capture_mouse();
@@ -2242,42 +2152,17 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 window.pixels_to_dip(y),
             );
         let preview_rect = this.borrow().preview_rect.clone();
-        match recommended_dest.dock_rect(preview_rect) {
-            Some(new_rect) => {
-                let mut loc = [POINT {
-                    x: window.dip_to_pixels(new_rect.X) as _,
-                    y: window.dip_to_pixels(new_rect.Y) as _,
-                }];
-                window.map_points_to_desktop(&mut loc);
-
-                docking_manager
-                    .borrow()
-                    .set_preview_rect(Rect {
-                        X: loc[0].x as _,
-                        Y: loc[0].y as _,
-                        Width: window.dip_to_pixels(new_rect.Width),
-                        Height: window.dip_to_pixels(new_rect.Height),
-                    })
-                    .expect("Failed to update preview rect")
-            }
-            None => {
-                let mut loc = [POINT {
-                    x: window.dip_to_pixels(ox + window.pixels_to_dip(x - bx)) as _,
-                    y: window.dip_to_pixels(oy + window.pixels_to_dip(y - by)) as _,
-                }];
-                window.map_points_to_desktop(&mut loc);
-
-                docking_manager
-                    .borrow()
-                    .set_preview_rect(Rect {
-                        X: loc[0].x as _,
-                        Y: loc[0].y as _,
-                        Width: window.dip_to_pixels(this.borrow().preview_rect.Width),
-                        Height: window.dip_to_pixels(this.borrow().preview_rect.Height),
-                    })
-                    .expect("Failed to update preview rect")
-            }
-        }
+        let new_rect = recommended_dest
+            .dock_rect(&preview_rect)
+            .unwrap_or_else(|| Rect {
+                X: ox + window.pixels_to_dip(x - bx),
+                Y: oy + window.pixels_to_dip(y - by),
+                ..preview_rect.clone()
+            });
+        docking_manager
+            .borrow()
+            .set_preview_rect(window.dip_rect_to_desktop_pixels_rect(&new_rect))
+            .expect("Failed to update preview rect");
     }
     fn on_end_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
@@ -3019,10 +2904,7 @@ impl InputState {
 pub struct HitTestTree {
     eh: Rc<dyn InputEventHandler>,
     id: usize,
-    left: f32,
-    top: f32,
-    width: f32,
-    height: f32,
+    rect: Rect,
     parent: WeakMut<HitTestTree>,
     children: HashMap<usize, SharedMut<HitTestTree>>,
 }
@@ -3031,18 +2913,12 @@ impl HitTestTree {
     pub fn new(
         eh: &Rc<impl InputEventHandler + 'static>,
         id: usize,
-        left: f32,
-        top: f32,
-        width: f32,
-        height: f32,
+        rect: Rect,
     ) -> SharedMut<Self> {
         new_shared_mut(Self {
             eh: eh.clone(),
             id,
-            left,
-            top,
-            width,
-            height,
+            rect,
             parent: empty_weak_mut(),
             children: HashMap::new(),
         })
@@ -3054,7 +2930,16 @@ impl HitTestTree {
         left: f32,
         top: f32,
     ) -> SharedMut<Self> {
-        Self::new(eh, id, left, top, f32::MAX, f32::MAX)
+        Self::new(
+            eh,
+            id,
+            Rect {
+                X: left,
+                Y: top,
+                Width: f32::MAX,
+                Height: f32::MAX,
+            },
+        )
     }
 
     #[inline]
@@ -3074,31 +2959,31 @@ impl HitTestTree {
 
     #[inline]
     pub fn set_rect(&mut self, left: f32, top: f32, width: f32, height: f32) {
-        self.left = left;
-        self.top = top;
-        self.width = width;
-        self.height = height;
+        self.rect = Rect {
+            X: left,
+            Y: top,
+            Width: width,
+            Height: height,
+        };
     }
     #[inline]
     pub fn set_size(&mut self, width: f32, height: f32) {
-        self.width = width;
-        self.height = height;
+        self.rect.Width = width;
+        self.rect.Height = height;
     }
     #[inline]
     pub fn set_offset(&mut self, left: f32, top: f32) {
-        self.left = left;
-        self.top = top;
+        self.rect.X = left;
+        self.rect.Y = top;
     }
 
     pub fn check(this: &SharedMut<Self>, x: f32, y: f32) -> Option<SharedMut<Self>> {
         let this1 = this.borrow();
-        if (this1.left..=(this1.left + this1.width)).contains(&x)
-            && (this1.top..=(this1.top + this1.height)).contains(&y)
-        {
+        if this1.rect.contains_point(x, y) {
             let child = this1
                 .children
                 .values()
-                .find_map(|c| Self::check(c, x - this1.left, y - this1.top));
+                .find_map(|c| Self::check(c, x - this1.rect.X, y - this1.rect.Y));
             Some(child.unwrap_or(this.clone()))
         } else {
             None
@@ -3109,10 +2994,10 @@ impl core::fmt::Debug for HitTestTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HitTestTree")
             .field("id", &self.id)
-            .field("left", &self.left)
-            .field("top", &self.top)
-            .field("width", &self.width)
-            .field("height", &self.height)
+            .field("left", &self.rect.X)
+            .field("top", &self.rect.Y)
+            .field("width", &self.rect.Width)
+            .field("height", &self.rect.Height)
             .field("children", &self.children)
             .finish_non_exhaustive()
     }
@@ -3247,6 +3132,21 @@ impl AppWindow {
     pub fn map_points_to_desktop(&self, points: &mut [POINT]) {
         unsafe {
             MapWindowPoints(self.handle, None, points);
+        }
+    }
+
+    pub fn dip_rect_to_desktop_pixels_rect(&self, dip_rect: &Rect) -> Rect {
+        let mut loc = [POINT {
+            x: self.dip_to_pixels(dip_rect.X) as _,
+            y: self.dip_to_pixels(dip_rect.Y) as _,
+        }];
+        self.map_points_to_desktop(&mut loc);
+
+        Rect {
+            X: loc[0].x as _,
+            Y: loc[0].y as _,
+            Width: self.dip_to_pixels(dip_rect.Width),
+            Height: self.dip_to_pixels(dip_rect.Height),
         }
     }
 
@@ -3600,7 +3500,7 @@ fn main() {
     pane_group3.borrow_mut().rearrange();
     pane_group3
         .borrow_mut()
-        .set_offset_size(0.0, 0.0, 256.0, 256.0)
+        .resize(256.0, 256.0)
         .expect("Failed to resize pane");
 
     let layout = PaneDockLayer::new_root(|parent| {

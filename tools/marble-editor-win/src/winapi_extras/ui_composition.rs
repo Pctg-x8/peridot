@@ -165,7 +165,7 @@ impl<'a, T: Interface + ?Sized + 'a> VisualPropertySetter<'a, T> {
     }
 
     #[inline]
-    pub fn rect(self, rect: Rect) -> windows::core::Result<Self> {
+    pub fn rect(self, rect: &Rect) -> windows::core::Result<Self> {
         let x = self.0.cast::<IVisual>()?;
         let (vt, this) = (x.vtable(), x.as_raw());
         unsafe {
