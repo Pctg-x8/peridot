@@ -1,11 +1,21 @@
 use windows::{
-    Win32::{Foundation::HWND, Graphics::DirectWrite::IDWriteTextFormat},
+    Win32::{
+        Foundation::HWND,
+        Graphics::{
+            CompositionSwapchain::IPresentationManager, Direct3D11::ID3D11Device,
+            DirectWrite::IDWriteTextFormat,
+        },
+        System::WinRT::Composition::ICompositorInterop,
+    },
     UI::Composition::{
         CompositionColorBrush, CompositionLinearGradientBrush, ScalarKeyFrameAnimation,
     },
 };
 
-use crate::object_cache::{TextFormatStock, TextSurfaceStock};
+use crate::{
+    object_cache::{TextFormatStock, TextSurfaceStock},
+    AppGlobalSignals, SharedMut,
+};
 
 mod input;
 pub use self::input::*;
@@ -23,10 +33,14 @@ pub struct UICommonObjects {
 
 pub trait ViewContext {
     fn compositor(&self) -> &windows::UI::Composition::Compositor;
+    fn compositor_interop(&self) -> &ICompositorInterop;
     fn common(&self) -> &UICommonObjects;
     fn text_format_stock_mut(&mut self) -> &mut TextFormatStock;
     fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock;
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext;
+    fn presentation_manager(&self) -> &IPresentationManager;
+    fn d3d11_device(&self) -> &ID3D11Device;
+    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals>;
 }
 pub trait InputContext: ViewContext {
     fn capture_mouse(&mut self);
@@ -36,6 +50,10 @@ pub trait InputContext: ViewContext {
 impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
         T::compositor(*self)
+    }
+
+    fn compositor_interop(&self) -> &ICompositorInterop {
+        T::compositor_interop(*self)
     }
 
     fn common(&self) -> &UICommonObjects {
@@ -53,6 +71,18 @@ impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
         T::hittest_context_mut(*self)
     }
+
+    fn presentation_manager(&self) -> &IPresentationManager {
+        T::presentation_manager(*self)
+    }
+
+    fn d3d11_device(&self) -> &ID3D11Device {
+        T::d3d11_device(*self)
+    }
+
+    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
+        T::app_global_signals(*self)
+    }
 }
 impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
     fn capture_mouse(&mut self) {
@@ -66,14 +96,22 @@ impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
 
 pub struct ViewContext1<'r> {
     pub compositor: &'r windows::UI::Composition::Compositor,
+    pub compositor_interop: &'r ICompositorInterop,
     pub common: &'r UICommonObjects,
     pub text_format_stock: &'r mut TextFormatStock,
     pub text_surface_stock: &'r mut TextSurfaceStock,
     pub hittest_context: &'r mut HitTestTreeContext,
+    pub presentation_manager: &'r IPresentationManager,
+    pub d3d11_device: &'r ID3D11Device,
+    pub app_global_signals: &'r SharedMut<AppGlobalSignals>,
 }
 impl ViewContext for ViewContext1<'_> {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
         self.compositor
+    }
+
+    fn compositor_interop(&self) -> &ICompositorInterop {
+        self.compositor_interop
     }
 
     fn common(&self) -> &UICommonObjects {
@@ -90,6 +128,18 @@ impl ViewContext for ViewContext1<'_> {
 
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
         self.hittest_context
+    }
+
+    fn presentation_manager(&self) -> &IPresentationManager {
+        self.presentation_manager
+    }
+
+    fn d3d11_device(&self) -> &ID3D11Device {
+        self.d3d11_device
+    }
+
+    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
+        self.app_global_signals
     }
 }
 

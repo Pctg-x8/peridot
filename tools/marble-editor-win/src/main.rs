@@ -1,7 +1,9 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
+    ffi::c_void,
     rc::{Rc, Weak},
+    sync::Arc,
 };
 
 use features::{DockingPanePreview, PaneSplitterView, SplitDirection};
@@ -21,27 +23,48 @@ use windows::{
         Rect,
     },
     Win32::{
-        Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{
+            CloseHandle, BOOL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_EVENT,
+            WAIT_OBJECT_0, WPARAM,
+        },
         Graphics::{
+            CompositionSwapchain::{
+                CreatePresentationFactory, IPresentationBuffer, IPresentationFactory,
+                IPresentationManager, IPresentationSurface,
+            },
             Direct2D::{
                 D2D1CreateFactory, ID2D1Factory1, D2D1_DEBUG_LEVEL_WARNING, D2D1_FACTORY_OPTIONS,
                 D2D1_FACTORY_TYPE_SINGLE_THREADED,
             },
             Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL},
             Direct3D11::{
-                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
+                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
+                ID3D11Resource, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+                D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE,
+                D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_DEFAULT,
+            },
+            DirectComposition::{
+                DCompositionCreateSurfaceHandle, COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE,
             },
             DirectWrite::{
                 DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
             },
             Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
-            Dxgi::IDXGIDevice,
+            Dxgi::{
+                Common::{
+                    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+                },
+                IDXGIDevice,
+            },
             Gdi::{MapWindowPoints, HBRUSH},
         },
         System::{
             LibraryLoader::GetModuleHandleA,
+            Threading::{CreateEventA, ResetEvent, SetEvent, INFINITE},
             WinRT::{
                 Composition::{ICompositorDesktopInterop, ICompositorInterop},
                 CreateDispatcherQueueController, DispatcherQueueOptions, DQTAT_COM_ASTA,
@@ -52,10 +75,11 @@ use windows::{
             HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
                 DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA, GetWindowLongPtrA,
-                LoadCursorA, LoadIconA, PostQuitMessage, SetWindowLongPtrA, ShowWindow,
-                TranslateMessage, HTCLIENT, IDC_ARROW, IDI_APPLICATION, MSG, SW_SHOWNORMAL,
+                LoadCursorA, LoadIconA, MsgWaitForMultipleObjects, PeekMessageA, PostQuitMessage,
+                SetWindowLongPtrA, ShowWindow, TranslateMessage, HTCLIENT, IDC_ARROW,
+                IDI_APPLICATION, MSG, PM_REMOVE, QS_ALLEVENTS, SW_SHOWNORMAL,
                 WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
+                WM_QUIT, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -63,8 +87,9 @@ use windows::{
         Color,
         Composition::{
             CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, Compositor,
-            ContainerVisual, LayerVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
-            VisualCollection,
+            ContainerVisual,
+            Diagnostics::{CompositionDebugOverdrawContentKinds, CompositionDebugSettings},
+            LayerVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
         },
     },
 };
@@ -2571,21 +2596,140 @@ impl PaneTabPresenter for TimelineTabPresenter {
     }
 }
 
-pub struct StageTabPresenter {}
+pub trait SignalEventReceiver {
+    fn on_signal(&self, arg: usize);
+}
+
+pub enum SignalEventType {
+    Receiver(Rc<dyn SignalEventReceiver>, usize),
+    Message,
+    Unknown,
+}
+
+pub struct PresentationAvailableEventEntry {
+    pub event: EventHandle,
+    pub buffer: IPresentationBuffer,
+    pub buffer_res: ID3D11Texture2D,
+}
+pub struct AppGlobalSignals {
+    pub entries: Vec<(Rc<dyn SignalEventReceiver>, usize)>,
+    pub raw_events: Vec<HANDLE>,
+}
+impl AppGlobalSignals {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            raw_events: Vec::new(),
+        }
+    }
+
+    pub fn wait(&self) -> SignalEventType {
+        let r = unsafe {
+            MsgWaitForMultipleObjects(Some(&self.raw_events), false, INFINITE, QS_ALLEVENTS)
+        };
+        if WAIT_OBJECT_0.0 <= r.0 && r.0 < WAIT_OBJECT_0.0 + self.raw_events.len() as u32 {
+            let index = (r.0 - WAIT_OBJECT_0.0) as usize;
+            SignalEventType::Receiver(self.entries[index].0.clone(), self.entries[index].1)
+        } else if WAIT_OBJECT_0.0 + self.raw_events.len() as u32 == r.0 {
+            SignalEventType::Message
+        } else {
+            SignalEventType::Unknown
+        }
+    }
+
+    pub fn register(
+        &mut self,
+        event: HANDLE,
+        handler: &Rc<(impl SignalEventReceiver + 'static)>,
+        arg: usize,
+    ) {
+        self.entries.push((handler.clone(), arg));
+        self.raw_events.push(event);
+    }
+    pub fn unregister(&mut self, handler: &Rc<impl SignalEventReceiver + 'static>, arg: usize) {
+        // Note: dynにするためにいったんcloneするしかない
+        let handler: Rc<dyn SignalEventReceiver> = handler.clone();
+        let Some(index) = self
+            .entries
+            .iter()
+            .position(|(h, a)| Rc::ptr_eq(h, &handler) && *a == arg)
+        else {
+            // ない
+            return;
+        };
+
+        self.raw_events.remove(index);
+        self.entries.remove(index);
+    }
+}
+
+pub struct StageTabContentRenderer {
+    presentation_manager: IPresentationManager,
+    presentation_surface: IPresentationSurface,
+    back_buffers: Vec<(ID3D11Texture2D, IPresentationBuffer, ID3D11RenderTargetView)>,
+    d3d11_device_context: ID3D11DeviceContext,
+}
+impl SignalEventReceiver for StageTabContentRenderer {
+    fn on_signal(&self, arg: usize) {
+        let (_, pb, rtv) = &self.back_buffers[arg];
+
+        unsafe {
+            self.d3d11_device_context
+                .ClearRenderTargetView(rtv, &[0.0, 1.0, 0.0, 1.0]);
+        }
+
+        unsafe {
+            self.presentation_surface
+                .SetBuffer(pb)
+                .expect("Failed to set new buffer");
+        }
+        unsafe {
+            self.presentation_manager
+                .Present()
+                .expect("Failed to queue present");
+        }
+    }
+}
+
+pub struct StageTabPresenter {
+    root: SpriteVisual,
+    back_buffers: Vec<(
+        ID3D11Texture2D,
+        IPresentationBuffer,
+        HANDLE,
+        ID3D11RenderTargetView,
+    )>,
+    renderer: Rc<StageTabContentRenderer>,
+}
 impl PaneTabContentPresenter for StageTabPresenter {
     fn build_content_view(
         &mut self,
-        _onto: &ContainerVisual,
+        onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
-        _view_context: &mut dyn ViewContext,
+        view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
+        onto.Children()?.InsertAtTop(&self.root)?;
+        for (n, (_, _, e, _)) in self.back_buffers.iter().enumerate() {
+            view_context
+                .app_global_signals()
+                .borrow_mut()
+                .register(*e, &self.renderer, n);
+        }
+
         Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut dyn ViewContext,
+        view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
+        for (n, _) in self.back_buffers.iter().enumerate() {
+            view_context
+                .app_global_signals()
+                .borrow_mut()
+                .unregister(&self.renderer, n);
+        }
+
         Ok(())
     }
 }
@@ -2596,8 +2740,159 @@ impl PaneTabPresenter for StageTabPresenter {
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         view_ctx: &mut (impl ViewContext + ?Sized),
     ) -> Self {
-        view_ctx.compositor().CreateSurface
-        Self {}
+        let root = view_ctx
+            .compositor()
+            .CreateSpriteVisual()
+            .expect("Failed to create root visual");
+
+        let composition_surface_handle = unsafe {
+            DCompositionCreateSurfaceHandle(
+                (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as _,
+                None,
+            )
+            .expect("Failed to create composition surface handle")
+        };
+        let presentation_surface = unsafe {
+            view_ctx
+                .presentation_manager()
+                .CreatePresentationSurface(composition_surface_handle)
+                .expect("Failed to create presentation surface")
+        };
+        let surface = unsafe {
+            view_ctx
+                .compositor_interop()
+                .CreateCompositionSurfaceForHandle(composition_surface_handle)
+                .expect("Failed to create ui composition surface")
+        };
+        unsafe {
+            presentation_surface
+                .SetSourceRect(&RECT {
+                    left: 0,
+                    top: 0,
+                    right: 128,
+                    bottom: 128,
+                })
+                .expect("Failed to set source rect");
+        }
+
+        let brush = view_ctx
+            .compositor()
+            .CreateSurfaceBrushWithSurface(&surface)
+            .expect("Failed to create surface brush");
+        root.SetBrush(&brush).expect("Failed to set surface brush");
+        root.SetSize(Vector2::scalar(128.0))
+            .expect("Failed to resize visual");
+        root.SetOffset(Vector3::zero())
+            .expect("Failed to position visual");
+
+        unsafe {
+            presentation_surface
+                .SetAlphaMode(DXGI_ALPHA_MODE_IGNORE)
+                .expect("Failed to set alpha mode");
+            presentation_surface
+                .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)
+                .expect("Failed to set color space");
+        }
+
+        let back_buffers = (0..3)
+            .map(|_| {
+                let texture_desc = D3D11_TEXTURE2D_DESC {
+                    Width: 128,
+                    Height: 128,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
+                    CPUAccessFlags: 0,
+                    MiscFlags: (D3D11_RESOURCE_MISC_SHARED
+                        | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
+                        | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
+                        .0 as _,
+                };
+                let mut texture = core::mem::MaybeUninit::uninit();
+                unsafe {
+                    view_ctx.d3d11_device().CreateTexture2D(
+                        &texture_desc,
+                        None,
+                        Some(texture.as_mut_ptr()),
+                    )?
+                };
+                let texture = unsafe { texture.assume_init().expect("texture not created") };
+                let presentation_buffer = unsafe {
+                    view_ctx
+                        .presentation_manager()
+                        .AddBufferFromResource(&texture)
+                        .expect("Failed to add texture as presentation buffer")
+                };
+                let eh = unsafe { presentation_buffer.GetAvailableEvent()? };
+
+                let mut rtv = core::mem::MaybeUninit::uninit();
+                unsafe {
+                    view_ctx.d3d11_device().CreateRenderTargetView(
+                        &texture.cast::<ID3D11Resource>()?,
+                        None,
+                        Some(rtv.as_mut_ptr()),
+                    )?
+                };
+                let rtv = unsafe {
+                    rtv.assume_init()
+                        .expect("Failed to create RenderTargetView")
+                };
+
+                windows::core::Result::Ok((texture, presentation_buffer, eh, rtv))
+            })
+            .collect::<windows::core::Result<Vec<_>>>()
+            .expect("Failed to create back buffers");
+
+        Self {
+            root,
+            renderer: Rc::new(StageTabContentRenderer {
+                back_buffers: back_buffers
+                    .iter()
+                    .map(|(r, b, _, rtv)| (r.clone(), b.clone(), rtv.clone()))
+                    .collect(),
+                presentation_manager: view_ctx.presentation_manager().clone(),
+                presentation_surface,
+                d3d11_device_context: unsafe {
+                    view_ctx
+                        .d3d11_device()
+                        .GetImmediateContext()
+                        .expect("Failed to get imm context")
+                },
+            }),
+            back_buffers,
+        }
+    }
+}
+
+pub struct EventHandle(HANDLE);
+unsafe impl Sync for EventHandle {}
+unsafe impl Send for EventHandle {}
+impl EventHandle {
+    #[inline(always)]
+    pub fn new() -> windows::core::Result<Self> {
+        unsafe { CreateEventA(None, false, false, None).map(Self) }
+    }
+
+    #[inline(always)]
+    pub fn set(&self) -> windows::core::Result<()> {
+        unsafe { SetEvent(self.0) }
+    }
+
+    #[inline(always)]
+    pub fn reset(&self) -> windows::core::Result<()> {
+        unsafe { ResetEvent(self.0) }
+    }
+}
+impl Drop for EventHandle {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.0).expect("Failed to close event handle") }
     }
 }
 
@@ -2727,15 +3022,23 @@ impl LabelView {
 struct AppWindowState<'r> {
     input_state: InputState,
     compositor: Compositor,
+    compositor_interop: ICompositorInterop,
     ui_common_objects: &'r UICommonObjects,
     text_format_stock: &'r mut TextFormatStock,
     text_surface_stock: &'r mut TextSurfaceStock,
     hittest_context: HitTestTreeContext,
     pane_group_docking_manager: SharedMut<PaneGroupDockingManager>,
+    presentation_manager: IPresentationManager,
+    d3d11_device: ID3D11Device,
+    app_global_signals: SharedMut<AppGlobalSignals>,
 }
 impl ViewContext for AppWindowState<'_> {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
         &self.compositor
+    }
+
+    fn compositor_interop(&self) -> &ICompositorInterop {
+        &self.compositor_interop
     }
 
     fn common(&self) -> &UICommonObjects {
@@ -2752,6 +3055,18 @@ impl ViewContext for AppWindowState<'_> {
 
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
         &mut self.hittest_context
+    }
+
+    fn presentation_manager(&self) -> &IPresentationManager {
+        &self.presentation_manager
+    }
+
+    fn d3d11_device(&self) -> &ID3D11Device {
+        &self.d3d11_device
+    }
+
+    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
+        &self.app_global_signals
     }
 }
 impl InputContext for AppWindowState<'_> {
@@ -2816,6 +3131,13 @@ impl AppWindow {
                 Self::STATE_STORE_PTR_INDEX,
                 state_ref as *mut _ as _,
             );
+        }
+    }
+
+    #[inline]
+    pub fn clear_state_store(&mut self) {
+        unsafe {
+            SetWindowLongPtrA(self.handle, Self::STATE_STORE_PTR_INDEX, 0);
         }
     }
 
@@ -2989,6 +3311,27 @@ fn main() {
         window_handle.current_dpi,
     );
 
+    let mut presentation_factory = core::mem::MaybeUninit::<*mut c_void>::uninit();
+    unsafe {
+        CreatePresentationFactory(
+            &d3d11_device,
+            &IPresentationFactory::IID,
+            presentation_factory.as_mut_ptr(),
+        )
+        .expect("Failed to create presentation factory")
+    };
+    let presentation_factory =
+        unsafe { IPresentationFactory::from_raw(presentation_factory.assume_init()) };
+    if unsafe { presentation_factory.IsPresentationSupportedWithIndependentFlip() == 0 } {
+        panic!("Independent Presentation is not supported on this machine");
+    }
+
+    let presentation_manager = unsafe {
+        presentation_factory
+            .CreatePresentationManager()
+            .expect("Failed to create presentation manager")
+    };
+
     let app_global_scale = window_handle.current_dpi as f64 / 96.0;
     let composition_root = compositor
         .CreateContainerVisual()
@@ -3034,9 +3377,18 @@ fn main() {
         .InsertAtBottom(&bg)
         .expect("Failed to insert bg");
 
+    let composition_debug =
+        CompositionDebugSettings::TryGetSettings(&compositor).expect("Failed to get settings");
+
     let overlay_layer = compositor
-        .CreateContainerVisual()
+        .CreateRedirectVisual()
         .expect("Failed to create overlay layer");
+    overlay_layer
+        .set_properties()
+        .relative_offset_adjustment(Vector3::zero())
+        .expect("Failed to set relative offset adjustment")
+        .relative_size_adjustment(Vector2::one())
+        .expect("Failed to set relative size adjustment");
     {
         let children = composition_root
             .Children()
@@ -3172,12 +3524,18 @@ fn main() {
     let hittest_tree_root = HitTestTree::new_unsized(&Rc::new(()), 0, 0.0, 0.0);
     let mut hittest_context = HitTestTreeContext::new();
 
+    let app_global_signals = new_shared_mut(AppGlobalSignals::new());
+
     let mut view_context = ViewContext1 {
         compositor: &compositor,
+        compositor_interop: &compositor_interop,
         common: &common_objects,
         text_format_stock: &mut text_format_stock,
         text_surface_stock: &mut text_surface_stock,
         hittest_context: &mut hittest_context,
+        presentation_manager: &presentation_manager,
+        d3d11_device: &d3d11_device,
+        app_global_signals: &app_global_signals,
     };
 
     let pane_group_docking_manager = new_shared_mut(
@@ -3293,26 +3651,51 @@ fn main() {
     let mut ws = AppWindowState {
         input_state: InputState::new(window_handle.handle, &hittest_tree_root),
         compositor: compositor.clone(),
+        compositor_interop,
         ui_common_objects: &common_objects,
         text_format_stock: &mut text_format_stock,
         text_surface_stock: &mut text_surface_stock,
         hittest_context,
         pane_group_docking_manager,
+        presentation_manager,
+        d3d11_device,
+        app_global_signals: app_global_signals.clone(),
     };
     window_handle.set_state_store(&mut ws);
     window_handle.show();
 
+    composition_debug
+        .HeatMaps()
+        .expect("Failed to get heatmap object")
+        .ShowMemoryUsage(&overlay_layer)
+        .expect("Failed to set composition debug view");
+
     let mut msg = core::mem::MaybeUninit::<MSG>::uninit();
-    while unsafe { GetMessageA(msg.as_mut_ptr(), None, 0, 0).0 > 0 } {
-        unsafe {
-            let _ = TranslateMessage(msg.as_ptr());
-            DispatchMessageA(msg.as_ptr());
+    'app: loop {
+        let r = app_global_signals.borrow().wait();
+        match r {
+            SignalEventType::Message => {
+                while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).0 != 0 } {
+                    if unsafe { msg.assume_init_ref().message == WM_QUIT } {
+                        break 'app;
+                    }
+
+                    unsafe {
+                        let _ = TranslateMessage(msg.as_ptr());
+                        DispatchMessageA(msg.as_ptr());
+                    }
+                }
+            }
+            SignalEventType::Receiver(handler, arg) => handler.on_signal(arg),
+            SignalEventType::Unknown => (),
         }
     }
 
+    window_handle.clear_state_store();
+
     // drop d3d11 before d2d1
     drop(d3d11_imm_context);
-    drop(d3d11_device);
+    drop(ws);
 
     std::process::exit(unsafe { msg.assume_init().wParam.0 as _ });
 }

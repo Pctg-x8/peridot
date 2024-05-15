@@ -6,7 +6,8 @@ use windows::{
     UI::Composition::{
         AnimationIterationBehavior, CompositionBrush, CompositionEasingFunction, ContainerVisual,
         ICompositionAnimation2, IKeyFrameAnimation, IVisual, IVisual2, KeyFrameAnimation,
-        ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, Vector3KeyFrameAnimation,
+        LayerVisual, RedirectVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
+        Vector3KeyFrameAnimation,
     },
 };
 use windows_core::{Interface, HSTRING};
@@ -210,6 +211,8 @@ pub trait VisualExtensions: Interface {
 impl VisualExtensions for ContainerVisual {}
 impl VisualExtensions for SpriteVisual {}
 impl VisualExtensions for ShapeVisual {}
+impl VisualExtensions for LayerVisual {}
+impl VisualExtensions for RedirectVisual {}
 
 pub trait VectorScalarConstructor {
     fn scalar(v: f32) -> Self;
