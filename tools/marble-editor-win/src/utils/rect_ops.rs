@@ -62,6 +62,9 @@ pub fn rect_slice_bottom(r: Rect, height: f32) -> (Rect, Rect) {
 
 pub trait RectExtensions {
     fn contains_point(&self, x: f32, y: f32) -> bool;
+    fn with_offset(self, left: f32, top: f32) -> Self
+    where
+        Self: Sized;
     fn from_size(width: f32, height: f32) -> Self
     where
         Self: Sized;
@@ -71,6 +74,15 @@ impl RectExtensions for Rect {
     #[inline(always)]
     fn contains_point(&self, x: f32, y: f32) -> bool {
         self.X <= x && x <= self.X + self.Width && self.Y <= y && y <= self.Y + self.Height
+    }
+
+    #[inline(always)]
+    fn with_offset(self, left: f32, top: f32) -> Self {
+        Self {
+            X: self.X + left,
+            Y: self.Y + top,
+            ..self
+        }
     }
 
     #[inline(always)]

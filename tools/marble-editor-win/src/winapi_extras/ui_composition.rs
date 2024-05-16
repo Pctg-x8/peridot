@@ -147,6 +147,12 @@ impl<'a, T: Interface + ?Sized + 'a> VisualPropertySetter<'a, T> {
         Ok(self)
     }
 
+    #[inline(always)]
+    pub fn expand_to_parent(self) -> windows::core::Result<Self> {
+        self.relative_offset_adjustment(Vector3::zero())?
+            .relative_size_adjustment(Vector2::one())
+    }
+
     #[inline]
     pub fn offset(self, p: Vector3) -> windows::core::Result<Self> {
         let x = self.0.cast::<IVisual>()?;
@@ -191,6 +197,12 @@ impl<'a, T: Interface + ?Sized + 'a> VisualPropertySetter<'a, T> {
 
         Ok(self)
     }
+
+    #[inline]
+    pub fn opacity(self, opacity: f32) -> windows::core::Result<Self> {
+        let x = self.0.cast::<IVisual>()?;
+        unsafe { (x.vtable().SetOpacity)(x.as_raw(), opacity).map(|| self) }
+    }
 }
 impl VisualPropertySetter<'_, SpriteVisual> {
     #[inline]
@@ -232,6 +244,7 @@ impl VectorScalarConstructor for Vector3 {
 
 pub trait Vector2Extension {
     fn with_z(self, z: f32) -> Vector3;
+    fn expand(self, xplus: f32, yplus: f32) -> Vector2;
 }
 impl Vector2Extension for Vector2 {
     #[inline(always)]
@@ -240,6 +253,14 @@ impl Vector2Extension for Vector2 {
             X: self.X,
             Y: self.Y,
             Z: z,
+        }
+    }
+
+    #[inline(always)]
+    fn expand(self, xplus: f32, yplus: f32) -> Vector2 {
+        Vector2 {
+            X: self.X + xplus,
+            Y: self.Y + yplus,
         }
     }
 }

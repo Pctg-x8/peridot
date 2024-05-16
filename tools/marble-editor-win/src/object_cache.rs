@@ -12,7 +12,7 @@ use windows::{
                 ID2D1DeviceContext, D2D1_DRAW_TEXT_OPTIONS_NONE,
             },
             DirectWrite::{
-                IDWriteFactory, IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL,
+                IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout, DWRITE_FONT_STRETCH_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_TEXT_METRICS,
             },
         },
@@ -123,6 +123,86 @@ impl TextSurfaceStock {
         }
     }
 
+    pub fn create_text_surface(
+        &self,
+        layout: &IDWriteTextLayout,
+    ) -> windows::core::Result<TextSurface> {
+        Self::create_text_surface_impl(
+            layout,
+            self.target_window_dpi,
+            &self.composition_graphics_device,
+        )
+    }
+
+    fn create_text_surface_impl(
+        layout: &IDWriteTextLayout,
+        dpi: f32,
+        composition_graphics_device: &CompositionGraphicsDevice,
+    ) -> windows::core::Result<TextSurface> {
+        let mut text_metrics = core::mem::MaybeUninit::<DWRITE_TEXT_METRICS>::uninit();
+        unsafe { layout.GetMetrics(text_metrics.as_mut_ptr())? };
+        let text_metrics = unsafe { text_metrics.assume_init() };
+        let size = Size {
+            Width: text_metrics.width * dpi / 96.0,
+            Height: text_metrics.height * dpi / 96.0,
+        };
+        let surface = composition_graphics_device.CreateDrawingSurface(
+            size,
+            DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            DirectXAlphaMode::Premultiplied,
+        )?;
+
+        let surface_interop = surface.cast::<ICompositionDrawingSurfaceInterop>()?;
+        let mut offset = core::mem::MaybeUninit::<POINT>::uninit();
+        let dc: ID2D1DeviceContext =
+            unsafe { surface_interop.BeginDraw(None, offset.as_mut_ptr())? };
+        let offset = unsafe { offset.assume_init() };
+        let res = 'drawing_block: {
+            unsafe {
+                dc.SetDpi(dpi, dpi);
+
+                let clear_color = D2D1_COLOR_F {
+                    a: 0.0,
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                };
+                let text_color = D2D1_COLOR_F {
+                    a: 1.0,
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                };
+
+                let brush = match dc.CreateSolidColorBrush(&text_color, None) {
+                    Ok(b) => b,
+                    Err(e) => break 'drawing_block Err(e),
+                };
+
+                dc.Clear(Some(&clear_color));
+                dc.DrawTextLayout(
+                    D2D_POINT_2F {
+                        x: offset.x as f32 * 96.0 / dpi,
+                        y: offset.y as f32 * 96.0 / dpi,
+                    },
+                    layout,
+                    &brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+
+                Ok(())
+            }
+        };
+        unsafe { surface_interop.EndDraw()? };
+        res?;
+
+        Ok(TextSurface {
+            surface,
+            width: text_metrics.width,
+            height: text_metrics.height,
+        })
+    }
+
     pub fn get(
         &mut self,
         fmt: &IDWriteTextFormat,
@@ -139,69 +219,13 @@ impl TextSurfaceStock {
                         core::f32::MAX,
                     )?
                 };
-                let mut text_metrics = core::mem::MaybeUninit::<DWRITE_TEXT_METRICS>::uninit();
-                unsafe { text_layout.GetMetrics(text_metrics.as_mut_ptr())? };
-                let text_metrics = unsafe { text_metrics.assume_init() };
-                let size = Size {
-                    Width: text_metrics.width * self.target_window_dpi / 96.0,
-                    Height: text_metrics.height * self.target_window_dpi / 96.0,
-                };
-                let surface = self.composition_graphics_device.CreateDrawingSurface(
-                    size,
-                    DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                    DirectXAlphaMode::Premultiplied,
+
+                let surface = Self::create_text_surface_impl(
+                    &text_layout,
+                    self.target_window_dpi,
+                    &self.composition_graphics_device,
                 )?;
-
-                let surface_interop = surface.cast::<ICompositionDrawingSurfaceInterop>()?;
-                let mut offset = core::mem::MaybeUninit::<POINT>::uninit();
-                let dc: ID2D1DeviceContext =
-                    unsafe { surface_interop.BeginDraw(None, offset.as_mut_ptr())? };
-                let offset = unsafe { offset.assume_init() };
-                let res = 'drawing_block: {
-                    unsafe {
-                        dc.SetDpi(self.target_window_dpi, self.target_window_dpi);
-
-                        let clear_color = D2D1_COLOR_F {
-                            a: 0.0,
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                        };
-                        let text_color = D2D1_COLOR_F {
-                            a: 1.0,
-                            r: 1.0,
-                            g: 1.0,
-                            b: 1.0,
-                        };
-
-                        let brush = match dc.CreateSolidColorBrush(&text_color, None) {
-                            Ok(b) => b,
-                            Err(e) => break 'drawing_block Err(e),
-                        };
-
-                        dc.Clear(Some(&clear_color));
-                        dc.DrawTextLayout(
-                            D2D_POINT_2F {
-                                x: offset.x as f32 * 96.0 / self.target_window_dpi,
-                                y: offset.y as f32 * 96.0 / self.target_window_dpi,
-                            },
-                            &text_layout,
-                            &brush,
-                            D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        );
-
-                        Ok(())
-                    }
-                };
-                unsafe { surface_interop.EndDraw()? };
-                res?;
-
-                Ok(e.insert(TextSurface {
-                    surface,
-                    width: text_metrics.width,
-                    height: text_metrics.height,
-                })
-                .clone())
+                Ok(e.insert(surface).clone())
             }
         }
     }

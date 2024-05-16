@@ -26,7 +26,7 @@ use windows::{
 };
 
 use crate::{
-    bindgen,
+    bindgen::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     uikit::ViewContext,
     utils::RectExtensions,
     winapi_extras::{
@@ -84,10 +84,10 @@ impl DockingPanePreview {
                 .CreateDesktopWindowTarget(window, true)?
         };
 
-        let fx = bindgen::GaussianBlurEffect::new()?;
+        let fx = GaussianBlurEffect::new()?;
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
         fx.SetBlurAmount(16.0)?;
-        fx.SetOptimization(bindgen::EffectOptimization::Balanced)?;
+        fx.SetOptimization(EffectOptimization::Balanced)?;
         let effect_factory = ctx.compositor().CreateEffectFactory(&fx)?;
         let backdrop_brush = ctx.compositor().CreateBackdropBrush()?;
         let blur_brush = effect_factory.CreateBrush()?;

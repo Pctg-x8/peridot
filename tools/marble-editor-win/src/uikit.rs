@@ -2,10 +2,13 @@ use windows::{
     Win32::{
         Foundation::HWND,
         Graphics::{
-            CompositionSwapchain::IPresentationManager, Direct3D11::ID3D11Device,
-            DirectWrite::IDWriteTextFormat,
+            CompositionSwapchain::IPresentationManager,
+            Direct2D::ID2D1Factory1,
+            Direct3D11::ID3D11Device,
+            DirectWrite::{IDWriteFactory, IDWriteTextFormat},
         },
         System::WinRT::Composition::ICompositorInterop,
+        UI::WindowsAndMessaging::HTCLIENT,
     },
     UI::Composition::{
         CompositionColorBrush, CompositionLinearGradientBrush, ScalarKeyFrameAnimation,
@@ -35,6 +38,8 @@ pub trait ViewContext {
     fn compositor(&self) -> &windows::UI::Composition::Compositor;
     fn compositor_interop(&self) -> &ICompositorInterop;
     fn common(&self) -> &UICommonObjects;
+    fn d2d1_factory(&self) -> &ID2D1Factory1;
+    fn dwrite_factory(&self) -> &IDWriteFactory;
     fn text_format_stock_mut(&mut self) -> &mut TextFormatStock;
     fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock;
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext;
@@ -58,6 +63,14 @@ impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
 
     fn common(&self) -> &UICommonObjects {
         T::common(*self)
+    }
+
+    fn d2d1_factory(&self) -> &ID2D1Factory1 {
+        T::d2d1_factory(*self)
+    }
+
+    fn dwrite_factory(&self) -> &IDWriteFactory {
+        T::dwrite_factory(*self)
     }
 
     fn text_format_stock_mut(&mut self) -> &mut TextFormatStock {
@@ -98,6 +111,8 @@ pub struct ViewContext1<'r> {
     pub compositor: &'r windows::UI::Composition::Compositor,
     pub compositor_interop: &'r ICompositorInterop,
     pub common: &'r UICommonObjects,
+    pub d2d1_factory: &'r ID2D1Factory1,
+    pub dwrite_factory: &'r IDWriteFactory,
     pub text_format_stock: &'r mut TextFormatStock,
     pub text_surface_stock: &'r mut TextSurfaceStock,
     pub hittest_context: &'r mut HitTestTreeContext,
@@ -116,6 +131,14 @@ impl ViewContext for ViewContext1<'_> {
 
     fn common(&self) -> &UICommonObjects {
         self.common
+    }
+
+    fn d2d1_factory(&self) -> &ID2D1Factory1 {
+        self.d2d1_factory
+    }
+
+    fn dwrite_factory(&self) -> &IDWriteFactory {
+        self.dwrite_factory
     }
 
     fn text_format_stock_mut(&mut self) -> &mut TextFormatStock {
@@ -154,6 +177,10 @@ pub trait InputEventHandler {
         CursorStyle::Arrow
     }
 
+    fn nc_hittest(&self) -> u32 {
+        HTCLIENT
+    }
+
     fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {}
     fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {}
     fn on_pointer_down(&self, _x: f32, _y: f32, _ctx: &mut dyn InputContext) {}
@@ -163,10 +190,15 @@ pub trait InputEventHandler {
     fn on_drag_move(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
     fn on_end_drag(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
 }
-impl<T: InputEventHandler> InputEventHandler for std::rc::Rc<T> {
+impl<T: InputEventHandler + ?Sized> InputEventHandler for std::rc::Rc<T> {
     #[inline(always)]
     fn hover_cursor(&self) -> CursorStyle {
         T::hover_cursor(&*self)
+    }
+
+    #[inline(always)]
+    fn nc_hittest(&self) -> u32 {
+        T::nc_hittest(&*self)
     }
 
     #[inline(always)]

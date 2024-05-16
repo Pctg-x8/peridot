@@ -14,6 +14,8 @@ use windows::{
 
 mod ui_composition;
 pub use self::ui_composition::*;
+mod composition_geometry_interop;
+pub use self::composition_geometry_interop::*;
 
 #[derive(Clone, Copy)]
 pub enum WindowClass {

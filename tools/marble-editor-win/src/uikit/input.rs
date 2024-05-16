@@ -10,7 +10,9 @@ use windows::{
         Foundation::HWND,
         UI::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
-            WindowsAndMessaging::{LoadCursorA, SetCursor, IDC_ARROW, IDC_SIZENS, IDC_SIZEWE},
+            WindowsAndMessaging::{
+                LoadCursorA, SetCursor, HTCLIENT, IDC_ARROW, IDC_SIZENS, IDC_SIZEWE,
+            },
         },
     },
 };
@@ -285,6 +287,20 @@ impl InputState {
             false
         }
     }
+
+    pub fn nc_hittest(&self, x: f32, y: f32) -> u32 {
+        let Some(active_element) = self
+            .mouse_capturing_element
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .or_else(|| HitTestTree::check(&self.ht_tree, x, y))
+        else {
+            return HTCLIENT;
+        };
+
+        let r = active_element.borrow().eh.nc_hittest();
+        r
+    }
 }
 
 pub struct HitTestTree {
@@ -344,6 +360,15 @@ impl HitTestTree {
     }
 
     #[inline]
+    pub fn remove_all_children(&mut self) {
+        for c in self.children.values() {
+            c.borrow_mut().parent = empty_weak_mut();
+        }
+
+        self.children.clear();
+    }
+
+    #[inline]
     pub fn unmount(&mut self) {
         if let Some(parent) = self.parent.upgrade() {
             parent.borrow_mut().children.remove(&self.id);
@@ -373,6 +398,18 @@ impl HitTestTree {
     pub fn set_offset(&mut self, left: f32, top: f32) {
         self.rect.X = left;
         self.rect.Y = top;
+    }
+    #[inline]
+    pub fn set_left(&mut self, left: f32) {
+        self.rect.X = left;
+    }
+    #[inline]
+    pub fn set_right(&mut self, right: f32) {
+        self.rect.X = right - self.rect.Width;
+    }
+    #[inline]
+    pub fn set_width(&mut self, width: f32) {
+        self.rect.Width = width;
     }
 
     pub fn check(this: &SharedMut<Self>, x: f32, y: f32) -> Option<SharedMut<Self>> {

@@ -3,10 +3,9 @@ use std::{
     cell::RefCell,
     ffi::c_void,
     rc::{Rc, Weak},
-    sync::Arc,
 };
 
-use features::{DockingPanePreview, PaneSplitterView, SplitDirection};
+use features::{AppTitleBarView, DockingPanePreview, PaneSplitterView, SplitDirection};
 use object_cache::{TextFormatStock, TextSurfaceStock};
 use uikit::{
     HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, ViewContext,
@@ -24,8 +23,7 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            CloseHandle, BOOL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_EVENT,
-            WAIT_OBJECT_0, WPARAM,
+            CloseHandle, BOOL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM,
         },
         Graphics::{
             CompositionSwapchain::{
@@ -52,7 +50,7 @@ use windows::{
                 DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
             },
-            Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
+            Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::{
                 Common::{
                     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
@@ -62,8 +60,9 @@ use windows::{
             },
             Gdi::{MapWindowPoints, HBRUSH},
         },
+        Storage::Packaging::Appx::PACKAGE_VERSION,
         System::{
-            LibraryLoader::GetModuleHandleA,
+            LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
             Threading::{CreateEventA, ResetEvent, SetEvent, INFINITE},
             WinRT::{
                 Composition::{ICompositorDesktopInterop, ICompositorInterop},
@@ -72,14 +71,18 @@ use windows::{
             },
         },
         UI::{
+            Controls::MARGINS,
             HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
-                DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA, GetWindowLongPtrA,
-                LoadCursorA, LoadIconA, MsgWaitForMultipleObjects, PeekMessageA, PostQuitMessage,
-                SetWindowLongPtrA, ShowWindow, TranslateMessage, HTCLIENT, IDC_ARROW,
-                IDI_APPLICATION, MSG, PM_REMOVE, QS_ALLEVENTS, SW_SHOWNORMAL,
-                WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_QUIT, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
+                DefWindowProcA, DispatchMessageA, GetClientRect, GetSystemMetrics,
+                GetWindowLongPtrA, GetWindowPlacement, GetWindowRect, LoadCursorA, LoadIconA,
+                MsgWaitForMultipleObjects, PeekMessageA, PostQuitMessage, SetWindowLongPtrA,
+                SetWindowPos, ShowWindow, TranslateMessage, HTCLIENT, HTTOP, IDC_ARROW,
+                IDI_APPLICATION, MSG, NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLEVENTS, SM_CXSIZEFRAME,
+                SM_CYSIZEFRAME, SWP_FRAMECHANGED, SW_MAXIMIZE, SW_SHOWNORMAL, WINDOWPLACEMENT,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSEMOVE, WM_QUIT,
+                WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -87,14 +90,19 @@ use windows::{
         Color,
         Composition::{
             CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, Compositor,
-            ContainerVisual,
-            Diagnostics::{CompositionDebugOverdrawContentKinds, CompositionDebugSettings},
-            LayerVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
+            ContainerVisual, Diagnostics::CompositionDebugSettings, LayerVisual,
+            ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
         },
     },
 };
 
 use crate::{
+    bindgen::UI::Composition::{
+        ICompositionSupportsSystemBackdrop,
+        SystemBackdrops::{
+            MicaController, MicaKind, SystemBackdropConfiguration, SystemBackdropTheme,
+        },
+    },
     uikit::{UICommonObjects, ViewContext1},
     winapi_extras::{register_window_class, VectorScalarConstructor, WindowBuilder},
 };
@@ -167,11 +175,17 @@ impl core::fmt::Debug for PaneDockingRecommendation {
     }
 }
 impl PaneDockingRecommendation {
-    pub fn dock_rect(&self, preview_rect: &Rect) -> Option<Rect> {
+    pub fn dock_rect(
+        &self,
+        preview_rect: &Rect,
+        docking_root: &PaneGroupDockingManager,
+    ) -> Option<Rect> {
+        let (ox, oy) = docking_root.offset();
+
         match self {
             Self::Left(d) => Some(Rect {
-                X: d.borrow().controlling_rect_left(),
-                Y: d.borrow().controlling_rect_top(),
+                X: d.borrow().controlling_rect_left() + ox,
+                Y: d.borrow().controlling_rect_top() + oy,
                 Width: preview_rect
                     .Width
                     .min(d.borrow().controlling_rect_width() * 0.9),
@@ -183,15 +197,15 @@ impl PaneDockingRecommendation {
                     .min(d.borrow().controlling_rect_width() * 0.9);
 
                 Rect {
-                    X: d.borrow().controlling_rect_right() - w,
-                    Y: d.borrow().controlling_rect_top(),
+                    X: d.borrow().controlling_rect_right() + ox - w,
+                    Y: d.borrow().controlling_rect_top() + oy,
                     Width: w,
                     Height: d.borrow().controlling_rect_height(),
                 }
             }),
             Self::Top(d) => Some(Rect {
-                X: d.borrow().controlling_rect_left(),
-                Y: d.borrow().controlling_rect_top(),
+                X: d.borrow().controlling_rect_left() + ox,
+                Y: d.borrow().controlling_rect_top() + oy,
                 Width: d.borrow().controlling_rect_width(),
                 Height: preview_rect
                     .Height
@@ -203,13 +217,13 @@ impl PaneDockingRecommendation {
                     .min(d.borrow().controlling_rect_height() * 0.9);
 
                 Rect {
-                    X: d.borrow().controlling_rect_left(),
-                    Y: d.borrow().controlling_rect_bottom() - h,
+                    X: d.borrow().controlling_rect_left() + ox,
+                    Y: d.borrow().controlling_rect_bottom() + oy - h,
                     Width: d.borrow().controlling_rect_width(),
                     Height: h,
                 }
             }),
-            Self::MergeGroup(view) => Some(view.borrow().view_rect.clone()),
+            Self::MergeGroup(view) => Some(view.borrow().view_rect.clone().with_offset(ox, oy)),
             Self::Free => None,
         }
     }
@@ -1122,10 +1136,14 @@ impl PaneGroupDockingManager {
         ctx: &mut impl ViewContext,
         ht_root: &SharedMut<HitTestTree>,
     ) -> windows::core::Result<Self> {
+        let ht_placement_root =
+            HitTestTree::new_unsized(&Rc::new(()), ctx.hittest_context_mut().new_id(), 0.0, 0.0);
+        HitTestTree::add_child(ht_root, ht_placement_root.clone());
+
         Ok(Self {
             docks: PaneDockLayer::new_root(|_| None),
             placement_visual: ctx.compositor().CreateContainerVisual()?,
-            ht_placement_root: ht_root.clone(),
+            ht_placement_root,
             floating_preview: DockingPanePreview::new(ctx)?,
         })
     }
@@ -1133,13 +1151,30 @@ impl PaneGroupDockingManager {
     fn set_layout(&mut self, layout: SharedMut<PaneDockLayer>) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
-        // TODO: HitTestTreeのほうもきれいにする
+        self.ht_placement_root.borrow_mut().remove_all_children();
         layout
             .borrow()
             .mount_recursive(&children, &self.ht_placement_root)?;
 
         self.docks = layout;
         Ok(())
+    }
+    fn set_offset(&self, left: f32, top: f32) -> windows::core::Result<()> {
+        self.placement_visual.SetOffset(Vector3 {
+            X: left,
+            Y: top,
+            Z: 0.0,
+        })?;
+        self.ht_placement_root.borrow_mut().set_offset(left, top);
+
+        Ok(())
+    }
+    #[inline]
+    fn offset(&self) -> (f32, f32) {
+        (
+            self.ht_placement_root.borrow().rect().X,
+            self.ht_placement_root.borrow().rect().Y,
+        )
     }
     fn resize_root(&mut self, width: f32, height: f32) -> windows::core::Result<()> {
         self.docks
@@ -1186,7 +1221,9 @@ impl PaneGroupDockingManager {
         x: f32,
         y: f32,
     ) -> PaneDockingRecommendation {
-        PaneDockLayer::compute_recommended_docking_destination(&self.docks, mode, x, y)
+        let (ox, oy) = self.offset();
+
+        PaneDockLayer::compute_recommended_docking_destination(&self.docks, mode, x - ox, y - oy)
     }
 }
 
@@ -1574,7 +1611,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             );
         let preview_rect = this.borrow().preview_rect.clone();
         let new_rect = recommended_dest
-            .dock_rect(&preview_rect)
+            .dock_rect(&preview_rect, &docking_manager.borrow())
             .unwrap_or_else(|| Rect {
                 X: ox + window.pixels_to_dip(x - bx),
                 Y: oy + window.pixels_to_dip(y - by),
@@ -2169,7 +2206,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             );
         let preview_rect = this.borrow().preview_rect.clone();
         let new_rect = recommended_dest
-            .dock_rect(&preview_rect)
+            .dock_rect(&preview_rect, &docking_manager.borrow())
             .unwrap_or_else(|| Rect {
                 X: ox + window.pixels_to_dip(x - bx),
                 Y: oy + window.pixels_to_dip(y - by),
@@ -3024,13 +3061,17 @@ struct AppWindowState<'r> {
     compositor: Compositor,
     compositor_interop: ICompositorInterop,
     ui_common_objects: &'r UICommonObjects,
+    d2d1_factory: ID2D1Factory1,
+    dwrite_factory: IDWriteFactory,
     text_format_stock: &'r mut TextFormatStock,
     text_surface_stock: &'r mut TextSurfaceStock,
     hittest_context: HitTestTreeContext,
     pane_group_docking_manager: SharedMut<PaneGroupDockingManager>,
+    app_title_bar_view: SharedMut<AppTitleBarView>,
     presentation_manager: IPresentationManager,
     d3d11_device: ID3D11Device,
     app_global_signals: SharedMut<AppGlobalSignals>,
+    currently_maximized: bool,
 }
 impl ViewContext for AppWindowState<'_> {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
@@ -3043,6 +3084,14 @@ impl ViewContext for AppWindowState<'_> {
 
     fn common(&self) -> &UICommonObjects {
         &self.ui_common_objects
+    }
+
+    fn d2d1_factory(&self) -> &ID2D1Factory1 {
+        &self.d2d1_factory
+    }
+
+    fn dwrite_factory(&self) -> &IDWriteFactory {
+        &self.dwrite_factory
     }
 
     fn text_format_stock_mut(&mut self) -> &mut TextFormatStock {
@@ -3164,6 +3213,12 @@ impl AppWindow {
             MapWindowPoints(self.handle, None, points);
         }
     }
+    #[inline]
+    pub fn map_points_from_desktop(&self, points: &mut [POINT]) {
+        unsafe {
+            MapWindowPoints(None, self.handle, points);
+        }
+    }
 
     pub fn dip_rect_to_desktop_pixels_rect(&self, dip_rect: &Rect) -> Rect {
         let mut loc = [POINT {
@@ -3199,6 +3254,16 @@ impl AppWindow {
     }
 
     #[inline]
+    pub fn is_maximized(&self) -> windows::core::Result<bool> {
+        let mut r = core::mem::MaybeUninit::<WINDOWPLACEMENT>::uninit();
+        unsafe {
+            (*r.as_mut_ptr()).length = core::mem::size_of::<WINDOWPLACEMENT>() as _;
+            GetWindowPlacement(self.handle, r.as_mut_ptr())
+                .map(|_| r.assume_init().showCmd == SW_MAXIMIZE.0 as _)
+        }
+    }
+
+    #[inline]
     pub fn show(&self) {
         unsafe {
             let _ = ShowWindow(self.handle, SW_SHOWNORMAL);
@@ -3206,7 +3271,56 @@ impl AppWindow {
     }
 }
 
+// windows app sdk bootstrapping
+type FPMddBootstrapInitialize2 = extern "system" fn(
+    majorMinorVersion: u32,
+    versionTag: PCWSTR,
+    minVersion: PACKAGE_VERSION,
+    options: MddBootstrapInitializeOptions,
+) -> HRESULT;
+type FPMddBootstrapShutdown = extern "system" fn();
+#[repr(C)]
+#[derive(Clone, Copy)]
+enum MddBootstrapInitializeOptions {
+    ShowUI = 0x08,
+}
+// copy from WindowsAppSDK-VersionInfo.h
+const APP_SDK_VERSION_U64: u64 = 0;
+
 fn main() {
+    let app_runtime_lib = unsafe {
+        LoadLibraryA(s!("Microsoft.WindowsAppRuntime.Bootstrap.dll"))
+            .expect("Failed to load runtime bootstrap dll")
+    };
+    let initializer: FPMddBootstrapInitialize2 = unsafe {
+        core::mem::transmute(
+            GetProcAddress(app_runtime_lib, s!("MddBootstrapInitialize2"))
+                .expect("Failed to load initialize fn"),
+        )
+    };
+    let shutdown: FPMddBootstrapShutdown = unsafe {
+        core::mem::transmute(
+            GetProcAddress(app_runtime_lib, s!("MddBootstrapShutdown"))
+                .expect("Failed to load shutdown fn"),
+        )
+    };
+
+    unsafe {
+        initializer(
+            0x00010005,
+            w!(""),
+            core::mem::transmute(APP_SDK_VERSION_U64),
+            MddBootstrapInitializeOptions::ShowUI,
+        )
+        .ok()
+        .expect("Failed to initialize windows app runtime");
+    }
+    let r = app();
+    shutdown();
+    std::process::exit(r);
+}
+
+fn app() -> i32 {
     let instance_handle = unsafe { GetModuleHandleA(None).expect("Failed to get instance handle") };
     let window_handle = WindowBuilder::new(
         instance_handle.into(),
@@ -3258,7 +3372,7 @@ fn main() {
         .expect("Failed to initialize D3D11");
     }
     let d3d11_device = d3d11_device.expect("No D3D11 device instance");
-    let d3d11_imm_context = d3d11_imm_context.expect("No D3D11 device context instance");
+    let _d3d11_imm_context = d3d11_imm_context.expect("No D3D11 device context instance");
     println!("D3D11 Feature Level: {feature_level:?}");
 
     let d2d1_factory: ID2D1Factory1 = {
@@ -3353,13 +3467,38 @@ fn main() {
         .SetRoot(&composition_root)
         .expect("Failed to set root visual");
 
+    if !MicaController::IsSupported().expect("Failed to get mica support") {
+        panic!("Mica is not supported");
+    }
+
+    let mica = MicaController::new().expect("Failed to get mica controller");
+    let system_backdrop_configuration =
+        SystemBackdropConfiguration::new().expect("Failed to create system backdrop configuration");
+    system_backdrop_configuration
+        .SetIsInputActive(true)
+        .expect("Failed to set input active");
+    system_backdrop_configuration
+        .SetTheme(SystemBackdropTheme::Default)
+        .expect("Failed to set theme");
+    mica.SetKind(MicaKind::BaseAlt)
+        .expect("Failed to set mica kind");
+    mica.SetSystemBackdropConfiguration(&system_backdrop_configuration)
+        .expect("Failed to set backdrop config");
+
+    mica.AddSystemBackdropTarget(
+        &desktop_window_target
+            .cast::<ICompositionSupportsSystemBackdrop>()
+            .expect("Failed to get system backdrop support"),
+    )
+    .expect("Failed to add backdrop target");
+
     let bg = compositor
         .CreateSpriteVisual()
         .expect("Failed to create bg");
     bg.SetBrush(
         &compositor
             .CreateColorBrushWithColor(Color {
-                A: 255,
+                A: 0,
                 R: 24,
                 G: 24,
                 B: 32,
@@ -3530,6 +3669,8 @@ fn main() {
         compositor: &compositor,
         compositor_interop: &compositor_interop,
         common: &common_objects,
+        d2d1_factory: &d2d1_factory,
+        dwrite_factory: &dwrite_factory,
         text_format_stock: &mut text_format_stock,
         text_surface_stock: &mut text_surface_stock,
         hittest_context: &mut hittest_context,
@@ -3645,21 +3786,43 @@ fn main() {
         .expect("Failed to get initial client size");
     pane_group_docking_manager
         .borrow_mut()
-        .resize_root(client_width, client_height)
+        .set_offset(0.0, AppTitleBarView::HEIGHT)
+        .expect("Failed to set docking manager offset");
+    pane_group_docking_manager
+        .borrow_mut()
+        .resize_root(client_width, client_height - AppTitleBarView::HEIGHT)
         .expect("Failed to initial relayout");
+
+    let app_title = AppTitleBarView::new(&mut view_context, app_global_scale)
+        .expect("Failed to initialize app title bar");
+    app_title
+        .borrow()
+        .mount(
+            &composition_root
+                .Children()
+                .expect("Failed to get children collection"),
+            &hittest_tree_root,
+        )
+        .expect("Failed to mount app title bar");
 
     let mut ws = AppWindowState {
         input_state: InputState::new(window_handle.handle, &hittest_tree_root),
         compositor: compositor.clone(),
         compositor_interop,
         ui_common_objects: &common_objects,
+        d2d1_factory,
+        dwrite_factory,
         text_format_stock: &mut text_format_stock,
         text_surface_stock: &mut text_surface_stock,
         hittest_context,
         pane_group_docking_manager,
+        app_title_bar_view: app_title,
         presentation_manager,
         d3d11_device,
         app_global_signals: app_global_signals.clone(),
+        currently_maximized: window_handle
+            .is_maximized()
+            .expect("Failed to query maximized state"),
     };
     window_handle.set_state_store(&mut ws);
     window_handle.show();
@@ -3693,11 +3856,7 @@ fn main() {
 
     window_handle.clear_state_store();
 
-    // drop d3d11 before d2d1
-    drop(d3d11_imm_context);
-    drop(ws);
-
-    std::process::exit(unsafe { msg.assume_init().wParam.0 as _ });
+    unsafe { msg.assume_init().wParam.0 as _ }
 }
 
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -3705,13 +3864,114 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         unsafe { PostQuitMessage(0) };
         return LRESULT(0);
     }
-    if msg == WM_MOUSEMOVE {
+    if msg == WM_CREATE {
+        let mut rc = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetWindowRect(hwnd, rc.as_mut_ptr()).expect("Failed to get window rect");
+        }
+        let rc = unsafe { rc.assume_init() };
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                rc.left,
+                rc.top,
+                rc.right - rc.left,
+                rc.bottom - rc.top,
+                SWP_FRAMECHANGED,
+            )
+            .expect("Failed to reset window frame");
+        }
+
+        return LRESULT(0);
+    }
+    if msg == WM_NCCALCSIZE {
+        if wp.0 == 1 {
+            // remove non-client area
+
+            let params = unsafe {
+                core::mem::transmute::<_, *mut NCCALCSIZE_PARAMS>(lp.0)
+                    .as_mut()
+                    .unwrap()
+            };
+            let w = unsafe { GetSystemMetrics(SM_CXSIZEFRAME) };
+            let h = unsafe { GetSystemMetrics(SM_CYSIZEFRAME) };
+            params.rgrc[0].left += w;
+            params.rgrc[0].right -= w;
+            params.rgrc[0].bottom -= h;
+            // topはいじらない（他アプリもそんな感じになってるのでtopは自前でNCHITTESTしてリサイズ判定する）
+
+            return LRESULT(0);
+        }
+    }
+    if msg == WM_ACTIVATE {
+        unsafe {
+            DwmExtendFrameIntoClientArea(
+                hwnd,
+                &MARGINS {
+                    cxLeftWidth: 1,
+                    cxRightWidth: 1,
+                    cyTopHeight: 1,
+                    cyBottomHeight: 1,
+                },
+            )
+            .expect("Failed to extend dwm frame");
+        }
+
+        return LRESULT(0);
+    }
+    if msg == WM_NCHITTEST {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
+            return LRESULT(HTCLIENT as _);
+        };
+
+        let resize_h = unsafe { GetSystemMetrics(SM_CYSIZEFRAME) };
+        let client_size = app_window
+            .client_size_pixels()
+            .expect("Failed to get client size");
+
+        let (x, y) = (
+            (lp.0 & 0xffff) as i16 as i32,
+            ((lp.0 >> 16) & 0xffff) as i16 as i32,
+        );
+        let mut p = [POINT { x, y }];
+        app_window.map_points_from_desktop(&mut p);
+        let POINT { x, y } = p[0];
+
+        if 0 > x || x > client_size.0 as i32 || 0 > y || y > client_size.1 as i32 {
+            // ウィンドウ範囲外はシステムにおまかせ
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        }
+        if y < resize_h {
+            // global override
+            return LRESULT(HTTOP as _);
+        }
+
+        let ht = state.input_state.nc_hittest(
+            app_window.pixels_to_dip(x as _),
+            app_window.pixels_to_dip(y as _),
+        );
+        return LRESULT(ht as _);
+    }
+    if msg == WM_MOUSEMOVE || msg == WM_NCMOUSEMOVE {
         let app_window = AppWindow::wrap(hwnd);
         let Some(state) = app_window.get_state_store() else {
             return LRESULT(0);
         };
 
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
+        let (x, y) = if msg == WM_NCMOUSEMOVE {
+            // NCのときは画面上での座標になる
+            let mut p = [POINT {
+                x: x as _,
+                y: y as _,
+            }];
+            app_window.map_points_from_desktop(&mut p);
+            (p[0].x, p[0].y)
+        } else {
+            (x as _, y as _)
+        };
         let actions = state.input_state.on_mouse_move(
             app_window.pixels_to_dip(x as _),
             app_window.pixels_to_dip(y as _),
@@ -3764,11 +4024,27 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         };
 
         let (w, h) = app_window.client_size().expect("Failed to get client size");
+        state.app_title_bar_view.borrow().set_width(w);
         state
             .pane_group_docking_manager
             .borrow_mut()
-            .resize_root(w, h)
+            .resize_root(w, h - AppTitleBarView::HEIGHT)
             .expect("Failed to resize root");
+
+        let maximized = app_window
+            .is_maximized()
+            .expect("Failed to query maximized state");
+        if maximized != state.currently_maximized {
+            // split borrowing
+            let title_bar_view = state.app_title_bar_view.clone();
+
+            title_bar_view
+                .borrow()
+                .change_maximize_restore_icon(maximized, state)
+                .expect("Failed to change maxres icon");
+
+            state.currently_maximized = maximized;
+        }
 
         return LRESULT(0);
     }
