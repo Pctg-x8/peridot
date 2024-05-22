@@ -26,3 +26,12 @@ impl PixelGeometryProvider for br::vk::VkExtent2D {
         )
     }
 }
+
+/// # Safety
+/// panicking in `updater` function may results undefined behavior
+pub(crate) unsafe fn update_inplace<T>(dest: &mut T, updater: impl FnOnce(T) -> T) {
+    unsafe {
+        let old = core::ptr::read(dest);
+        core::ptr::write(dest, updater(old));
+    }
+}

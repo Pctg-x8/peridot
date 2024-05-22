@@ -14,6 +14,20 @@ winres = "0.1"
 
 [dependencies]
 windows-core = "0.56.0"
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
+    "Implements",
+    "Allow1_3APIs",
+    "VK_EXT_debug_utils",
+    "VK_KHR_external_memory",
+    "VK_KHR_external_memory_win32",
+    "VK_KHR_synchronization2",
+    "VK_KHR_external_memory_capabilities",
+    "VK_KHR_get_physical_device_properties2",
+] }
+widestring = "0.4"
+peridot = { path = "../../base" }
+peridot-math = { path = "../../modules/math" }
+peridot-memory-manager = { path = "../../modules/memory-manager" }
 
 [dependencies.windows]
 version = "0.56.0"
@@ -32,6 +46,7 @@ features = [
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",

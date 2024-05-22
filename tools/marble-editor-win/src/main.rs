@@ -5,8 +5,16 @@ use std::{
     rc::{Rc, Weak},
 };
 
+use bedrock as br;
+use br::{
+    CommandBuffer, CommandPool, DescriptorPool, Device, GraphicsPipelineBuilder,
+    ImageSubresourceSlice, Instance, MemoryBound, PhysicalDevice, PipelineShaderStageProvider,
+    Queue, RenderPass, SubmissionBatch, VulkanStructure,
+};
 use features::{AppTitleBarView, DockingPanePreview, PaneSplitterView, SplitDirection};
+use miniengine::{ColoredVertex, Mat4, Vec4};
 use object_cache::{TextFormatStock, TextSurfaceStock};
+use peridot_math::{Camera, One, ProjectionMethod, Zero};
 use uikit::{
     HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, ViewContext,
 };
@@ -23,7 +31,8 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            CloseHandle, BOOL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM,
+            CloseHandle, BOOL, GENERIC_ALL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT,
+            WAIT_OBJECT_0, WPARAM,
         },
         Graphics::{
             CompositionSwapchain::{
@@ -34,14 +43,19 @@ use windows::{
                 D2D1CreateFactory, ID2D1Factory1, D2D1_DEBUG_LEVEL_WARNING, D2D1_FACTORY_OPTIONS,
                 D2D1_FACTORY_TYPE_SINGLE_THREADED,
             },
-            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL},
+            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0},
             Direct3D11::{
                 D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
                 ID3D11Resource, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
                 D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE,
-                D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-                D3D11_USAGE_DEFAULT,
+                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
+                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            },
+            Direct3D12::{
+                D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device,
+                D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+                D3D12_COMMAND_QUEUE_FLAGS,
             },
             DirectComposition::{
                 DCompositionCreateSurfaceHandle, COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE,
@@ -56,7 +70,8 @@ use windows::{
                     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
                     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
                 },
-                IDXGIDevice,
+                IDXGIDevice, IDXGIKeyedMutex, IDXGIResource, IDXGIResource1,
+                DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
             },
             Gdi::{MapWindowPoints, HBRUSH},
         },
@@ -103,12 +118,14 @@ use crate::{
             MicaController, MicaKind, SystemBackdropConfiguration, SystemBackdropTheme,
         },
     },
+    miniengine::MiniEngine,
     uikit::{UICommonObjects, ViewContext1},
     winapi_extras::{register_window_class, VectorScalarConstructor, WindowBuilder},
 };
 
 mod bindgen;
 mod features;
+mod miniengine;
 mod object_cache;
 mod uikit;
 mod utils;
@@ -2703,16 +2720,49 @@ impl AppGlobalSignals {
 pub struct StageTabContentRenderer {
     presentation_manager: IPresentationManager,
     presentation_surface: IPresentationSurface,
-    back_buffers: Vec<(ID3D11Texture2D, IPresentationBuffer, ID3D11RenderTargetView)>,
+    graphics_queue: Rc<RefCell<br::QueueObject<StdVkDevice>>>,
     d3d11_device_context: ID3D11DeviceContext,
+    back_buffers: Vec<(
+        IPresentationBuffer,
+        br::CommandBufferObject<StdVkDevice>,
+        ID3D11Texture2D,
+        ID3D11Texture2D,
+        IDXGIKeyedMutex,
+    )>,
 }
 impl SignalEventReceiver for StageTabContentRenderer {
     fn on_signal(&self, arg: usize) {
-        let (_, pb, rtv) = &self.back_buffers[arg];
+        let (pb, cb, fin, rt, km) = &self.back_buffers[arg];
 
         unsafe {
-            self.d3d11_device_context
-                .ClearRenderTargetView(rtv, &[0.0, 1.0, 0.0, 1.0]);
+            km.AcquireSync(0, INFINITE)
+                .expect("Failed to acquire keyed mutex");
+        }
+        self.graphics_queue
+            .borrow_mut()
+            .submit(
+                &[br::EmptySubmissionBatch.with_command_buffers(&[cb])],
+                None::<&mut br::FenceObject<StdVkDevice>>,
+            )
+            .expect("Failed to send command");
+        self.graphics_queue
+            .borrow_mut()
+            .wait()
+            .expect("Failed to wait work");
+        unsafe {
+            km.ReleaseSync(1).expect("Failed to release keyed mutex");
+        }
+
+        unsafe {
+            km.AcquireSync(1, INFINITE)
+                .expect("Failed to acquire keyed mutex");
+        }
+        unsafe {
+            // Note: rtそのままでは表示できないらしい（Composition SwapchainでKeyedMutexいじれたらワンチャンありそうな気がする）
+            self.d3d11_device_context.CopyResource(fin, rt);
+        }
+        unsafe {
+            km.ReleaseSync(0).expect("Failed to release keyed mutex");
         }
 
         unsafe {
@@ -2730,11 +2780,19 @@ impl SignalEventReceiver for StageTabContentRenderer {
 
 pub struct StageTabPresenter {
     root: SpriteVisual,
-    back_buffers: Vec<(
-        ID3D11Texture2D,
-        IPresentationBuffer,
+    main_render_pass: br::RenderPassObject<StdVkDevice>,
+    main_render_command_pool: br::CommandPoolObject<StdVkDevice>,
+    _grid_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    _grid_pipeline: br::PipelineObject<StdVkDevice>,
+    _grid_buffer: peridot_memory_manager::Buffer,
+    camera_buffer: peridot_memory_manager::Buffer,
+    _descriptor_set_layout_ub1: br::DescriptorSetLayoutObject<StdVkDevice>,
+    _descriptor_pool: br::DescriptorPoolObject<StdVkDevice>,
+    camera_descriptor_set: br::DescriptorSet,
+    back_buffer_resources: Vec<(
         HANDLE,
-        ID3D11RenderTargetView,
+        br::DeviceMemoryObject<StdVkDevice>,
+        br::FramebufferObject<'static, StdVkDevice>,
     )>,
     renderer: Rc<StageTabContentRenderer>,
 }
@@ -2746,7 +2804,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
         view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.Children()?.InsertAtTop(&self.root)?;
-        for (n, (_, _, e, _)) in self.back_buffers.iter().enumerate() {
+        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
             view_context
                 .app_global_signals()
                 .borrow_mut()
@@ -2760,7 +2818,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
         &mut self,
         view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
-        for (n, _) in self.back_buffers.iter().enumerate() {
+        for (n, _) in self.back_buffer_resources.iter().enumerate() {
             view_context
                 .app_global_signals()
                 .borrow_mut()
@@ -2831,78 +2889,504 @@ impl PaneTabPresenter for StageTabPresenter {
                 .expect("Failed to set color space");
         }
 
-        let back_buffers = (0..3)
-            .map(|_| {
-                let texture_desc = D3D11_TEXTURE2D_DESC {
-                    Width: 128,
-                    Height: 128,
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
+        let main_render_pass = br::RenderPassBuilder2::new(
+            &[
+                br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                    .layout_transition(br::ImageLayout::Undefined, br::ImageLayout::General)
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
+                br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
+                    .layout_transition(
+                        br::ImageLayout::Undefined,
+                        br::ImageLayout::DepthStencilAttachmentOpt,
+                    )
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare),
+            ],
+            &[br::SubpassDescription2::new()
+                .colors(&[br::AttachmentReference2::color(
+                    0,
+                    br::ImageLayout::ColorAttachmentOpt,
+                )])
+                .depth_stencil(&br::AttachmentReference2::depth_stencil(
+                    1,
+                    br::ImageLayout::DepthStencilAttachmentOpt,
+                ))],
+            &[br::SubpassDependency2::new(
+                br::SubpassIndex::Internal(0),
+                br::SubpassIndex::External,
+            )
+            .of_memory(
+                br::AccessFlags::COLOR_ATTACHMENT.write,
+                br::AccessFlags::MEMORY.read,
+            )],
+        )
+        .create(view_ctx.mini_engine().device().clone())
+        .expect("Failed to create main render pass");
+        let mut main_render_command_pool =
+            br::CommandPoolBuilder::new(view_ctx.mini_engine().graphics_queue_family_index())
+                .create(view_ctx.mini_engine().device().clone())
+                .expect("Failed to create command pool");
+        let main_render_commands = main_render_command_pool
+            .alloc(3, true)
+            .expect("Failed to allocate command buffers");
+
+        let shared_depth_stencil_buffer = view_ctx
+            .mini_engine_mut()
+            .alloc_device_local_image(br::ImageDesc::new(
+                br::vk::VkExtent2D::spread1(128),
+                br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+                br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                br::ImageLayout::Undefined,
+            ))
+            .expect("Failed to create shared depth stencil buffer");
+        let shared_depth_stencil_buffer = Rc::new(
+            shared_depth_stencil_buffer
+                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create shared depth stencil buffer view"),
+        );
+
+        let descriptor_set_layout_ub1 = br::DescriptorSetLayoutBuilder::new()
+            .bind(
+                br::DescriptorType::UniformBuffer
+                    .make_binding(1)
+                    .only_for_vertex(),
+            )
+            .create(view_ctx.mini_engine().device().clone())
+            .expect("Failed to create descriptor set layout");
+
+        let grid_vsh = view_ctx
+            .mini_engine_mut()
+            .shader("shaders/simple_transformed_static_pos.vspv")
+            .expect("Failed to load vertex shader");
+        let grid_fsh = view_ctx
+            .mini_engine_mut()
+            .shader("shaders/vertex_color.fspv")
+            .expect("Failed to load fragment shader");
+        let (grid_vbinds, grid_vattrs) = ColoredVertex::single_binding(0, 1);
+        let grid_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&descriptor_set_layout_ub1],
+            vec![(br::ShaderStage::VERTEX, 0..64)],
+        )
+        .create(view_ctx.mini_engine().device().clone())
+        .expect("Failed to create grid pipeline layout");
+        let mut grid_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &grid_pipeline_layout,
+            (&main_render_pass, 0),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(&grid_vsh, c"main".to_owned()))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(
+                        &grid_fsh,
+                        c"main".to_owned(),
+                    )),
+                &grid_vbinds,
+                &grid_vattrs,
+                br::vk::VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
+            ),
+        );
+        grid_pipeline
+            .multisample_state(Some(br::MultisampleState::new()))
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+            .viewport_scissors(
+                br::DynamicArrayState::Dynamic(1),
+                br::DynamicArrayState::Dynamic(1),
+            )
+            .depth_test_settings(Some(br::CompareOp::LessOrEqual), true);
+        let grid_pipeline = grid_pipeline
+            .create(
+                view_ctx.mini_engine().device().clone(),
+                Some(view_ctx.mini_engine().pipeline_cache()),
+            )
+            .expect("Failed to create grid pipeline state");
+        view_ctx.mini_engine().writeback_pipeline_cache();
+
+        let grid_vertices = (-10..=10)
+            .flat_map(|x| {
+                [
+                    ColoredVertex {
+                        pos: Vec4::new(x as _, 0.0, -10.0, 1.0),
+                        color: Vec4::new(0.5, 0.5, 0.5, 1.0),
                     },
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
-                    CPUAccessFlags: 0,
-                    MiscFlags: (D3D11_RESOURCE_MISC_SHARED
-                        | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
-                        | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
-                        .0 as _,
-                };
-                let mut texture = core::mem::MaybeUninit::uninit();
-                unsafe {
-                    view_ctx.d3d11_device().CreateTexture2D(
-                        &texture_desc,
-                        None,
-                        Some(texture.as_mut_ptr()),
-                    )?
-                };
-                let texture = unsafe { texture.assume_init().expect("texture not created") };
-                let presentation_buffer = unsafe {
-                    view_ctx
-                        .presentation_manager()
-                        .AddBufferFromResource(&texture)
-                        .expect("Failed to add texture as presentation buffer")
-                };
-                let eh = unsafe { presentation_buffer.GetAvailableEvent()? };
-
-                let mut rtv = core::mem::MaybeUninit::uninit();
-                unsafe {
-                    view_ctx.d3d11_device().CreateRenderTargetView(
-                        &texture.cast::<ID3D11Resource>()?,
-                        None,
-                        Some(rtv.as_mut_ptr()),
-                    )?
-                };
-                let rtv = unsafe {
-                    rtv.assume_init()
-                        .expect("Failed to create RenderTargetView")
-                };
-
-                windows::core::Result::Ok((texture, presentation_buffer, eh, rtv))
+                    ColoredVertex {
+                        pos: Vec4::new(x as _, 0.0, 10.0, 1.0),
+                        color: Vec4::new(0.5, 0.5, 0.5, 1.0),
+                    },
+                ]
             })
-            .collect::<windows::core::Result<Vec<_>>>()
-            .expect("Failed to create back buffers");
+            .chain((-10..=10).flat_map(|z| {
+                [
+                    ColoredVertex {
+                        pos: Vec4::new(-10.0, 0.0, z as _, 1.0),
+                        color: Vec4::new(0.5, 0.5, 0.5, 1.0),
+                    },
+                    ColoredVertex {
+                        pos: Vec4::new(10.0, 0.0, z as _, 1.0),
+                        color: Vec4::new(0.5, 0.5, 0.5, 1.0),
+                    },
+                ]
+            }))
+            .chain([
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(1000.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 1000.0, 0.0, 1.0),
+                    color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 1000.0, 1.0),
+                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ])
+            .collect::<Vec<_>>();
+        let mut default_camera = Camera {
+            projection: Some(ProjectionMethod::Perspective {
+                fov: 60.0f32.to_radians(),
+            }),
+            position: peridot_math::Vector3(0.0, 1.0, -5.0),
+            rotation: peridot_math::Quaternion::ONE,
+            depth_range: 0.1..100.0,
+        };
+        default_camera.look_at(peridot_math::Vector3::ZERO);
+
+        let [grid_buffer, camera_buffer] = view_ctx
+            .mini_engine_mut()
+            .alloc_device_local_buffer_array([
+                br::BufferDesc::new(
+                    core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
+                    br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
+                ),
+                br::BufferDesc::new(
+                    core::mem::size_of::<peridot_math::Matrix4F32>(),
+                    br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+                ),
+            ])
+            .expect("Failed to allocate device local buffers");
+        let [mut grid_buffer_stg, mut camera_buffer_stg] = view_ctx
+            .mini_engine_mut()
+            .alloc_upload_buffer_array([
+                br::BufferDesc::new(
+                    core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
+                    br::BufferUsage::TRANSFER_SRC,
+                ),
+                br::BufferDesc::new(
+                    core::mem::size_of::<peridot_math::Matrix4F32>(),
+                    br::BufferUsage::TRANSFER_SRC,
+                ),
+            ])
+            .expect("Failed to allocate upload buffers");
+        grid_buffer_stg
+            .clone_content_from_slice(&grid_vertices)
+            .expect("Failed to write grid vbuffer content");
+        camera_buffer_stg
+            .write_content(default_camera.view_projection_matrix(1.0))
+            .expect("Failed to write camera matrix");
+
+        // initialize
+        let mut cp =
+            br::CommandPoolBuilder::new(view_ctx.mini_engine().graphics_queue_family_index())
+                .transient()
+                .create(view_ctx.mini_engine().device())
+                .expect("Failed to create initialize command pool");
+        let mut init_cb = cp
+            .alloc(1, true)
+            .expect("Failed to allocate init command buffer");
+        unsafe {
+            init_cb[0]
+                .begin_once()
+                .expect("Failed to begin init commands")
+        }
+        .pipeline_barrier_2(&br::DependencyInfo::new(
+            &[br::MemoryBarrier2::new()
+                .of_memory(
+                    br::AccessFlags2::HOST.write,
+                    br::AccessFlags2::TRANSFER.read,
+                )
+                .of_execution(br::PipelineStageFlags2::HOST, br::PipelineStageFlags2::COPY)],
+            &[],
+            &[],
+        ))
+        .copy_buffer(
+            &grid_buffer_stg,
+            &grid_buffer,
+            &[br::vk::VkBufferCopy {
+                srcOffset: 0,
+                dstOffset: 0,
+                size: grid_buffer.byte_length() as _,
+            }],
+        )
+        .copy_buffer(
+            &camera_buffer_stg,
+            &camera_buffer,
+            &[br::vk::VkBufferCopy {
+                srcOffset: 0,
+                dstOffset: 0,
+                size: camera_buffer_stg.byte_length() as _,
+            }],
+        )
+        .pipeline_barrier_2(&br::DependencyInfo::new(
+            &[br::MemoryBarrier2::new()
+                .of_memory(
+                    br::AccessFlags2::TRANSFER.write,
+                    br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::UNIFORM_READ,
+                )
+                .of_execution(
+                    br::PipelineStageFlags2::COPY,
+                    br::PipelineStageFlags2::VERTEX_INPUT | br::PipelineStageFlags2::VERTEX_SHADER,
+                )],
+            &[],
+            &[],
+        ))
+        .end()
+        .expect("Failed to finish init commands");
+        view_ctx
+            .mini_engine()
+            .graphics_queue()
+            .borrow_mut()
+            .submit2(
+                &[br::SubmitInfo2::new(
+                    &[],
+                    &[br::CommandBufferSubmitInfo::new(&init_cb[0])],
+                    &[],
+                )],
+                None::<&mut br::FenceObject<StdVkDevice>>,
+            )
+            .expect("Failed to submit init commands");
+        view_ctx
+            .mini_engine()
+            .graphics_queue()
+            .borrow_mut()
+            .wait()
+            .expect("Failed to wait init commands");
+
+        let mut dp = br::DescriptorPoolBuilder::new(1)
+            .reserve(br::DescriptorType::UniformBuffer.with_count(1))
+            .create(view_ctx.mini_engine().device().clone())
+            .expect("Failed to create descriptor pool");
+        let camera_descriptor_set = dp
+            .alloc(&[&descriptor_set_layout_ub1])
+            .expect("Failed to allocate camera descriptor set");
+        view_ctx.mini_engine().device().update_descriptor_sets(
+            &[
+                br::DescriptorPointer::new(camera_descriptor_set[0].0, 0).write(
+                    br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
+                        &camera_buffer,
+                        0..core::mem::size_of::<Mat4>() as u64,
+                    )]),
+                ),
+            ],
+            &[],
+        );
+
+        let mut back_buffer_resources = Vec::with_capacity(3);
+        let mut back_buffer_render_resources = Vec::with_capacity(3);
+        for (n, mut cb) in (0..3).zip(main_render_commands.into_iter()) {
+            let texture_desc = D3D11_TEXTURE2D_DESC {
+                Width: 128,
+                Height: 128,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
+                CPUAccessFlags: 0,
+                MiscFlags: (D3D11_RESOURCE_MISC_SHARED
+                    | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
+                    | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
+                    .0 as _,
+            };
+            let mut texture = core::mem::MaybeUninit::uninit();
+            unsafe {
+                view_ctx
+                    .d3d11_device()
+                    .CreateTexture2D(&texture_desc, None, Some(texture.as_mut_ptr()))
+                    .expect("Failed to create back buffer texture")
+            };
+            let texture = unsafe { texture.assume_init().expect("texture not created") };
+            let presentation_buffer = unsafe {
+                view_ctx
+                    .presentation_manager()
+                    .AddBufferFromResource(&texture)
+                    .expect("Failed to add texture as presentation buffer")
+            };
+            let eh = unsafe {
+                presentation_buffer
+                    .GetAvailableEvent()
+                    .expect("Failed to get available event handle")
+            };
+
+            let rt_desc = D3D11_TEXTURE2D_DESC {
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as _,
+                MiscFlags: (D3D11_RESOURCE_MISC_SHARED_NTHANDLE
+                    | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                    .0 as _,
+                ..texture_desc
+            };
+            let mut rt = core::mem::MaybeUninit::uninit();
+            unsafe {
+                view_ctx
+                    .d3d11_device()
+                    .CreateTexture2D(&rt_desc, None, Some(rt.as_mut_ptr()))
+                    .expect("Failed to create render target texture");
+            }
+            let rt = unsafe { rt.assume_init().expect("rt not created") };
+
+            let share_name = widestring::WideCString::from_str(&format!("PMEStageBackbuffer{n}"))
+                .expect("invalid sequence");
+
+            let texture_res = rt
+                .cast::<IDXGIResource1>()
+                .expect("Failed to query underlying resource");
+            let tex_handle = unsafe {
+                texture_res
+                    .CreateSharedHandle(
+                        None,
+                        GENERIC_ALL.0 | DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                        PCWSTR(share_name.as_ptr()),
+                    )
+                    .expect("Failed to get shared handle")
+            };
+            let external_handle = br::ExternalMemoryHandleTypeWin32::D3D11Texture
+                .with_handle(unsafe { core::mem::transmute(tex_handle.0) });
+            let external_handle_image_memory_req = unsafe {
+                external_handle
+                    .properties(
+                        &view_ctx.mini_engine().graphics_objects.device,
+                        br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
+                    )
+                    .expect("Failed to query external handle memory properties")
+            };
+            let mut vk_image = br::ImageDesc::new(
+                br::vk::VkExtent2D::spread1(128),
+                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+                br::ImageUsageFlags::COLOR_ATTACHMENT,
+                br::ImageLayout::Undefined,
+            )
+            .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
+            .create(view_ctx.mini_engine().graphics_objects.device.clone())
+            .expect("Failed to create external backbuffer image");
+            let vk_image_memory_req = vk_image.requirements();
+            let vk_memory_index = view_ctx
+                .mini_engine()
+                .find_device_local_memory_index(
+                    vk_image_memory_req.memoryTypeBits
+                        & external_handle_image_memory_req.memoryTypeBits,
+                )
+                .expect("no suitable memory");
+            let vk_image_memory =
+                br::DeviceMemoryRequest::import(vk_memory_index, external_handle, &share_name)
+                    .execute(view_ctx.mini_engine().graphics_objects.device.clone())
+                    .expect("Failed to import d3d11 memory");
+            vk_image
+                .bind(&vk_image_memory, 0)
+                .expect("Failed to bind image to memory");
+            let vk_image = Rc::new(vk_image);
+
+            let vk_framebuffer = br::FramebufferBuilder::new(&main_render_pass)
+                .with_attachment(
+                    vk_image
+                        .clone()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .view_builder()
+                        .create()
+                        .expect("Failed to create image view"),
+                )
+                .with_attachment(shared_depth_stencil_buffer.clone())
+                .create()
+                .expect("Failed to create framebuffer");
+
+            unsafe { cb.begin().expect("Failed to begin command recording") }
+                .begin_render_pass(
+                    &main_render_pass,
+                    &vk_framebuffer,
+                    br::vk::VkRect2D {
+                        offset: br::vk::VkOffset2D::ZERO,
+                        extent: br::vk::VkExtent2D {
+                            width: 128,
+                            height: 128,
+                        },
+                    },
+                    &[
+                        br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                        br::ClearValue::depth_stencil(1.0, 0),
+                    ],
+                    true,
+                )
+                .bind_graphics_pipeline_pair(&grid_pipeline, &grid_pipeline_layout)
+                .set_viewport(
+                    0,
+                    &[br::vk::VkViewport {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 128.0,
+                        height: 128.0,
+                        minDepth: 0.0,
+                        maxDepth: 1.0,
+                    }],
+                )
+                .set_scissor(
+                    0,
+                    &[br::vk::VkRect2D {
+                        offset: br::vk::VkOffset2D::ZERO,
+                        extent: br::vk::VkExtent2D::spread1(128),
+                    }],
+                )
+                .bind_graphics_descriptor_sets(0, &[camera_descriptor_set[0].0], &[])
+                .bind_vertex_buffers(0, &[(&grid_buffer, 0)])
+                .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
+                .draw(grid_vertices.len() as _, 1, 0, 0)
+                .end_render_pass()
+                .end()
+                .expect("Failed to record commands");
+
+            let rt_mutex = rt
+                .cast::<IDXGIKeyedMutex>()
+                .expect("Failed to get keyed mutex");
+            back_buffer_render_resources.push((presentation_buffer, cb, texture, rt, rt_mutex));
+            back_buffer_resources.push((eh, vk_image_memory, vk_framebuffer));
+        }
 
         Self {
             root,
+            main_render_pass,
+            main_render_command_pool,
+            _grid_pipeline_layout: grid_pipeline_layout,
+            _grid_pipeline: grid_pipeline,
+            _grid_buffer: grid_buffer,
+            camera_buffer,
+            _descriptor_set_layout_ub1: descriptor_set_layout_ub1,
+            _descriptor_pool: dp,
+            camera_descriptor_set: camera_descriptor_set[0],
             renderer: Rc::new(StageTabContentRenderer {
-                back_buffers: back_buffers
-                    .iter()
-                    .map(|(r, b, _, rtv)| (r.clone(), b.clone(), rtv.clone()))
-                    .collect(),
+                back_buffers: back_buffer_render_resources,
                 presentation_manager: view_ctx.presentation_manager().clone(),
                 presentation_surface,
+                graphics_queue: view_ctx.mini_engine().graphics_queue().clone(),
                 d3d11_device_context: unsafe {
                     view_ctx
                         .d3d11_device()
                         .GetImmediateContext()
-                        .expect("Failed to get imm context")
+                        .expect("Failed to get d3d imm context")
                 },
             }),
-            back_buffers,
+            back_buffer_resources,
         }
     }
 }
@@ -3056,6 +3540,8 @@ impl LabelView {
     }
 }
 
+type StdVkDevice = Rc<br::DeviceObject<Rc<br::InstanceObject>>>;
+
 struct AppWindowState<'r> {
     input_state: InputState,
     compositor: Compositor,
@@ -3072,6 +3558,7 @@ struct AppWindowState<'r> {
     d3d11_device: ID3D11Device,
     app_global_signals: SharedMut<AppGlobalSignals>,
     currently_maximized: bool,
+    mini_engine: MiniEngine,
 }
 impl ViewContext for AppWindowState<'_> {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
@@ -3116,6 +3603,14 @@ impl ViewContext for AppWindowState<'_> {
 
     fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
         &self.app_global_signals
+    }
+
+    fn mini_engine(&self) -> &MiniEngine {
+        &self.mini_engine
+    }
+
+    fn mini_engine_mut(&mut self) -> &mut MiniEngine {
+        &mut self.mini_engine
     }
 }
 impl InputContext for AppWindowState<'_> {
@@ -3401,6 +3896,8 @@ fn app() -> i32 {
     };
     let mut text_format_stock = TextFormatStock::new(&dwrite_factory);
 
+    let mut miniengine = MiniEngine::new().expect("Failed to initialize mini engine");
+
     let compositor = Compositor::new().expect("Failed to create ui compositor");
     let desktop_interop = compositor
         .cast::<ICompositorDesktopInterop>()
@@ -3677,6 +4174,7 @@ fn app() -> i32 {
         presentation_manager: &presentation_manager,
         d3d11_device: &d3d11_device,
         app_global_signals: &app_global_signals,
+        mini_engine: &mut miniengine,
     };
 
     let pane_group_docking_manager = new_shared_mut(
@@ -3823,6 +4321,7 @@ fn app() -> i32 {
         currently_maximized: window_handle
             .is_maximized()
             .expect("Failed to query maximized state"),
+        mini_engine: miniengine,
     };
     window_handle.set_state_store(&mut ws);
     window_handle.show();

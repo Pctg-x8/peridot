@@ -183,19 +183,13 @@ impl BufferContent {
         }
     }
 
-    fn alignment(&self, pd: &impl br::PhysicalDevice) -> u64 {
+    fn alignment(&self, min_alignments: &MinOffsetAlignments) -> u64 {
         use self::BufferContent::*;
 
         match *self {
             Vertex(_, a) | Index(_, a) | Raw(_, a) => a,
-            Uniform(_, a) | UniformTexel(_, a) => u64::lcm(
-                &pd.properties().limits.minUniformBufferOffsetAlignment as _,
-                &a,
-            ),
-            Storage(_, a) | StorageTexel(_, a) => u64::lcm(
-                &pd.properties().limits.minStorageBufferOffsetAlignment as _,
-                &a,
-            ),
+            Uniform(_, a) | UniformTexel(_, a) => u64::lcm(&min_alignments.uniform_buffer as _, &a),
+            Storage(_, a) | StorageTexel(_, a) => u64::lcm(&min_alignments.storage_buffer as _, &a),
         }
     }
 
@@ -315,18 +309,32 @@ impl BufferContent {
         )
     }
 }
+
 #[derive(Clone)]
-pub struct BufferPrealloc<'g> {
-    g: &'g crate::Graphics,
+struct MinOffsetAlignments {
+    uniform_buffer: br::vk::VkDeviceSize,
+    storage_buffer: br::vk::VkDeviceSize,
+}
+
+#[derive(Clone)]
+pub struct BufferPrealloc<'g, Device: br::Device> {
+    device: &'g Device,
+    min_offset_alignments: MinOffsetAlignments,
     usage: br::BufferUsage,
     offsets: Vec<u64>,
     total: u64,
     common_align: u64,
 }
-impl<'g> BufferPrealloc<'g> {
-    pub const fn new(g: &'g crate::Graphics) -> Self {
+impl<'g, Device: br::Device + Clone> BufferPrealloc<'g, Device> {
+    pub fn new(device: &'g Device, adapter: &(impl br::PhysicalDevice + ?Sized)) -> Self {
+        let adapter_limits = adapter.properties().limits;
+
         Self {
-            g,
+            device,
+            min_offset_alignments: MinOffsetAlignments {
+                uniform_buffer: adapter_limits.minUniformBufferOffsetAlignment,
+                storage_buffer: adapter_limits.minStorageBufferOffsetAlignment,
+            },
             usage: br::BufferUsage(0),
             offsets: Vec::new(),
             total: 0,
@@ -343,30 +351,28 @@ impl<'g> BufferPrealloc<'g> {
         br::BufferDesc::new(self.total as _, usage)
     }
 
-    pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage).create(self.g.device.clone())
+    pub fn build(&self) -> br::Result<br::BufferObject<Device>> {
+        br::BufferDesc::new(self.total as _, self.usage).create(self.device.clone())
     }
 
-    pub fn build_transferred(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_dest())
-            .create(self.g.device.clone())
+    pub fn build_transferred(&self) -> br::Result<br::BufferObject<Device>> {
+        br::BufferDesc::new(self.total as _, self.usage.transfer_dest()).create(self.device.clone())
     }
 
-    pub fn build_upload(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_src())
-            .create(self.g.device.clone())
+    pub fn build_upload(&self) -> br::Result<br::BufferObject<Device>> {
+        br::BufferDesc::new(self.total as _, self.usage.transfer_src()).create(self.device.clone())
     }
 
     pub fn build_custom_usage(
         &self,
         usage: br::BufferUsage,
-    ) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage | usage).create(self.g.device.clone())
+    ) -> br::Result<br::BufferObject<Device>> {
+        br::BufferDesc::new(self.total as _, self.usage | usage).create(self.device.clone())
     }
 
     pub fn add(&mut self, content: BufferContent) -> u64 {
         self.usage = content.usage(self.usage);
-        let content_align = content.alignment(&self.g.adapter);
+        let content_align = content.alignment(&self.min_offset_alignments);
         self.common_align = self.common_align.lcm(&content_align);
         let offs = super::align2!(self.total, content_align);
         self.total = offs + content.size() as u64;

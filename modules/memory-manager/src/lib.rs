@@ -158,6 +158,57 @@ struct OptimalBufferLinearImagePlacementInfo {
     pub row_pitch_alignment: u64,
 }
 
+pub trait AdapterPropertiesProvider {
+    fn available_features(&self) -> &br::vk::VkPhysicalDeviceFeatures;
+    fn limits(&self) -> &br::vk::VkPhysicalDeviceLimits;
+    fn memory_properties(&self) -> &br::MemoryProperties;
+}
+impl AdapterPropertiesProvider for peridot::Graphics {
+    #[inline]
+    fn available_features(&self) -> &br::vk::VkPhysicalDeviceFeatures {
+        self.adapter_available_features()
+    }
+
+    #[inline]
+    fn limits(&self) -> &br::vk::VkPhysicalDeviceLimits {
+        self.adapter_limits()
+    }
+
+    #[inline]
+    fn memory_properties(&self) -> &br::MemoryProperties {
+        self.adapter_memory_properties()
+    }
+}
+
+pub trait MemoryAllocationSource {
+    fn device(&self) -> &peridot::DeviceObject;
+    fn adapter(&self) -> &(impl br::PhysicalDevice + ?Sized);
+    fn can_request_extended_memory_requirements(&self) -> bool;
+    fn dedicated_allocation_available(&self) -> bool;
+    fn extended_memory_binding_available(&self) -> bool;
+}
+impl MemoryAllocationSource for peridot::Graphics {
+    fn device(&self) -> &peridot::DeviceObject {
+        peridot::Graphics::device(self)
+    }
+
+    fn adapter(&self) -> &(impl br::PhysicalDevice + ?Sized) {
+        peridot::Graphics::adapter(self)
+    }
+
+    fn can_request_extended_memory_requirements(&self) -> bool {
+        peridot::Graphics::can_request_extended_memory_requirements(self)
+    }
+
+    fn dedicated_allocation_available(&self) -> bool {
+        peridot::Graphics::dedicated_allocation_available(self)
+    }
+
+    fn extended_memory_binding_available(&self) -> bool {
+        peridot::Graphics::extended_memory_binding_available(self)
+    }
+}
+
 pub struct MemoryManager {
     /// Device Local only
     device_local_memory_types: Vec<MemoryType>,
@@ -177,10 +228,10 @@ impl MemoryManager {
     const SMALL_ALLOCATION_THRESHOLD: u64 = 1024 * 1024;
     const NEW_MANAGED_ALLOCATION_SIZE: u64 = 4 * Self::SMALL_ALLOCATION_THRESHOLD;
 
-    pub fn new(e: &peridot::Graphics) -> Self {
-        let features = e.adapter_available_features();
-        let limits = e.adapter_limits();
-        let memory_properties = e.adapter_memory_properties();
+    pub fn new(adapter_props: &(impl AdapterPropertiesProvider + ?Sized)) -> Self {
+        let features = adapter_props.available_features();
+        let limits = adapter_props.limits();
+        let memory_properties = adapter_props.memory_properties();
 
         let heap_stats = memory_properties
             .heaps()
@@ -363,15 +414,15 @@ impl MemoryManager {
 
     pub fn allocate_device_local_buffer(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = desc.create(alloc_src.device().clone())?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if alloc_src.can_request_extended_memory_requirements() {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -388,15 +439,16 @@ impl MemoryManager {
             .expect("no memory type index")
             .index;
 
-        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
-            if e.dedicated_allocation_available() {
-                tracing::info!("using dedicated allocation");
+        let (memory, offset) =
+            self.allocate_internal(alloc_src.device(), &req, memory_index, |r| {
+                if alloc_src.dedicated_allocation_available() {
+                    tracing::info!("using dedicated allocation");
 
-                unsafe { r.for_dedicated_buffer_allocation(&o) }
-            } else {
-                r
-            }
-        })?;
+                    unsafe { r.for_dedicated_buffer_allocation(&o) }
+                } else {
+                    r
+                }
+            })?;
         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
         // この前提が崩れることがあったら考え直す)
         let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
@@ -418,7 +470,7 @@ impl MemoryManager {
 
     pub fn allocate_multiple_device_local_buffers<'r>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
     ) -> br::Result<Vec<Buffer>> {
         let descs = descs.into_iter();
@@ -430,11 +482,11 @@ impl MemoryManager {
         );
         for d in descs {
             exact_sizes.push(d.size());
-            let object = d.create(e.device().clone())?;
+            let object = d.create(alloc_src.device().clone())?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if alloc_src.can_request_extended_memory_requirements() {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -468,7 +520,7 @@ impl MemoryManager {
 
             Some(make_shared_mutable_ref(
                 br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
-                    .execute(e.device().clone())?,
+                    .execute(alloc_src.device().clone())?,
             ))
         } else {
             None
@@ -497,10 +549,10 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if alloc_src.dedicated_allocation_available() {
                         memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
                     }
-                    let memory = memory_req.execute(e.device().clone())?;
+                    let memory = memory_req.execute(alloc_src.device().clone())?;
 
                     binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
                         sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
@@ -540,7 +592,7 @@ impl MemoryManager {
                     } else {
                         // normal small allocation
                         let (memory, offset) =
-                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                            self.allocate_internal(alloc_src.device(), &req, memory_index, |_| {
                                 unreachable!("no dedicated allocation must occurs!")
                             })?;
                         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -571,28 +623,29 @@ impl MemoryManager {
             }
         }
 
-        bind_buffers(e, &binding_info)?;
+        bind_buffers(alloc_src, &binding_info)?;
         Ok(bound_objects)
     }
 
     pub fn allocate_device_local_buffer_array<const N: usize>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         descs: [br::BufferDesc; N],
     ) -> br::Result<[Buffer; N]> {
-        self.allocate_multiple_device_local_buffers(e, descs)
+        self.allocate_multiple_device_local_buffers(alloc_src, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
     }
 
     pub fn allocate_device_local_buffer_with_contents(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         contents: impl IntoIterator<Item = peridot::BufferContent>,
         add_usage: br::BufferUsage,
     ) -> br::Result<(Buffer, Vec<u64>)> {
-        let mut bp = peridot::BufferPrealloc::new(e);
+        let mut bp = peridot::BufferPrealloc::new(alloc_src.device(), alloc_src.adapter());
         let offsets = contents.into_iter().map(|c| bp.add(c)).collect::<Vec<_>>();
-        let obj = self.allocate_device_local_buffer(e, bp.build_desc().and_usage(add_usage))?;
+        let obj =
+            self.allocate_device_local_buffer(alloc_src, bp.build_desc().and_usage(add_usage))?;
 
         Ok((obj, offsets))
     }
@@ -631,15 +684,15 @@ impl MemoryManager {
 
     pub fn allocate_upload_buffer(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         desc: br::BufferDesc,
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = desc.create(alloc_src.device().clone())?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if alloc_src.can_request_extended_memory_requirements() {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -657,8 +710,8 @@ impl MemoryManager {
         let requires_flushing = !memory_type.is_coherent;
 
         let (memory, offset) =
-            self.allocate_internal(e.device(), &req, memory_type.index, |r| {
-                if e.dedicated_allocation_available() {
+            self.allocate_internal(alloc_src.device(), &req, memory_type.index, |r| {
+                if alloc_src.dedicated_allocation_available() {
                     tracing::info!("using dedicated allocation");
 
                     unsafe { r.for_dedicated_buffer_allocation(&o) }
@@ -687,7 +740,7 @@ impl MemoryManager {
 
     pub fn allocate_multiple_upload_buffers<'r>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
     ) -> br::Result<Vec<Buffer>> {
         let descs = descs.into_iter();
@@ -699,11 +752,11 @@ impl MemoryManager {
         );
         for d in descs {
             exact_sizes.push(d.size());
-            let object = d.create(e.device().clone())?;
+            let object = d.create(alloc_src.device().clone())?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if alloc_src.can_request_extended_memory_requirements() {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -739,7 +792,7 @@ impl MemoryManager {
 
             Some(make_shared_mutable_ref(
                 br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
-                    .execute(e.device().clone())?,
+                    .execute(alloc_src.device().clone())?,
             ))
         } else {
             None
@@ -768,10 +821,10 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_type.index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if alloc_src.dedicated_allocation_available() {
                         memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
                     }
-                    let memory = memory_req.execute(e.device().clone())?;
+                    let memory = memory_req.execute(alloc_src.device().clone())?;
 
                     binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
                         sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
@@ -811,7 +864,7 @@ impl MemoryManager {
                     } else {
                         // normal small allocation
                         let (memory, offset) =
-                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                            self.allocate_internal(alloc_src.device(), &req, memory_index, |_| {
                                 unreachable!("no dedicated allocation must occurs!")
                             })?;
                         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -842,35 +895,35 @@ impl MemoryManager {
             }
         }
 
-        bind_buffers(e, &binding_info)?;
+        bind_buffers(alloc_src, &binding_info)?;
         Ok(bound_objects)
     }
 
     pub fn allocate_upload_buffer_array<const N: usize>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         descs: [br::BufferDesc; N],
     ) -> br::Result<[Buffer; N]> {
-        self.allocate_multiple_upload_buffers(e, descs)
+        self.allocate_multiple_upload_buffers(alloc_src, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
     }
 
     pub fn allocate_upload_buffer_with_contents(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         contents: impl IntoIterator<Item = peridot::BufferContent>,
         usage: br::BufferUsage,
     ) -> br::Result<(Buffer, Vec<u64>)> {
-        let mut bp = peridot::BufferPrealloc::new(e);
+        let mut bp = peridot::BufferPrealloc::new(alloc_src.device(), alloc_src.adapter());
         let offsets = contents.into_iter().map(|c| bp.add(c)).collect::<Vec<_>>();
-        let obj = self.allocate_upload_buffer(e, bp.build_desc_custom_usage(usage))?;
+        let obj = self.allocate_upload_buffer(alloc_src, bp.build_desc_custom_usage(usage))?;
 
         Ok((obj, offsets))
     }
 
     pub fn allocate_upload_linear_image_buffer(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         width: u32,
         height: u32,
         format: peridot::PixelFormat,
@@ -879,7 +932,7 @@ impl MemoryManager {
         let (byte_length, _alignment, row_texels) =
             self.compute_optimal_linear_image_buffer_layout(width, height, format);
         let object =
-            self.allocate_upload_buffer(e, br::BufferDesc::new(byte_length as _, usage))?;
+            self.allocate_upload_buffer(alloc_src, br::BufferDesc::new(byte_length as _, usage))?;
 
         Ok(LinearImageBuffer {
             inner: object,
@@ -912,14 +965,14 @@ impl MemoryManager {
 
     pub fn allocate_device_local_image(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         desc: br::ImageDesc,
     ) -> br::Result<Image> {
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = desc.create(alloc_src.device().clone())?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if alloc_src.can_request_extended_memory_requirements() {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -938,15 +991,16 @@ impl MemoryManager {
             .expect("no memory type index")
             .index;
 
-        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
-            if e.dedicated_allocation_available() {
-                tracing::info!("using dedicated allocation");
+        let (memory, offset) =
+            self.allocate_internal(alloc_src.device(), &req, memory_index, |r| {
+                if alloc_src.dedicated_allocation_available() {
+                    tracing::info!("using dedicated allocation");
 
-                unsafe { r.for_dedicated_image_allocation(&o) }
-            } else {
-                r
-            }
-        })?;
+                    unsafe { r.for_dedicated_image_allocation(&o) }
+                } else {
+                    r
+                }
+            })?;
         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
         // この前提が崩れることがあったら考え直す)
         let aligned_offset = align2_u64(offset, req.memoryRequirements.alignment);
@@ -1025,7 +1079,7 @@ impl MemoryManager {
             Vec::with_capacity(objects.len()),
             Vec::with_capacity(objects.len()),
         );
-        for ((mut object, mode), (req, _)) in objects
+        for ((object, mode), (req, _)) in objects
             .into_iter()
             .zip(alloc_info.allocation_modes.into_iter())
             .zip(requirements.into_iter())
@@ -1174,7 +1228,7 @@ impl ObjectAllocationInfo {
 }
 
 fn bind_buffers(
-    e: &peridot::Graphics,
+    e: &(impl MemoryAllocationSource + ?Sized),
     binds: &[br::vk::VkBindBufferMemoryInfoKHR],
 ) -> br::Result<()> {
     if e.extended_memory_binding_available() {

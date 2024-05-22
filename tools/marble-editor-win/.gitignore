@@ -1,2 +1,5 @@
 *.winmd
 src/bindgen.rs
+/temp
+**/*.vspv
+**/*.fspv

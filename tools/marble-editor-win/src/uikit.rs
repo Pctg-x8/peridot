@@ -16,6 +16,7 @@ use windows::{
 };
 
 use crate::{
+    miniengine::MiniEngine,
     object_cache::{TextFormatStock, TextSurfaceStock},
     AppGlobalSignals, SharedMut,
 };
@@ -46,6 +47,8 @@ pub trait ViewContext {
     fn presentation_manager(&self) -> &IPresentationManager;
     fn d3d11_device(&self) -> &ID3D11Device;
     fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals>;
+    fn mini_engine(&self) -> &MiniEngine;
+    fn mini_engine_mut(&mut self) -> &mut MiniEngine;
 }
 pub trait InputContext: ViewContext {
     fn capture_mouse(&mut self);
@@ -96,6 +99,14 @@ impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
     fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
         T::app_global_signals(*self)
     }
+
+    fn mini_engine(&self) -> &MiniEngine {
+        T::mini_engine(*self)
+    }
+
+    fn mini_engine_mut(&mut self) -> &mut MiniEngine {
+        T::mini_engine_mut(*self)
+    }
 }
 impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
     fn capture_mouse(&mut self) {
@@ -119,6 +130,7 @@ pub struct ViewContext1<'r> {
     pub presentation_manager: &'r IPresentationManager,
     pub d3d11_device: &'r ID3D11Device,
     pub app_global_signals: &'r SharedMut<AppGlobalSignals>,
+    pub mini_engine: &'r mut MiniEngine,
 }
 impl ViewContext for ViewContext1<'_> {
     fn compositor(&self) -> &windows::UI::Composition::Compositor {
@@ -163,6 +175,14 @@ impl ViewContext for ViewContext1<'_> {
 
     fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
         self.app_global_signals
+    }
+
+    fn mini_engine(&self) -> &MiniEngine {
+        self.mini_engine
+    }
+
+    fn mini_engine_mut(&mut self) -> &mut MiniEngine {
+        self.mini_engine
     }
 }
 

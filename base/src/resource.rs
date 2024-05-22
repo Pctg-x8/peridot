@@ -58,12 +58,12 @@ impl From<br::vk::VkFormat> for PixelFormat {
 }
 
 pub struct Texture2D<Image: br::Image>(br::ImageViewObject<Image>);
-impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
+impl<Device: br::Device + Clone> Texture2D<br::ImageObject<Device>> {
     pub fn init(
         g: Device,
         size: math::Vector2<u32>,
         format: PixelFormat,
-        prealloc: &mut BufferPrealloc,
+        prealloc: &mut BufferPrealloc<Device>,
     ) -> br::Result<(br::ImageObject<Device>, u64)> {
         let idesc = br::ImageDesc::new(
             size.clone(),
@@ -161,7 +161,7 @@ impl<Device: br::Device> TextureInitializationGroup<Device> {
 
     pub fn prealloc(
         self,
-        prealloc: &mut BufferPrealloc,
+        prealloc: &mut BufferPrealloc<Device>,
     ) -> br::Result<TexturePreallocatedGroup<br::ImageObject<Device>>>
     where
         Device: Clone,
@@ -660,8 +660,8 @@ impl
     /// Initialize a FixedMemory using preallocation structures
     pub fn new<'g, I: FixedBufferInitializer + ?Sized>(
         g: &'g Graphics,
-        mut prealloc: BufferPrealloc<'g>,
-        prealloc_mut: BufferPrealloc<'g>,
+        mut prealloc: BufferPrealloc<'g, DeviceObject>,
+        prealloc_mut: BufferPrealloc<'g, DeviceObject>,
         textures: TextureInitializationGroup<DeviceObject>,
         initializer: &mut I,
         tfb: &mut TransferBatch,

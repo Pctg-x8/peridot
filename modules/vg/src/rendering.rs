@@ -67,7 +67,10 @@ impl ModelData for Context {
     type PreallocOffsetType = ContextPreallocOffsets;
     type RendererParams = RendererParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> ContextPreallocOffsets {
+    fn prealloc<Device: br::Device + Clone>(
+        &self,
+        alloc: &mut BufferPrealloc<Device>,
+    ) -> ContextPreallocOffsets {
         let (
             mut interior_positions_count,
             mut interior_indices_count,

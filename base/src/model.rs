@@ -8,7 +8,10 @@ pub trait ModelData {
     type PreallocOffsetType;
     type RendererParams;
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
+    fn prealloc<Device: br::Device + Clone>(
+        &self,
+        alloc: &mut BufferPrealloc<Device>,
+    ) -> Self::PreallocOffsetType;
     fn stage_data_into(
         &self,
         mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
@@ -35,7 +38,7 @@ impl<VT: Clone> ModelData for Primitive<VT> {
     type PreallocOffsetType = u64;
     type RendererParams = ();
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> u64 {
+    fn prealloc<Device: br::Device + Clone>(&self, alloc: &mut BufferPrealloc<Device>) -> u64 {
         alloc.add(BufferContent::vertices::<VT>(self.vertices.len()))
     }
     fn stage_data_into(
@@ -58,7 +61,10 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
     type PreallocOffsetType = (u64, u64);
     type RendererParams = ();
 
-    fn prealloc(&self, alloc: &mut BufferPrealloc) -> (u64, u64) {
+    fn prealloc<Device: br::Device + Clone>(
+        &self,
+        alloc: &mut BufferPrealloc<Device>,
+    ) -> (u64, u64) {
         let v = alloc.add(BufferContent::vertices::<VT>(self.vertices.len()));
         let i = alloc.add(BufferContent::indices::<u16>(self.indices.len()));
 

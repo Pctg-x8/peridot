@@ -5,7 +5,7 @@ use bedrock as br;
 use br::VkObject;
 use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
 
-use crate::{mthelper::SharedRef, DeviceObject};
+use crate::{mthelper::SharedRef, update_inplace, DeviceObject};
 
 pub trait PlatformPresenter {
     type BackBuffer: br::ImageView
@@ -246,14 +246,18 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             })
             .collect::<Vec<_>>();
 
-        let _ = recorder.pipeline_barrier(
-            br::PipelineStageFlags::BOTTOM_OF_PIPE,
-            br::PipelineStageFlags::BOTTOM_OF_PIPE,
-            false,
-            &[],
-            &[],
-            &image_barriers,
-        );
+        unsafe {
+            update_inplace(recorder, |x| {
+                x.pipeline_barrier(
+                    br::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    br::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    false,
+                    &[],
+                    &[],
+                    &image_barriers,
+                )
+            });
+        }
     }
 
     #[inline]

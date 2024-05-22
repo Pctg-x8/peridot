@@ -572,6 +572,8 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self,
         rec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
     ) {
-        let _ = rec.bind_graphics_pipeline_pair(&self.0, &self.1);
+        unsafe {
+            update_inplace(rec, |x| x.bind_graphics_pipeline_pair(&self.0, &self.1));
+        }
     }
 }
