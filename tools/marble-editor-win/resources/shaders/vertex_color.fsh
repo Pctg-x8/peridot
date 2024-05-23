@@ -6,4 +6,5 @@ layout(location = 0) out vec4 target;
 void main()
 {
     target = color;
+    target.rgb *= target.a;
 }

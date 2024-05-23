@@ -47,23 +47,41 @@ impl PaneSplitterView {
         ctx: &mut (impl ViewContext + ?Sized),
         dir: SplitDirection,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let visual = ctx.compositor().CreateSpriteVisual()?;
+        let visual = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
         visual.SetBrush(
-            &ctx.compositor()
+            &ctx.app_subsystems()
+                .borrow()
+                .compositor
                 .CreateColorBrushWithColor(Self::SURFACE_COLOR)?,
         )?;
         visual.SetOpacity(0.0)?;
 
-        let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
+        let linear_easing = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateLinearEasingFunction()?;
 
-        let hover_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        let hover_animation = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
         hover_animation
             .keyframe(0.0, 0.0)?
             .interpolate(1.0, 1.0, &linear_easing)?
             .set_properties()
             .duration(timespan_ms(100))?;
 
-        let hover_end_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        let hover_end_animation = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
         hover_end_animation
             .keyframe(0.0, 1.0)?
             .interpolate(1.0, 0.0, &linear_easing)?
@@ -177,7 +195,7 @@ impl InputEventHandler for WeakMut<PaneSplitterView> {
         ctx.capture_mouse();
     }
 
-    fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
             return;
         };
@@ -200,7 +218,7 @@ impl InputEventHandler for WeakMut<PaneSplitterView> {
         .max(1.0);
         let (x, y) = target_dock
             .borrow_mut()
-            .set_dock_size(new_size)
+            .set_dock_size(new_size, &ctx.make_resize_context())
             .expect("Failed to resize pane");
         this.borrow_mut()
             .set_offset(x, y)

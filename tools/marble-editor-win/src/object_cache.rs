@@ -106,19 +106,16 @@ impl TextSurface {
 pub struct TextSurfaceStock {
     dwrite_factory: IDWriteFactory,
     composition_graphics_device: CompositionGraphicsDevice,
-    target_window_dpi: f32,
-    surfaces: HashMap<(*mut core::ffi::c_void, Cow<'static, str>), TextSurface>,
+    surfaces: HashMap<(*mut core::ffi::c_void, Cow<'static, str>, SafeF32), TextSurface>,
 }
 impl TextSurfaceStock {
     pub fn new(
         dwrite_factory: &IDWriteFactory,
         composition_graphics_device: &CompositionGraphicsDevice,
-        current_window_dpi: f32,
     ) -> Self {
         Self {
             dwrite_factory: dwrite_factory.clone(),
             composition_graphics_device: composition_graphics_device.clone(),
-            target_window_dpi: current_window_dpi,
             surfaces: HashMap::new(),
         }
     }
@@ -126,12 +123,9 @@ impl TextSurfaceStock {
     pub fn create_text_surface(
         &self,
         layout: &IDWriteTextLayout,
+        dpi: f32,
     ) -> windows::core::Result<TextSurface> {
-        Self::create_text_surface_impl(
-            layout,
-            self.target_window_dpi,
-            &self.composition_graphics_device,
-        )
+        Self::create_text_surface_impl(layout, dpi, &self.composition_graphics_device)
     }
 
     fn create_text_surface_impl(
@@ -206,9 +200,11 @@ impl TextSurfaceStock {
     pub fn get(
         &mut self,
         fmt: &IDWriteTextFormat,
+        dpi: impl Into<SafeF32>,
         text: impl Into<Cow<'static, str>>,
     ) -> windows::core::Result<TextSurface> {
-        match self.surfaces.entry((fmt.as_raw(), text.into())) {
+        let dpi_safe = dpi.into();
+        match self.surfaces.entry((fmt.as_raw(), text.into(), dpi_safe)) {
             std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let text_layout = unsafe {
@@ -222,7 +218,7 @@ impl TextSurfaceStock {
 
                 let surface = Self::create_text_surface_impl(
                     &text_layout,
-                    self.target_window_dpi,
+                    dpi_safe.value(),
                     &self.composition_graphics_device,
                 )?;
                 Ok(e.insert(surface).clone())

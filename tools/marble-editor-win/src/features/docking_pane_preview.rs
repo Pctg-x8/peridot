@@ -59,7 +59,7 @@ impl DockingPanePreview {
         unsafe { DefWindowProcA(h, m, w, l) }
     }
 
-    pub fn new(ctx: &mut (impl ViewContext + ?Sized)) -> windows::core::Result<Self> {
+    pub fn new(ctx: &(impl ViewContext + ?Sized)) -> windows::core::Result<Self> {
         let window_cls = WNDCLASSEXA {
             cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
             lpfnWndProc: Some(Self::window_callback),
@@ -79,7 +79,9 @@ impl DockingPanePreview {
         .popup()
         .create()?;
         let composition_target = unsafe {
-            ctx.compositor()
+            ctx.app_subsystems()
+                .borrow()
+                .compositor
                 .cast::<ICompositorDesktopInterop>()?
                 .CreateDesktopWindowTarget(window, true)?
         };
@@ -88,12 +90,24 @@ impl DockingPanePreview {
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
         fx.SetBlurAmount(16.0)?;
         fx.SetOptimization(EffectOptimization::Balanced)?;
-        let effect_factory = ctx.compositor().CreateEffectFactory(&fx)?;
-        let backdrop_brush = ctx.compositor().CreateBackdropBrush()?;
+        let effect_factory = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateEffectFactory(&fx)?;
+        let backdrop_brush = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateBackdropBrush()?;
         let blur_brush = effect_factory.CreateBrush()?;
         blur_brush.SetSourceParameter(h!("source"), &backdrop_brush)?;
 
-        let blur_visual = ctx.compositor().CreateSpriteVisual()?;
+        let blur_visual = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
         blur_visual
             .set_properties()
             .center_point(Vector3::scalar(0.5))?
@@ -101,11 +115,17 @@ impl DockingPanePreview {
             .relative_offset_adjustment(Vector2::scalar(0.5).with_z(0.0))?
             .brush(&blur_brush)?;
 
-        let color_tint = ctx.compositor().CreateSpriteVisual()?;
+        let color_tint = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
         color_tint
             .set_properties()
             .brush(
-                &ctx.compositor()
+                &ctx.app_subsystems()
+                    .borrow()
+                    .compositor
                     .CreateColorBrushWithColor(Self::TINT_COLOR)?,
             )?
             .relative_offset_adjustment(Vector3::zero())?
@@ -113,16 +133,28 @@ impl DockingPanePreview {
         blur_visual.Children()?.InsertAtTop(&color_tint)?;
 
         blur_visual.SetShadow(&{
-            let x = ctx.compositor().CreateDropShadow()?;
+            let x = ctx
+                .app_subsystems()
+                .borrow()
+                .compositor
+                .CreateDropShadow()?;
             x.SetBlurRadius(32.0)?;
             x.SetOffset(Vector3::down(16.0))?;
             x.SetOpacity(0.3)?;
             x
         })?;
 
-        let linear_easing = ctx.compositor().CreateLinearEasingFunction()?;
+        let linear_easing = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateLinearEasingFunction()?;
 
-        let blink_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        let blink_animation = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
         blink_animation
             .iterate_forever()?
             .keyframe(0.0, 1.0)?
@@ -131,9 +163,17 @@ impl DockingPanePreview {
             .set_properties()
             .duration(timespan_ms(2600))?;
 
-        let show_animation = ctx.compositor().CreateAnimationGroup()?;
+        let show_animation = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateAnimationGroup()?;
         show_animation.Add(&{
-            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+            let a = ctx
+                .app_subsystems()
+                .borrow()
+                .compositor
+                .CreateScalarKeyFrameAnimation()?;
             a.keyframe(0.0, 0.0)?
                 .interpolate(1.0, 1.0, &linear_easing)?
                 .set_properties()
@@ -143,13 +183,17 @@ impl DockingPanePreview {
             a
         })?;
         show_animation.Add(&{
-            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
+            let a = ctx
+                .app_subsystems()
+                .borrow()
+                .compositor
+                .CreateVector3KeyFrameAnimation()?;
             a.keyframe(0.0, Vector2::scalar(1.2).with_z(1.0))?
                 .interpolate(
                     1.0,
                     Vector3::one(),
                     &CompositionEasingFunction::CreatePowerEasingFunction(
-                        ctx.compositor(),
+                        &ctx.app_subsystems().borrow().compositor,
                         CompositionEasingFunctionMode::Out,
                         2.0,
                     )?,
@@ -160,9 +204,17 @@ impl DockingPanePreview {
 
             a
         })?;
-        let hide_animation = ctx.compositor().CreateAnimationGroup()?;
+        let hide_animation = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateAnimationGroup()?;
         hide_animation.Add(&{
-            let a = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+            let a = ctx
+                .app_subsystems()
+                .borrow()
+                .compositor
+                .CreateScalarKeyFrameAnimation()?;
             a.keyframe(0.0, 1.0)?
                 .interpolate(1.0, 0.0, &linear_easing)?
                 .set_properties()
@@ -172,7 +224,11 @@ impl DockingPanePreview {
             a
         })?;
         hide_animation.Add(&{
-            let a = ctx.compositor().CreateVector3KeyFrameAnimation()?;
+            let a = ctx
+                .app_subsystems()
+                .borrow()
+                .compositor
+                .CreateVector3KeyFrameAnimation()?;
             a.keyframe(0.0, Vector3::one())?
                 .interpolate(1.0, Vector2::scalar(0.9).with_z(1.0), &linear_easing)?
                 .set_properties()

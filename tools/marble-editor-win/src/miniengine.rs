@@ -90,8 +90,38 @@ impl MiniEngine {
             .next()
             .expect("no physical devices?");
         let memory_properties = adapter.memory_properties();
-        let adapter_features = adapter.features();
-        let adapter_limits = adapter.properties().limits;
+
+        let mut adapter_features = br::vk::VkPhysicalDeviceFeatures2KHR::uninit_sink();
+        let mut adapter_line_rasterization_features =
+            br::vk::VkPhysicalDeviceLineRasterizationFeaturesKHR::uninit_sink();
+        adapter.features2(
+            unsafe { &mut *adapter_features.as_mut_ptr() },
+            &mut [unsafe { &mut *adapter_line_rasterization_features.as_mut_ptr() }],
+        );
+        let adapter_features = unsafe { adapter_features.assume_init() };
+        let adapter_line_rasterization_features =
+            unsafe { adapter_line_rasterization_features.assume_init() };
+        println!(
+            "LineRasterizationFeatures.smoothLines: {}",
+            adapter_line_rasterization_features.smoothLines
+        );
+
+        let mut adapter_properties = br::vk::VkPhysicalDeviceProperties2KHR::uninit_sink();
+        let mut adapter_line_rasterization_properties =
+            br::vk::VkPhysicalDeviceLineRasterizationPropertiesKHR::uninit_sink();
+        adapter.properties2(
+            unsafe { &mut *adapter_properties.as_mut_ptr() },
+            &mut [unsafe { &mut *adapter_line_rasterization_properties.as_mut_ptr() }],
+        );
+        let adapter_properties = unsafe { adapter_properties.assume_init() };
+        let adapter_line_rasterization_properties =
+            unsafe { adapter_line_rasterization_properties.assume_init() };
+        let adapter_limits = adapter_properties.properties.limits;
+        println!(
+            "LineRasterizationProperties.lineSubPixelPrecisionBits: {:08x}",
+            adapter_line_rasterization_properties.lineSubPixelPrecisionBits
+        );
+
         let queue_families = adapter.queue_family_properties();
         let graphics_queue_family_index = queue_families
             .find_matching_index(br::QueueFlags::GRAPHICS)
@@ -109,6 +139,9 @@ impl MiniEngine {
             "VK_KHR_external_memory_win32",
             "VK_KHR_synchronization2",
         ];
+        if adapter_line_rasterization_features.smoothLines != 0 {
+            device_extensions.push("VK_KHR_line_rasterization");
+        }
         for e in adapter
             .enumerate_extension_properties(None)
             .expect("Failed to enumerate device extensions")
@@ -130,6 +163,16 @@ impl MiniEngine {
                 sType: br::vk::VkPhysicalDeviceSynchronization2FeaturesKHR::TYPE,
                 pNext: core::ptr::null_mut(),
                 synchronization2: 1,
+            })
+            .add_extra_features(br::vk::VkPhysicalDeviceLineRasterizationFeaturesKHR {
+                sType: br::vk::VkPhysicalDeviceLineRasterizationFeaturesKHR::TYPE,
+                pNext: core::ptr::null_mut(),
+                smoothLines: adapter_line_rasterization_features.smoothLines,
+                rectangularLines: false as _,
+                bresenhamLines: false as _,
+                stippledRectangularLines: false as _,
+                stippledBresenhamLines: false as _,
+                stippledSmoothLines: false as _,
             });
         let device = Rc::new(
             device
@@ -146,7 +189,7 @@ impl MiniEngine {
             graphics_queue_family: graphics_queue_family_index,
             graphics_queue: Rc::new(RefCell::new(graphics_queue)),
             memory_properties,
-            adapter_features,
+            adapter_features: adapter_features.features,
             adapter_limits,
         };
         let memory_manager = peridot_memory_manager::MemoryManager::new(&graphics_objects);
@@ -265,12 +308,26 @@ impl MiniEngine {
     }
 
     #[inline]
+    pub fn alloc_upload_buffer(
+        &mut self,
+        desc: br::BufferDesc,
+    ) -> br::Result<peridot_memory_manager::Buffer> {
+        self.memory_manager
+            .allocate_upload_buffer(&self.graphics_objects, desc)
+    }
+
+    #[inline]
     pub fn alloc_device_local_image(
         &mut self,
         desc: br::ImageDesc,
     ) -> br::Result<peridot_memory_manager::Image> {
         self.memory_manager
             .allocate_device_local_image(&self.graphics_objects, desc)
+    }
+
+    #[inline]
+    pub fn has_extra_line_rasterization_enabled(&self) -> bool {
+        self.graphics_objects.enabled_vk_extensions.contains("VK_KHR_line_rasterization")
     }
 }
 

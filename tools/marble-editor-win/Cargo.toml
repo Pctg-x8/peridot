@@ -23,6 +23,7 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "VK_KHR_synchronization2",
     "VK_KHR_external_memory_capabilities",
     "VK_KHR_get_physical_device_properties2",
+    "VK_KHR_line_rasterization",
 ] }
 widestring = "0.4"
 peridot = { path = "../../base" }

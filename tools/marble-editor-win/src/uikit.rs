@@ -1,13 +1,6 @@
 use windows::{
     Win32::{
-        Foundation::HWND,
-        Graphics::{
-            CompositionSwapchain::IPresentationManager,
-            Direct2D::ID2D1Factory1,
-            Direct3D11::ID3D11Device,
-            DirectWrite::{IDWriteFactory, IDWriteTextFormat},
-        },
-        System::WinRT::Composition::ICompositorInterop,
+        Foundation::HWND, Graphics::DirectWrite::IDWriteTextFormat,
         UI::WindowsAndMessaging::HTCLIENT,
     },
     UI::Composition::{
@@ -15,11 +8,7 @@ use windows::{
     },
 };
 
-use crate::{
-    miniengine::MiniEngine,
-    object_cache::{TextFormatStock, TextSurfaceStock},
-    AppGlobalSignals, SharedMut,
-};
+use crate::{app_subsystem_instances::AppSubsystemInstances, AppGlobalSignals, SharedMut};
 
 mod input;
 pub use self::input::*;
@@ -35,80 +24,47 @@ pub struct UICommonObjects {
     pub tab_active_overlay_leave_animation: ScalarKeyFrameAnimation,
 }
 
+pub struct ResizeContext<'r> {
+    pub app_subsystems: &'r SharedMut<AppSubsystemInstances>,
+    pub app_global_signals: &'r SharedMut<AppGlobalSignals>,
+    pub current_dpi: f32,
+}
+
 pub trait ViewContext {
-    fn compositor(&self) -> &windows::UI::Composition::Compositor;
-    fn compositor_interop(&self) -> &ICompositorInterop;
-    fn common(&self) -> &UICommonObjects;
-    fn d2d1_factory(&self) -> &ID2D1Factory1;
-    fn dwrite_factory(&self) -> &IDWriteFactory;
-    fn text_format_stock_mut(&mut self) -> &mut TextFormatStock;
-    fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock;
-    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext;
-    fn presentation_manager(&self) -> &IPresentationManager;
-    fn d3d11_device(&self) -> &ID3D11Device;
+    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances>;
     fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals>;
-    fn mini_engine(&self) -> &MiniEngine;
-    fn mini_engine_mut(&mut self) -> &mut MiniEngine;
+
+    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext;
+    fn current_dpi(&self) -> f32;
 }
 pub trait InputContext: ViewContext {
+    fn make_resize_context(&self) -> ResizeContext;
+
     fn capture_mouse(&mut self);
     fn release_mouse_capture(&mut self);
 }
 
 impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
-    fn compositor(&self) -> &windows::UI::Composition::Compositor {
-        T::compositor(*self)
+    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
+        T::app_subsystems(*self)
     }
-
-    fn compositor_interop(&self) -> &ICompositorInterop {
-        T::compositor_interop(*self)
-    }
-
-    fn common(&self) -> &UICommonObjects {
-        T::common(*self)
-    }
-
-    fn d2d1_factory(&self) -> &ID2D1Factory1 {
-        T::d2d1_factory(*self)
-    }
-
-    fn dwrite_factory(&self) -> &IDWriteFactory {
-        T::dwrite_factory(*self)
-    }
-
-    fn text_format_stock_mut(&mut self) -> &mut TextFormatStock {
-        T::text_format_stock_mut(*self)
-    }
-
-    fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock {
-        T::text_surface_stock_mut(*self)
+    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
+        T::app_global_signals(*self)
     }
 
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
         T::hittest_context_mut(*self)
     }
 
-    fn presentation_manager(&self) -> &IPresentationManager {
-        T::presentation_manager(*self)
-    }
-
-    fn d3d11_device(&self) -> &ID3D11Device {
-        T::d3d11_device(*self)
-    }
-
-    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
-        T::app_global_signals(*self)
-    }
-
-    fn mini_engine(&self) -> &MiniEngine {
-        T::mini_engine(*self)
-    }
-
-    fn mini_engine_mut(&mut self) -> &mut MiniEngine {
-        T::mini_engine_mut(*self)
+    fn current_dpi(&self) -> f32 {
+        T::current_dpi(*self)
     }
 }
 impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
+    fn make_resize_context(&self) -> ResizeContext {
+        T::make_resize_context(*self)
+    }
+
     fn capture_mouse(&mut self) {
         T::capture_mouse(*self)
     }
@@ -119,70 +75,25 @@ impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
 }
 
 pub struct ViewContext1<'r> {
-    pub compositor: &'r windows::UI::Composition::Compositor,
-    pub compositor_interop: &'r ICompositorInterop,
-    pub common: &'r UICommonObjects,
-    pub d2d1_factory: &'r ID2D1Factory1,
-    pub dwrite_factory: &'r IDWriteFactory,
-    pub text_format_stock: &'r mut TextFormatStock,
-    pub text_surface_stock: &'r mut TextSurfaceStock,
-    pub hittest_context: &'r mut HitTestTreeContext,
-    pub presentation_manager: &'r IPresentationManager,
-    pub d3d11_device: &'r ID3D11Device,
+    pub app_subsystems: &'r SharedMut<AppSubsystemInstances>,
     pub app_global_signals: &'r SharedMut<AppGlobalSignals>,
-    pub mini_engine: &'r mut MiniEngine,
+    pub hittest_context: &'r mut HitTestTreeContext,
+    pub current_dpi: f32,
 }
 impl ViewContext for ViewContext1<'_> {
-    fn compositor(&self) -> &windows::UI::Composition::Compositor {
-        self.compositor
+    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
+        self.app_subsystems
     }
-
-    fn compositor_interop(&self) -> &ICompositorInterop {
-        self.compositor_interop
-    }
-
-    fn common(&self) -> &UICommonObjects {
-        self.common
-    }
-
-    fn d2d1_factory(&self) -> &ID2D1Factory1 {
-        self.d2d1_factory
-    }
-
-    fn dwrite_factory(&self) -> &IDWriteFactory {
-        self.dwrite_factory
-    }
-
-    fn text_format_stock_mut(&mut self) -> &mut TextFormatStock {
-        self.text_format_stock
-    }
-
-    fn text_surface_stock_mut(&mut self) -> &mut TextSurfaceStock {
-        self.text_surface_stock
+    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
+        self.app_global_signals
     }
 
     fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
         self.hittest_context
     }
 
-    fn presentation_manager(&self) -> &IPresentationManager {
-        self.presentation_manager
-    }
-
-    fn d3d11_device(&self) -> &ID3D11Device {
-        self.d3d11_device
-    }
-
-    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
-        self.app_global_signals
-    }
-
-    fn mini_engine(&self) -> &MiniEngine {
-        self.mini_engine
-    }
-
-    fn mini_engine_mut(&mut self) -> &mut MiniEngine {
-        self.mini_engine
+    fn current_dpi(&self) -> f32 {
+        self.current_dpi
     }
 }
 

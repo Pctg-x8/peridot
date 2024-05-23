@@ -62,7 +62,11 @@ impl AppTitleBarControlButtonView {
         ty: AppTitleBarControlButtonType,
         nth: usize,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let root = ctx.compositor().CreateContainerVisual()?;
+        let root = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateContainerVisual()?;
         root.set_properties()
             .size(Vector2 {
                 X: AppTitleBarView::BUTTON_WIDTH,
@@ -79,30 +83,49 @@ impl AppTitleBarControlButtonView {
                 Y: 0.0,
                 Z: 0.0,
             })?;
-        let bg = ctx.compositor().CreateSpriteVisual()?;
+        let bg = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
         bg.set_properties()
-            .brush(&ctx.compositor().CreateColorBrushWithColor(
-                if ty == AppTitleBarControlButtonType::Close {
-                    Colors::Red()?
-                } else {
-                    Color {
-                        A: 64,
-                        R: 255,
-                        G: 255,
-                        B: 255,
-                    }
-                },
-            )?)?
+            .brush(
+                &ctx.app_subsystems()
+                    .borrow()
+                    .compositor
+                    .CreateColorBrushWithColor(if ty == AppTitleBarControlButtonType::Close {
+                        Colors::Red()?
+                    } else {
+                        Color {
+                            A: 64,
+                            R: 255,
+                            G: 255,
+                            B: 255,
+                        }
+                    })?,
+            )?
             .expand_to_parent()?
             .opacity(0.0)?;
-        let linear_fn = ctx.compositor().CreateLinearEasingFunction()?;
-        let hover_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        let linear_fn = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateLinearEasingFunction()?;
+        let hover_animation = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
         hover_animation
             .keyframe(0.0, 0.0)?
             .interpolate(1.0, 1.0, &linear_fn)?
             .set_properties()
             .duration(timespan_ms(100))?;
-        let hover_end_animation = ctx.compositor().CreateScalarKeyFrameAnimation()?;
+        let hover_end_animation = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
         hover_end_animation
             .keyframe(0.0, 1.0)?
             .interpolate(1.0, 0.0, &linear_fn)?
@@ -110,7 +133,12 @@ impl AppTitleBarControlButtonView {
             .duration(timespan_ms(100))?;
         root.Children()?.InsertAtTop(&bg)?;
 
-        let icon_geometry = unsafe { ctx.d2d1_factory().CreatePathGeometry()? };
+        let icon_geometry = unsafe {
+            ctx.app_subsystems()
+                .borrow()
+                .d2d1_factory
+                .CreatePathGeometry()?
+        };
         let sink = unsafe { icon_geometry.Open()? };
         match ty {
             AppTitleBarControlButtonType::Close => unsafe {
@@ -177,17 +205,27 @@ impl AppTitleBarControlButtonView {
         }
         let icon_geometry: IGeometrySource2D = GeometryInterop(icon_geometry.into()).into();
         let icon_geometry = ctx
-            .compositor()
+            .app_subsystems()
+            .borrow()
+            .compositor
             .CreatePathGeometryWithPath(&CompositionPath::Create(&icon_geometry)?)?;
         let icon_shape = ctx
-            .compositor()
+            .app_subsystems()
+            .borrow()
+            .compositor
             .CreateSpriteShapeWithGeometry(&icon_geometry)?;
         icon_shape.SetStrokeBrush(
-            &ctx.compositor()
+            &ctx.app_subsystems()
+                .borrow()
+                .compositor
                 .CreateColorBrushWithColor(Colors::White()?)?,
         )?;
         icon_shape.SetStrokeThickness(1.5)?;
-        let icon = ctx.compositor().CreateShapeVisual()?;
+        let icon = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateShapeVisual()?;
         icon.Shapes()?.Append(&icon_shape)?;
         icon.set_properties()
             .size(Vector2::scalar(AppTitleBarView::BUTTON_ICON_SIZE))?
@@ -242,7 +280,13 @@ impl AppTitleBarControlButtonView {
             return Ok(());
         }
 
-        let icon_geometry = unsafe { view_ctx.d2d1_factory().CreatePathGeometry()? };
+        let icon_geometry = unsafe {
+            view_ctx
+                .app_subsystems()
+                .borrow()
+                .d2d1_factory
+                .CreatePathGeometry()?
+        };
         let sink = unsafe { icon_geometry.Open()? };
         if !is_maximized {
             unsafe {
@@ -326,14 +370,20 @@ impl AppTitleBarControlButtonView {
         }
         let icon_geometry: IGeometrySource2D = GeometryInterop(icon_geometry.into()).into();
         let icon_geometry = view_ctx
-            .compositor()
+            .app_subsystems()
+            .borrow()
+            .compositor
             .CreatePathGeometryWithPath(&CompositionPath::Create(&icon_geometry)?)?;
         let icon_shape = view_ctx
-            .compositor()
+            .app_subsystems()
+            .borrow()
+            .compositor
             .CreateSpriteShapeWithGeometry(&icon_geometry)?;
         icon_shape.SetStrokeBrush(
             &view_ctx
-                .compositor()
+                .app_subsystems()
+                .borrow()
+                .compositor
                 .CreateColorBrushWithColor(Colors::White()?)?,
         )?;
         icon_shape.SetStrokeThickness(1.5)?;
@@ -393,9 +443,14 @@ impl AppTitleBarView {
 
     pub fn new(
         ctx: &mut (impl ViewContext + ?Sized),
+        init_dpi: f32,
         global_scale: f64,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let root = ctx.compositor().CreateContainerVisual()?;
+        let root = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateContainerVisual()?;
         root.set_properties()
             .size(Vector2 {
                 X: 0.0,
@@ -407,17 +462,22 @@ impl AppTitleBarView {
                 Y: 0.0,
             })?;
 
-        let title_font =
-            ctx.text_format_stock_mut()
-                .get("system-ui", 10.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let title_font = ctx.app_subsystems().borrow_mut().text_format_stock.get(
+            "system-ui",
+            10.0,
+            DWRITE_FONT_WEIGHT_NORMAL,
+        )?;
         let title_text = "New Project Peridot Marble Editor 0.1.0";
         let title_layout = unsafe {
-            ctx.dwrite_factory().CreateTextLayout(
-                &title_text.encode_utf16().collect::<Vec<_>>(),
-                &title_font,
-                f32::MAX,
-                f32::MAX,
-            )?
+            ctx.app_subsystems()
+                .borrow()
+                .dwrite_factory
+                .CreateTextLayout(
+                    &title_text.encode_utf16().collect::<Vec<_>>(),
+                    &title_font,
+                    f32::MAX,
+                    f32::MAX,
+                )?
         };
         unsafe {
             let project_name_range = DWRITE_TEXT_RANGE {
@@ -429,9 +489,15 @@ impl AppTitleBarView {
             title_layout.SetFontSize(12.0, project_name_range)?;
         }
         let title_text = ctx
-            .text_surface_stock_mut()
-            .create_text_surface(&title_layout)?;
-        let title = ctx.compositor().CreateSpriteVisual()?;
+            .app_subsystems()
+            .borrow_mut()
+            .text_surface_stock
+            .create_text_surface(&title_layout, init_dpi)?;
+        let title = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
         title
             .set_properties()
             .anchor_point(Vector2::scalar(0.5))?
@@ -439,7 +505,9 @@ impl AppTitleBarView {
             .size(title_text.visual_size())?
             .relative_offset_adjustment(Vector3::scalar(0.5))?
             .brush(
-                &ctx.compositor()
+                &ctx.app_subsystems()
+                    .borrow()
+                    .compositor
                     .CreateSurfaceBrushWithSurface(&title_text.surface)?,
             )?;
 
@@ -447,14 +515,24 @@ impl AppTitleBarView {
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
         fx.SetBlurAmount(2.0)?;
         fx.SetOptimization(EffectOptimization::Balanced)?;
-        let effect_factory = ctx.compositor().CreateEffectFactory(&fx)?;
+        let effect_factory = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateEffectFactory(&fx)?;
         let blur_brush = effect_factory.CreateBrush()?;
         blur_brush.SetSourceParameter(
             h!("source"),
-            &ctx.compositor()
+            &ctx.app_subsystems()
+                .borrow()
+                .compositor
                 .CreateSurfaceBrushWithSurface(&title_text.surface)?,
         )?;
-        let title_fx = ctx.compositor().CreateSpriteVisual()?;
+        let title_fx = ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
         title_fx
             .set_properties()
             .anchor_point(Vector2::scalar(0.5))?
