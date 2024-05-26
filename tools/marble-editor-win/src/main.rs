@@ -2952,7 +2952,49 @@ impl SignalEventReceiver for StageTabContentRenderer {
 }
 
 pub struct StageTabPresenter {
+    view: SharedMut<EditorStageView>,
+}
+impl PaneTabContentPresenter for StageTabPresenter {
+    fn build_content_view(
+        &mut self,
+        onto: &ContainerVisual,
+        onto_ht: &SharedMut<HitTestTree>,
+        view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        self.view.borrow().mount(onto, onto_ht, view_context)
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        self.view.borrow().unmount(view_context)
+    }
+
+    fn on_resize(
+        &mut self,
+        new_size: Vector2,
+        resize_ctx: &ResizeContext,
+    ) -> windows::core::Result<()> {
+        self.view.borrow_mut().resize(new_size, resize_ctx)
+    }
+}
+impl PaneTabPresenter for StageTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Stage";
+
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        mut view_ctx: &mut (impl ViewContext + ?Sized),
+    ) -> Self {
+        Self {
+            view: EditorStageView::new(&mut view_ctx).expect("Failed to create EditorStageView"),
+        }
+    }
+}
+
+pub struct EditorStageView {
     root: SpriteVisual,
+    ht: SharedMut<HitTestTree>,
     main_render_pass: br::RenderPassObject<StdVkDevice>,
     main_render_command_pool: br::CommandPoolObject<StdVkDevice>,
     grid_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
@@ -2971,379 +3013,8 @@ pub struct StageTabPresenter {
     )>,
     renderer: Rc<StageTabContentRenderer>,
 }
-impl PaneTabContentPresenter for StageTabPresenter {
-    fn build_content_view(
-        &mut self,
-        onto: &ContainerVisual,
-        _onto_ht: &SharedMut<HitTestTree>,
-        view_context: &mut dyn ViewContext,
-    ) -> windows::core::Result<()> {
-        onto.Children()?.InsertAtTop(&self.root)?;
-        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
-            view_context
-                .app_global_signals()
-                .borrow_mut()
-                .register(*e, &self.renderer, n);
-        }
-
-        Ok(())
-    }
-
-    fn on_hide_content_view(
-        &mut self,
-        view_context: &mut dyn ViewContext,
-    ) -> windows::core::Result<()> {
-        for (n, _) in self.back_buffer_resources.iter().enumerate() {
-            view_context
-                .app_global_signals()
-                .borrow_mut()
-                .unregister(&self.renderer, n);
-        }
-
-        Ok(())
-    }
-
-    fn on_resize(
-        &mut self,
-        new_size: Vector2,
-        resize_ctx: &ResizeContext,
-    ) -> windows::core::Result<()> {
-        self.root.SetSize(new_size)?;
-
-        self.main_render_command_pool
-            .reset(true)
-            .expect("Failed to reset old commands");
-        for n in 0..BACK_BUFFER_COUNT {
-            resize_ctx
-                .app_global_signals
-                .borrow_mut()
-                .unregister(&self.renderer, n);
-        }
-
-        let buffer_real_size = br::vk::VkExtent2D {
-            width: (new_size.X * resize_ctx.current_dpi / 96.0) as _,
-            height: (new_size.Y * resize_ctx.current_dpi / 96.0) as _,
-        };
-
-        unsafe {
-            self.renderer.presentation_surface.SetSourceRect(&RECT {
-                left: 0,
-                top: 0,
-                right: buffer_real_size.width as _,
-                bottom: buffer_real_size.height as _,
-            })?;
-        }
-
-        let shared_depth_stencil_buffer = resize_ctx
-            .app_subsystems
-            .borrow_mut()
-            .mini_engine
-            .alloc_device_local_image(br::ImageDesc::new(
-                buffer_real_size.clone(),
-                br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
-                br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            ))
-            .expect("Failed to create shared depth stencil buffer");
-        let shared_depth_stencil_buffer = Rc::new(
-            shared_depth_stencil_buffer
-                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
-                .view_builder()
-                .create()
-                .expect("Failed to create shared depth stencil buffer view"),
-        );
-
-        let mut camera_upload_buffer = resize_ctx
-            .app_subsystems
-            .borrow_mut()
-            .mini_engine
-            .alloc_upload_buffer(br::BufferDesc::new(
-                core::mem::size_of::<peridot_math::Matrix4F32>(),
-                br::BufferUsage::TRANSFER_SRC,
-            ))
-            .expect("Failed to create upload buffer");
-        camera_upload_buffer
-            .write_content(self.camera.view_projection_matrix(new_size.X / new_size.Y))
-            .expect("Failed to write camera vp matrix");
-
-        let app_subsystems_borrow = resize_ctx.app_subsystems.borrow();
-        let mut cp = br::CommandPoolBuilder::new(
-            app_subsystems_borrow
-                .mini_engine
-                .graphics_queue_family_index(),
-        )
-        .transient()
-        .create(app_subsystems_borrow.mini_engine.device())
-        .expect("Failed to create transient command pool");
-        let mut cb = cp
-            .alloc(1, true)
-            .expect("Failed to allocate command buffer");
-        unsafe { cb[0].begin_once().expect("Failed to begin commands") }
-            .copy_buffer(
-                &camera_upload_buffer,
-                &self.camera_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: 0,
-                    dstOffset: 0,
-                    size: core::mem::size_of::<peridot_math::Matrix4F32>() as _,
-                }],
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::TRANSFER.write,
-                        br::AccessFlags2::UNIFORM_READ,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COPY,
-                        br::PipelineStageFlags2::VERTEX_SHADER,
-                    )],
-                &[],
-                &[],
-            ))
-            .end()
-            .expect("Failed to finish updating commands");
-        app_subsystems_borrow
-            .mini_engine
-            .graphics_queue()
-            .borrow_mut()
-            .submit2(
-                &[br::SubmitInfo2::new(
-                    &[],
-                    &[br::CommandBufferSubmitInfo::new(&cb[0])],
-                    &[],
-                )],
-                None::<&mut br::FenceObject<StdVkDevice>>,
-            )
-            .expect("Failed to submit updating commands");
-        app_subsystems_borrow
-            .mini_engine
-            .graphics_queue()
-            .borrow_mut()
-            .wait()
-            .expect("Failed to wait update completion");
-        drop(cp);
-        drop(app_subsystems_borrow);
-
-        for (n, (renderer, bb)) in (0..3).zip(
-            Rc::get_mut(&mut self.renderer)
-                .expect("non unique renderer")
-                .back_buffers
-                .iter_mut()
-                .zip(self.back_buffer_resources.iter_mut()),
-        ) {
-            let texture_desc = D3D11_TEXTURE2D_DESC {
-                Width: buffer_real_size.width,
-                Height: buffer_real_size.height,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
-                CPUAccessFlags: 0,
-                MiscFlags: (D3D11_RESOURCE_MISC_SHARED
-                    | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
-                    | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
-                    .0 as _,
-            };
-            let mut texture = core::mem::MaybeUninit::uninit();
-            unsafe {
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
-                    .d3d11_device
-                    .CreateTexture2D(&texture_desc, None, Some(texture.as_mut_ptr()))
-                    .expect("Failed to create back buffer texture")
-            };
-            let texture = unsafe { texture.assume_init().expect("texture not created") };
-            let presentation_buffer = unsafe {
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
-                    .presentation_manager
-                    .AddBufferFromResource(&texture)
-                    .expect("Failed to add texture as presentation buffer")
-            };
-            let eh = unsafe {
-                presentation_buffer
-                    .GetAvailableEvent()
-                    .expect("Failed to get available event handle")
-            };
-
-            let rt_desc = D3D11_TEXTURE2D_DESC {
-                BindFlags: D3D11_BIND_RENDER_TARGET.0 as _,
-                MiscFlags: (D3D11_RESOURCE_MISC_SHARED_NTHANDLE
-                    | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
-                    .0 as _,
-                ..texture_desc
-            };
-            let mut rt = core::mem::MaybeUninit::uninit();
-            unsafe {
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
-                    .d3d11_device
-                    .CreateTexture2D(&rt_desc, None, Some(rt.as_mut_ptr()))
-                    .expect("Failed to create render target texture");
-            }
-            let rt = unsafe { rt.assume_init().expect("rt not created") };
-
-            let texture_res = rt
-                .cast::<IDXGIResource1>()
-                .expect("Failed to query underlying resource");
-            let tex_handle = unsafe {
-                texture_res
-                    .CreateSharedHandle(
-                        None,
-                        GENERIC_ALL.0 | DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-                        None,
-                    )
-                    .expect("Failed to get shared handle")
-            };
-            let external_handle = br::ExternalMemoryHandleTypeWin32::D3D11Texture
-                .with_handle(unsafe { core::mem::transmute(tex_handle.0) });
-            let external_handle_image_memory_req = unsafe {
-                external_handle
-                    .properties(
-                        resize_ctx.app_subsystems.borrow().mini_engine.device(),
-                        br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
-                    )
-                    .expect("Failed to query external handle memory properties")
-            };
-            let mut vk_image = br::ImageDesc::new(
-                buffer_real_size.clone(),
-                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-                br::ImageUsageFlags::COLOR_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            )
-            .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
-            .create(
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
-                    .mini_engine
-                    .device()
-                    .clone(),
-            )
-            .expect("Failed to create external backbuffer image");
-            let vk_image_memory_req = vk_image.requirements();
-            let vk_memory_index = resize_ctx
-                .app_subsystems
-                .borrow()
-                .mini_engine
-                .find_device_local_memory_index(
-                    vk_image_memory_req.memoryTypeBits
-                        & external_handle_image_memory_req.memoryTypeBits,
-                )
-                .expect("no suitable memory");
-            let vk_image_memory = external_handle
-                .into_import_request(vk_memory_index, None)
-                .execute(
-                    resize_ctx
-                        .app_subsystems
-                        .borrow()
-                        .mini_engine
-                        .device()
-                        .clone(),
-                )
-                .expect("Failed to import d3d11 memory");
-            vk_image
-                .bind(&vk_image_memory, 0)
-                .expect("Failed to bind image to memory");
-            let vk_image = Rc::new(vk_image);
-
-            let vk_framebuffer = br::FramebufferBuilder::new(&self.main_render_pass)
-                .with_attachment(
-                    vk_image
-                        .clone()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .view_builder()
-                        .create()
-                        .expect("Failed to create image view"),
-                )
-                .with_attachment(shared_depth_stencil_buffer.clone())
-                .create()
-                .expect("Failed to create framebuffer");
-
-            unsafe {
-                renderer
-                    .1
-                    .begin()
-                    .expect("Failed to begin command recording")
-            }
-            .begin_render_pass(
-                &self.main_render_pass,
-                &vk_framebuffer,
-                br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: buffer_real_size.clone(),
-                },
-                &[
-                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                    br::ClearValue::depth_stencil(1.0, 0),
-                ],
-                true,
-            )
-            .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
-            .set_viewport(
-                0,
-                &[br::vk::VkViewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: buffer_real_size.width as _,
-                    height: buffer_real_size.height as _,
-                    minDepth: 0.0,
-                    maxDepth: 1.0,
-                }],
-            )
-            .set_scissor(
-                0,
-                &[br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: buffer_real_size.clone(),
-                }],
-            )
-            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
-            .bind_vertex_buffers(0, &[(&self.grid_buffer, 0)])
-            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
-            .draw(self.grid_vertex_count as _, 1, 0, 0)
-            .end_render_pass()
-            .end()
-            .expect("Failed to record commands");
-
-            renderer.4 = rt
-                .cast::<IDXGIKeyedMutex>()
-                .expect("Failed to get keyed mutex");
-
-            renderer.0 = presentation_buffer;
-            renderer.2 = texture;
-            renderer.3 = rt;
-            bb.0 = eh;
-            bb.1 = vk_image_memory;
-            bb.2 = vk_framebuffer;
-        }
-
-        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
-            resize_ctx
-                .app_global_signals
-                .borrow_mut()
-                .register(*e, &self.renderer, n);
-        }
-
-        Ok(())
-    }
-}
-impl PaneTabPresenter for StageTabPresenter {
-    const INIT_TAB_NAME: &'static str = "Stage";
-
-    fn new(
-        _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        view_ctx: &mut (impl ViewContext + ?Sized),
-    ) -> Self {
+impl EditorStageView {
+    pub fn new(view_ctx: &mut impl ViewContext) -> windows::core::Result<SharedMut<Self>> {
         let root = view_ctx
             .app_subsystems()
             .borrow()
@@ -3555,8 +3226,7 @@ impl PaneTabPresenter for StageTabPresenter {
                 br::LineRasterizationMode::RectangularSmooth,
             ));
         }
-        let mut multisample_state = br::MultisampleState::new();
-        multisample_state.enable_alpha_to_coverage(true);
+        let multisample_state = br::MultisampleState::new();
         grid_pipeline
             .multisample_state(Some(multisample_state))
             .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
@@ -3999,46 +3669,429 @@ impl PaneTabPresenter for StageTabPresenter {
             back_buffer_resources.push((eh, vk_image_memory, vk_framebuffer));
         }
 
-        Self {
-            root,
-            main_render_pass,
-            main_render_command_pool,
-            grid_pipeline_layout,
-            grid_pipeline,
-            grid_buffer,
-            grid_vertex_count: grid_vertices.len(),
-            camera_buffer,
-            camera: default_camera,
-            _descriptor_set_layout_ub1: descriptor_set_layout_ub1,
-            _descriptor_pool: dp,
-            camera_descriptor_set: camera_descriptor_set[0],
-            renderer: Rc::new(StageTabContentRenderer {
-                back_buffers: back_buffer_render_resources,
-                presentation_manager: view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .presentation_manager
-                    .clone(),
-                presentation_surface,
-                graphics_queue: view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .mini_engine
-                    .graphics_queue()
-                    .clone(),
-                d3d11_device_context: unsafe {
-                    view_ctx
+        Ok(new_cyclic_shared_mut(move |wthis| {
+            let ht = HitTestTree::new(
+                &Rc::new(wthis.clone()),
+                view_ctx.hittest_context_mut().new_id(),
+                Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 128.0,
+                    Height: 128.0,
+                },
+            );
+
+            Self {
+                root,
+                ht,
+                main_render_pass,
+                main_render_command_pool,
+                grid_pipeline_layout,
+                grid_pipeline,
+                grid_buffer,
+                grid_vertex_count: grid_vertices.len(),
+                camera_buffer,
+                camera: default_camera,
+                _descriptor_set_layout_ub1: descriptor_set_layout_ub1,
+                _descriptor_pool: dp,
+                camera_descriptor_set: camera_descriptor_set[0],
+                renderer: Rc::new(StageTabContentRenderer {
+                    back_buffers: back_buffer_render_resources,
+                    presentation_manager: view_ctx
                         .app_subsystems()
                         .borrow()
-                        .d3d11_device
-                        .GetImmediateContext()
-                        .expect("Failed to get d3d imm context")
-                },
-            }),
-            back_buffer_resources,
+                        .presentation_manager
+                        .clone(),
+                    presentation_surface,
+                    graphics_queue: view_ctx
+                        .app_subsystems()
+                        .borrow()
+                        .mini_engine
+                        .graphics_queue()
+                        .clone(),
+                    d3d11_device_context: unsafe {
+                        view_ctx
+                            .app_subsystems()
+                            .borrow()
+                            .d3d11_device
+                            .GetImmediateContext()
+                            .expect("Failed to get d3d imm context")
+                    },
+                }),
+                back_buffer_resources,
+            }
+        }))
+    }
+
+    fn mount(
+        &self,
+        onto: &ContainerVisual,
+        onto_ht: &SharedMut<HitTestTree>,
+        view_context: &mut dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        onto.Children()?.InsertAtTop(&self.root)?;
+        HitTestTree::add_child(&onto_ht, self.ht.clone());
+
+        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
+            view_context
+                .app_global_signals()
+                .borrow_mut()
+                .register(*e, &self.renderer, n);
         }
+
+        Ok(())
+    }
+
+    fn unmount(&self, view_context: &mut dyn ViewContext) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+        self.ht.borrow_mut().unmount();
+
+        for (n, _) in self.back_buffer_resources.iter().enumerate() {
+            view_context
+                .app_global_signals()
+                .borrow_mut()
+                .unregister(&self.renderer, n);
+        }
+
+        Ok(())
+    }
+
+    fn resize(
+        &mut self,
+        new_size: Vector2,
+        resize_ctx: &ResizeContext,
+    ) -> windows::core::Result<()> {
+        self.root.SetSize(new_size)?;
+        self.ht.borrow_mut().set_size(new_size.X, new_size.Y);
+
+        self.main_render_command_pool
+            .reset(true)
+            .expect("Failed to reset old commands");
+        for n in 0..BACK_BUFFER_COUNT {
+            resize_ctx
+                .app_global_signals
+                .borrow_mut()
+                .unregister(&self.renderer, n);
+        }
+
+        let buffer_real_size = br::vk::VkExtent2D {
+            width: (new_size.X * resize_ctx.current_dpi / 96.0) as _,
+            height: (new_size.Y * resize_ctx.current_dpi / 96.0) as _,
+        };
+
+        unsafe {
+            self.renderer.presentation_surface.SetSourceRect(&RECT {
+                left: 0,
+                top: 0,
+                right: buffer_real_size.width as _,
+                bottom: buffer_real_size.height as _,
+            })?;
+        }
+
+        let shared_depth_stencil_buffer = resize_ctx
+            .app_subsystems
+            .borrow_mut()
+            .mini_engine
+            .alloc_device_local_image(br::ImageDesc::new(
+                buffer_real_size.clone(),
+                br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+                br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                br::ImageLayout::Undefined,
+            ))
+            .expect("Failed to create shared depth stencil buffer");
+        let shared_depth_stencil_buffer = Rc::new(
+            shared_depth_stencil_buffer
+                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create shared depth stencil buffer view"),
+        );
+
+        let mut camera_upload_buffer = resize_ctx
+            .app_subsystems
+            .borrow_mut()
+            .mini_engine
+            .alloc_upload_buffer(br::BufferDesc::new(
+                core::mem::size_of::<peridot_math::Matrix4F32>(),
+                br::BufferUsage::TRANSFER_SRC,
+            ))
+            .expect("Failed to create upload buffer");
+        camera_upload_buffer
+            .write_content(self.camera.view_projection_matrix(new_size.X / new_size.Y))
+            .expect("Failed to write camera vp matrix");
+
+        let app_subsystems_borrow = resize_ctx.app_subsystems.borrow();
+        let mut cp = br::CommandPoolBuilder::new(
+            app_subsystems_borrow
+                .mini_engine
+                .graphics_queue_family_index(),
+        )
+        .transient()
+        .create(app_subsystems_borrow.mini_engine.device())
+        .expect("Failed to create transient command pool");
+        let mut cb = cp
+            .alloc(1, true)
+            .expect("Failed to allocate command buffer");
+        unsafe { cb[0].begin_once().expect("Failed to begin commands") }
+            .copy_buffer(
+                &camera_upload_buffer,
+                &self.camera_buffer,
+                &[br::vk::VkBufferCopy {
+                    srcOffset: 0,
+                    dstOffset: 0,
+                    size: core::mem::size_of::<peridot_math::Matrix4F32>() as _,
+                }],
+            )
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .of_memory(
+                        br::AccessFlags2::TRANSFER.write,
+                        br::AccessFlags2::UNIFORM_READ,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags2::COPY,
+                        br::PipelineStageFlags2::VERTEX_SHADER,
+                    )],
+                &[],
+                &[],
+            ))
+            .end()
+            .expect("Failed to finish updating commands");
+        app_subsystems_borrow
+            .mini_engine
+            .graphics_queue()
+            .borrow_mut()
+            .submit2(
+                &[br::SubmitInfo2::new(
+                    &[],
+                    &[br::CommandBufferSubmitInfo::new(&cb[0])],
+                    &[],
+                )],
+                None::<&mut br::FenceObject<StdVkDevice>>,
+            )
+            .expect("Failed to submit updating commands");
+        app_subsystems_borrow
+            .mini_engine
+            .graphics_queue()
+            .borrow_mut()
+            .wait()
+            .expect("Failed to wait update completion");
+        drop(cp);
+        drop(app_subsystems_borrow);
+
+        for (n, (renderer, bb)) in (0..3).zip(
+            Rc::get_mut(&mut self.renderer)
+                .expect("non unique renderer")
+                .back_buffers
+                .iter_mut()
+                .zip(self.back_buffer_resources.iter_mut()),
+        ) {
+            let texture_desc = D3D11_TEXTURE2D_DESC {
+                Width: buffer_real_size.width,
+                Height: buffer_real_size.height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
+                CPUAccessFlags: 0,
+                MiscFlags: (D3D11_RESOURCE_MISC_SHARED
+                    | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
+                    | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
+                    .0 as _,
+            };
+            let mut texture = core::mem::MaybeUninit::uninit();
+            unsafe {
+                resize_ctx
+                    .app_subsystems
+                    .borrow()
+                    .d3d11_device
+                    .CreateTexture2D(&texture_desc, None, Some(texture.as_mut_ptr()))
+                    .expect("Failed to create back buffer texture")
+            };
+            let texture = unsafe { texture.assume_init().expect("texture not created") };
+            let presentation_buffer = unsafe {
+                resize_ctx
+                    .app_subsystems
+                    .borrow()
+                    .presentation_manager
+                    .AddBufferFromResource(&texture)
+                    .expect("Failed to add texture as presentation buffer")
+            };
+            let eh = unsafe {
+                presentation_buffer
+                    .GetAvailableEvent()
+                    .expect("Failed to get available event handle")
+            };
+
+            let rt_desc = D3D11_TEXTURE2D_DESC {
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as _,
+                MiscFlags: (D3D11_RESOURCE_MISC_SHARED_NTHANDLE
+                    | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                    .0 as _,
+                ..texture_desc
+            };
+            let mut rt = core::mem::MaybeUninit::uninit();
+            unsafe {
+                resize_ctx
+                    .app_subsystems
+                    .borrow()
+                    .d3d11_device
+                    .CreateTexture2D(&rt_desc, None, Some(rt.as_mut_ptr()))
+                    .expect("Failed to create render target texture");
+            }
+            let rt = unsafe { rt.assume_init().expect("rt not created") };
+
+            let texture_res = rt
+                .cast::<IDXGIResource1>()
+                .expect("Failed to query underlying resource");
+            let tex_handle = unsafe {
+                texture_res
+                    .CreateSharedHandle(
+                        None,
+                        GENERIC_ALL.0 | DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                        None,
+                    )
+                    .expect("Failed to get shared handle")
+            };
+            let external_handle = br::ExternalMemoryHandleTypeWin32::D3D11Texture
+                .with_handle(unsafe { core::mem::transmute(tex_handle.0) });
+            let external_handle_image_memory_req = unsafe {
+                external_handle
+                    .properties(
+                        resize_ctx.app_subsystems.borrow().mini_engine.device(),
+                        br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
+                    )
+                    .expect("Failed to query external handle memory properties")
+            };
+            let mut vk_image = br::ImageDesc::new(
+                buffer_real_size.clone(),
+                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+                br::ImageUsageFlags::COLOR_ATTACHMENT,
+                br::ImageLayout::Undefined,
+            )
+            .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
+            .create(
+                resize_ctx
+                    .app_subsystems
+                    .borrow()
+                    .mini_engine
+                    .device()
+                    .clone(),
+            )
+            .expect("Failed to create external backbuffer image");
+            let vk_image_memory_req = vk_image.requirements();
+            let vk_memory_index = resize_ctx
+                .app_subsystems
+                .borrow()
+                .mini_engine
+                .find_device_local_memory_index(
+                    vk_image_memory_req.memoryTypeBits
+                        & external_handle_image_memory_req.memoryTypeBits,
+                )
+                .expect("no suitable memory");
+            let vk_image_memory = external_handle
+                .into_import_request(vk_memory_index, None)
+                .execute(
+                    resize_ctx
+                        .app_subsystems
+                        .borrow()
+                        .mini_engine
+                        .device()
+                        .clone(),
+                )
+                .expect("Failed to import d3d11 memory");
+            vk_image
+                .bind(&vk_image_memory, 0)
+                .expect("Failed to bind image to memory");
+            let vk_image = Rc::new(vk_image);
+
+            let vk_framebuffer = br::FramebufferBuilder::new(&self.main_render_pass)
+                .with_attachment(
+                    vk_image
+                        .clone()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .view_builder()
+                        .create()
+                        .expect("Failed to create image view"),
+                )
+                .with_attachment(shared_depth_stencil_buffer.clone())
+                .create()
+                .expect("Failed to create framebuffer");
+
+            unsafe {
+                renderer
+                    .1
+                    .begin()
+                    .expect("Failed to begin command recording")
+            }
+            .begin_render_pass(
+                &self.main_render_pass,
+                &vk_framebuffer,
+                br::vk::VkRect2D {
+                    offset: br::vk::VkOffset2D::ZERO,
+                    extent: buffer_real_size.clone(),
+                },
+                &[
+                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                    br::ClearValue::depth_stencil(1.0, 0),
+                ],
+                true,
+            )
+            .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
+            .set_viewport(
+                0,
+                &[br::vk::VkViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: buffer_real_size.width as _,
+                    height: buffer_real_size.height as _,
+                    minDepth: 0.0,
+                    maxDepth: 1.0,
+                }],
+            )
+            .set_scissor(
+                0,
+                &[br::vk::VkRect2D {
+                    offset: br::vk::VkOffset2D::ZERO,
+                    extent: buffer_real_size.clone(),
+                }],
+            )
+            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
+            .bind_vertex_buffers(0, &[(&self.grid_buffer, 0)])
+            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
+            .draw(self.grid_vertex_count as _, 1, 0, 0)
+            .end_render_pass()
+            .end()
+            .expect("Failed to record commands");
+
+            renderer.4 = rt
+                .cast::<IDXGIKeyedMutex>()
+                .expect("Failed to get keyed mutex");
+
+            renderer.0 = presentation_buffer;
+            renderer.2 = texture;
+            renderer.3 = rt;
+            bb.0 = eh;
+            bb.1 = vk_image_memory;
+            bb.2 = vk_framebuffer;
+        }
+
+        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
+            resize_ctx
+                .app_global_signals
+                .borrow_mut()
+                .register(*e, &self.renderer, n);
+        }
+
+        Ok(())
     }
 }
+impl InputEventHandler for WeakMut<EditorStageView> {}
 
 pub struct EventHandle(HANDLE);
 unsafe impl Sync for EventHandle {}
