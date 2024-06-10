@@ -1,0 +1,11 @@
+#version 450
+
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D src;
+layout(set = 0, binding = 1, rgba16f) uniform image2D dest;
+
+layout(local_size_x = 32, local_size_y = 32) in;
+void main()
+{
+    const vec4 v = imageLoad(src, ivec2(gl_GlobalInvocationID.xy)) + imageLoad(dest, ivec2(gl_GlobalInvocationID.xy));
+    imageStore(dest, ivec2(gl_GlobalInvocationID.xy), v);
+}

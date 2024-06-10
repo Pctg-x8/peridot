@@ -3,3 +3,4 @@ src/bindgen.rs
 /temp
 **/*.vspv
 **/*.fspv
+**/*.cspv

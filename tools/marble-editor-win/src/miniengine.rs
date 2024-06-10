@@ -81,6 +81,7 @@ impl MiniEngine {
             .add_extensions([
                 "VK_KHR_external_memory_capabilities",
                 "VK_KHR_get_physical_device_properties2",
+                "VK_EXT_debug_utils",
             ])
             .set_api_version(1, 3, 0);
         let instance = Rc::new(instance.create().expect("Failed to create vulkan instance"));
@@ -290,6 +291,15 @@ impl MiniEngine {
     }
 
     #[inline]
+    pub fn alloc_device_local_buffer(
+        &mut self,
+        desc: br::BufferDesc,
+    ) -> br::Result<peridot_memory_manager::Buffer> {
+        self.memory_manager
+            .allocate_device_local_buffer(&self.graphics_objects, desc)
+    }
+
+    #[inline]
     pub fn alloc_device_local_buffer_array<const N: usize>(
         &mut self,
         descs: [br::BufferDesc; N],
@@ -326,8 +336,19 @@ impl MiniEngine {
     }
 
     #[inline]
+    pub fn alloc_device_local_image_array<const N: usize>(
+        &mut self,
+        descs: [br::ImageDesc; N],
+    ) -> br::Result<[peridot_memory_manager::Image; N]> {
+        self.memory_manager
+            .allocate_device_local_image_array(&self.graphics_objects, descs)
+    }
+
+    #[inline]
     pub fn has_extra_line_rasterization_enabled(&self) -> bool {
-        self.graphics_objects.enabled_vk_extensions.contains("VK_KHR_line_rasterization")
+        self.graphics_objects
+            .enabled_vk_extensions
+            .contains("VK_KHR_line_rasterization")
     }
 }
 

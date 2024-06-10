@@ -1021,18 +1021,18 @@ impl MemoryManager {
 
     pub fn allocate_multiple_device_local_images<'r>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         descriptions: impl IntoIterator<Item = br::ImageDesc<'r>>,
     ) -> br::Result<Vec<Image>> {
         let descs = descriptions.into_iter();
         let (s, _) = descs.size_hint();
         let (mut objects, mut requirements) = (Vec::with_capacity(s), Vec::with_capacity(s));
         for d in descs {
-            let object = d.create(e.device().clone())?;
+            let object = d.create(alloc_src.device().clone())?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if alloc_src.can_request_extended_memory_requirements() {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -1069,7 +1069,7 @@ impl MemoryManager {
 
             Some(make_shared_mutable_ref(
                 br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
-                    .execute(e.device().clone())?,
+                    .execute(alloc_src.device().clone())?,
             ))
         } else {
             None
@@ -1099,10 +1099,10 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if alloc_src.dedicated_allocation_available() {
                         memory_req = unsafe { memory_req.for_dedicated_image_allocation(&object) };
                     }
-                    let memory = memory_req.execute(e.device().clone())?;
+                    let memory = memory_req.execute(alloc_src.device().clone())?;
 
                     bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
                         sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
@@ -1139,7 +1139,7 @@ impl MemoryManager {
                     } else {
                         // normal small allocation
                         let (memory, offset) =
-                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                            self.allocate_internal(alloc_src.device(), &req, memory_index, |_| {
                                 unreachable!("no dedicated allocation must occurs!")
                             })?;
                         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -1169,16 +1169,16 @@ impl MemoryManager {
             }
         }
 
-        bind_images(e, &bind_infos)?;
+        bind_images(alloc_src, &bind_infos)?;
         Ok(bound_objects)
     }
 
     pub fn allocate_device_local_image_array<const N: usize>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         descs: [br::ImageDesc; N],
     ) -> br::Result<[Image; N]> {
-        self.allocate_multiple_device_local_images(e, descs)
+        self.allocate_multiple_device_local_images(alloc_src, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
     }
 }
@@ -1255,20 +1255,20 @@ fn bind_buffers(
 }
 
 fn bind_images(
-    e: &peridot::Graphics,
+    alloc_src: &(impl MemoryAllocationSource + ?Sized),
     binds: &[br::vk::VkBindImageMemoryInfoKHR],
 ) -> br::Result<()> {
-    if e.extended_memory_binding_available() {
+    if alloc_src.extended_memory_binding_available() {
         // use batched binding
 
-        e.device().bind_images(&binds)?;
+        alloc_src.device().bind_images(&binds)?;
     } else {
         // use old binding
 
         for b in binds.iter() {
             unsafe {
                 br::vkresolve::bind_image_memory(
-                    e.device().native_ptr(),
+                    alloc_src.device().native_ptr(),
                     b.image,
                     b.memory,
                     b.memoryOffset,
