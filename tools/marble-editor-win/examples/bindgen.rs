@@ -90,6 +90,18 @@ fn main() {
         "Microsoft.UI.ClosableNotifierHandler",
         "--filter",
         "Microsoft.UI.WindowId",
+        "--filter",
+        "Microsoft.Graphics.Canvas.Effects.TintEffect",
+        "--filter",
+        "Microsoft.Graphics.Canvas.Effects.ITintEffect",
+        "--filter",
+        "Microsoft.Graphics.Canvas.Effects.ITintEffectStatics",
+        "--filter",
+        "Microsoft.Graphics.Canvas.Effects.BorderEffect",
+        "--filter",
+        "Microsoft.Graphics.Canvas.Effects.IBorderEffect",
+        "--filter",
+        "Microsoft.Graphics.Canvas.CanvasEdgeBehavior",
     ])
     .unwrap();
 }

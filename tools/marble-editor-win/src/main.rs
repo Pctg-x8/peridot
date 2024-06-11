@@ -1281,7 +1281,7 @@ pub struct TabGroupPaneView {
 }
 impl TabGroupPaneView {
     const CONTENT_AREA_BASE_COLOR: Color = Color {
-        A: 255,
+        A: 128,
         R: 64,
         G: 64,
         B: 72,
@@ -5687,17 +5687,51 @@ fn app() -> i32 {
         .compositor
         .CreateSpriteVisual()
         .expect("Failed to create bg");
-    bg.SetBrush(
-        &app_subsystem_instances
+    bg.SetBrush(&{
+        let b = app_subsystem_instances
             .compositor
-            .CreateColorBrushWithColor(Color {
-                A: 0,
-                R: 24,
-                G: 24,
-                B: 32,
-            })
-            .expect("Failed to create bg brush"),
-    )
+            .CreateLinearGradientBrush()
+            .expect("Failed to create bg brush");
+        let color_stops = b.ColorStops().expect("Failed to get color stop collection");
+        color_stops
+            .Append(
+                &app_subsystem_instances
+                    .compositor
+                    .CreateColorGradientStopWithOffsetAndColor(
+                        0.0,
+                        Color {
+                            A: 16,
+                            R: 128,
+                            G: 32,
+                            B: 24,
+                        },
+                    )
+                    .expect("Failed to create color stop"),
+            )
+            .expect("Failed to append color stop");
+        color_stops
+            .Append(
+                &app_subsystem_instances
+                    .compositor
+                    .CreateColorGradientStopWithOffsetAndColor(
+                        1.0,
+                        Color {
+                            A: 72,
+                            R: 24,
+                            G: 64,
+                            B: 128,
+                        },
+                    )
+                    .expect("Failed to create color stop"),
+            )
+            .expect("Failed to append color stop");
+        b.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })
+            .expect("Failed to set start point");
+        b.SetEndPoint(Vector2 { X: 1.0, Y: 1.0 })
+            .expect("Failed to set end point");
+
+        b
+    })
     .expect("Failed to set bg brush");
     bg.SetRelativeOffsetAdjustment(Vector3::zero())
         .expect("Failed to set bg offset");
