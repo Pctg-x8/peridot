@@ -23,13 +23,13 @@ use uikit::{
 use utils::{rect_slice_bottom, rect_slice_left, rect_slice_right, rect_slice_top, RectExtensions};
 use winapi_extras::{
     timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
-    VisualExtensions,
+    Vector2Extension, VisualExtensions,
 };
 use windows::{
     core::*,
     Foundation::{
         Numerics::{Vector2, Vector3},
-        Rect,
+        Rect, TimeSpan,
     },
     Win32::{
         Foundation::{
@@ -5377,14 +5377,205 @@ impl PaneTabPresenter for PreviewTabPresenter {
     }
 }
 
-pub struct ObjectTreeTabPresenter {}
+pub struct ObjectTreeElementRowView {
+    root: ContainerVisual,
+    ht: SharedMut<HitTestTree>,
+    bg: SpriteVisual,
+    bg_hover_animation: ScalarKeyFrameAnimation,
+    bg_hover_end_animation: ScalarKeyFrameAnimation,
+}
+impl ObjectTreeElementRowView {
+    const PADDING: f32 = 4.0;
+    const HOVER_ANIMATION_DURATION: TimeSpan = timespan_ms(50);
+
+    pub fn new(
+        view_ctx: &mut (impl ViewContext + ?Sized),
+        init_name: impl Into<Cow<'static, str>>,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let label_fmt = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .text_format_stock
+            .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let label_surface = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .text_surface_stock
+            .get(&label_fmt, view_ctx.current_dpi(), init_name)?;
+
+        let root = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateContainerVisual()?;
+        root.set_properties()
+            .size(Vector2 {
+                X: 0.0,
+                Y: label_surface.height + Self::PADDING * 2.0,
+            })?
+            .relative_size_adjustment(Vector2 { X: 1.0, Y: 0.0 })?;
+
+        let bg = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
+        bg.set_properties()
+            .brush(
+                &view_ctx
+                    .app_subsystems()
+                    .borrow()
+                    .compositor
+                    .CreateColorBrushWithColor(Color {
+                        A: 16,
+                        R: 255,
+                        G: 255,
+                        B: 255,
+                    })?,
+            )?
+            .expand_to_parent()?
+            .opacity(0.0)?;
+        root.Children()?.InsertAtTop(&bg)?;
+
+        let label = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
+        label
+            .set_properties()
+            .brush(
+                &view_ctx
+                    .app_subsystems()
+                    .borrow()
+                    .compositor
+                    .CreateSurfaceBrushWithSurface(&label_surface.surface)?,
+            )?
+            .rect(&Rect {
+                X: Self::PADDING,
+                Y: Self::PADDING,
+                Width: label_surface.width,
+                Height: label_surface.height,
+            })?;
+        root.Children()?.InsertAtTop(&label)?;
+
+        let linear_easing = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateLinearEasingFunction()?;
+        let bg_hover_animation = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
+        bg_hover_animation
+            .keyframe(0.0, 0.0)?
+            .interpolate(1.0, 1.0, &linear_easing)?
+            .set_properties()
+            .duration(Self::HOVER_ANIMATION_DURATION)?;
+        let bg_hover_end_animation = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
+        bg_hover_end_animation
+            .keyframe(0.0, 1.0)?
+            .interpolate(1.0, 0.0, &linear_easing)?
+            .set_properties()
+            .duration(Self::HOVER_ANIMATION_DURATION)?;
+
+        Ok(new_cyclic_shared_mut(|wthis| {
+            let ht = HitTestTree::new(
+                &Rc::new(wthis.clone()),
+                view_ctx.hittest_context_mut().new_id(),
+                Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: core::f32::MAX,
+                    Height: label_surface.height + Self::PADDING * 2.0,
+                },
+            );
+
+            Self {
+                root,
+                ht,
+                bg,
+                bg_hover_animation,
+                bg_hover_end_animation,
+            }
+        }))
+    }
+
+    pub fn height(&self) -> f32 {
+        self.ht.borrow().rect().Height
+    }
+
+    pub fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
+        HitTestTree::add_child(onto_ht, self.ht.clone());
+
+        Ok(())
+    }
+
+    pub fn unmount(&self) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+        self.ht.borrow_mut().unmount();
+
+        Ok(())
+    }
+
+    pub fn reposition(&mut self, pos: Vector2) -> windows::core::Result<()> {
+        self.root.SetOffset(pos.with_z(0.0))?;
+        self.ht.borrow_mut().set_offset(pos.X, pos.Y);
+
+        Ok(())
+    }
+}
+impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
+    fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow()
+            .bg
+            .StartAnimation(h!("Opacity"), &this.borrow().bg_hover_animation)
+            .expect("Failed to start hover animation");
+    }
+
+    fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow()
+            .bg
+            .StartAnimation(h!("Opacity"), &this.borrow().bg_hover_end_animation)
+            .expect("Failed to start hover animation");
+    }
+}
+
+pub struct ObjectTreeTabPresenter {
+    camera_row: SharedMut<ObjectTreeElementRowView>,
+    sun_light_row: SharedMut<ObjectTreeElementRowView>,
+}
 impl PaneTabContentPresenter for ObjectTreeTabPresenter {
     fn build_content_view(
         &mut self,
-        _onto: &ContainerVisual,
-        _onto_ht: &SharedMut<HitTestTree>,
+        onto: &ContainerVisual,
+        onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
+        self.camera_row.borrow().mount(&onto.Children()?, onto_ht)?;
+        self.sun_light_row
+            .borrow()
+            .mount(&onto.Children()?, onto_ht)?;
+
         Ok(())
     }
 
@@ -5392,6 +5583,9 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         &mut self,
         _view_context: &mut dyn ViewContext,
     ) -> windows::core::Result<()> {
+        self.camera_row.borrow().unmount()?;
+        self.sun_light_row.borrow().unmount()?;
+
         Ok(())
     }
 }
@@ -5400,9 +5594,25 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &mut (impl ViewContext + ?Sized),
     ) -> Self {
-        Self {}
+        let camera_row = ObjectTreeElementRowView::new(view_ctx, "Camera")
+            .expect("Failed to create camera row view");
+        let sun_light_row = ObjectTreeElementRowView::new(view_ctx, "Sun Light")
+            .expect("Failed to create sun light row view");
+
+        sun_light_row
+            .borrow_mut()
+            .reposition(Vector2 {
+                X: 0.0,
+                Y: camera_row.borrow().height(),
+            })
+            .expect("Failed to reposition sun light row");
+
+        Self {
+            camera_row,
+            sun_light_row,
+        }
     }
 }
 
@@ -5480,6 +5690,10 @@ impl LabelView {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
 
         Ok(())
+    }
+
+    pub fn set_position(&self, pos: Vector3) -> windows::core::Result<()> {
+        self.root.SetOffset(pos)
     }
 }
 
