@@ -633,6 +633,11 @@ impl<T: Mul<Output = T> + Add<Output = T> + Sub<Output = T> + Copy> Mul for Quat
         Quaternion(x0, y0, z0, w0)
     }
 }
+impl<T: Mul<Output = T> + Add<Output = T> + Sub<Output = T> + Copy> MulAssign for Quaternion<T> {
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
 
 // q * neg q = id
 impl<T: Neg<Output = T>> Neg for Quaternion<T> {
