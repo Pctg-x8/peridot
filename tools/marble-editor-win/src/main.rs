@@ -94,13 +94,14 @@ use windows::{
             WindowsAndMessaging::{
                 DefWindowProcA, DispatchMessageA, GetClientRect, GetSystemMetrics,
                 GetWindowLongPtrA, GetWindowPlacement, GetWindowRect, LoadCursorA, LoadIconA,
-                MsgWaitForMultipleObjects, PeekMessageA, PostQuitMessage, SetWindowLongPtrA,
-                SetWindowPos, ShowWindow, TranslateMessage, HTCLIENT, HTTOP, IDC_ARROW,
-                IDI_APPLICATION, MSG, NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLEVENTS, SM_CXSIZEFRAME,
-                SM_CYSIZEFRAME, SWP_FRAMECHANGED, SW_MAXIMIZE, SW_SHOWNORMAL, WINDOWPLACEMENT,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSEMOVE, WM_QUIT,
-                WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
+                MsgWaitForMultipleObjects, PeekMessageA, PostQuitMessage, SetCursorPos,
+                SetWindowLongPtrA, SetWindowPos, ShowCursor, ShowWindow, TranslateMessage,
+                HTCLIENT, HTTOP, IDC_ARROW, IDI_APPLICATION, MSG, NCCALCSIZE_PARAMS, PM_REMOVE,
+                QS_ALLEVENTS, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SW_MAXIMIZE,
+                SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE,
+                WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE,
+                WM_NCHITTEST, WM_NCMOUSEMOVE, WM_QUIT, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
+                WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -4048,6 +4049,7 @@ pub struct EditorStageView {
         br::FramebufferObject<'static, StdVkDevice>,
     )>,
     renderer: Rc<StageTabContentRenderer>,
+    pointer_down_point: peridot_math::Vector2F32,
 }
 impl EditorStageView {
     pub fn new(view_ctx: &mut impl ViewContext) -> windows::core::Result<SharedMut<Self>> {
@@ -4792,6 +4794,7 @@ impl EditorStageView {
                     },
                 }),
                 back_buffer_resources,
+                pointer_down_point: peridot_math::Vector2(0.0, 0.0),
             }
         }))
     }
@@ -5187,7 +5190,137 @@ impl EditorStageView {
         Ok(())
     }
 }
-impl InputEventHandler for WeakMut<EditorStageView> {}
+impl InputEventHandler for WeakMut<EditorStageView> {
+    fn on_pointer_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow_mut().pointer_down_point = peridot_math::Vector2(x, y);
+        ctx.capture_mouse();
+        unsafe {
+            ShowCursor(false);
+        }
+    }
+
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        let app_window = AppWindow::wrap(window);
+        let mut points = [POINT {
+            x: this.borrow().pointer_down_point.0 as _,
+            y: this.borrow().pointer_down_point.1 as _,
+        }];
+        app_window.map_points_to_desktop(&mut points);
+        unsafe {
+            SetCursorPos(points[0].x, points[0].y).expect("Failed to hold cursor");
+        }
+
+        let d = peridot_math::Vector2(x, y) - this.borrow().pointer_down_point;
+        const DRAG_SENSITIVITY: f32 = 0.05f32;
+        let yrot = peridot_math::Quaternion::new(
+            d.1 * DRAG_SENSITIVITY.to_radians(),
+            peridot_math::Matrix3F32::from(this.borrow().camera.rotation)
+                * peridot_math::Vector3::left(),
+        );
+        this.borrow_mut().camera.rotation *= yrot;
+        this.borrow_mut().camera.rotation *= peridot_math::Quaternion::new(
+            d.0 * DRAG_SENSITIVITY.to_radians(),
+            peridot_math::Vector3::down(),
+        );
+
+        let current_size = this.borrow().ht.borrow().rect().clone();
+        let mut camera_upload_buffer = ctx
+            .app_subsystems()
+            .borrow_mut()
+            .mini_engine
+            .alloc_upload_buffer(br::BufferDesc::new(
+                core::mem::size_of::<RenderCameraUniformData>(),
+                br::BufferUsage::TRANSFER_SRC,
+            ))
+            .expect("Failed to create upload buffer");
+        camera_upload_buffer
+            .write_content(RenderCameraUniformData {
+                camera_view_projection_matrix: this
+                    .borrow()
+                    .camera
+                    .view_projection_matrix(current_size.Width / current_size.Height),
+                camera_view_matrix: this.borrow().camera.view_matrix(),
+                // TODO: ここの値はcameraから取りたい
+                camera_persp_fov_rad: 45.0f32.to_radians(),
+                camera_aspect_wh: current_size.Width / current_size.Height,
+            })
+            .expect("Failed to write camera vp matrix");
+
+        let app_subsystems_borrow = ctx.app_subsystems().borrow();
+        let mut cp = br::CommandPoolBuilder::new(
+            app_subsystems_borrow
+                .mini_engine
+                .graphics_queue_family_index(),
+        )
+        .transient()
+        .create(app_subsystems_borrow.mini_engine.device())
+        .expect("Failed to create transient command pool");
+        let mut cb = cp
+            .alloc(1, true)
+            .expect("Failed to allocate command buffer");
+        unsafe { cb[0].begin_once().expect("Failed to begin commands") }
+            .copy_buffer(
+                &camera_upload_buffer,
+                &this.borrow().camera_buffer,
+                &[br::vk::VkBufferCopy {
+                    srcOffset: 0,
+                    dstOffset: 0,
+                    size: core::mem::size_of::<RenderCameraUniformData>() as _,
+                }],
+            )
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .of_memory(
+                        br::AccessFlags2::TRANSFER.write,
+                        br::AccessFlags2::UNIFORM_READ,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags2::COPY,
+                        br::PipelineStageFlags2::VERTEX_SHADER,
+                    )],
+                &[],
+                &[],
+            ))
+            .end()
+            .expect("Failed to finish updating commands");
+        app_subsystems_borrow
+            .mini_engine
+            .graphics_queue()
+            .borrow_mut()
+            .submit2(
+                &[br::SubmitInfo2::new(
+                    &[],
+                    &[br::CommandBufferSubmitInfo::new(&cb[0])],
+                    &[],
+                )],
+                None::<&mut br::FenceObject<StdVkDevice>>,
+            )
+            .expect("Failed to submit updating commands");
+        app_subsystems_borrow
+            .mini_engine
+            .graphics_queue()
+            .borrow_mut()
+            .wait()
+            .expect("Failed to wait update completion");
+        drop(cp);
+        drop(app_subsystems_borrow);
+    }
+
+    fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        unsafe {
+            ShowCursor(true);
+        }
+        ctx.release_mouse_capture();
+    }
+}
 
 pub struct EventHandle(HANDLE);
 unsafe impl Sync for EventHandle {}
