@@ -8,11 +8,12 @@ layout(location = 0) out vec4 target;
 
 layout(set = 0, binding = 0, std140) uniform RenderCameraData {
     mat4 cameraViewProjectionMatrix;
-    mat4 cameraViewMatrix;
+    mat4 cameraInverseViewMatrix;
     float perspFovInRadians, aspectWH;
 };
 layout(set = 1, binding = 0, std140) uniform PrimaryDirectionalLightData {
-    vec4 incidentLightDir;
+    vec3 incidentLightDir;
+    float lightIntensity;
 };
 layout(set = 1, binding = 1) uniform sampler3D scatter;
 layout(set = 1, binding = 2) uniform sampler2D transmittance;
@@ -59,15 +60,17 @@ vec4 lookupTransmittance(float height, float cvs)
 
 void main() {
     const float zd = 1.0 / tan(perspFovInRadians * 0.5);
-    const vec3 viewvec = normalize((cameraViewMatrix * vec4((2.0 * uv.x - 1.0) * aspectWH, -(2.0 * uv.y - 1.0), zd, 0.0)).xyz);
+    const vec3 viewvec = normalize((vec4((2.0 * uv.x - 1.0) * aspectWH, -(2.0 * uv.y - 1.0), zd, 0.0) * cameraInverseViewMatrix).xyz);
     const float cv = dot(viewvec, vec3(0.0, 1.0, 0.0));
-    const float camHeight = (cameraViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).y;
     const float cs = dot(-incidentLightDir.xyz, vec3(0.0, 1.0, 0.0));
+    const float camHeight = (vec4(0.0, 0.0, 0.0, 1.0) * cameraInverseViewMatrix).y;
     const float vs_cos = dot(incidentLightDir.xyz, -viewvec);
+
+    const float ph_rayleigh = (1.0f + pow(vs_cos, 2.0f)) * 3.0f / 4.0f;
 
     const float fade = clamp(viewvec.y / 0.02f, 0.0f, 1.0f);
 
     const vec4 scatterLight = getScatterLight(camHeight, cv, cs);
     const vec3 mieRgb = phaseMie(vs_cos) * estimateMieRgb(scatterLight);
-    target = mix(vec4(0.1, 0.1, 0.13, 1.0), vec4(10.0 * (/*lookupTransmittance(eyeHeight, cs).xyz + */phaseRayleigh(vs_cos) * scatterLight.xyz/* + mieRgb*/), 1.0), fade);
+    target = mix(vec4(0.1, 0.1, 0.13, 1.0), vec4(ph_rayleigh * scatterLight.xyz * lightIntensity + mieRgb * lightIntensity, 1.0), fade);
 }

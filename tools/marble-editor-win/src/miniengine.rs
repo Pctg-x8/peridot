@@ -226,6 +226,11 @@ impl MiniEngine {
     }
 
     #[inline(always)]
+    pub fn adapter(&self) -> &impl br::PhysicalDevice {
+        &self.graphics_objects.adapter
+    }
+
+    #[inline(always)]
     pub fn device(&self) -> &StdVkDevice {
         &self.graphics_objects.device
     }

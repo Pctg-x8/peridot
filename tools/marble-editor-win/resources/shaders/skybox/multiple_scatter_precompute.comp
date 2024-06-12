@@ -21,7 +21,7 @@ vec4 lookupGatheredLight(float height, vec2 dir)
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 void main()
 {
-    const vec3 uv = (gl_GlobalInvocationID.xyz * 0.9 + 0.5) / vec3(imageSize(scatterLUT));
+    const vec3 uv = (gl_GlobalInvocationID.xyz + 0.5) / vec3(imageSize(scatterLUT));
     const float paHeight = calcHeightFromParam(uv.x);
     const float vCos = calcViewZenithCosFromParam(uv.y, paHeight);
     const float lCos = calcSunZenithCosFromParam(uv.z);

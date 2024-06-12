@@ -3905,7 +3905,9 @@ impl SkyboxRenderer {
                 },
             ],
             primary_directional_light_data: PrimaryDirectionalLightUniformData {
-                incident_light_dir: peridot_math::Vector4(0.0f32, -0.2, -1.0, 0.0).normalize(),
+                // incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
+                incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                light_intensity: 20.0,
             },
         })?;
 
@@ -4018,31 +4020,127 @@ impl SkyboxRenderer {
 #[repr(C)]
 pub struct RenderCameraUniformData {
     pub camera_view_projection_matrix: peridot_math::Matrix4F32,
-    pub camera_view_matrix: peridot_math::Matrix4F32,
+    pub camera_inverse_view_matrix: peridot_math::Matrix4F32,
     pub camera_persp_fov_rad: f32,
     pub camera_aspect_wh: f32,
 }
 
 #[repr(C)]
 pub struct PrimaryDirectionalLightUniformData {
-    pub incident_light_dir: peridot_math::Vector4F32,
+    pub incident_light_dir: peridot_math::Vector3F32,
+    pub light_intensity: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UVVertex2D {
+    pub pos: peridot_math::Vector2F32,
+    pub uv: peridot_math::Vector2F32,
+}
+
+pub struct UtilityVertices {
+    pub buffer: peridot_memory_manager::Buffer,
+    pub uv_triangle_strip_fill_plane2d_offset: br::vk::VkDeviceSize,
+}
+impl UtilityVertices {
+    pub fn new(
+        e: &mut MiniEngine,
+        cmdrec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
+    ) -> br::Result<Self> {
+        let mut buffer_prealloc = peridot::BufferPrealloc::new(e.device(), e.adapter());
+        let uv_triangle_strip_fill_plane2d_offset =
+            buffer_prealloc.add(peridot::BufferContent::vertices::<UVVertex2D>(4));
+        let total_size = buffer_prealloc.total_size();
+
+        let buffer_desc =
+            buffer_prealloc.build_desc_custom_usage(br::BufferUsage::VERTEX_BUFFER.transfer_dest());
+        let buffer_stg_desc =
+            buffer_prealloc.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC);
+        drop(buffer_prealloc);
+
+        let buffer = e.alloc_device_local_buffer(buffer_desc)?;
+        let mut buffer_stg = e.alloc_upload_buffer(buffer_stg_desc)?;
+        buffer_stg.guard_map(peridot_memory_manager::BufferMapMode::Write, |ptr| unsafe {
+            ptr.copy_slice_to(
+                uv_triangle_strip_fill_plane2d_offset as _,
+                &[
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(-1.0, -1.0),
+                        uv: peridot_math::Vector2(0.0, 0.0),
+                    },
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(1.0, -1.0),
+                        uv: peridot_math::Vector2(1.0, 0.0),
+                    },
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(-1.0, 1.0),
+                        uv: peridot_math::Vector2(0.0, 1.0),
+                    },
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(1.0, 1.0),
+                        uv: peridot_math::Vector2(1.0, 1.0),
+                    },
+                ],
+            );
+        })?;
+
+        unsafe {
+            // update_inplace
+            core::ptr::write(
+                cmdrec,
+                core::ptr::read(cmdrec)
+                    .copy_buffer(
+                        &buffer_stg,
+                        &buffer,
+                        &[br::vk::VkBufferCopy {
+                            srcOffset: 0,
+                            dstOffset: 0,
+                            size: total_size,
+                        }],
+                    )
+                    .pipeline_barrier_2(&br::DependencyInfo::new(
+                        &[br::MemoryBarrier2::new()
+                            .of_memory(
+                                br::AccessFlags2::TRANSFER.write,
+                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+                            )
+                            .of_execution(
+                                br::PipelineStageFlags2::COPY,
+                                br::PipelineStageFlags2::VERTEX_INPUT,
+                            )],
+                        &[],
+                        &[],
+                    )),
+            );
+        }
+
+        Ok(Self {
+            buffer,
+            uv_triangle_strip_fill_plane2d_offset,
+        })
+    }
 }
 
 pub struct EditorStageView {
     root: SpriteVisual,
     ht: SharedMut<HitTestTree>,
+    utility_verts: UtilityVertices,
     skybox_renderer: SkyboxRenderer,
     main_render_pass: br::RenderPassObject<StdVkDevice>,
     main_render_command_pool: br::CommandPoolObject<StdVkDevice>,
+    hdr_final_pass_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    hdr_final_pass_pipeline: br::PipelineObject<StdVkDevice>,
     grid_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
     grid_pipeline: br::PipelineObject<StdVkDevice>,
     grid_buffer: peridot_memory_manager::Buffer,
     grid_vertex_count: usize,
     camera_buffer: peridot_memory_manager::Buffer,
     camera: Camera,
+    _descriptor_set_layout_ia1: br::DescriptorSetLayoutObject<StdVkDevice>,
     _descriptor_set_layout_ub1: br::DescriptorSetLayoutObject<StdVkDevice>,
     _descriptor_pool: br::DescriptorPoolObject<StdVkDevice>,
     camera_descriptor_set: br::DescriptorSet,
+    hdr_final_pass_descriptor_set: br::DescriptorSet,
     back_buffer_resources: Vec<(
         HANDLE,
         br::DeviceMemoryObject<StdVkDevice>,
@@ -4123,11 +4221,49 @@ impl EditorStageView {
             SkyboxPrecomputedTextures::new(&mut view_ctx.app_subsystems().borrow_mut().mini_engine)
                 .expect("Failed to precompute skybox textures");
 
+        let mut initialization_cp = br::CommandPoolBuilder::new(
+            view_ctx
+                .app_subsystems()
+                .borrow()
+                .mini_engine
+                .graphics_queue_family_index(),
+        )
+        .transient()
+        .create(
+            view_ctx
+                .app_subsystems()
+                .borrow()
+                .mini_engine
+                .device()
+                .clone(),
+        )
+        .expect("Failed to create initialization command pool");
+        let mut initialization_cb = initialization_cp
+            .alloc(1, true)
+            .expect("Failed to alloc initialization command buffer");
+        let mut initialization_cmd_rec = unsafe {
+            initialization_cb[0]
+                .begin_once()
+                .expect("Failed to begin initialization command recording")
+        };
+
+        let utility_verts = UtilityVertices::new(
+            &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
+            &mut initialization_cmd_rec,
+        )
+        .expect("Failed to create utility verts");
+
         let main_render_pass = br::RenderPassBuilder2::new(
             &[
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
                     .layout_transition(br::ImageLayout::Undefined, br::ImageLayout::General)
-                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
+                    .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
+                br::AttachmentDescription2::new(br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .layout_transition(
+                        br::ImageLayout::Undefined,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    )
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare),
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
                     .layout_transition(
                         br::ImageLayout::Undefined,
@@ -4135,27 +4271,56 @@ impl EditorStageView {
                     )
                     .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare),
             ],
-            &[br::SubpassDescription2::new()
-                .colors(&[br::AttachmentReference2::color(
-                    0,
-                    br::ImageLayout::ColorAttachmentOpt,
-                )])
-                .depth_stencil(&br::AttachmentReference2::depth_stencil(
-                    1,
-                    br::ImageLayout::DepthStencilAttachmentOpt,
-                ))],
-            &[br::SubpassDependency2::new(
-                br::SubpassIndex::Internal(0),
-                br::SubpassIndex::External,
-            )
-            .of_memory(
-                br::AccessFlags::COLOR_ATTACHMENT.write,
-                br::AccessFlags::MEMORY.read,
-            )
-            .of_execution(
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                br::PipelineStageFlags(0),
-            )],
+            &[
+                br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color(
+                        1,
+                        br::ImageLayout::ColorAttachmentOpt,
+                    )])
+                    .depth_stencil(&br::AttachmentReference2::depth_stencil(
+                        2,
+                        br::ImageLayout::DepthStencilAttachmentOpt,
+                    )),
+                br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color(
+                        0,
+                        br::ImageLayout::ColorAttachmentOpt,
+                    )])
+                    .inputs(&[br::AttachmentReference2::color(
+                        1,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    )])
+                    .depth_stencil(&br::AttachmentReference2::depth_stencil(
+                        2,
+                        br::ImageLayout::DepthStencilAttachmentOpt,
+                    )),
+            ],
+            &[
+                br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::Internal(1),
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::SHADER.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::FRAGMENT_SHADER,
+                ),
+                br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(1),
+                    br::SubpassIndex::External,
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::MEMORY.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags(0),
+                ),
+            ],
         )
         .create(
             view_ctx
@@ -4166,6 +4331,8 @@ impl EditorStageView {
                 .clone(),
         )
         .expect("Failed to create main render pass");
+        let hdr_render_subpass = 0;
+        let ldr_gizmos_render_subpass = 1;
         let mut main_render_command_pool = br::CommandPoolBuilder::new(
             view_ctx
                 .app_subsystems()
@@ -4186,6 +4353,27 @@ impl EditorStageView {
             .alloc(3, true)
             .expect("Failed to allocate command buffers");
 
+        let hdr_temp_buffer = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .mini_engine
+            .alloc_device_local_image(br::ImageDesc::new(
+                br::vk::VkExtent2D {
+                    width: 128,
+                    height: 128,
+                },
+                br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
+                br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::INPUT_ATTACHMENT,
+                br::ImageLayout::Undefined,
+            ))
+            .expect("Failed to create hdr temp buffer");
+        let hdr_temp_buffer = Rc::new(
+            hdr_temp_buffer
+                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create shared hdr temp buffer"),
+        );
         let shared_depth_stencil_buffer = view_ctx
             .app_subsystems()
             .borrow_mut()
@@ -4205,6 +4393,21 @@ impl EditorStageView {
                 .expect("Failed to create shared depth stencil buffer view"),
         );
 
+        let descriptor_set_layout_ia1 = br::DescriptorSetLayoutBuilder::new()
+            .bind(
+                br::DescriptorType::InputAttachment
+                    .make_binding(1)
+                    .only_for_fragment(),
+            )
+            .create(
+                view_ctx
+                    .app_subsystems()
+                    .borrow()
+                    .mini_engine
+                    .device()
+                    .clone(),
+            )
+            .expect("Failed to create descriptor set layout");
         let descriptor_set_layout_ub1 = br::DescriptorSetLayoutBuilder::new()
             .bind(
                 br::DescriptorType::UniformBuffer
@@ -4220,6 +4423,72 @@ impl EditorStageView {
                     .clone(),
             )
             .expect("Failed to create descriptor set layout");
+
+        let hdr_final_pass_vsh = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .mini_engine
+            .shader("shaders/simple2d_notrans_with_uv.vspv")
+            .expect("Failed to load final pass vertex shader");
+        let hdr_final_pass_fsh = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .mini_engine
+            .shader("shaders/simple2d_hdr_final_pass.fspv")
+            .expect("Failed to load final pass fragment shader");
+        let hdr_final_pass_vbinds = [br::VertexInputBindingDescription::per_vertex_typed::<
+            UVVertex2D,
+        >(0)];
+        let hdr_final_pass_vattrs = [
+            br::vk::VkVertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                offset: core::mem::offset_of!(UVVertex2D, pos) as _,
+            },
+            br::vk::VkVertexInputAttributeDescription {
+                location: 1,
+                binding: 0,
+                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                offset: core::mem::offset_of!(UVVertex2D, uv) as _,
+            },
+        ];
+        let hdr_final_pass_pipeline_layout =
+            br::PipelineLayoutBuilder::new(vec![&descriptor_set_layout_ia1], vec![])
+                .create(
+                    view_ctx
+                        .app_subsystems()
+                        .borrow()
+                        .mini_engine
+                        .device()
+                        .clone(),
+                )
+                .expect("Failed to create hdr final pass pipeline layout");
+        let mut hdr_final_pass_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &hdr_final_pass_pipeline_layout,
+            (&main_render_pass, ldr_gizmos_render_subpass),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(
+                    &hdr_final_pass_vsh,
+                    c"main".to_owned(),
+                ))
+                .with_fragment_shader_stage(br::PipelineShader2::new(
+                    &hdr_final_pass_fsh,
+                    c"main".to_owned(),
+                )),
+                &hdr_final_pass_vbinds,
+                &hdr_final_pass_vattrs,
+                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            ),
+        );
+        hdr_final_pass_pipeline
+            .multisample_state(Some(br::MultisampleState::new()))
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+            .viewport_scissors(
+                br::DynamicArrayState::Dynamic(1),
+                br::DynamicArrayState::Dynamic(1),
+            )
+            .depth_test_settings(None, false);
 
         let grid_vsh = view_ctx
             .app_subsystems()
@@ -4249,7 +4518,7 @@ impl EditorStageView {
         .expect("Failed to create grid pipeline layout");
         let mut grid_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
             &grid_pipeline_layout,
-            (&main_render_pass, 0),
+            (&main_render_pass, 1),
             br::VertexProcessingStages::new(
                 br::VertexShaderStage::new(br::PipelineShader2::new(&grid_vsh, c"main".to_owned()))
                     .with_fragment_shader_stage(br::PipelineShader2::new(
@@ -4282,14 +4551,19 @@ impl EditorStageView {
             )
             .depth_test_settings(Some(br::CompareOp::LessOrEqual), true)
             .rasterization_state(rasterization_state);
-        let grid_pipeline = grid_pipeline
-            .create(
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .mini_engine
-                    .device()
-                    .clone(),
+
+        let hdr_final_pass_pipeline_extras = hdr_final_pass_pipeline.make_extras();
+        let grid_pipeline_extras = grid_pipeline.make_extras();
+        let [hdr_final_pass_pipeline, grid_pipeline] = view_ctx
+            .app_subsystems()
+            .borrow()
+            .mini_engine
+            .device()
+            .new_graphics_pipeline_array(
+                &[
+                    hdr_final_pass_pipeline.build(&hdr_final_pass_pipeline_extras),
+                    grid_pipeline.build(&grid_pipeline_extras),
+                ],
                 Some(
                     view_ctx
                         .app_subsystems()
@@ -4359,7 +4633,7 @@ impl EditorStageView {
             .collect::<Vec<_>>();
         let default_camera = Camera {
             projection: Some(ProjectionMethod::Perspective {
-                fov: 45.0f32.to_radians(),
+                fov: 60.0f32.to_radians(),
             }),
             position: peridot_math::Vector3(0.0, 1.6, -10.0),
             rotation: peridot_math::Quaternion::ONE,
@@ -4402,75 +4676,58 @@ impl EditorStageView {
         camera_buffer_stg
             .write_content(RenderCameraUniformData {
                 camera_view_projection_matrix: default_camera.view_projection_matrix(1.0),
-                camera_view_matrix: default_camera.view_matrix(),
-                camera_persp_fov_rad: 45.0f32.to_radians(),
+                camera_inverse_view_matrix: default_camera.inverse_view_matrix(),
+                camera_persp_fov_rad: 60.0f32.to_radians(),
                 camera_aspect_wh: 1.0,
             })
             .expect("Failed to write camera matrix");
 
         // initialize
-        let app_subsystems_borrow = view_ctx.app_subsystems().borrow();
-        let mut cp = br::CommandPoolBuilder::new(
-            view_ctx
-                .app_subsystems()
-                .borrow()
-                .mini_engine
-                .graphics_queue_family_index(),
-        )
-        .transient()
-        .create(app_subsystems_borrow.mini_engine.device())
-        .expect("Failed to create initialize command pool");
-        let mut init_cb = cp
-            .alloc(1, true)
-            .expect("Failed to allocate init command buffer");
-        unsafe {
-            init_cb[0]
-                .begin_once()
-                .expect("Failed to begin init commands")
-        }
-        .pipeline_barrier_2(&br::DependencyInfo::new(
-            &[br::MemoryBarrier2::new()
-                .of_memory(
-                    br::AccessFlags2::HOST.write,
-                    br::AccessFlags2::TRANSFER.read,
-                )
-                .of_execution(br::PipelineStageFlags2::HOST, br::PipelineStageFlags2::COPY)],
-            &[],
-            &[],
-        ))
-        .copy_buffer(
-            &grid_buffer_stg,
-            &grid_buffer,
-            &[br::vk::VkBufferCopy {
-                srcOffset: 0,
-                dstOffset: 0,
-                size: grid_buffer.byte_length() as _,
-            }],
-        )
-        .copy_buffer(
-            &camera_buffer_stg,
-            &camera_buffer,
-            &[br::vk::VkBufferCopy {
-                srcOffset: 0,
-                dstOffset: 0,
-                size: camera_buffer_stg.byte_length() as _,
-            }],
-        )
-        .pipeline_barrier_2(&br::DependencyInfo::new(
-            &[br::MemoryBarrier2::new()
-                .of_memory(
-                    br::AccessFlags2::TRANSFER.write,
-                    br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::UNIFORM_READ,
-                )
-                .of_execution(
-                    br::PipelineStageFlags2::COPY,
-                    br::PipelineStageFlags2::VERTEX_INPUT | br::PipelineStageFlags2::VERTEX_SHADER,
-                )],
-            &[],
-            &[],
-        ))
-        .end()
-        .expect("Failed to finish init commands");
+        initialization_cmd_rec
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .of_memory(
+                        br::AccessFlags2::HOST.write,
+                        br::AccessFlags2::TRANSFER.read,
+                    )
+                    .of_execution(br::PipelineStageFlags2::HOST, br::PipelineStageFlags2::COPY)],
+                &[],
+                &[],
+            ))
+            .copy_buffer(
+                &grid_buffer_stg,
+                &grid_buffer,
+                &[br::vk::VkBufferCopy {
+                    srcOffset: 0,
+                    dstOffset: 0,
+                    size: grid_buffer.byte_length() as _,
+                }],
+            )
+            .copy_buffer(
+                &camera_buffer_stg,
+                &camera_buffer,
+                &[br::vk::VkBufferCopy {
+                    srcOffset: 0,
+                    dstOffset: 0,
+                    size: camera_buffer_stg.byte_length() as _,
+                }],
+            )
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .of_memory(
+                        br::AccessFlags2::TRANSFER.write,
+                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::UNIFORM_READ,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags2::COPY,
+                        br::PipelineStageFlags2::VERTEX_INPUT
+                            | br::PipelineStageFlags2::VERTEX_SHADER,
+                    )],
+                &[],
+                &[],
+            ))
+            .end()
+            .expect("Failed to finish init commands");
         view_ctx
             .app_subsystems()
             .borrow()
@@ -4480,7 +4737,7 @@ impl EditorStageView {
             .submit2(
                 &[br::SubmitInfo2::new(
                     &[],
-                    &[br::CommandBufferSubmitInfo::new(&init_cb[0])],
+                    &[br::CommandBufferSubmitInfo::new(&initialization_cb[0])],
                     &[],
                 )],
                 None::<&mut br::FenceObject<StdVkDevice>>,
@@ -4494,11 +4751,11 @@ impl EditorStageView {
             .borrow_mut()
             .wait()
             .expect("Failed to wait init commands");
-        drop(cp);
-        drop(app_subsystems_borrow);
+        drop(initialization_cp);
 
-        let mut dp = br::DescriptorPoolBuilder::new(1)
+        let mut dp = br::DescriptorPoolBuilder::new(2)
             .reserve(br::DescriptorType::UniformBuffer.with_count(1))
+            .reserve(br::DescriptorType::InputAttachment.with_count(1))
             .create(
                 view_ctx
                     .app_subsystems()
@@ -4508,8 +4765,11 @@ impl EditorStageView {
                     .clone(),
             )
             .expect("Failed to create descriptor pool");
-        let camera_descriptor_set = dp
-            .alloc(&[&descriptor_set_layout_ub1])
+        let [camera_descriptor_set, hdr_final_pass_descriptor_set] = dp
+            .alloc_array(&[
+                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ub1),
+                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ia1),
+            ])
             .expect("Failed to allocate camera descriptor set");
         view_ctx
             .app_subsystems()
@@ -4518,11 +4778,17 @@ impl EditorStageView {
             .device()
             .update_descriptor_sets(
                 &[
-                    br::DescriptorPointer::new(camera_descriptor_set[0].0, 0).write(
+                    camera_descriptor_set.binding_at(0).write(
                         br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
                             &camera_buffer,
                             0..core::mem::size_of::<RenderCameraUniformData>() as u64,
                         )]),
+                    ),
+                    hdr_final_pass_descriptor_set.binding_at(0).write(
+                        br::DescriptorContents::input_attachment(
+                            &hdr_temp_buffer,
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        ),
                     ),
                 ],
                 &[],
@@ -4532,7 +4798,7 @@ impl EditorStageView {
             &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
             &descriptor_set_layout_ub1,
             &main_render_pass,
-            0,
+            hdr_render_subpass,
             skybox_precomputed_textures,
         )
         .expect("Failed to initialize skybox renderer");
@@ -4673,6 +4939,7 @@ impl EditorStageView {
                         .create()
                         .expect("Failed to create image view"),
                 )
+                .with_attachment(hdr_temp_buffer.clone())
                 .with_attachment(shared_depth_stencil_buffer.clone())
                 .create()
                 .expect("Failed to create framebuffer");
@@ -4690,11 +4957,11 @@ impl EditorStageView {
                     },
                     &[
                         br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                        br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
                         br::ClearValue::depth_stencil(1.0, 0),
                     ],
                     true,
                 )
-                .bind_graphics_pipeline_pair(&grid_pipeline, &grid_pipeline_layout)
                 .set_viewport(
                     0,
                     &[br::vk::VkViewport {
@@ -4713,10 +4980,6 @@ impl EditorStageView {
                         extent: br::vk::VkExtent2D::spread1(128),
                     }],
                 )
-                .bind_graphics_descriptor_sets(0, &[camera_descriptor_set[0].0], &[])
-                .bind_vertex_buffers(0, &[(&grid_buffer, 0)])
-                .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
-                .draw(grid_vertices.len() as _, 1, 0, 0)
                 .bind_graphics_pipeline_pair(
                     &skybox_renderer.pipeline,
                     &skybox_renderer.pipeline_layout,
@@ -4725,13 +4988,32 @@ impl EditorStageView {
                 .bind_graphics_descriptor_sets(
                     0,
                     &[
-                        camera_descriptor_set[0].0,
+                        camera_descriptor_set.0,
                         skybox_renderer.renderer_descriptor.0,
                     ],
                     &[],
                 )
                 .bind_vertex_buffers(0, &[(&skybox_renderer.vertex_buffer, 0)])
                 .draw(4, 1, 0, 0)
+                .next_subpass(true)
+                .bind_graphics_pipeline_pair(
+                    &hdr_final_pass_pipeline,
+                    &hdr_final_pass_pipeline_layout,
+                )
+                .bind_graphics_descriptor_sets(0, &[hdr_final_pass_descriptor_set.0], &[])
+                .bind_vertex_buffers(
+                    0,
+                    &[(
+                        &utility_verts.buffer,
+                        utility_verts.uv_triangle_strip_fill_plane2d_offset as _,
+                    )],
+                )
+                .draw(4, 1, 0, 0)
+                .bind_graphics_pipeline_pair(&grid_pipeline, &grid_pipeline_layout)
+                .bind_graphics_descriptor_sets(0, &[camera_descriptor_set.0], &[])
+                .bind_vertex_buffers(0, &[(&grid_buffer, 0)])
+                .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
+                .draw(grid_vertices.len() as _, 1, 0, 0)
                 .end_render_pass()
                 .end()
                 .expect("Failed to record commands");
@@ -4758,18 +5040,23 @@ impl EditorStageView {
             Self {
                 root,
                 ht,
+                utility_verts,
                 skybox_renderer,
                 main_render_pass,
                 main_render_command_pool,
+                hdr_final_pass_pipeline_layout,
+                hdr_final_pass_pipeline,
                 grid_pipeline_layout,
                 grid_pipeline,
                 grid_buffer,
                 grid_vertex_count: grid_vertices.len(),
                 camera_buffer,
                 camera: default_camera,
+                _descriptor_set_layout_ia1: descriptor_set_layout_ia1,
                 _descriptor_set_layout_ub1: descriptor_set_layout_ub1,
                 _descriptor_pool: dp,
-                camera_descriptor_set: camera_descriptor_set[0],
+                camera_descriptor_set,
+                hdr_final_pass_descriptor_set,
                 renderer: Rc::new(StageTabContentRenderer {
                     back_buffers: back_buffer_render_resources,
                     presentation_manager: view_ctx
@@ -4864,6 +5151,24 @@ impl EditorStageView {
             })?;
         }
 
+        let hdr_temp_buffer = resize_ctx
+            .app_subsystems
+            .borrow_mut()
+            .mini_engine
+            .alloc_device_local_image(br::ImageDesc::new(
+                buffer_real_size.clone(),
+                br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
+                br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::INPUT_ATTACHMENT,
+                br::ImageLayout::Undefined,
+            ))
+            .expect("Failed to create hdr temp buffer");
+        let hdr_temp_buffer = Rc::new(
+            hdr_temp_buffer
+                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                .view_builder()
+                .create()
+                .expect("Failed to create shared hdr temp buffer"),
+        );
         let shared_depth_stencil_buffer = resize_ctx
             .app_subsystems
             .borrow_mut()
@@ -4897,9 +5202,9 @@ impl EditorStageView {
                 camera_view_projection_matrix: self
                     .camera
                     .view_projection_matrix(new_size.X / new_size.Y),
-                camera_view_matrix: self.camera.view_matrix(),
+                camera_inverse_view_matrix: self.camera.inverse_view_matrix(),
                 // TODO: ここの値はself.cameraから取りたい
-                camera_persp_fov_rad: 45.0f32.to_radians(),
+                camera_persp_fov_rad: 60.0f32.to_radians(),
                 camera_aspect_wh: new_size.X / new_size.Y,
             })
             .expect("Failed to write camera vp matrix");
@@ -4962,6 +5267,21 @@ impl EditorStageView {
             .expect("Failed to wait update completion");
         drop(cp);
         drop(app_subsystems_borrow);
+
+        resize_ctx
+            .app_subsystems
+            .borrow()
+            .mini_engine
+            .device()
+            .update_descriptor_sets(
+                &[self.hdr_final_pass_descriptor_set.binding_at(0).write(
+                    br::DescriptorContents::input_attachment(
+                        &hdr_temp_buffer,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    ),
+                )],
+                &[],
+            );
 
         for (n, (renderer, bb)) in (0..3).zip(
             Rc::get_mut(&mut self.renderer)
@@ -5103,6 +5423,7 @@ impl EditorStageView {
                         .create()
                         .expect("Failed to create image view"),
                 )
+                .with_attachment(hdr_temp_buffer.clone())
                 .with_attachment(shared_depth_stencil_buffer.clone())
                 .create()
                 .expect("Failed to create framebuffer");
@@ -5122,11 +5443,11 @@ impl EditorStageView {
                 },
                 &[
                     br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
                     br::ClearValue::depth_stencil(1.0, 0),
                 ],
                 true,
             )
-            .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
             .set_viewport(
                 0,
                 &[br::vk::VkViewport {
@@ -5145,10 +5466,6 @@ impl EditorStageView {
                     extent: buffer_real_size.clone(),
                 }],
             )
-            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
-            .bind_vertex_buffers(0, &[(&self.grid_buffer, 0)])
-            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
-            .draw(self.grid_vertex_count as _, 1, 0, 0)
             .bind_graphics_pipeline_pair(
                 &self.skybox_renderer.pipeline,
                 &self.skybox_renderer.pipeline_layout,
@@ -5164,6 +5481,25 @@ impl EditorStageView {
             )
             .bind_vertex_buffers(0, &[(&self.skybox_renderer.vertex_buffer, 0)])
             .draw(4, 1, 0, 0)
+            .next_subpass(true)
+            .bind_graphics_pipeline_pair(
+                &self.hdr_final_pass_pipeline,
+                &self.hdr_final_pass_pipeline_layout,
+            )
+            .bind_graphics_descriptor_sets(0, &[self.hdr_final_pass_descriptor_set.0], &[])
+            .bind_vertex_buffers(
+                0,
+                &[(
+                    &self.utility_verts.buffer,
+                    self.utility_verts.uv_triangle_strip_fill_plane2d_offset as _,
+                )],
+            )
+            .draw(4, 1, 0, 0)
+            .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
+            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
+            .bind_vertex_buffers(0, &[(&self.grid_buffer, 0)])
+            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
+            .draw(self.grid_vertex_count as _, 1, 0, 0)
             .end_render_pass()
             .end()
             .expect("Failed to record commands");
@@ -5247,9 +5583,9 @@ impl InputEventHandler for WeakMut<EditorStageView> {
                     .borrow()
                     .camera
                     .view_projection_matrix(current_size.Width / current_size.Height),
-                camera_view_matrix: this.borrow().camera.view_matrix(),
+                camera_inverse_view_matrix: this.borrow().camera.inverse_view_matrix(),
                 // TODO: ここの値はcameraから取りたい
-                camera_persp_fov_rad: 45.0f32.to_radians(),
+                camera_persp_fov_rad: 60.0f32.to_radians(),
                 camera_aspect_wh: current_size.Width / current_size.Height,
             })
             .expect("Failed to write camera vp matrix");
@@ -5385,7 +5721,8 @@ pub struct ObjectTreeElementRowView {
     bg_hover_end_animation: ScalarKeyFrameAnimation,
 }
 impl ObjectTreeElementRowView {
-    const PADDING: f32 = 4.0;
+    const PADDING_Y: f32 = 2.0;
+    const PADDING_X: f32 = 8.0;
     const HOVER_ANIMATION_DURATION: TimeSpan = timespan_ms(50);
 
     pub fn new(
@@ -5411,7 +5748,7 @@ impl ObjectTreeElementRowView {
         root.set_properties()
             .size(Vector2 {
                 X: 0.0,
-                Y: label_surface.height + Self::PADDING * 2.0,
+                Y: label_surface.height + Self::PADDING_Y * 2.0,
             })?
             .relative_size_adjustment(Vector2 { X: 1.0, Y: 0.0 })?;
 
@@ -5452,8 +5789,8 @@ impl ObjectTreeElementRowView {
                     .CreateSurfaceBrushWithSurface(&label_surface.surface)?,
             )?
             .rect(&Rect {
-                X: Self::PADDING,
-                Y: Self::PADDING,
+                X: Self::PADDING_X,
+                Y: Self::PADDING_Y,
                 Width: label_surface.width,
                 Height: label_surface.height,
             })?;
@@ -5493,7 +5830,7 @@ impl ObjectTreeElementRowView {
                     X: 0.0,
                     Y: 0.0,
                     Width: core::f32::MAX,
-                    Height: label_surface.height + Self::PADDING * 2.0,
+                    Height: label_surface.height + Self::PADDING_Y * 2.0,
                 },
             );
 

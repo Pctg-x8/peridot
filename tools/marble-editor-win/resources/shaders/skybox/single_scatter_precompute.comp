@@ -8,10 +8,6 @@ const uint IntegrationSteps = 512;
 layout(set = 0, binding = 0) uniform sampler2D transmittanceLUT;
 layout(set = 0, binding = 1, rgba16f) writeonly uniform image3D scatterLUT;
 
-layout(constant_id = 0) const float IncidentLightInteisityR = 1.0;
-layout(constant_id = 1) const float IncidentLightInteisityG = 1.0;
-layout(constant_id = 2) const float IncidentLightIntensityB = 1.0;
-
 vec4 lookupTransmittance(float height, vec2 dir)
 {
     return texture(transmittanceLUT, vec2(parameterizeSunZenithCos(dir.y), parameterizeHeight(height)));
@@ -20,16 +16,17 @@ vec4 lookupTransmittance(float height, vec2 dir)
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 void main()
 {
-    const vec3 uv = (gl_GlobalInvocationID.xyz * 0.9 + 0.5) / vec3(imageSize(scatterLUT));
+    const vec3 uv = (gl_GlobalInvocationID.xyz + 0.5) / vec3(imageSize(scatterLUT));
     const float paHeight = calcHeightFromParam(uv.x);
     const float vCos = calcViewZenithCosFromParam(uv.y, paHeight);
     const float lCos = calcSunZenithCosFromParam(uv.z);
+
     const vec2 pa = vec2(0.0, paHeight + R_EARTH);
-    const vec2 view = vec2(sqrt(1.0 - pow(vCos, 2.0)), vCos);
-    const vec2 light = vec2(sqrt(1.0 - pow(lCos, 2.0)), lCos);
+    const vec2 viewDir = directionFromZenithCos(vCos);
+    const vec2 lightDir = directionFromZenithCos(lCos);
 
     vec2 pb;
-    intersection(pa, view, pb);
+    intersection(pa, viewDir, pb);
     const float stepSize = length(pb - pa) / float(IntegrationSteps);
     vec2 totalAccumulatedDensities = vec2(0.0);
     vec2 lastAccumulatedDensities = vec2(0.0);
@@ -39,7 +36,7 @@ void main()
     vec3 lastInscatteringRayleigh = vec3(0.0);
     for (uint i = 0; i < IntegrationSteps; i++)
     {
-        const vec2 p = pa + vec2(stepSize * float(i)) * view;
+        const vec2 p = pa + vec2(stepSize * float(i)) * viewDir;
 
         const vec2 accumulatedDensities = vec2(getMieDensity(height(p)), getRayleighDensity(height(p)));
         totalAccumulatedDensities += (accumulatedDensities + lastAccumulatedDensities) * 0.5 * stepSize;
@@ -47,7 +44,7 @@ void main()
 
         const vec3 transmittance =
             calcTransmittanceFromDensities(totalAccumulatedDensities.x, totalAccumulatedDensities.y) *
-            lookupTransmittance(height(p), light).xyz;
+            lookupTransmittance(height(p), lightDir).xyz;
         const vec3 currentInscatteringMie = getMieDensity(height(p)) * transmittance;
         const vec3 currentInscatteringRayleigh = getRayleighDensity(height(p)) * transmittance;
         totalInscatteringMie += (currentInscatteringMie + lastInscatteringMie) * 0.5 * stepSize;

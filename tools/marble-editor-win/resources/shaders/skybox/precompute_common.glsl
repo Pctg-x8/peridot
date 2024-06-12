@@ -2,12 +2,14 @@
 const float H_ATM = 80000;
 const float R_EARTH = 6371000;
 const vec3 RayleighCoeffs = vec3(6.55e-6, 1.73e-5, 2.30e-5);
+const vec3 RayleighExtinctionCoeffs = RayleighCoeffs;
 const vec3 MieCoeffs = vec3(2.0e-6, 2.0e-6, 2.0e-6);
-const vec3 TransmittanceMieCoeffs = MieCoeffs / 0.9;
+const vec3 MieExtinctionCoeffs = MieCoeffs / 0.9;
+const vec3 OzoneExtinctionCoeffs = vec3(4.0e-21, 1.1e-21, 5.3e-22) / 1e4;
 
 vec3 calcTransmittanceFromDensities(float mieDensity, float rayleighDensity)
 {
-    return exp(-(TransmittanceMieCoeffs * mieDensity + RayleighCoeffs * rayleighDensity));
+    return exp(-(MieExtinctionCoeffs * mieDensity + RayleighExtinctionCoeffs * rayleighDensity));
 }
 
 // Inverse Parameterizations //
@@ -47,14 +49,13 @@ float parameterizeSunZenithCos(float cs)
 // unit: m
 const float RayleighScaleHeight = 8000;
 const float MieScaleHeight = 1200;
-float density(float h, float scale)
-{
-    return exp(-h / scale);
-}
+float density(float h, float scale) { return exp(-h / scale); }
 float getRayleighDensity(float h) { return density(h, RayleighScaleHeight); }
 float getMieDensity(float h) { return density(h, MieScaleHeight); }
+float getOzoneDensity(float h) { return getRayleighDensity(h) * 6e-7; }
 
 float height(vec2 p) { return length(p) - R_EARTH; }
+vec2 directionFromZenithCos(float c) { return vec2(sqrt(1.0 - pow(c, 2.0)), c); }
 // true if intersects with ground of the earth
 bool intersection(vec2 p, vec2 v, out vec2 pa)
 {
@@ -78,15 +79,21 @@ bool intersection(vec2 p, vec2 v, out vec2 pa)
     const float tGroundDiscriminant = y * y - 4.0 * x * zGround;
     if (tGroundDiscriminant <= 0)
     {
+        // 地面には接触しない
         pa = p + v * tAtmos;
         return false;
     }
-    else
+    
+    const float tPos = (-y + sqrt(tGroundDiscriminant)) / (2.0 * x);
+    const float tNeg = (-y - sqrt(tGroundDiscriminant)) / (2.0 * x);
+    const float t = tPos > 0 ? (tNeg > 0 ? min(tPos, tNeg) : tPos) : tNeg;
+    if (t < 0)
     {
-        const float tPos = (-y + sqrt(tGroundDiscriminant)) / (2.0 * x);
-        const float tNeg = (-y - sqrt(tGroundDiscriminant)) / (2.0 * x);
-        const float t = tPos > 0 ? (tNeg > 0 ? min(tPos, tNeg) : tPos) : tNeg;
-        pa = p + v * (t > 0.0 ? min(t, tAtmos) : tAtmos);
-        return t > 0.0 && t < tAtmos;
+        // 地面には接触しない（逆方向にある）
+        pa = p + v * tAtmos;
+        return false;
     }
+
+    pa = p + v * t;
+    return true;
 }
