@@ -38,3 +38,6 @@ impl core::hash::Hash for SafeF32 {
 
 mod rect_ops;
 pub use self::rect_ops::*;
+
+mod safe_event;
+pub use self::safe_event::*;

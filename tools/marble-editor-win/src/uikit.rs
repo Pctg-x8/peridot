@@ -116,7 +116,7 @@ pub trait InputEventHandler {
     fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {}
     fn on_pointer_down(&self, _x: f32, _y: f32, _ctx: &mut dyn InputContext) {}
     fn on_pointer_up(&self, _x: f32, _y: f32, _ctx: &mut dyn InputContext) {}
-    fn on_click(&self, _ctx: &mut dyn InputContext) {}
+    fn on_click(&self, _window: HWND, _ctx: &mut dyn InputContext) {}
     fn on_begin_drag(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
     fn on_drag_move(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
     fn on_end_drag(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
@@ -153,8 +153,8 @@ impl<T: InputEventHandler + ?Sized> InputEventHandler for std::rc::Rc<T> {
     }
 
     #[inline(always)]
-    fn on_click(&self, ctx: &mut dyn InputContext) {
-        T::on_click(&*self, ctx)
+    fn on_click(&self, window: HWND, ctx: &mut dyn InputContext) {
+        T::on_click(&*self, window, ctx)
     }
 
     #[inline(always)]

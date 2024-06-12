@@ -1,7 +1,9 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
+    collections::{BTreeSet, HashMap, HashSet},
     ffi::c_void,
+    hash::Hash,
     rc::{Rc, Weak},
 };
 
@@ -13,14 +15,18 @@ use br::{
     Queue, RenderPass, SubmissionBatch, VulkanStructure,
 };
 use features::{AppTitleBarView, DockingPanePreview, PaneSplitterView, SplitDirection};
-use miniengine::{ColoredVertex, Mat4, Vec4};
+use miniengine::{ColoredVertex, Mat4, StdVkDevice, Vec4};
 use object_cache::{TextFormatStock, TextSurfaceStock};
 use peridot_math::{Camera, One, ProjectionMethod, Zero};
 use uikit::{
     HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, ResizeContext,
     ViewContext,
 };
-use utils::{rect_slice_bottom, rect_slice_left, rect_slice_right, rect_slice_top, RectExtensions};
+use utils::{
+    rect_slice_bottom, rect_slice_left, rect_slice_right, rect_slice_top, EventHandle,
+    RectExtensions,
+};
+use uuid::Uuid;
 use winapi_extras::{
     timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
     Vector2Extension, VisualExtensions,
@@ -1377,20 +1383,23 @@ impl TabGroupPaneView {
         tab: &SharedMut<PaneTabHeaderView>,
         target: &SharedMut<Self>,
         mut view_ctx: &mut (impl ViewContext + ?Sized),
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let index = tab.borrow().index_in_group;
 
         if tab.borrow().is_active && self.tabs.len() > 1 {
             // アクティブを付け替える（0個になる場合はどのみち消されるのでなにもしない）
             let new_active = if index == 0 { 1 } else { index - 1 };
-            self.switch_active(new_active, &mut view_ctx)?;
+            self.switch_active(new_active, &mut view_ctx, app_state)?;
         }
         tab.borrow().unmount()?;
         let (tab, content) = self.tabs.remove(index);
 
         let new_tab_index = Self::add_tab_raw(target, &tab, content.clone())?;
         // activate this tab
-        target.borrow_mut().switch_active(new_tab_index, view_ctx)?;
+        target
+            .borrow_mut()
+            .switch_active(new_tab_index, view_ctx, app_state)?;
 
         Ok(())
     }
@@ -1399,6 +1408,7 @@ impl TabGroupPaneView {
         &mut self,
         tab: &SharedMut<PaneTabHeaderView>,
         mut view_ctx: &mut (impl ViewContext + ?Sized),
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<Option<SharedMut<Self>>> {
         let Some(index) = self.tabs.iter().position(|(h, _)| Rc::ptr_eq(h, tab)) else {
             // 対応するタブがない
@@ -1408,7 +1418,7 @@ impl TabGroupPaneView {
         if tab.borrow().is_active && self.tabs.len() > 1 {
             // アクティブを付け替える（0個になる場合はどのみち消されるので何もしない）
             let new_active = if index == 0 { 1 } else { index - 1 };
-            self.switch_active(new_active, &mut view_ctx)?;
+            self.switch_active(new_active, &mut view_ctx, app_state)?;
         }
         tab.borrow().unmount()?;
         let (tab, content) = self.tabs.remove(index);
@@ -1427,6 +1437,7 @@ impl TabGroupPaneView {
             &new_group.borrow().content_area,
             &self.ht_ref_content,
             &mut view_ctx,
+            app_state,
         )?;
         tab.borrow_mut().set_active_imm(true, view_ctx)?;
 
@@ -1436,10 +1447,11 @@ impl TabGroupPaneView {
     pub fn add_tab<T: PaneTabPresenter + 'static>(
         this: &SharedMut<Self>,
         ctx: &mut impl ViewContext,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<SharedMut<T>> {
         let header_view =
             PaneTabHeaderView::new(T::INIT_TAB_NAME, this.borrow().tabs.is_empty(), ctx)?;
-        let content_presenter = new_shared_mut(T::new(&header_view, ctx));
+        let content_presenter = new_shared_mut(T::new(&header_view, ctx, app_state));
         Self::add_tab_raw(this, &header_view, content_presenter.clone())?;
 
         let thisref = this.borrow();
@@ -1449,6 +1461,7 @@ impl TabGroupPaneView {
                 &thisref.content_area,
                 &thisref.ht_ref_content,
                 ctx,
+                app_state,
             )?;
         }
 
@@ -1593,6 +1606,7 @@ impl TabGroupPaneView {
         &mut self,
         new_active: usize,
         mut view_ctx: impl ViewContext,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let new_active = new_active.min(self.tabs.len());
         if self.current_active == new_active {
@@ -1603,7 +1617,7 @@ impl TabGroupPaneView {
         self.tabs[self.current_active]
             .1
             .borrow_mut()
-            .on_hide_content_view(&mut view_ctx)?;
+            .on_hide_content_view(&mut view_ctx, app_state)?;
         self.tabs[self.current_active]
             .0
             .borrow_mut()
@@ -1613,7 +1627,12 @@ impl TabGroupPaneView {
         self.tabs[self.current_active]
             .1
             .borrow_mut()
-            .build_content_view(&self.content_area, &self.ht_ref_content, &mut view_ctx)?;
+            .build_content_view(
+                &self.content_area,
+                &self.ht_ref_content,
+                &mut view_ctx,
+                app_state,
+            )?;
         self.tabs[self.current_active]
             .0
             .borrow_mut()
@@ -2303,8 +2322,13 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             .deactivate_bg()
             .expect("Failed to deactivate bg");
     }
-    fn on_click(&self, ctx: &mut dyn InputContext) {
+    fn on_click(&self, window: HWND, ctx: &mut dyn InputContext) {
+        let app_window = AppWindow::wrap(window);
+
         let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(state) = app_window.get_state_store() else {
             return;
         };
 
@@ -2315,7 +2339,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
         let index = this.borrow().index_in_group;
 
         g.borrow_mut()
-            .switch_active(index, ctx)
+            .switch_active(index, ctx, &state.app_state)
             .expect("Failed to transition");
     }
 
@@ -2405,7 +2429,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_tab(&this, ctx)
+                        .split_tab(
+                            &this,
+                            ctx,
+                            &window.get_state_store().expect("no state store?").app_state,
+                        )
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view
@@ -2468,7 +2496,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_tab(&this, ctx)
+                        .split_tab(
+                            &this,
+                            ctx,
+                            &window.get_state_store().expect("no state store?").app_state,
+                        )
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view
@@ -2531,7 +2563,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_tab(&this, ctx)
+                        .split_tab(
+                            &this,
+                            ctx,
+                            &window.get_state_store().expect("no state store?").app_state,
+                        )
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view
@@ -2594,7 +2630,11 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 if !Rc::ptr_eq(&bound_dock_layer, &d) || group_view.borrow().tabs.len() != 1 {
                     let new_group_view = group_view
                         .borrow_mut()
-                        .split_tab(&this, ctx)
+                        .split_tab(
+                            &this,
+                            ctx,
+                            &window.get_state_store().expect("no state store?").app_state,
+                        )
                         .expect("Failed to split group view")
                         .expect("corrupted relationship");
                     new_group_view
@@ -2672,7 +2712,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                 let bound_dock_layer = group_view.borrow().bound_dock_layer.upgrade().unwrap();
                 group_view
                     .borrow_mut()
-                    .move_tab_into(&this, &target_group, ctx)
+                    .move_tab_into(
+                        &this,
+                        &target_group,
+                        ctx,
+                        &window.get_state_store().expect("no state store?").app_state,
+                    )
                     .expect("Failed to move tab");
                 target_group
                     .borrow_mut()
@@ -2711,10 +2756,12 @@ pub trait PaneTabContentPresenter {
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
         view_context: &mut dyn ViewContext,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()>;
     fn on_hide_content_view(
         &mut self,
         view_context: &mut dyn ViewContext,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()>;
 
     fn on_resize(
@@ -2730,19 +2777,100 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &mut (impl ViewContext + ?Sized),
+        _app_state: &SharedMut<AppState>,
     ) -> Self;
 }
 
-pub struct InspectorTabPresenter {}
+pub struct InspectorTabSelectionChangedEventHandler {
+    content_root: ContainerVisual,
+}
+impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEventHandler {
+    fn on_changed(&self, app_state: &SharedMut<AppState>, mut view_context: &mut dyn ViewContext) {
+        println!(
+            "Changed: {:?}",
+            app_state.borrow().current_selection_object_id
+        );
+
+        // TODO: 本当は以前のViewを使いまわすとかしたほうがいいけどいったん見た目優先なのであとでやる
+        self.content_root.Children().unwrap().RemoveAll().unwrap();
+        match app_state.borrow().current_selection_object_id.clone() {
+            None => {
+                let label = LabelView::new("None Selected", &mut view_context).unwrap();
+                label
+                    .set_position(Vector3 {
+                        X: 4.0,
+                        Y: 4.0,
+                        Z: 0.0,
+                    })
+                    .unwrap();
+                label.mount(&self.content_root.Children().unwrap()).unwrap();
+            }
+            Some(id) => {
+                if let Some(entity_ref) = app_state.borrow().current_scene.objects.get(&id) {
+                    let id_label =
+                        LabelView::new(format!("Object: {id:?}"), &mut view_context).unwrap();
+                    id_label
+                        .set_position(Vector3 {
+                            X: 4.0,
+                            Y: 4.0,
+                            Z: 0.0,
+                        })
+                        .unwrap();
+                    id_label
+                        .mount(&self.content_root.Children().unwrap())
+                        .unwrap();
+
+                    let object_name_label =
+                        LabelView::new(format!("Name: {:?}", entity_ref.name), &mut view_context)
+                            .unwrap();
+                    object_name_label
+                        .set_position(Vector3 {
+                            X: 16.0,
+                            Y: 20.0,
+                            Z: 0.0,
+                        })
+                        .unwrap();
+                    object_name_label
+                        .mount(&self.content_root.Children().unwrap())
+                        .unwrap();
+                } else {
+                    let id_label =
+                        LabelView::new(format!("Object: {id:?} (gone)"), &mut view_context)
+                            .unwrap();
+                    id_label
+                        .set_position(Vector3 {
+                            X: 4.0,
+                            Y: 4.0,
+                            Z: 0.0,
+                        })
+                        .unwrap();
+                    id_label
+                        .mount(&self.content_root.Children().unwrap())
+                        .unwrap();
+                }
+            }
+        }
+    }
+}
+pub struct InspectorTabPresenter {
+    selection_changed_event_handler: Rc<InspectorTabSelectionChangedEventHandler>,
+}
 impl PaneTabContentPresenter for InspectorTabPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
-        view_context: &mut dyn ViewContext,
+        mut view_context: &mut dyn ViewContext,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        let label = LabelView::new("Inspector Pane", view_context)?;
-        label.mount(&onto.Children()?)?;
+        AppState::observe_current_selection_changes(
+            &app_state,
+            &self.selection_changed_event_handler,
+            &mut view_context,
+        );
+
+        onto.Children()?
+            .InsertAtTop(&self.selection_changed_event_handler.content_root)?;
 
         Ok(())
     }
@@ -2750,7 +2878,19 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &mut dyn ViewContext,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
+        self.selection_changed_event_handler
+            .content_root
+            .Parent()?
+            .Children()?
+            .Remove(&self.selection_changed_event_handler.content_root)?;
+        app_state
+            .borrow_mut()
+            .unobserve_current_selection_changes(&Rc::downgrade(
+                &self.selection_changed_event_handler,
+            ));
+
         Ok(())
     }
 }
@@ -2759,9 +2899,25 @@ impl PaneTabPresenter for InspectorTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &mut (impl ViewContext + ?Sized),
+        _app_state: &SharedMut<AppState>,
     ) -> Self {
-        Self {}
+        let content_root = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateContainerVisual()
+            .expect("Failed to create content root");
+        content_root
+            .set_properties()
+            .expand_to_parent()
+            .expect("Failed to set content root size");
+
+        Self {
+            selection_changed_event_handler: Rc::new(InspectorTabSelectionChangedEventHandler {
+                content_root,
+            }),
+        }
     }
 }
 
@@ -2772,6 +2928,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2779,6 +2936,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2789,6 +2947,7 @@ impl PaneTabPresenter for ProjectSettingsTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &mut (impl ViewContext + ?Sized),
+        _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
     }
@@ -2801,6 +2960,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2808,6 +2968,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2818,6 +2979,7 @@ impl PaneTabPresenter for TimelineTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &mut (impl ViewContext + ?Sized),
+        _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
     }
@@ -2962,6 +3124,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
         view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.view.borrow().mount(onto, onto_ht, view_context)
     }
@@ -2969,6 +3132,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
     fn on_hide_content_view(
         &mut self,
         view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.view.borrow().unmount(view_context)
     }
@@ -2987,6 +3151,7 @@ impl PaneTabPresenter for StageTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         mut view_ctx: &mut (impl ViewContext + ?Sized),
+        _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {
             view: EditorStageView::new(&mut view_ctx).expect("Failed to create EditorStageView"),
@@ -3905,8 +4070,8 @@ impl SkyboxRenderer {
                 },
             ],
             primary_directional_light_data: PrimaryDirectionalLightUniformData {
-                // incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
-                incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
+                // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
                 light_intensity: 20.0,
             },
         })?;
@@ -4333,25 +4498,6 @@ impl EditorStageView {
         .expect("Failed to create main render pass");
         let hdr_render_subpass = 0;
         let ldr_gizmos_render_subpass = 1;
-        let mut main_render_command_pool = br::CommandPoolBuilder::new(
-            view_ctx
-                .app_subsystems()
-                .borrow()
-                .mini_engine
-                .graphics_queue_family_index(),
-        )
-        .create(
-            view_ctx
-                .app_subsystems()
-                .borrow()
-                .mini_engine
-                .device()
-                .clone(),
-        )
-        .expect("Failed to create command pool");
-        let main_render_commands = main_render_command_pool
-            .alloc(3, true)
-            .expect("Failed to allocate command buffers");
 
         let hdr_temp_buffer = view_ctx
             .app_subsystems()
@@ -4802,6 +4948,26 @@ impl EditorStageView {
             skybox_precomputed_textures,
         )
         .expect("Failed to initialize skybox renderer");
+
+        let mut main_render_command_pool = br::CommandPoolBuilder::new(
+            view_ctx
+                .app_subsystems()
+                .borrow()
+                .mini_engine
+                .graphics_queue_family_index(),
+        )
+        .create(
+            view_ctx
+                .app_subsystems()
+                .borrow()
+                .mini_engine
+                .device()
+                .clone(),
+        )
+        .expect("Failed to create command pool");
+        let main_render_commands = main_render_command_pool
+            .alloc(3, true)
+            .expect("Failed to allocate command buffers");
 
         let mut back_buffer_resources = Vec::with_capacity(3);
         let mut back_buffer_render_resources = Vec::with_capacity(3);
@@ -5658,32 +5824,6 @@ impl InputEventHandler for WeakMut<EditorStageView> {
     }
 }
 
-pub struct EventHandle(HANDLE);
-unsafe impl Sync for EventHandle {}
-unsafe impl Send for EventHandle {}
-impl EventHandle {
-    #[inline(always)]
-    pub fn new() -> windows::core::Result<Self> {
-        unsafe { CreateEventA(None, false, false, None).map(Self) }
-    }
-
-    #[inline(always)]
-    pub fn set(&self) -> windows::core::Result<()> {
-        unsafe { SetEvent(self.0) }
-    }
-
-    #[inline(always)]
-    pub fn reset(&self) -> windows::core::Result<()> {
-        unsafe { ResetEvent(self.0) }
-    }
-}
-impl Drop for EventHandle {
-    #[inline(always)]
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0).expect("Failed to close event handle") }
-    }
-}
-
 pub struct PreviewTabPresenter {}
 impl PaneTabContentPresenter for PreviewTabPresenter {
     fn build_content_view(
@@ -5691,6 +5831,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5698,6 +5839,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5708,6 +5850,7 @@ impl PaneTabPresenter for PreviewTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &mut (impl ViewContext + ?Sized),
+        _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
     }
@@ -5719,6 +5862,7 @@ pub struct ObjectTreeElementRowView {
     bg: SpriteVisual,
     bg_hover_animation: ScalarKeyFrameAnimation,
     bg_hover_end_animation: ScalarKeyFrameAnimation,
+    bound_object_id: Uuid,
 }
 impl ObjectTreeElementRowView {
     const PADDING_Y: f32 = 2.0;
@@ -5728,6 +5872,7 @@ impl ObjectTreeElementRowView {
     pub fn new(
         view_ctx: &mut (impl ViewContext + ?Sized),
         init_name: impl Into<Cow<'static, str>>,
+        bound_object_id: Uuid,
     ) -> windows::core::Result<SharedMut<Self>> {
         let label_fmt = view_ctx
             .app_subsystems()
@@ -5840,6 +5985,7 @@ impl ObjectTreeElementRowView {
                 bg,
                 bg_hover_animation,
                 bg_hover_end_animation,
+                bound_object_id,
             }
         }))
     }
@@ -5895,11 +6041,27 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
             .StartAnimation(h!("Opacity"), &this.borrow().bg_hover_end_animation)
             .expect("Failed to start hover animation");
     }
+
+    fn on_click(&self, window: HWND, mut ctx: &mut dyn InputContext) {
+        let app_window = AppWindow::wrap(window);
+
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(state) = app_window.get_state_store() else {
+            return;
+        };
+
+        AppState::set_current_selection(
+            &state.app_state,
+            Some(this.borrow().bound_object_id.clone()),
+            &mut ctx,
+        );
+    }
 }
 
 pub struct ObjectTreeTabPresenter {
-    camera_row: SharedMut<ObjectTreeElementRowView>,
-    sun_light_row: SharedMut<ObjectTreeElementRowView>,
+    rows: Vec<SharedMut<ObjectTreeElementRowView>>,
 }
 impl PaneTabContentPresenter for ObjectTreeTabPresenter {
     fn build_content_view(
@@ -5907,11 +6069,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        self.camera_row.borrow().mount(&onto.Children()?, onto_ht)?;
-        self.sun_light_row
-            .borrow()
-            .mount(&onto.Children()?, onto_ht)?;
+        let children = onto.Children()?;
+        for r in &self.rows {
+            r.borrow().mount(&children, onto_ht)?;
+        }
 
         Ok(())
     }
@@ -5919,9 +6082,11 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        self.camera_row.borrow().unmount()?;
-        self.sun_light_row.borrow().unmount()?;
+        for r in &self.rows {
+            r.borrow().unmount()?;
+        }
 
         Ok(())
     }
@@ -5932,24 +6097,31 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         view_ctx: &mut (impl ViewContext + ?Sized),
+        app_state: &SharedMut<AppState>,
     ) -> Self {
-        let camera_row = ObjectTreeElementRowView::new(view_ctx, "Camera")
-            .expect("Failed to create camera row view");
-        let sun_light_row = ObjectTreeElementRowView::new(view_ctx, "Sun Light")
-            .expect("Failed to create sun light row view");
+        let app_state_borrow = app_state.borrow();
+        let mut init_objects = app_state_borrow
+            .current_scene
+            .objects
+            .values()
+            .collect::<Vec<_>>();
+        init_objects.sort_by_key(|x| x.order);
 
-        sun_light_row
-            .borrow_mut()
-            .reposition(Vector2 {
-                X: 0.0,
-                Y: camera_row.borrow().height(),
+        let rows = init_objects
+            .into_iter()
+            .scan(0.0f32, |y, x| {
+                let p = ObjectTreeElementRowView::new(view_ctx, x.name.to_owned(), x.id.clone())
+                    .expect("Failed to create row view");
+                p.borrow_mut()
+                    .reposition(Vector2 { X: 0.0, Y: *y })
+                    .expect("Failed to reposition row view");
+                *y += p.borrow().height();
+
+                Some(p)
             })
-            .expect("Failed to reposition sun light row");
+            .collect::<Vec<_>>();
 
-        Self {
-            camera_row,
-            sun_light_row,
-        }
+        Self { rows }
     }
 }
 
@@ -5960,6 +6132,7 @@ impl PaneTabContentPresenter for AssetExplorerTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5967,6 +6140,7 @@ impl PaneTabContentPresenter for AssetExplorerTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &mut dyn ViewContext,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5977,6 +6151,7 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &mut (impl ViewContext + ?Sized),
+        _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
     }
@@ -6034,7 +6209,95 @@ impl LabelView {
     }
 }
 
-type StdVkDevice = Rc<br::DeviceObject<Rc<br::InstanceObject>>>;
+pub trait AppStateCurrentSelectionChangedHandler {
+    fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &mut dyn ViewContext);
+}
+#[repr(transparent)]
+pub struct AppStateCurrentSelectionChangedHandlerEntry(
+    pub Weak<dyn AppStateCurrentSelectionChangedHandler>,
+);
+impl PartialEq for AppStateCurrentSelectionChangedHandlerEntry {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for AppStateCurrentSelectionChangedHandlerEntry {}
+impl Hash for AppStateCurrentSelectionChangedHandlerEntry {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state)
+    }
+}
+
+pub struct AppState {
+    pub current_scene: SceneEditState,
+    pub current_selection_object_id: Option<Uuid>,
+    pub current_selection_changed_handlers: HashSet<AppStateCurrentSelectionChangedHandlerEntry>,
+}
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            current_scene: SceneEditState::new(),
+            current_selection_object_id: None,
+            current_selection_changed_handlers: HashSet::new(),
+        }
+    }
+
+    pub fn set_current_selection(
+        this: &SharedMut<Self>,
+        selection: Option<Uuid>,
+        view_context: &mut impl ViewContext,
+    ) {
+        this.borrow_mut().current_selection_object_id = selection;
+
+        let callbacks = this
+            .borrow()
+            .current_selection_changed_handlers
+            .iter()
+            .filter_map(|x| x.0.upgrade())
+            .collect::<Vec<_>>();
+        for h in callbacks {
+            h.on_changed(this, view_context);
+        }
+    }
+
+    pub fn observe_current_selection_changes(
+        this: &SharedMut<Self>,
+        handler: &Rc<impl AppStateCurrentSelectionChangedHandler + 'static>,
+        view_ctx: &mut impl ViewContext,
+    ) {
+        let wh = Rc::downgrade(handler);
+        this.borrow_mut()
+            .current_selection_changed_handlers
+            .insert(AppStateCurrentSelectionChangedHandlerEntry(wh));
+
+        handler.on_changed(this, view_ctx);
+    }
+
+    pub fn unobserve_current_selection_changes(
+        &mut self,
+        handler: &Weak<impl AppStateCurrentSelectionChangedHandler + 'static>,
+    ) {
+        self.current_selection_changed_handlers
+            .remove(unsafe { core::mem::transmute(handler) });
+    }
+}
+
+pub struct SceneEditState {
+    pub objects: HashMap<Uuid, ObjectEditState>,
+}
+impl SceneEditState {
+    pub fn new() -> Self {
+        Self {
+            objects: HashMap::new(),
+        }
+    }
+}
+
+pub struct ObjectEditState {
+    pub id: Uuid,
+    pub name: String,
+    pub order: u32,
+}
 
 struct AppWindowState {
     app_subsystem_instances: SharedMut<AppSubsystemInstances>,
@@ -6045,6 +6308,7 @@ struct AppWindowState {
     app_global_signals: SharedMut<AppGlobalSignals>,
     currently_maximized: bool,
     current_dpi: f32,
+    app_state: SharedMut<AppState>,
 }
 impl ViewContext for AppWindowState {
     fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
@@ -6298,6 +6562,21 @@ fn app() -> i32 {
     }
     let mut window_handle = AppWindow::wrap(window_handle);
 
+    let mut state = AppState::new();
+    let obj = ObjectEditState {
+        id: Uuid::new_v4(),
+        name: "Camera".into(),
+        order: 0,
+    };
+    state.current_scene.objects.insert(obj.id.clone(), obj);
+    let obj = ObjectEditState {
+        id: Uuid::new_v4(),
+        name: "Sun Light".into(),
+        order: 1,
+    };
+    state.current_scene.objects.insert(obj.id.clone(), obj);
+    let state = new_shared_mut(state);
+
     let _dispatcher_queue_controller = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
             dwSize: core::mem::size_of::<DispatcherQueueOptions>() as _,
@@ -6469,7 +6748,7 @@ fn app() -> i32 {
 
     let pane_group1 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context)
+    TabGroupPaneView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context, &state)
         .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange(&ResizeContext {
         app_subsystems: &app_subsystem_instances,
@@ -6479,11 +6758,11 @@ fn app() -> i32 {
 
     let main_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<StageTabPresenter>(&main_pane, &mut view_context)
+    TabGroupPaneView::add_tab::<StageTabPresenter>(&main_pane, &mut view_context, &state)
         .expect("Failed to create StagePaneTab");
-    TabGroupPaneView::add_tab::<PreviewTabPresenter>(&main_pane, &mut view_context)
+    TabGroupPaneView::add_tab::<PreviewTabPresenter>(&main_pane, &mut view_context, &state)
         .expect("Failed to create PreviewPaneTab");
-    TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&main_pane, &mut view_context)
+    TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&main_pane, &mut view_context, &state)
         .expect("Failed to create ProjectSettingsPaneTabHeader");
     main_pane.borrow_mut().rearrange(&ResizeContext {
         app_subsystems: &app_subsystem_instances,
@@ -6493,7 +6772,7 @@ fn app() -> i32 {
 
     let pane_group3 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context)
+    TabGroupPaneView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context, &state)
         .expect("Failed to create InspectorPaneTabHeader");
     pane_group3.borrow_mut().rearrange(&ResizeContext {
         app_subsystems: &app_subsystem_instances,
@@ -6515,8 +6794,12 @@ fn app() -> i32 {
 
     let explorers_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<AssetExplorerTabPresenter>(&explorers_pane, &mut view_context)
-        .expect("Failed to create AssetExplorerTab");
+    TabGroupPaneView::add_tab::<AssetExplorerTabPresenter>(
+        &explorers_pane,
+        &mut view_context,
+        &state,
+    )
+    .expect("Failed to create AssetExplorerTab");
     explorers_pane.borrow_mut().rearrange(&ResizeContext {
         app_subsystems: &app_subsystem_instances,
         app_global_signals: &app_global_signals,
@@ -6537,8 +6820,12 @@ fn app() -> i32 {
 
     let scene_subinfo_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<ObjectTreeTabPresenter>(&scene_subinfo_pane, &mut view_context)
-        .expect("Failed to create ObjectTreeTab");
+    TabGroupPaneView::add_tab::<ObjectTreeTabPresenter>(
+        &scene_subinfo_pane,
+        &mut view_context,
+        &state,
+    )
+    .expect("Failed to create ObjectTreeTab");
     scene_subinfo_pane.borrow_mut().rearrange(&ResizeContext {
         app_subsystems: &app_subsystem_instances,
         app_global_signals: &app_global_signals,
@@ -6655,6 +6942,7 @@ fn app() -> i32 {
             .is_maximized()
             .expect("Failed to query maximized state"),
         current_dpi: window_handle.current_dpi,
+        app_state: state,
     };
     window_handle.set_state_store(&mut ws);
     window_handle.show();

@@ -42,7 +42,7 @@ impl InputAction {
             Self::PointerEnter(e) => e.on_pointer_enter(ctx),
             Self::PointerDown(e) => e.on_pointer_down(x, y, ctx),
             Self::PointerUp(e) => e.on_pointer_up(x, y, ctx),
-            Self::Click(e) => e.on_click(&mut ctx),
+            Self::Click(e) => e.on_click(window, &mut ctx),
             Self::BeginDrag(e) => e.on_begin_drag(x, y, window, ctx),
             Self::DragMove(e) => e.on_drag_move(x, y, window, ctx),
             Self::EndDrag(e) => e.on_end_drag(x, y, window, ctx),
