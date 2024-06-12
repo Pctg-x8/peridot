@@ -1,8 +1,7 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::{BTreeSet, HashMap, HashSet},
-    ffi::c_void,
+    collections::{HashMap, HashSet},
     hash::Hash,
     rc::{Rc, Weak},
 };
@@ -11,13 +10,11 @@ use app_subsystem_instances::AppSubsystemInstances;
 use bedrock::{self as br, ImageChild, VkObject};
 use br::{
     CommandBuffer, CommandPool, DescriptorPool, Device, GraphicsPipelineBuilder,
-    ImageSubresourceSlice, Instance, MemoryBound, PhysicalDevice, PipelineShaderStageProvider,
-    Queue, RenderPass, SubmissionBatch, VulkanStructure,
+    ImageSubresourceSlice, MemoryBound, PipelineShaderStageProvider, Queue, SubmissionBatch,
 };
 use features::{AppTitleBarView, DockingPanePreview, PaneSplitterView, SplitDirection};
 use miniengine::{ColoredVertex, Mat4, StdVkDevice, Vec4};
-use object_cache::{TextFormatStock, TextSurfaceStock};
-use peridot_math::{Camera, One, ProjectionMethod, Zero};
+use peridot_math::{Camera, One, ProjectionMethod};
 use uikit::{
     HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, ResizeContext,
     ViewContext,
@@ -39,59 +36,40 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            CloseHandle, BOOL, GENERIC_ALL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT,
-            WAIT_OBJECT_0, WPARAM,
+            BOOL, GENERIC_ALL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM,
         },
         Graphics::{
             CompositionSwapchain::{
-                CreatePresentationFactory, IPresentationBuffer, IPresentationFactory,
-                IPresentationManager, IPresentationSurface,
+                IPresentationBuffer, IPresentationManager, IPresentationSurface,
             },
-            Direct2D::{
-                D2D1CreateFactory, ID2D1Factory1, D2D1_DEBUG_LEVEL_WARNING, D2D1_FACTORY_OPTIONS,
-                D2D1_FACTORY_TYPE_SINGLE_THREADED,
-            },
-            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0},
             Direct3D11::{
-                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
-                ID3D11Resource, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
-                D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE,
-                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
-                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-            },
-            Direct3D12::{
-                D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device,
-                D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
-                D3D12_COMMAND_QUEUE_FLAGS,
+                ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+                D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED,
+                D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
+                D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
             },
             DirectComposition::{
                 DCompositionCreateSurfaceHandle, COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE,
             },
-            DirectWrite::{
-                DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
-                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-            },
+            DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
             Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::{
                 Common::{
-                    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-                    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_FORMAT_R8G8B8A8_UNORM,
-                    DXGI_SAMPLE_DESC,
+                    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
                 },
-                IDXGIDevice, IDXGIKeyedMutex, IDXGIResource, IDXGIResource1,
-                DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
+                IDXGIKeyedMutex, IDXGIResource1, DXGI_SHARED_RESOURCE_READ,
+                DXGI_SHARED_RESOURCE_WRITE,
             },
             Gdi::{MapWindowPoints, HBRUSH},
         },
         Storage::Packaging::Appx::PACKAGE_VERSION,
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
-            Threading::{CreateEventA, ResetEvent, SetEvent, INFINITE},
+            Threading::INFINITE,
             WinRT::{
-                Composition::{ICompositorDesktopInterop, ICompositorInterop},
-                CreateDispatcherQueueController, DispatcherQueueOptions, DQTAT_COM_ASTA,
-                DQTYPE_THREAD_CURRENT,
+                Composition::ICompositorDesktopInterop, CreateDispatcherQueueController,
+                DispatcherQueueOptions, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
             },
         },
         UI::{
@@ -114,9 +92,9 @@ use windows::{
     UI::{
         Color,
         Composition::{
-            CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, Compositor,
-            ContainerVisual, Diagnostics::CompositionDebugSettings, LayerVisual,
-            ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
+            CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, ContainerVisual,
+            Diagnostics::CompositionDebugSettings, LayerVisual, ScalarKeyFrameAnimation,
+            ShapeVisual, SpriteVisual, VisualCollection,
         },
     },
 };
@@ -129,7 +107,7 @@ use crate::{
         },
     },
     miniengine::MiniEngine,
-    uikit::{UICommonObjects, ViewContext1},
+    uikit::ViewContext1,
     winapi_extras::{register_window_class, VectorScalarConstructor, WindowBuilder},
 };
 
@@ -1288,7 +1266,7 @@ pub struct TabGroupPaneView {
 }
 impl TabGroupPaneView {
     const CONTENT_AREA_BASE_COLOR: Color = Color {
-        A: 128,
+        A: 64,
         R: 64,
         G: 64,
         B: 72,
@@ -1327,12 +1305,12 @@ impl TabGroupPaneView {
         content_area_base.SetRelativeOffsetAdjustment(Vector3::zero())?;
         content_area_base.SetRelativeSizeAdjustment(Vector2::one())?;
         root.Children()?.InsertAtBottom(&content_area_base)?;
-        root.SetClip(
-            &ctx.app_subsystems()
-                .borrow()
-                .compositor
-                .CreateInsetClipWithInsets(0.0, 0.0, 0.0, 0.0)?,
-        )?;
+        // root.SetClip(
+        //     &ctx.app_subsystems()
+        //         .borrow()
+        //         .compositor
+        //         .CreateInsetClipWithInsets(0.0, 0.0, 0.0, 0.0)?,
+        // )?;
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
@@ -2783,6 +2761,7 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
 
 pub struct InspectorTabSelectionChangedEventHandler {
     content_root: ContainerVisual,
+    root_ht: SharedMut<HitTestTree>,
 }
 impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEventHandler {
     fn on_changed(&self, app_state: &SharedMut<AppState>, mut view_context: &mut dyn ViewContext) {
@@ -2833,6 +2812,55 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                     object_name_label
                         .mount(&self.content_root.Children().unwrap())
                         .unwrap();
+
+                    match entity_ref.details {
+                        ObjectDetails::SunLight {
+                            rotation,
+                            intensity,
+                        } => {
+                            let rotation_label = LabelView::new(
+                                format!(
+                                    "Rotation: {}, {}, {}, {}",
+                                    rotation.0, rotation.1, rotation.2, rotation.3
+                                ),
+                                &mut view_context,
+                            )
+                            .unwrap();
+                            rotation_label
+                                .set_position(Vector3 {
+                                    X: 16.0,
+                                    Y: 60.0,
+                                    Z: 0.0,
+                                })
+                                .unwrap();
+                            rotation_label
+                                .mount(&self.content_root.Children().unwrap())
+                                .unwrap();
+                            let intensity_label =
+                                LabelView::new("Intensity", &mut view_context).unwrap();
+                            intensity_label
+                                .set_position(Vector3 {
+                                    X: 16.0,
+                                    Y: 80.0,
+                                    Z: 0.0,
+                                })
+                                .unwrap();
+                            intensity_label
+                                .mount(&self.content_root.Children().unwrap())
+                                .unwrap();
+                            let intensity_control =
+                                FloatSliderView::new(&mut view_context).unwrap();
+                            intensity_control
+                                .borrow()
+                                .reposition(Vector2 { X: 0.0, Y: 80.0 })
+                                .unwrap();
+                            intensity_control
+                                .borrow()
+                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .unwrap();
+                        }
+                        ObjectDetails::Camera {} => (),
+                    }
                 } else {
                     let id_label =
                         LabelView::new(format!("Object: {id:?} (gone)"), &mut view_context)
@@ -2916,6 +2944,12 @@ impl PaneTabPresenter for InspectorTabPresenter {
         Self {
             selection_changed_event_handler: Rc::new(InspectorTabSelectionChangedEventHandler {
                 content_root,
+                root_ht: HitTestTree::new_unsized(
+                    &Rc::new(()),
+                    view_ctx.hittest_context_mut().new_id(),
+                    0.0,
+                    0.0,
+                ),
             }),
         }
     }
@@ -4286,6 +4320,45 @@ impl UtilityVertices {
     }
 }
 
+fn d3d11_presentation_texture_desc(width: u32, height: u32) -> D3D11_TEXTURE2D_DESC {
+    D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
+        CPUAccessFlags: 0,
+        MiscFlags: (D3D11_RESOURCE_MISC_SHARED
+            | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
+            | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
+            .0 as _,
+    }
+}
+
+trait D3D11ResourceDescriptor {
+    type Output;
+
+    fn create(&self, device: &ID3D11Device) -> windows::core::Result<Self::Output>;
+}
+impl D3D11ResourceDescriptor for D3D11_TEXTURE2D_DESC {
+    type Output = ID3D11Texture2D;
+
+    #[inline(always)]
+    fn create(&self, device: &ID3D11Device) -> windows::core::Result<Self::Output> {
+        let mut h = core::mem::MaybeUninit::uninit();
+        unsafe {
+            device.CreateTexture2D(self, None, Some(h.as_mut_ptr()))?;
+        }
+        unsafe { Ok(h.assume_init().expect("resource not created?")) }
+    }
+}
+
 pub struct EditorStageView {
     root: SpriteVisual,
     ht: SharedMut<HitTestTree>,
@@ -4969,37 +5042,19 @@ impl EditorStageView {
             .alloc(3, true)
             .expect("Failed to allocate command buffers");
 
+        let init_size = br::vk::VkExtent2D {
+            width: 128,
+            height: 128,
+        };
+        let rect = init_size.into_rect(br::vk::VkOffset2D::ZERO);
+        let viewport = rect.make_viewport(0.0..1.0);
         let mut back_buffer_resources = Vec::with_capacity(3);
         let mut back_buffer_render_resources = Vec::with_capacity(3);
-        for (n, mut cb) in (0..3).zip(main_render_commands.into_iter()) {
-            let texture_desc = D3D11_TEXTURE2D_DESC {
-                Width: 128,
-                Height: 128,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
-                CPUAccessFlags: 0,
-                MiscFlags: (D3D11_RESOURCE_MISC_SHARED
-                    | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
-                    | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
-                    .0 as _,
-            };
-            let mut texture = core::mem::MaybeUninit::uninit();
-            unsafe {
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .d3d11_device
-                    .CreateTexture2D(&texture_desc, None, Some(texture.as_mut_ptr()))
-                    .expect("Failed to create back buffer texture")
-            };
-            let texture = unsafe { texture.assume_init().expect("texture not created") };
+        for mut cb in main_render_commands.into_iter() {
+            let texture_desc = d3d11_presentation_texture_desc(init_size.width, init_size.height);
+            let texture = texture_desc
+                .create(&view_ctx.app_subsystems().borrow().d3d11_device)
+                .expect("Failed to create back buffer texture");
             let presentation_buffer = unsafe {
                 view_ctx
                     .app_subsystems()
@@ -5021,16 +5076,9 @@ impl EditorStageView {
                     .0 as _,
                 ..texture_desc
             };
-            let mut rt = core::mem::MaybeUninit::uninit();
-            unsafe {
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .d3d11_device
-                    .CreateTexture2D(&rt_desc, None, Some(rt.as_mut_ptr()))
-                    .expect("Failed to create render target texture");
-            }
-            let rt = unsafe { rt.assume_init().expect("rt not created") };
+            let rt = rt_desc
+                .create(&view_ctx.app_subsystems().borrow().d3d11_device)
+                .expect("Failed to create rt");
 
             let texture_res = rt
                 .cast::<IDXGIResource1>()
@@ -5055,7 +5103,7 @@ impl EditorStageView {
                     .expect("Failed to query external handle memory properties")
             };
             let mut vk_image = br::ImageDesc::new(
-                br::vk::VkExtent2D::spread1(128),
+                init_size,
                 br::vk::VK_FORMAT_R8G8B8A8_UNORM,
                 br::ImageUsageFlags::COLOR_ATTACHMENT,
                 br::ImageLayout::Undefined,
@@ -5114,13 +5162,7 @@ impl EditorStageView {
                 .begin_render_pass(
                     &main_render_pass,
                     &vk_framebuffer,
-                    br::vk::VkRect2D {
-                        offset: br::vk::VkOffset2D::ZERO,
-                        extent: br::vk::VkExtent2D {
-                            width: 128,
-                            height: 128,
-                        },
-                    },
+                    init_size.into_rect(br::vk::VkOffset2D::ZERO),
                     &[
                         br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
                         br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
@@ -5128,29 +5170,12 @@ impl EditorStageView {
                     ],
                     true,
                 )
-                .set_viewport(
-                    0,
-                    &[br::vk::VkViewport {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 128.0,
-                        height: 128.0,
-                        minDepth: 0.0,
-                        maxDepth: 1.0,
-                    }],
-                )
-                .set_scissor(
-                    0,
-                    &[br::vk::VkRect2D {
-                        offset: br::vk::VkOffset2D::ZERO,
-                        extent: br::vk::VkExtent2D::spread1(128),
-                    }],
-                )
+                .set_viewport(0, &[viewport.clone()])
+                .set_scissor(0, &[rect])
                 .bind_graphics_pipeline_pair(
                     &skybox_renderer.pipeline,
                     &skybox_renderer.pipeline_layout,
                 )
-                // TODO: ここ0番はセットしなくてもいいはずなんだけど......後で調べる
                 .bind_graphics_descriptor_sets(
                     0,
                     &[
@@ -5198,8 +5223,8 @@ impl EditorStageView {
                 Rect {
                     X: 0.0,
                     Y: 0.0,
-                    Width: 128.0,
-                    Height: 128.0,
+                    Width: init_size.width as _,
+                    Height: init_size.height as _,
                 },
             );
 
@@ -5322,7 +5347,7 @@ impl EditorStageView {
             .borrow_mut()
             .mini_engine
             .alloc_device_local_image(br::ImageDesc::new(
-                buffer_real_size.clone(),
+                buffer_real_size,
                 br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
                 br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::INPUT_ATTACHMENT,
                 br::ImageLayout::Undefined,
@@ -5340,7 +5365,7 @@ impl EditorStageView {
             .borrow_mut()
             .mini_engine
             .alloc_device_local_image(br::ImageDesc::new(
-                buffer_real_size.clone(),
+                buffer_real_size,
                 br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
                 br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
                 br::ImageLayout::Undefined,
@@ -5449,13 +5474,12 @@ impl EditorStageView {
                 &[],
             );
 
-        for (n, (renderer, bb)) in (0..3).zip(
-            Rc::get_mut(&mut self.renderer)
-                .expect("non unique renderer")
-                .back_buffers
-                .iter_mut()
-                .zip(self.back_buffer_resources.iter_mut()),
-        ) {
+        for (renderer, bb) in Rc::get_mut(&mut self.renderer)
+            .expect("non unique renderer")
+            .back_buffers
+            .iter_mut()
+            .zip(self.back_buffer_resources.iter_mut())
+        {
             let texture_desc = D3D11_TEXTURE2D_DESC {
                 Width: buffer_real_size.width,
                 Height: buffer_real_size.height,
@@ -6209,6 +6233,112 @@ impl LabelView {
     }
 }
 
+pub struct FloatSliderView {
+    root: SpriteVisual,
+    value_label: SpriteVisual,
+    ht: SharedMut<HitTestTree>,
+}
+impl FloatSliderView {
+    pub const BORDER_RECT_ROUNDING: f32 = 6.0;
+
+    pub fn new(view_ctx: &mut impl ViewContext) -> windows::core::Result<SharedMut<Self>> {
+        let root = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
+        root.set_properties()
+            .size(Vector2 { X: 0.0, Y: 16.0 })?
+            .relative_size_adjustment(Vector2 { X: 0.5, Y: 0.0 })?
+            .brush(
+                &view_ctx
+                    .app_subsystems()
+                    .borrow()
+                    .ui_common_objects
+                    .slider_base_brush,
+            )?;
+
+        let value_text_fmt = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .text_format_stock
+            .get("system-ui", 10.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let value_init_surface = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .text_surface_stock
+            .get(&value_text_fmt, view_ctx.current_dpi(), "0.0")?;
+        let value_label = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
+        value_label
+            .set_properties()
+            .brush(
+                &view_ctx
+                    .app_subsystems()
+                    .borrow()
+                    .compositor
+                    .CreateSurfaceBrushWithSurface(&value_init_surface.surface)?,
+            )?
+            .size(value_init_surface.visual_size())?
+            .offset(Vector3 {
+                X: 8.0,
+                Y: 0.0,
+                Z: 0.0,
+            })?
+            .relative_offset_adjustment(Vector3 {
+                X: 0.0,
+                Y: 0.5,
+                Z: 0.0,
+            })?
+            .anchor_point(Vector2 { X: 0.0, Y: 0.5 })?;
+        root.Children()?.InsertAtTop(&value_label)?;
+
+        Ok(new_cyclic_shared_mut(|wthis| {
+            let ht = HitTestTree::new_unsized(
+                &Rc::new(wthis.clone()),
+                view_ctx.hittest_context_mut().new_id(),
+                0.0,
+                0.0,
+            );
+
+            Self {
+                root,
+                value_label,
+                ht,
+            }
+        }))
+    }
+
+    pub fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
+        HitTestTree::add_child(onto_ht, self.ht.clone());
+
+        Ok(())
+    }
+
+    pub fn unmount(&self) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+        self.ht.borrow_mut().unmount();
+
+        Ok(())
+    }
+
+    pub fn reposition(&self, pos: Vector2) -> windows::core::Result<()> {
+        self.root.SetOffset(pos.with_z(0.0))?;
+        self.ht.borrow_mut().set_offset(pos.X, pos.Y);
+
+        Ok(())
+    }
+}
+impl InputEventHandler for WeakMut<FloatSliderView> {}
+
 pub trait AppStateCurrentSelectionChangedHandler {
     fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &mut dyn ViewContext);
 }
@@ -6297,6 +6427,15 @@ pub struct ObjectEditState {
     pub id: Uuid,
     pub name: String,
     pub order: u32,
+    pub details: ObjectDetails,
+}
+
+pub enum ObjectDetails {
+    Camera {},
+    SunLight {
+        rotation: peridot_math::QuaternionF32,
+        intensity: f32,
+    },
 }
 
 struct AppWindowState {
@@ -6567,12 +6706,17 @@ fn app() -> i32 {
         id: Uuid::new_v4(),
         name: "Camera".into(),
         order: 0,
+        details: ObjectDetails::Camera {},
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
     let obj = ObjectEditState {
         id: Uuid::new_v4(),
         name: "Sun Light".into(),
         order: 1,
+        details: ObjectDetails::SunLight {
+            rotation: peridot_math::QuaternionF32::ONE,
+            intensity: 20.0,
+        },
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
     let state = new_shared_mut(state);
@@ -6586,7 +6730,7 @@ fn app() -> i32 {
         .expect("Failed to create dispatcher queue controller")
     };
 
-    let mut app_subsystem_instances = AppSubsystemInstances::new();
+    let app_subsystem_instances = AppSubsystemInstances::new();
     let app_global_signals = new_shared_mut(AppGlobalSignals::new());
 
     let desktop_interop = app_subsystem_instances
@@ -6600,6 +6744,7 @@ fn app() -> i32 {
     };
 
     let app_global_scale = window_handle.current_dpi as f64 / 96.0;
+    println!("global scale: {app_global_scale}");
     let composition_root = app_subsystem_instances
         .compositor
         .CreateContainerVisual()

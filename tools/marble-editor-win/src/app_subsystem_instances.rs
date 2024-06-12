@@ -1,15 +1,18 @@
 use core::ffi::c_void;
 use windows::{
     core::Interface,
-    Foundation::Numerics::Vector2,
+    Foundation::{Numerics::Vector2, Size},
+    Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat},
     Win32::{
+        Foundation::POINT,
         Graphics::{
             CompositionSwapchain::{
                 CreatePresentationFactory, IPresentationFactory, IPresentationManager,
             },
             Direct2D::{
-                D2D1CreateFactory, ID2D1Factory1, D2D1_DEBUG_LEVEL_WARNING, D2D1_FACTORY_OPTIONS,
-                D2D1_FACTORY_TYPE_SINGLE_THREADED,
+                Common::{D2D1_COLOR_F, D2D_RECT_F},
+                D2D1CreateFactory, ID2D1DeviceContext, ID2D1Factory1, D2D1_DEBUG_LEVEL_WARNING,
+                D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT,
             },
             Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL},
             Direct3D11::{
@@ -22,9 +25,12 @@ use windows::{
             },
             Dxgi::IDXGIDevice,
         },
-        System::WinRT::Composition::ICompositorInterop,
+        System::WinRT::Composition::{ICompositionDrawingSurfaceInterop, ICompositorInterop},
     },
-    UI::{Color, Composition::Compositor},
+    UI::{
+        Color,
+        Composition::{CompositionStretch, Compositor},
+    },
 };
 
 use crate::{
@@ -34,7 +40,7 @@ use crate::{
     winapi_extras::{
         timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
     },
-    TAB_ACTIVE_BASE_COLOR, TAB_ACTIVE_LIT_COLOR,
+    FloatSliderView, TAB_ACTIVE_BASE_COLOR, TAB_ACTIVE_LIT_COLOR,
 };
 
 pub struct AppSubsystemInstances {
@@ -252,6 +258,106 @@ impl AppSubsystemInstances {
                     .expect("Failed to set duration");
 
                 a
+            },
+            slider_base_brush: {
+                let base_surface = composition_graphics_device
+                    .CreateDrawingSurface(
+                        Size {
+                            Width: FloatSliderView::BORDER_RECT_ROUNDING * 2.0 + 1.0 + 2.0,
+                            Height: FloatSliderView::BORDER_RECT_ROUNDING * 2.0 + 1.0 + 2.0,
+                        },
+                        DirectXPixelFormat::R8G8B8A8UIntNormalized,
+                        DirectXAlphaMode::Premultiplied,
+                    )
+                    .expect("Failed to create slider base surface");
+                let surface_interop = base_surface
+                    .cast::<ICompositionDrawingSurfaceInterop>()
+                    .expect("no ICompositionDrawingSurfaceInterop queried");
+                let mut update_offset = POINT { x: 0, y: 0 };
+                let dc: ID2D1DeviceContext = unsafe {
+                    surface_interop
+                        .BeginDraw(None, &mut update_offset)
+                        .expect("Failed to begin render slider base surface")
+                };
+                let res = 'rendering_block: {
+                    unsafe {
+                        const CLEAR_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
+                            a: 0.0,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                        };
+                        const BORDER_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
+                            a: 1.0,
+                            r: 0.8,
+                            g: 0.8,
+                            b: 0.8,
+                        };
+                        const INNER_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
+                            a: 0.3,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                        };
+                        let rounded_rect = D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: update_offset.x as f32 + 0.5,
+                                top: update_offset.y as f32 + 0.5,
+                                right: update_offset.x as f32
+                                    + FloatSliderView::BORDER_RECT_ROUNDING * 2.0
+                                    + 1.0
+                                    + 2.0
+                                    - 0.5,
+                                bottom: update_offset.y as f32
+                                    + FloatSliderView::BORDER_RECT_ROUNDING * 2.0
+                                    + 1.0
+                                    + 2.0
+                                    - 0.5,
+                            },
+                            radiusX: FloatSliderView::BORDER_RECT_ROUNDING,
+                            radiusY: FloatSliderView::BORDER_RECT_ROUNDING,
+                        };
+
+                        let border_brush = match dc.CreateSolidColorBrush(&BORDER_COLOR, None) {
+                            Ok(b) => b,
+                            Err(e) => break 'rendering_block Err(e),
+                        };
+                        let inner_brush = match dc.CreateSolidColorBrush(&INNER_COLOR, None) {
+                            Ok(b) => b,
+                            Err(e) => break 'rendering_block Err(e),
+                        };
+
+                        dc.Clear(Some(&CLEAR_COLOR));
+                        dc.FillRoundedRectangle(&rounded_rect, &inner_brush);
+                        dc.DrawRoundedRectangle(&rounded_rect, &border_brush, 1.0, None);
+                    }
+
+                    Ok(())
+                };
+                unsafe {
+                    surface_interop
+                        .EndDraw()
+                        .expect("Failed to finish rendering")
+                };
+                res.expect("Error in rendering");
+
+                let base_brush = compositor
+                    .CreateSurfaceBrushWithSurface(&base_surface)
+                    .expect("Failed to create base composition brush");
+                let brush = compositor
+                    .CreateNineGridBrush()
+                    .expect("Failed to create slider base brush");
+                brush
+                    .SetSource(&base_brush)
+                    .expect("Failed to set slider brush base");
+                brush
+                    .SetInsets(FloatSliderView::BORDER_RECT_ROUNDING + 1.0)
+                    .expect("Failed to set slider brush insets");
+                base_brush
+                    .SetStretch(CompositionStretch::Fill)
+                    .expect("Failed to base brush stretching mode");
+
+                brush
             },
         };
 
