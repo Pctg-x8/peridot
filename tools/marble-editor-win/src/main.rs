@@ -1288,7 +1288,6 @@ impl TabGroupPaneView {
             .borrow()
             .compositor
             .CreateContainerVisual()?;
-        content_area.SetRelativeSizeAdjustment(Vector2::one())?;
         root.Children()?.InsertAtBottom(&content_area)?;
 
         let content_area_base = ctx
@@ -1296,14 +1295,12 @@ impl TabGroupPaneView {
             .borrow()
             .compositor
             .CreateSpriteVisual()?;
-        content_area_base.SetBrush(
+        content_area_base.set_properties().brush(
             &ctx.app_subsystems()
                 .borrow()
                 .compositor
                 .CreateColorBrushWithColor(Self::CONTENT_AREA_BASE_COLOR)?,
         )?;
-        content_area_base.SetRelativeOffsetAdjustment(Vector3::zero())?;
-        content_area_base.SetRelativeSizeAdjustment(Vector2::one())?;
         root.Children()?.InsertAtBottom(&content_area_base)?;
         // root.SetClip(
         //     &ctx.app_subsystems()
