@@ -51,7 +51,7 @@ use windows::{
             DirectComposition::{
                 DCompositionCreateSurfaceHandle, COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE,
             },
-            DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+            DirectWrite::{IDWriteTextFormat, DWRITE_FONT_WEIGHT_NORMAL},
             Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::{
                 Common::{
@@ -93,7 +93,7 @@ use windows::{
         Color,
         Composition::{
             CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, ContainerVisual,
-            Diagnostics::CompositionDebugSettings, LayerVisual, ScalarKeyFrameAnimation,
+            Diagnostics::CompositionDebugSettings, InsetClip, LayerVisual, ScalarKeyFrameAnimation,
             ShapeVisual, SpriteVisual, VisualCollection,
         },
     },
@@ -1146,8 +1146,12 @@ impl PaneGroupDockingManager {
         ctx: &mut impl ViewContext,
         ht_root: &SharedMut<HitTestTree>,
     ) -> windows::core::Result<Self> {
-        let ht_placement_root =
-            HitTestTree::new_unsized(&Rc::new(()), ctx.hittest_context_mut().new_id(), 0.0, 0.0);
+        let ht_placement_root = HitTestTree::new_unsized(
+            Some(&Rc::new(())),
+            ctx.hittest_context_mut().new_id(),
+            0.0,
+            0.0,
+        );
         HitTestTree::add_child(ht_root, ht_placement_root.clone());
 
         Ok(Self {
@@ -1311,12 +1315,12 @@ impl TabGroupPaneView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context_mut().new_id(),
                 Rect::from_size(128.0, 128.0),
             );
             let ht_content = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context_mut().new_id(),
                 Rect::from_size(128.0, 128.0),
             );
@@ -2047,7 +2051,7 @@ impl PaneTabHeaderView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht_self = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context_mut().new_id(),
                 Rect::from_size(view_size.X, view_size.Y),
             );
@@ -2756,64 +2760,92 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     ) -> Self;
 }
 
+pub struct InspectorTabValueChangeEventHandler {
+    app_state: SharedMut<AppState>,
+    bound_object_id: Uuid,
+}
+impl ValueChangeEventHandler<f32> for InspectorTabValueChangeEventHandler {
+    fn on_value_changed(
+        &self,
+        view_context: &mut dyn ViewContext,
+        sender_id: usize,
+        new_value: f32,
+    ) {
+        if sender_id == 1 {
+            // sun light - intensity slider
+            if let Some(e) = self
+                .app_state
+                .borrow_mut()
+                .current_scene
+                .objects
+                .get_mut(&self.bound_object_id)
+            {
+                e.update_sunlight_intensity(new_value, view_context);
+            }
+        }
+    }
+}
 pub struct InspectorTabSelectionChangedEventHandler {
     content_root: ContainerVisual,
     root_ht: SharedMut<HitTestTree>,
+    current_mounted_views: RefCell<Vec<SharedMut<dyn MountableView>>>,
+    observation_disconnectors: RefCell<Vec<Box<dyn ObservationDisconnector>>>,
+    value_change_event_handler_ref: RefCell<Option<Rc<InspectorTabValueChangeEventHandler>>>,
 }
 impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEventHandler {
     fn on_changed(&self, app_state: &SharedMut<AppState>, mut view_context: &mut dyn ViewContext) {
-        println!(
-            "Changed: {:?}",
-            app_state.borrow().current_selection_object_id
-        );
-
         // TODO: 本当は以前のViewを使いまわすとかしたほうがいいけどいったん見た目優先なのであとでやる
-        self.content_root.Children().unwrap().RemoveAll().unwrap();
+        for od in self.observation_disconnectors.borrow_mut().drain(..) {
+            od.disconnect();
+        }
+        for c in self.current_mounted_views.borrow_mut().drain(..) {
+            c.borrow().unmount().expect("Failed to unmount last views");
+        }
+        self.value_change_event_handler_ref.replace(None);
+
         match app_state.borrow().current_selection_object_id.clone() {
             None => {
                 let label = LabelView::new("None Selected", &mut view_context).unwrap();
                 label
-                    .set_position(Vector3 {
-                        X: 4.0,
-                        Y: 4.0,
-                        Z: 0.0,
-                    })
+                    .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                     .unwrap();
-                label.mount(&self.content_root.Children().unwrap()).unwrap();
+                self.current_mounted_views
+                    .borrow_mut()
+                    .push(new_shared_mut(label));
             }
             Some(id) => {
                 if let Some(entity_ref) = app_state.borrow().current_scene.objects.get(&id) {
                     let id_label =
                         LabelView::new(format!("Object: {id:?}"), &mut view_context).unwrap();
                     id_label
-                        .set_position(Vector3 {
-                            X: 4.0,
-                            Y: 4.0,
-                            Z: 0.0,
-                        })
+                        .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                         .unwrap();
-                    id_label
-                        .mount(&self.content_root.Children().unwrap())
-                        .unwrap();
+                    self.current_mounted_views
+                        .borrow_mut()
+                        .push(new_shared_mut(id_label));
 
                     let object_name_label =
                         LabelView::new(format!("Name: {:?}", entity_ref.name), &mut view_context)
                             .unwrap();
                     object_name_label
                         .set_position(Vector3 {
-                            X: 16.0,
+                            X: 12.0,
                             Y: 20.0,
                             Z: 0.0,
                         })
                         .unwrap();
                     object_name_label
-                        .mount(&self.content_root.Children().unwrap())
+                        .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                         .unwrap();
+                    self.current_mounted_views
+                        .borrow_mut()
+                        .push(new_shared_mut(object_name_label));
 
                     match entity_ref.details {
                         ObjectDetails::SunLight {
                             rotation,
                             intensity,
+                            ..
                         } => {
                             let rotation_label = LabelView::new(
                                 format!(
@@ -2825,36 +2857,63 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             .unwrap();
                             rotation_label
                                 .set_position(Vector3 {
-                                    X: 16.0,
+                                    X: 0.0,
                                     Y: 60.0,
                                     Z: 0.0,
                                 })
                                 .unwrap();
                             rotation_label
-                                .mount(&self.content_root.Children().unwrap())
+                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                                 .unwrap();
+                            self.current_mounted_views
+                                .borrow_mut()
+                                .push(new_shared_mut(rotation_label));
+
                             let intensity_label =
                                 LabelView::new("Intensity", &mut view_context).unwrap();
                             intensity_label
                                 .set_position(Vector3 {
-                                    X: 16.0,
+                                    X: 0.0,
                                     Y: 80.0,
                                     Z: 0.0,
                                 })
                                 .unwrap();
                             intensity_label
-                                .mount(&self.content_root.Children().unwrap())
+                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                                 .unwrap();
+                            self.current_mounted_views
+                                .borrow_mut()
+                                .push(new_shared_mut(intensity_label));
+
                             let intensity_control =
-                                FloatSliderView::new(&mut view_context).unwrap();
+                                FloatSliderView::new(&mut view_context, intensity, 100.0).unwrap();
                             intensity_control
                                 .borrow()
-                                .reposition(Vector2 { X: 0.0, Y: 80.0 })
+                                .reposition_xrel(0.5, 80.0)
                                 .unwrap();
                             intensity_control
                                 .borrow()
                                 .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                                 .unwrap();
+                            let intensity_changed_event_handler =
+                                Rc::new(InspectorTabValueChangeEventHandler {
+                                    app_state: app_state.clone(),
+                                    bound_object_id: id.clone(),
+                                });
+                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                                FloatSliderView::observe_value_changes2(
+                                    &intensity_control,
+                                    &intensity_changed_event_handler,
+                                    1,
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.value_change_event_handler_ref
+                                .replace(Some(intensity_changed_event_handler));
+                            self.current_mounted_views
+                                .borrow_mut()
+                                .push(intensity_control);
                         }
                         ObjectDetails::Camera {} => (),
                     }
@@ -2863,15 +2922,11 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                         LabelView::new(format!("Object: {id:?} (gone)"), &mut view_context)
                             .unwrap();
                     id_label
-                        .set_position(Vector3 {
-                            X: 4.0,
-                            Y: 4.0,
-                            Z: 0.0,
-                        })
+                        .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                         .unwrap();
-                    id_label
-                        .mount(&self.content_root.Children().unwrap())
-                        .unwrap();
+                    self.current_mounted_views
+                        .borrow_mut()
+                        .push(new_shared_mut(id_label));
                 }
             }
         }
@@ -2884,7 +2939,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
-        _onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &SharedMut<HitTestTree>,
         mut view_context: &mut dyn ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -2896,6 +2951,10 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
 
         onto.Children()?
             .InsertAtTop(&self.selection_changed_event_handler.content_root)?;
+        HitTestTree::add_child(
+            onto_ht,
+            self.selection_changed_event_handler.root_ht.clone(),
+        );
 
         Ok(())
     }
@@ -2910,6 +2969,10 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
             .Parent()?
             .Children()?
             .Remove(&self.selection_changed_event_handler.content_root)?;
+        self.selection_changed_event_handler
+            .root_ht
+            .borrow_mut()
+            .unmount();
         app_state
             .borrow_mut()
             .unobserve_current_selection_changes(&Rc::downgrade(
@@ -2936,17 +2999,31 @@ impl PaneTabPresenter for InspectorTabPresenter {
         content_root
             .set_properties()
             .expand_to_parent()
-            .expect("Failed to set content root size");
+            .expect("Failed to set content root size")
+            .offset(Vector3 {
+                X: 8.0,
+                Y: 8.0,
+                Z: 0.0,
+            })
+            .expect("Failed to set content offset margin")
+            .size(Vector2 { X: -16.0, Y: -16.0 })
+            .expect("Failed to set content size margin");
+
+        let content_root_ht = HitTestTree::new_fit_to_parent(
+            None::<&Rc<()>>,
+            view_ctx.hittest_context_mut().new_id(),
+        );
+        content_root_ht
+            .borrow_mut()
+            .set_rect(8.0, 8.0, -16.0, -16.0);
 
         Self {
             selection_changed_event_handler: Rc::new(InspectorTabSelectionChangedEventHandler {
                 content_root,
-                root_ht: HitTestTree::new_unsized(
-                    &Rc::new(()),
-                    view_ctx.hittest_context_mut().new_id(),
-                    0.0,
-                    0.0,
-                ),
+                root_ht: content_root_ht,
+                current_mounted_views: RefCell::new(Vec::new()),
+                observation_disconnectors: RefCell::new(Vec::new()),
+                value_change_event_handler_ref: RefCell::new(None),
             }),
         }
     }
@@ -3155,17 +3232,43 @@ impl PaneTabContentPresenter for StageTabPresenter {
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
         view_context: &mut dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        self.view.borrow().mount(onto, onto_ht, view_context)
+        self.view.borrow().mount(onto, onto_ht, view_context)?;
+
+        // TODO: 仮でSunLightだけを探してそれのイベントを購読する
+        if let Some(sunlight) = app_state
+            .borrow_mut()
+            .current_scene
+            .objects
+            .values_mut()
+            .find(|x| x.is_sunlight_object())
+        {
+            sunlight.observe_sunlight_intensity_changes(&self.view, 1, view_context);
+        }
+
+        Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
         view_context: &mut dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        self.view.borrow().unmount(view_context)
+        self.view.borrow().unmount(view_context)?;
+
+        // TODO: 仮でSunLightだけを探してそれのイベントを購読する
+        if let Some(sunlight) = app_state
+            .borrow_mut()
+            .current_scene
+            .objects
+            .values_mut()
+            .find(|x| x.is_sunlight_object())
+        {
+            sunlight.unobserve_sunlight_intensity_changes(&self.view);
+        }
+
+        Ok(())
     }
 
     fn on_resize(
@@ -4211,6 +4314,58 @@ impl SkyboxRenderer {
             primary_directional_light_data_buffer,
         })
     }
+
+    pub fn update_primary_directional_light_data(
+        &self,
+        e: &mut MiniEngine,
+        new_data: PrimaryDirectionalLightUniformData,
+    ) -> br::Result<()> {
+        let mut upload_buffer = e.alloc_upload_buffer(br::BufferDesc::new(
+            core::mem::size_of::<PrimaryDirectionalLightUniformData>(),
+            br::BufferUsage::TRANSFER_SRC,
+        ))?;
+        upload_buffer.write_content(new_data)?;
+
+        let mut cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
+            .transient()
+            .create(e.device())?;
+        let mut cb = cp.alloc(1, true)?;
+        unsafe { cb[0].begin_once()? }
+            .copy_buffer(
+                &upload_buffer,
+                &self.primary_directional_light_data_buffer,
+                &[br::vk::VkBufferCopy {
+                    srcOffset: 0,
+                    dstOffset: 0,
+                    size: core::mem::size_of::<PrimaryDirectionalLightUniformData>() as _,
+                }],
+            )
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .of_memory(
+                        br::AccessFlags2::TRANSFER.write,
+                        br::AccessFlags2::UNIFORM_READ,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags2::COPY,
+                        br::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )],
+                &[],
+                &[],
+            ))
+            .end()?;
+        e.graphics_queue().borrow_mut().submit2(
+            &[br::SubmitInfo2::new(
+                &[],
+                &[br::CommandBufferSubmitInfo::new(&cb[0])],
+                &[],
+            )],
+            None::<&mut br::FenceObject<StdVkDevice>>,
+        )?;
+        e.graphics_queue().borrow_mut().wait()?;
+
+        Ok(())
+    }
 }
 
 #[repr(C)]
@@ -5215,7 +5370,7 @@ impl EditorStageView {
 
         Ok(new_cyclic_shared_mut(move |wthis| {
             let ht = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 view_ctx.hittest_context_mut().new_id(),
                 Rect {
                     X: 0.0,
@@ -5844,6 +5999,32 @@ impl InputEventHandler for WeakMut<EditorStageView> {
         ctx.release_mouse_capture();
     }
 }
+impl ValueChangeEventHandler<f32> for RefCell<EditorStageView> {
+    fn on_value_changed(
+        &self,
+        view_context: &mut dyn ViewContext,
+        sender_id: usize,
+        new_value: f32,
+    ) {
+        if sender_id != 1 {
+            // Intensity以外はいったん見ない
+            return;
+        }
+
+        let data = PrimaryDirectionalLightUniformData {
+            incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
+            // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+            light_intensity: new_value,
+        };
+        self.borrow()
+            .skybox_renderer
+            .update_primary_directional_light_data(
+                &mut view_context.app_subsystems().borrow_mut().mini_engine,
+                data,
+            )
+            .expect("Failed to update uniform buffer");
+    }
+}
 
 pub struct PreviewTabPresenter {}
 impl PaneTabContentPresenter for PreviewTabPresenter {
@@ -5990,7 +6171,7 @@ impl ObjectTreeElementRowView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 view_ctx.hittest_context_mut().new_id(),
                 Rect {
                     X: 0.0,
@@ -6178,6 +6359,15 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
     }
 }
 
+pub trait MountableView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()>;
+    fn unmount(&self) -> windows::core::Result<()>;
+}
+
 pub struct LabelView {
     pub root: SpriteVisual,
 }
@@ -6214,39 +6404,90 @@ impl LabelView {
         Ok(Self { root })
     }
 
-    pub fn mount(&self, onto: &VisualCollection) -> windows::core::Result<()> {
+    pub fn set_position(&self, pos: Vector3) -> windows::core::Result<()> {
+        self.root.SetOffset(pos)
+    }
+}
+impl MountableView for LabelView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        _onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
 
         Ok(())
     }
-    pub fn unmount(&self) -> windows::core::Result<()> {
+
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
 
         Ok(())
     }
+}
 
-    pub fn set_position(&self, pos: Vector3) -> windows::core::Result<()> {
-        self.root.SetOffset(pos)
+pub trait ValueChangeEventHandler<T> {
+    fn on_value_changed(&self, view_context: &mut dyn ViewContext, sender_id: usize, new_value: T);
+}
+#[repr(transparent)]
+pub struct ValueChangeEventHandlerHashKey<T>(pub Weak<dyn ValueChangeEventHandler<T>>);
+impl<T> PartialEq for ValueChangeEventHandlerHashKey<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+impl<T> Eq for ValueChangeEventHandlerHashKey<T> {}
+impl<T> Hash for ValueChangeEventHandlerHashKey<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state)
+    }
+}
+
+pub trait ObservationDisconnector {
+    fn disconnect(&self);
+}
+pub struct FloatSliderValueChangedObservationDisconnector {
+    view_ref: WeakMut<FloatSliderView>,
+    handler_ref: Weak<dyn ValueChangeEventHandler<f32>>,
+}
+impl ObservationDisconnector for FloatSliderValueChangedObservationDisconnector {
+    fn disconnect(&self) {
+        let (Some(view), Some(handler)) = (self.view_ref.upgrade(), self.handler_ref.upgrade())
+        else {
+            return;
+        };
+
+        view.borrow_mut().unobserve_value_changes_dyn(&handler);
     }
 }
 
 pub struct FloatSliderView {
     root: SpriteVisual,
+    gauge_clip: InsetClip,
+    value_label_format: IDWriteTextFormat,
     value_label: SpriteVisual,
+    value_label_brush: CompositionSurfaceBrush,
     ht: SharedMut<HitTestTree>,
+    current_value: f32,
+    max_value: f32,
+    drag_base_x: f32,
+    value_change_event_handlers: HashMap<ValueChangeEventHandlerHashKey<f32>, usize>,
 }
 impl FloatSliderView {
     pub const BORDER_RECT_ROUNDING: f32 = 6.0;
 
-    pub fn new(view_ctx: &mut impl ViewContext) -> windows::core::Result<SharedMut<Self>> {
+    pub fn new(
+        view_ctx: &mut impl ViewContext,
+        init_value: f32,
+        max_value: f32,
+    ) -> windows::core::Result<SharedMut<Self>> {
         let root = view_ctx
             .app_subsystems()
             .borrow()
             .compositor
             .CreateSpriteVisual()?;
         root.set_properties()
-            .size(Vector2 { X: 0.0, Y: 16.0 })?
-            .relative_size_adjustment(Vector2 { X: 0.5, Y: 0.0 })?
+            .size(Vector2 { X: 128.0, Y: 16.0 })?
             .brush(
                 &view_ctx
                     .app_subsystems()
@@ -6254,6 +6495,47 @@ impl FloatSliderView {
                     .ui_common_objects
                     .slider_base_brush,
             )?;
+
+        let rate = (init_value / max_value).clamp(0.0, 1.0);
+        let gauge = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
+        let gauge_base_brush = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateColorBrushWithColor(Color {
+                A: 128,
+                R: 255,
+                G: 255,
+                B: 128,
+            })?;
+        let gauge_masked_brush = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateMaskBrush()?;
+        gauge_masked_brush.SetSource(&gauge_base_brush)?;
+        gauge_masked_brush.SetMask(
+            &view_ctx
+                .app_subsystems()
+                .borrow()
+                .ui_common_objects
+                .slider_base_brush,
+        )?;
+        gauge
+            .set_properties()
+            .expand_to_parent()?
+            .brush(&gauge_masked_brush)?;
+        let gauge_clip = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateInsetClipWithInsets(0.0, 0.0, 128.0 * (1.0 - rate), 0.0)?;
+        gauge.SetClip(&gauge_clip)?;
+        root.Children()?.InsertAtTop(&gauge)?;
 
         let value_text_fmt = view_ctx
             .app_subsystems()
@@ -6264,21 +6546,24 @@ impl FloatSliderView {
             .app_subsystems()
             .borrow_mut()
             .text_surface_stock
-            .get(&value_text_fmt, view_ctx.current_dpi(), "0.0")?;
+            .get(
+                &value_text_fmt,
+                view_ctx.current_dpi(),
+                format!("{:.1}", init_value),
+            )?;
         let value_label = view_ctx
             .app_subsystems()
             .borrow()
             .compositor
             .CreateSpriteVisual()?;
+        let value_label_brush = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSurfaceBrushWithSurface(&value_init_surface.surface)?;
         value_label
             .set_properties()
-            .brush(
-                &view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .compositor
-                    .CreateSurfaceBrushWithSurface(&value_init_surface.surface)?,
-            )?
+            .brush(&value_label_brush)?
             .size(value_init_surface.visual_size())?
             .offset(Vector3 {
                 X: 8.0,
@@ -6294,22 +6579,143 @@ impl FloatSliderView {
         root.Children()?.InsertAtTop(&value_label)?;
 
         Ok(new_cyclic_shared_mut(|wthis| {
-            let ht = HitTestTree::new_unsized(
-                &Rc::new(wthis.clone()),
+            let ht = HitTestTree::new(
+                Some(&Rc::new(wthis.clone())),
                 view_ctx.hittest_context_mut().new_id(),
-                0.0,
-                0.0,
+                Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 128.0,
+                    Height: 16.0,
+                },
             );
 
             Self {
                 root,
+                gauge_clip,
+                value_label_format: value_text_fmt,
                 value_label,
+                value_label_brush,
                 ht,
+                current_value: init_value,
+                max_value,
+                drag_base_x: 0.0,
+                value_change_event_handlers: HashMap::new(),
             }
         }))
     }
 
-    pub fn mount(
+    // TODO: これもうちょっと柔軟に書けるようにしたい（どっちか決め打ちで相対値みたいなのはやめたい）
+    pub fn reposition_xrel(&self, x_rel: f32, y: f32) -> windows::core::Result<()> {
+        self.root.SetOffset(Vector3 {
+            X: 0.0,
+            Y: y,
+            Z: 0.0,
+        })?;
+        self.root.SetRelativeOffsetAdjustment(Vector3 {
+            X: x_rel,
+            Y: 0.0,
+            Z: 0.0,
+        })?;
+        self.ht.borrow_mut().set_top(y);
+        self.ht.borrow_mut().set_relative_left(x_rel, 0.0);
+
+        Ok(())
+    }
+
+    pub fn observe_value_changes2(
+        this: &SharedMut<Self>,
+        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
+        sender_id: usize,
+        view_context: &mut dyn ViewContext,
+        request_current_value: bool,
+    ) -> impl ObservationDisconnector {
+        let wh = Rc::downgrade(handler);
+        this.borrow_mut()
+            .value_change_event_handlers
+            .insert(ValueChangeEventHandlerHashKey(wh.clone()), sender_id);
+        if request_current_value {
+            handler.on_value_changed(view_context, sender_id, this.borrow().current_value);
+        }
+
+        FloatSliderValueChangedObservationDisconnector {
+            view_ref: Rc::downgrade(this),
+            handler_ref: wh,
+        }
+    }
+
+    pub fn observe_value_changes(
+        &mut self,
+        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
+        sender_id: usize,
+        view_context: &mut dyn ViewContext,
+    ) {
+        let wh = Rc::downgrade(handler);
+        self.value_change_event_handlers
+            .insert(ValueChangeEventHandlerHashKey(wh), sender_id);
+        handler.on_value_changed(view_context, sender_id, self.current_value);
+    }
+
+    pub fn unobserve_value_changes(
+        &mut self,
+        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
+    ) {
+        let wh = Rc::downgrade(handler);
+        self.value_change_event_handlers
+            .remove(&ValueChangeEventHandlerHashKey(wh));
+    }
+
+    fn unobserve_value_changes_dyn(&mut self, handler: &Rc<dyn ValueChangeEventHandler<f32>>) {
+        let wh = Rc::downgrade(handler);
+        self.value_change_event_handlers
+            .remove(&ValueChangeEventHandlerHashKey(wh));
+    }
+
+    fn notify_current_value(&self, view_context: &mut dyn ViewContext) {
+        for (e, id) in self.value_change_event_handlers.iter() {
+            if let Some(e) = e.0.upgrade() {
+                e.on_value_changed(view_context, *id, self.current_value);
+            }
+        }
+    }
+
+    fn update_rate(&self) -> windows::core::Result<()> {
+        let rate = self.current_value / self.max_value;
+
+        self.gauge_clip
+            .SetRightInset(self.ht.borrow().rect().Width * (1.0 - rate))?;
+        Ok(())
+    }
+
+    fn update_value_label(&self, view_context: &mut impl ViewContext) -> windows::core::Result<()> {
+        let label_text = format!("{:.1}", self.current_value);
+        let label_text_u16 = label_text.encode_utf16().collect::<Vec<_>>();
+        let label_text_layout = unsafe {
+            view_context
+                .app_subsystems()
+                .borrow()
+                .dwrite_factory
+                .CreateTextLayout(
+                    &label_text_u16,
+                    &self.value_label_format,
+                    core::f32::MAX,
+                    core::f32::MAX,
+                )?
+        };
+        let label_surface = view_context
+            .app_subsystems()
+            .borrow_mut()
+            .text_surface_stock
+            .create_text_surface(&label_text_layout, view_context.current_dpi())?;
+
+        self.value_label_brush.SetSurface(&label_surface.surface)?;
+        self.value_label.SetSize(label_surface.visual_size())?;
+
+        Ok(())
+    }
+}
+impl MountableView for FloatSliderView {
+    fn mount(
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
@@ -6320,21 +6726,50 @@ impl FloatSliderView {
         Ok(())
     }
 
-    pub fn unmount(&self) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
         self.ht.borrow_mut().unmount();
 
         Ok(())
     }
+}
+impl InputEventHandler for WeakMut<FloatSliderView> {
+    fn hover_cursor(&self) -> uikit::CursorStyle {
+        uikit::CursorStyle::SizeEW
+    }
 
-    pub fn reposition(&self, pos: Vector2) -> windows::core::Result<()> {
-        self.root.SetOffset(pos.with_z(0.0))?;
-        self.ht.borrow_mut().set_offset(pos.X, pos.Y);
+    fn on_pointer_down(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        ctx.capture_mouse();
+        let component_global_x = this.borrow().ht.borrow().global_rect().X;
+        this.borrow_mut().drag_base_x = component_global_x;
+    }
 
-        Ok(())
+    fn on_drag_move(&self, x: f32, _y: f32, window: HWND, mut ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let app_window = AppWindow::wrap(window);
+
+        let d = app_window.pixels_to_dip(x) - this.borrow().drag_base_x;
+        let max_value = this.borrow().max_value;
+        let component_width = this.borrow().ht.borrow().rect().Width;
+        this.borrow_mut().current_value = d * max_value / component_width;
+        this.borrow()
+            .update_rate()
+            .expect("Failed to update gauge rate");
+        this.borrow()
+            .update_value_label(&mut ctx)
+            .expect("Failed to update value label");
+        this.borrow().notify_current_value(&mut ctx);
+    }
+
+    fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        ctx.release_mouse_capture();
     }
 }
-impl InputEventHandler for WeakMut<FloatSliderView> {}
 
 pub trait AppStateCurrentSelectionChangedHandler {
     fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &mut dyn ViewContext);
@@ -6426,12 +6861,76 @@ pub struct ObjectEditState {
     pub order: u32,
     pub details: ObjectDetails,
 }
+impl ObjectEditState {
+    pub fn is_sunlight_object(&self) -> bool {
+        matches!(self.details, ObjectDetails::SunLight { .. })
+    }
+
+    pub fn observe_sunlight_intensity_changes(
+        &mut self,
+        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
+        sender_id: usize,
+        view_context: &mut dyn ViewContext,
+    ) {
+        let ObjectDetails::SunLight {
+            intensity,
+            ref mut intensity_changed_handlers,
+            ..
+        } = self.details
+        else {
+            return;
+        };
+
+        let wh = Rc::downgrade(handler);
+        intensity_changed_handlers.insert(ValueChangeEventHandlerHashKey(wh), sender_id);
+        handler.on_value_changed(view_context, sender_id, intensity);
+    }
+
+    pub fn unobserve_sunlight_intensity_changes(
+        &mut self,
+        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
+    ) {
+        let ObjectDetails::SunLight {
+            ref mut intensity_changed_handlers,
+            ..
+        } = self.details
+        else {
+            return;
+        };
+
+        let wh = Rc::downgrade(handler);
+        intensity_changed_handlers.remove(&ValueChangeEventHandlerHashKey(wh));
+    }
+
+    pub fn update_sunlight_intensity(
+        &mut self,
+        new_intensity: f32,
+        view_ctx: &mut dyn ViewContext,
+    ) {
+        let ObjectDetails::SunLight {
+            ref mut intensity,
+            ref mut intensity_changed_handlers,
+            ..
+        } = self.details
+        else {
+            return;
+        };
+
+        *intensity = new_intensity;
+        for (e, id) in intensity_changed_handlers.iter() {
+            if let Some(e) = e.0.upgrade() {
+                e.on_value_changed(view_ctx, *id, new_intensity);
+            }
+        }
+    }
+}
 
 pub enum ObjectDetails {
     Camera {},
     SunLight {
         rotation: peridot_math::QuaternionF32,
         intensity: f32,
+        intensity_changed_handlers: HashMap<ValueChangeEventHandlerHashKey<f32>, usize>,
     },
 }
 
@@ -6713,6 +7212,7 @@ fn app() -> i32 {
         details: ObjectDetails::SunLight {
             rotation: peridot_math::QuaternionF32::ONE,
             intensity: 20.0,
+            intensity_changed_handlers: HashMap::new(),
         },
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
@@ -6872,7 +7372,7 @@ fn app() -> i32 {
             .expect("Failed to insert overlay layer");
     }
 
-    let hittest_tree_root = HitTestTree::new_unsized(&Rc::new(()), 0, 0.0, 0.0);
+    let hittest_tree_root = HitTestTree::new_unsized(Some(&Rc::new(())), 0, 0.0, 0.0);
     let mut hittest_context = HitTestTreeContext::new();
 
     let app_subsystem_instances = new_shared_mut(app_subsystem_instances);

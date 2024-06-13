@@ -90,7 +90,7 @@ impl PaneSplitterView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context_mut().new_id(),
                 Rect {
                     X: 0.0,

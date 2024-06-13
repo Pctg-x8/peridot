@@ -72,7 +72,17 @@ impl InputState {
     }
 
     fn update_mouse_pos(&mut self, x: f32, y: f32, actions: &mut Vec<InputAction>) {
-        let over_tree = HitTestTree::check(&self.ht_tree, x, y);
+        let over_tree = HitTestTree::check(
+            &self.ht_tree,
+            x,
+            y,
+            Rect {
+                X: 0.0,
+                Y: 0.0,
+                Width: 0.0,
+                Height: 0.0,
+            },
+        );
         let over_changes = over_tree.as_ref().map(|x| x.borrow().id)
             != self
                 .mouse_current_enter_element
@@ -86,7 +96,9 @@ impl InputState {
         {
             if Some(x.borrow().id) != over_tree.as_ref().map(|x| x.borrow().id) {
                 // leave
-                actions.push(InputAction::PointerLeave(x.borrow().eh.clone()));
+                actions.push(InputAction::PointerLeave(
+                    x.borrow().eh.as_ref().unwrap().clone(),
+                ));
             }
         }
         self.mouse_current_enter_element = over_tree.as_ref().map(Rc::downgrade);
@@ -96,7 +108,9 @@ impl InputState {
                 .as_ref()
                 .and_then(Weak::upgrade)
             {
-                actions.push(InputAction::PointerEnter(x.borrow().eh.clone()));
+                actions.push(InputAction::PointerEnter(
+                    x.borrow().eh.as_ref().unwrap().clone(),
+                ));
             }
         }
     }
@@ -137,12 +151,16 @@ impl InputState {
                     let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
                     if dist2 >= DRAG_THRESHOLD_DIST2 {
                         self.is_mouse_dragging = true;
-                        actions.push(InputAction::BeginDrag(e.borrow().eh.clone()));
+                        actions.push(InputAction::BeginDrag(
+                            e.borrow().eh.as_ref().unwrap().clone(),
+                        ));
                     }
                 }
 
                 if self.is_mouse_dragging {
-                    actions.push(InputAction::DragMove(e.borrow().eh.clone()));
+                    actions.push(InputAction::DragMove(
+                        e.borrow().eh.as_ref().unwrap().clone(),
+                    ));
                 }
             }
 
@@ -158,14 +176,18 @@ impl InputState {
                 if dist2 >= DRAG_THRESHOLD_DIST2 {
                     self.is_mouse_dragging = true;
                     if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
-                        actions.push(InputAction::BeginDrag(e.borrow().eh.clone()));
+                        actions.push(InputAction::BeginDrag(
+                            e.borrow().eh.as_ref().unwrap().clone(),
+                        ));
                     }
                 }
             }
 
             if self.is_mouse_dragging {
                 if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
-                    actions.push(InputAction::DragMove(e.borrow().eh.clone()));
+                    actions.push(InputAction::DragMove(
+                        e.borrow().eh.as_ref().unwrap().clone(),
+                    ));
                 }
             }
         }
@@ -190,7 +212,9 @@ impl InputState {
         self.mouse_down_point = Some((x, y, self.mouse_current_enter_element.clone()));
         self.is_mouse_dragging = false;
         if let Some(e) = active_target {
-            actions.push(InputAction::PointerDown(e.borrow().eh.clone()));
+            actions.push(InputAction::PointerDown(
+                e.borrow().eh.as_ref().unwrap().clone(),
+            ));
         }
 
         actions
@@ -204,11 +228,15 @@ impl InputState {
             .as_ref()
             .and_then(Weak::upgrade)
         {
-            actions.push(InputAction::PointerUp(e.borrow().eh.clone()));
+            actions.push(InputAction::PointerUp(
+                e.borrow().eh.as_ref().unwrap().clone(),
+            ));
             if !self.is_mouse_dragging {
-                actions.push(InputAction::Click(e.borrow().eh.clone()));
+                actions.push(InputAction::Click(e.borrow().eh.as_ref().unwrap().clone()));
             } else {
-                actions.push(InputAction::EndDrag(e.borrow().eh.clone()));
+                actions.push(InputAction::EndDrag(
+                    e.borrow().eh.as_ref().unwrap().clone(),
+                ));
             }
             self.mouse_down_point = None;
 
@@ -223,7 +251,7 @@ impl InputState {
                 .as_ref()
                 .and_then(Weak::upgrade)
             {
-                actions.push(InputAction::Click(x.borrow().eh.clone()));
+                actions.push(InputAction::Click(x.borrow().eh.as_ref().unwrap().clone()));
             }
         } else {
             if let Some(x) = self
@@ -232,7 +260,9 @@ impl InputState {
                 .and_then(|x| x.2.as_ref())
                 .and_then(std::rc::Weak::upgrade)
             {
-                actions.push(InputAction::EndDrag(x.borrow().eh.clone()));
+                actions.push(InputAction::EndDrag(
+                    x.borrow().eh.as_ref().unwrap().clone(),
+                ));
             }
         }
         self.mouse_down_point = None;
@@ -247,7 +277,7 @@ impl InputState {
             .and_then(Weak::upgrade)
         {
             // TODO: caching loaded cursors
-            let c = match e.borrow().eh.hover_cursor() {
+            let c = match e.borrow().eh.as_ref().unwrap().hover_cursor() {
                 CursorStyle::Arrow => unsafe {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
                 },
@@ -269,7 +299,7 @@ impl InputState {
             .and_then(Weak::upgrade)
         {
             // TODO: caching loaded cursors
-            let c = match e.borrow().eh.hover_cursor() {
+            let c = match e.borrow().eh.as_ref().unwrap().hover_cursor() {
                 CursorStyle::Arrow => unsafe {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
                 },
@@ -293,41 +323,60 @@ impl InputState {
             .mouse_capturing_element
             .as_ref()
             .and_then(Weak::upgrade)
-            .or_else(|| HitTestTree::check(&self.ht_tree, x, y))
+            .or_else(|| {
+                HitTestTree::check(
+                    &self.ht_tree,
+                    x,
+                    y,
+                    Rect {
+                        X: 0.0,
+                        Y: 0.0,
+                        Width: 0.0,
+                        Height: 0.0,
+                    },
+                )
+            })
         else {
             return HTCLIENT;
         };
 
-        let r = active_element.borrow().eh.nc_hittest();
+        let r = active_element.borrow().eh.as_ref().unwrap().nc_hittest();
         r
     }
 }
 
 pub struct HitTestTree {
-    eh: Rc<dyn InputEventHandler>,
+    eh: Option<Rc<dyn InputEventHandler>>,
     id: usize,
     rect: Rect,
+    relative_adjustments: Rect,
     parent: WeakMut<HitTestTree>,
     children: HashMap<usize, SharedMut<HitTestTree>>,
 }
 impl HitTestTree {
     #[inline]
     pub fn new(
-        eh: &Rc<impl InputEventHandler + 'static>,
+        eh: Option<&Rc<impl InputEventHandler + 'static>>,
         id: usize,
         rect: Rect,
     ) -> SharedMut<Self> {
         new_shared_mut(Self {
-            eh: eh.clone(),
+            eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| x.clone()),
             id,
             rect,
+            relative_adjustments: Rect {
+                X: 0.0,
+                Y: 0.0,
+                Width: 0.0,
+                Height: 0.0,
+            },
             parent: empty_weak_mut(),
             children: HashMap::new(),
         })
     }
     #[inline]
     pub fn new_unsized(
-        eh: &Rc<impl InputEventHandler + 'static>,
+        eh: Option<&Rc<impl InputEventHandler + 'static>>,
         id: usize,
         left: f32,
         top: f32,
@@ -342,6 +391,30 @@ impl HitTestTree {
                 Height: f32::MAX,
             },
         )
+    }
+    #[inline]
+    pub fn new_fit_to_parent(
+        eh: Option<&Rc<impl InputEventHandler + 'static>>,
+        id: usize,
+    ) -> SharedMut<Self> {
+        new_shared_mut(Self {
+            eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| x.clone()),
+            id,
+            rect: Rect {
+                X: 0.0,
+                Y: 0.0,
+                Width: 0.0,
+                Height: 0.0,
+            },
+            relative_adjustments: Rect {
+                X: 0.0,
+                Y: 0.0,
+                Width: 1.0,
+                Height: 1.0,
+            },
+            parent: empty_weak_mut(),
+            children: HashMap::new(),
+        })
     }
 
     #[inline]
@@ -377,6 +450,25 @@ impl HitTestTree {
     }
 
     #[inline]
+    pub fn global_rect(&self) -> Rect {
+        let parent_rect = self.parent.upgrade().map_or_else(
+            || Rect {
+                X: 0.0,
+                Y: 0.0,
+                Width: 0.0,
+                Height: 0.0,
+            },
+            |p| p.borrow().global_rect(),
+        );
+        Rect {
+            X: parent_rect.X + parent_rect.Width * self.relative_adjustments.X + self.rect.X,
+            Y: parent_rect.Y + parent_rect.Height * self.relative_adjustments.Y + self.rect.Y,
+            Width: parent_rect.Width * self.relative_adjustments.Width + self.rect.Width,
+            Height: parent_rect.Height * self.relative_adjustments.Height + self.rect.Height,
+        }
+    }
+
+    #[inline]
     pub const fn rect(&self) -> &Rect {
         &self.rect
     }
@@ -408,18 +500,52 @@ impl HitTestTree {
         self.rect.X = right - self.rect.Width;
     }
     #[inline]
+    pub fn set_top(&mut self, top: f32) {
+        self.rect.Y = top;
+    }
+    #[inline]
     pub fn set_width(&mut self, width: f32) {
         self.rect.Width = width;
     }
+    #[inline]
+    pub fn set_relative_left(&mut self, rate: f32, offset: f32) {
+        self.rect.X = offset;
+        self.relative_adjustments.X = rate;
+    }
 
-    pub fn check(this: &SharedMut<Self>, x: f32, y: f32) -> Option<SharedMut<Self>> {
+    pub fn check(
+        this: &SharedMut<Self>,
+        x: f32,
+        y: f32,
+        ref_rect: Rect,
+    ) -> Option<SharedMut<Self>> {
         let this1 = this.borrow();
-        if this1.rect.contains_point(x, y) {
-            let child = this1
-                .children
-                .values()
-                .find_map(|c| Self::check(c, x - this1.rect.X, y - this1.rect.Y));
-            Some(child.unwrap_or(this.clone()))
+        let real_rect = Rect {
+            X: ref_rect.Width * this1.relative_adjustments.X + this1.rect.X,
+            Y: ref_rect.Height * this1.relative_adjustments.Y + this1.rect.Y,
+            Width: ref_rect.Width * this1.relative_adjustments.Width + this1.rect.Width,
+            Height: ref_rect.Height * this1.relative_adjustments.Height + this1.rect.Height,
+        };
+        if real_rect.contains_point(x, y) {
+            let child = this1.children.values().find_map(|c| {
+                Self::check(
+                    c,
+                    x - real_rect.X,
+                    y - real_rect.Y,
+                    Rect {
+                        X: 0.0,
+                        Y: 0.0,
+                        ..real_rect
+                    },
+                )
+            });
+
+            match child {
+                Some(c) => Some(c),
+                // EventHandlerの設定がない場合はイベント透過なので親に戻す
+                None if this.borrow().eh.is_some() => Some(this.clone()),
+                None => None,
+            }
         } else {
             None
         }

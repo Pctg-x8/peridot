@@ -235,7 +235,7 @@ impl AppTitleBarControlButtonView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context_mut().new_id(),
                 Rect::from_size(AppTitleBarView::BUTTON_WIDTH, AppTitleBarView::HEIGHT),
             );
@@ -557,7 +557,7 @@ impl AppTitleBarView {
 
         let this = new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                &Rc::new(wthis.clone()),
+                Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context_mut().new_id(),
                 Rect::from_size(128.0, Self::HEIGHT),
             );

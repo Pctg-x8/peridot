@@ -29,7 +29,7 @@ use windows::{
     },
     UI::{
         Color,
-        Composition::{CompositionStretch, Compositor},
+        Composition::{CompositionGraphicsDevice, CompositionStretch, Compositor},
     },
 };
 
@@ -48,6 +48,7 @@ pub struct AppSubsystemInstances {
     pub d2d1_factory: ID2D1Factory1,
     pub dwrite_factory: IDWriteFactory,
     pub compositor: Compositor,
+    pub composition_graphics_device: CompositionGraphicsDevice,
     pub compositor_interop: ICompositorInterop,
     pub ui_common_objects: UICommonObjects,
     pub presentation_manager: IPresentationManager,
@@ -366,6 +367,7 @@ impl AppSubsystemInstances {
             d2d1_factory,
             dwrite_factory,
             compositor,
+            composition_graphics_device,
             compositor_interop,
             ui_common_objects,
             presentation_manager,
