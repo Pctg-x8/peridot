@@ -244,7 +244,6 @@ impl VectorScalarConstructor for Vector3 {
 
 pub trait Vector2Extension {
     fn with_z(self, z: f32) -> Vector3;
-    fn expand(self, xplus: f32, yplus: f32) -> Vector2;
 }
 impl Vector2Extension for Vector2 {
     #[inline(always)]
@@ -253,14 +252,6 @@ impl Vector2Extension for Vector2 {
             X: self.X,
             Y: self.Y,
             Z: z,
-        }
-    }
-
-    #[inline(always)]
-    fn expand(self, xplus: f32, yplus: f32) -> Vector2 {
-        Vector2 {
-            X: self.X + xplus,
-            Y: self.Y + yplus,
         }
     }
 }

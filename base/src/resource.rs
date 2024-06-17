@@ -65,12 +65,10 @@ impl<Device: br::Device + Clone> Texture2D<br::ImageObject<Device>> {
         format: PixelFormat,
         prealloc: &mut BufferPrealloc<Device>,
     ) -> br::Result<(br::ImageObject<Device>, u64)> {
-        let idesc = br::ImageDesc::new(
-            size.clone(),
-            format as _,
-            br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST,
-            br::ImageLayout::Preinitialized,
-        );
+        let idesc = br::ImageDesc::new(size.clone(), format as _)
+            .init_layout(br::ImageLayout::Preinitialized)
+            .sampled()
+            .transfer_dest();
         let bytes_per_pixel = (format.bpp() >> 3) as u64;
         let pixels_stg = prealloc.add(BufferContent::Raw(
             (size.x() * size.y()) as u64 * bytes_per_pixel,
@@ -426,12 +424,11 @@ impl DeviceWorkingTextureAllocator<'_> {
         format: PixelFormat,
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture2DRef {
-        self.planes.push(br::ImageDesc::new(
-            size,
-            format as _,
-            usage,
-            br::ImageLayout::Preinitialized,
-        ));
+        self.planes.push(
+            br::ImageDesc::new(size, format as _)
+                .init_layout(br::ImageLayout::Preinitialized)
+                .set_usage(usage),
+        );
         DeviceWorkingTexture2DRef(self.planes.len() - 1)
     }
 
@@ -442,12 +439,11 @@ impl DeviceWorkingTextureAllocator<'_> {
         format: PixelFormat,
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture3DRef {
-        self.volumes.push(br::ImageDesc::new(
-            size,
-            format as _,
-            usage,
-            br::ImageLayout::Preinitialized,
-        ));
+        self.volumes.push(
+            br::ImageDesc::new(size, format as _)
+                .init_layout(br::ImageLayout::Preinitialized)
+                .set_usage(usage),
+        );
         DeviceWorkingTexture3DRef(self.volumes.len() - 1)
     }
 
@@ -458,7 +454,9 @@ impl DeviceWorkingTextureAllocator<'_> {
         format: PixelFormat,
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingCubeTextureRef {
-        let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
+        let id = br::ImageDesc::new(size, format as _)
+            .init_layout(br::ImageLayout::Preinitialized)
+            .set_usage(usage)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6);
         self.cube.push(id);
@@ -474,7 +472,9 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsageFlags,
         mipmaps: u32,
     ) -> DeviceWorkingCubeTextureRef {
-        let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
+        let id = br::ImageDesc::new(size, format as _)
+            .init_layout(br::ImageLayout::Preinitialized)
+            .set_usage(usage)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6)
             .mip_levels(mipmaps);

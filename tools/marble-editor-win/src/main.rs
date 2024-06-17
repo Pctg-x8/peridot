@@ -12,12 +12,13 @@ use br::{
     CommandBuffer, CommandPool, DescriptorPool, Device, GraphicsPipelineBuilder,
     ImageSubresourceSlice, MemoryBound, PipelineShaderStageProvider, Queue, SubmissionBatch,
 };
+use components::LabelView;
 use features::{AppTitleBarView, DockingPanePreview, PaneSplitterView, SplitDirection};
-use miniengine::{ColoredVertex, Mat4, StdVkDevice, Vec4};
+use miniengine::{ColoredVertex, Mat4, StdVkDevice, UVVertex2D, UtilityVertices, Vec4};
 use peridot_math::{Camera, One, ProjectionMethod};
 use uikit::{
-    HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, ResizeContext,
-    ViewContext,
+    HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, MountableView,
+    ResizeContext, ViewContext,
 };
 use utils::{
     rect_slice_bottom, rect_slice_left, rect_slice_right, rect_slice_top, EventHandle,
@@ -113,6 +114,7 @@ use crate::{
 
 mod app_subsystem_instances;
 mod bindgen;
+mod components;
 mod features;
 mod miniengine;
 mod object_cache;
@@ -1143,15 +1145,11 @@ pub struct PaneGroupDockingManager {
 }
 impl PaneGroupDockingManager {
     fn new(
-        ctx: &mut impl ViewContext,
+        ctx: &impl ViewContext,
         ht_root: &SharedMut<HitTestTree>,
     ) -> windows::core::Result<Self> {
-        let ht_placement_root = HitTestTree::new_unsized(
-            Some(&Rc::new(())),
-            ctx.hittest_context_mut().new_id(),
-            0.0,
-            0.0,
-        );
+        let ht_placement_root =
+            HitTestTree::new_unsized(Some(&Rc::new(())), ctx.hittest_context().new_id(), 0.0, 0.0);
         HitTestTree::add_child(ht_root, ht_placement_root.clone());
 
         Ok(Self {
@@ -1278,7 +1276,7 @@ impl TabGroupPaneView {
 
     pub fn new(
         docking_manager: &SharedMut<PaneGroupDockingManager>,
-        ctx: &mut (impl ViewContext + ?Sized),
+        ctx: &(impl ViewContext + ?Sized),
     ) -> windows::core::Result<SharedMut<Self>> {
         let root = ctx
             .app_subsystems()
@@ -1316,12 +1314,12 @@ impl TabGroupPaneView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                ctx.hittest_context_mut().new_id(),
+                ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
             );
             let ht_content = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                ctx.hittest_context_mut().new_id(),
+                ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
             );
             HitTestTree::add_child(&ht, ht_content.clone());
@@ -1911,7 +1909,7 @@ impl PaneTabHeaderView {
     fn create_geometry(
         text_width: f32,
         text_height: f32,
-        ctx: &mut impl ViewContext,
+        ctx: &impl ViewContext,
     ) -> windows::core::Result<CompositionRoundedRectangleGeometry> {
         let g = ctx
             .app_subsystems()
@@ -1935,7 +1933,7 @@ impl PaneTabHeaderView {
     pub fn new(
         title: impl Into<Cow<'static, str>>,
         init_active: bool,
-        ctx: &mut impl ViewContext,
+        ctx: &impl ViewContext,
     ) -> windows::core::Result<SharedMut<Self>> {
         let base = ctx
             .app_subsystems()
@@ -2052,7 +2050,7 @@ impl PaneTabHeaderView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht_self = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                ctx.hittest_context_mut().new_id(),
+                ctx.hittest_context().new_id(),
                 Rect::from_size(view_size.X, view_size.Y),
             );
 
@@ -2755,7 +2753,7 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     const INIT_TAB_NAME: &'static str;
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &mut (impl ViewContext + ?Sized),
+        _view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self;
 }
@@ -2987,7 +2985,7 @@ impl PaneTabPresenter for InspectorTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self {
         let content_root = view_ctx
@@ -3009,10 +3007,8 @@ impl PaneTabPresenter for InspectorTabPresenter {
             .size(Vector2 { X: -16.0, Y: -16.0 })
             .expect("Failed to set content size margin");
 
-        let content_root_ht = HitTestTree::new_fit_to_parent(
-            None::<&Rc<()>>,
-            view_ctx.hittest_context_mut().new_id(),
-        );
+        let content_root_ht =
+            HitTestTree::new_fit_to_parent(None::<&Rc<()>>, view_ctx.hittest_context().new_id());
         content_root_ht
             .borrow_mut()
             .set_rect(8.0, 8.0, -16.0, -16.0);
@@ -3054,7 +3050,7 @@ impl PaneTabPresenter for ProjectSettingsTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &mut (impl ViewContext + ?Sized),
+        _view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
@@ -3086,7 +3082,7 @@ impl PaneTabPresenter for TimelineTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &mut (impl ViewContext + ?Sized),
+        _view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
@@ -3284,12 +3280,18 @@ impl PaneTabPresenter for StageTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        mut view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {
-            view: EditorStageView::new(&mut view_ctx).expect("Failed to create EditorStageView"),
+            view: EditorStageView::new(&view_ctx).expect("Failed to create EditorStageView"),
         }
+    }
+}
+
+macro_rules! ArrayBuilderOp {
+    ([ref, try] $($base: tt).+, { $($vname: ident <- $arg: expr),* $(,)? }) => {
+        let [$($vname),*] = $($base).+(&[$($arg),*])?;
     }
 }
 
@@ -3311,33 +3313,21 @@ impl SkyboxPrecomputedTextures {
                 br::ImageDesc::new(
                     Self::TRANSMITTANCE_SIZE,
                     br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                    br::ImageUsageFlags::STORAGE | br::ImageUsageFlags::SAMPLED,
-                    br::ImageLayout::Undefined,
-                ),
-                br::ImageDesc::new(
-                    Self::SCATTER_SIZE,
-                    br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                    br::ImageUsageFlags::STORAGE | br::ImageUsageFlags::SAMPLED,
-                    br::ImageLayout::Undefined,
-                ),
-                br::ImageDesc::new(
-                    Self::GATHERED_SIZE,
-                    br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                    br::ImageUsageFlags::STORAGE | br::ImageUsageFlags::SAMPLED,
-                    br::ImageLayout::Undefined,
-                ),
-                br::ImageDesc::new(
-                    Self::SCATTER_SIZE,
-                    br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                    br::ImageUsageFlags::STORAGE | br::ImageUsageFlags::SAMPLED,
-                    br::ImageLayout::Undefined,
-                ),
-                br::ImageDesc::new(
-                    Self::GATHERED_SIZE,
-                    br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                    br::ImageUsageFlags::STORAGE | br::ImageUsageFlags::SAMPLED,
-                    br::ImageLayout::Undefined,
-                ),
+                )
+                .sampled()
+                .use_as_storage(),
+                br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .sampled()
+                    .use_as_storage(),
+                br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .sampled()
+                    .use_as_storage(),
+                br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .sampled()
+                    .use_as_storage(),
+                br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .sampled()
+                    .use_as_storage(),
             ])?;
         let transmittance = transmittance
             .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
@@ -3476,17 +3466,18 @@ impl SkyboxPrecomputedTextures {
                 br::DescriptorType::CombinedImageSampler.with_count(7),
             ])
             .create(e.device().clone())?;
-        let [transmittance_set, transmittance_to_scatter_set, scatter_to_gathered_set, transmittance_gathered_to_k_scatter_set, k_scatter_to_k_gathered_set, k_scatter_to_scatter_set, k_gathered_to_k_gathered_set, transmittance_k_gathered_to_k_scatter_set] =
-            descriptor_pool.alloc_array(&[
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1),
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_cis1_si1),
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1_si1),
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1_si1),
-                br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_cis1_si1),
-            ])?;
+        ArrayBuilderOp! {
+            [ref, try] descriptor_pool.alloc_array, {
+                transmittance_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1),
+                transmittance_to_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
+                scatter_to_gathered_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
+                transmittance_gathered_to_k_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_cis1_si1),
+                k_scatter_to_k_gathered_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
+                k_scatter_to_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1_si1),
+                k_gathered_to_k_gathered_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1_si1),
+                transmittance_k_gathered_to_k_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_cis1_si1),
+            }
+        };
         e.device().update_descriptor_sets(
             &[
                 br::DescriptorPointer::new(transmittance_set.0, 0).write(
@@ -4269,7 +4260,7 @@ impl SkyboxRenderer {
             )],
             None::<&mut br::FenceObject<StdVkDevice>>,
         )?;
-        e.graphics_queue().borrow_mut().wait()?;
+        br::Queue::wait(&mut *e.graphics_queue().borrow_mut())?;
 
         let mut dp = br::DescriptorPoolBuilder::new(1)
             .with_reservations(vec![
@@ -4382,96 +4373,6 @@ pub struct PrimaryDirectionalLightUniformData {
     pub light_intensity: f32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct UVVertex2D {
-    pub pos: peridot_math::Vector2F32,
-    pub uv: peridot_math::Vector2F32,
-}
-
-pub struct UtilityVertices {
-    pub buffer: peridot_memory_manager::Buffer,
-    pub uv_triangle_strip_fill_plane2d_offset: br::vk::VkDeviceSize,
-}
-impl UtilityVertices {
-    pub fn new(
-        e: &mut MiniEngine,
-        cmdrec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
-    ) -> br::Result<Self> {
-        let mut buffer_prealloc = peridot::BufferPrealloc::new(e.device(), e.adapter());
-        let uv_triangle_strip_fill_plane2d_offset =
-            buffer_prealloc.add(peridot::BufferContent::vertices::<UVVertex2D>(4));
-        let total_size = buffer_prealloc.total_size();
-
-        let buffer_desc =
-            buffer_prealloc.build_desc_custom_usage(br::BufferUsage::VERTEX_BUFFER.transfer_dest());
-        let buffer_stg_desc =
-            buffer_prealloc.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC);
-        drop(buffer_prealloc);
-
-        let buffer = e.alloc_device_local_buffer(buffer_desc)?;
-        let mut buffer_stg = e.alloc_upload_buffer(buffer_stg_desc)?;
-        buffer_stg.guard_map(peridot_memory_manager::BufferMapMode::Write, |ptr| unsafe {
-            ptr.copy_slice_to(
-                uv_triangle_strip_fill_plane2d_offset as _,
-                &[
-                    UVVertex2D {
-                        pos: peridot_math::Vector2(-1.0, -1.0),
-                        uv: peridot_math::Vector2(0.0, 0.0),
-                    },
-                    UVVertex2D {
-                        pos: peridot_math::Vector2(1.0, -1.0),
-                        uv: peridot_math::Vector2(1.0, 0.0),
-                    },
-                    UVVertex2D {
-                        pos: peridot_math::Vector2(-1.0, 1.0),
-                        uv: peridot_math::Vector2(0.0, 1.0),
-                    },
-                    UVVertex2D {
-                        pos: peridot_math::Vector2(1.0, 1.0),
-                        uv: peridot_math::Vector2(1.0, 1.0),
-                    },
-                ],
-            );
-        })?;
-
-        unsafe {
-            // update_inplace
-            core::ptr::write(
-                cmdrec,
-                core::ptr::read(cmdrec)
-                    .copy_buffer(
-                        &buffer_stg,
-                        &buffer,
-                        &[br::vk::VkBufferCopy {
-                            srcOffset: 0,
-                            dstOffset: 0,
-                            size: total_size,
-                        }],
-                    )
-                    .pipeline_barrier_2(&br::DependencyInfo::new(
-                        &[br::MemoryBarrier2::new()
-                            .of_memory(
-                                br::AccessFlags2::TRANSFER.write,
-                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
-                            )
-                            .of_execution(
-                                br::PipelineStageFlags2::COPY,
-                                br::PipelineStageFlags2::VERTEX_INPUT,
-                            )],
-                        &[],
-                        &[],
-                    )),
-            );
-        }
-
-        Ok(Self {
-            buffer,
-            uv_triangle_strip_fill_plane2d_offset,
-        })
-    }
-}
-
 fn d3d11_presentation_texture_desc(width: u32, height: u32) -> D3D11_TEXTURE2D_DESC {
     D3D11_TEXTURE2D_DESC {
         Width: width,
@@ -4540,7 +4441,14 @@ pub struct EditorStageView {
     pointer_down_point: peridot_math::Vector2F32,
 }
 impl EditorStageView {
-    pub fn new(view_ctx: &mut impl ViewContext) -> windows::core::Result<SharedMut<Self>> {
+    pub fn new(view_ctx: &impl ViewContext) -> windows::core::Result<SharedMut<Self>> {
+        let init_size = br::vk::VkExtent2D {
+            width: 128,
+            height: 128,
+        };
+        let rect = init_size.into_rect(br::vk::VkOffset2D::ZERO);
+        let viewport = rect.make_viewport(0.0..1.0);
+
         let root = view_ctx
             .app_subsystems()
             .borrow()
@@ -4576,8 +4484,8 @@ impl EditorStageView {
                 .SetSourceRect(&RECT {
                     left: 0,
                     top: 0,
-                    right: 128,
-                    bottom: 128,
+                    right: init_size.width as _,
+                    bottom: init_size.height as _,
                 })
                 .expect("Failed to set source rect");
         }
@@ -4728,15 +4636,11 @@ impl EditorStageView {
             .app_subsystems()
             .borrow_mut()
             .mini_engine
-            .alloc_device_local_image(br::ImageDesc::new(
-                br::vk::VkExtent2D {
-                    width: 128,
-                    height: 128,
-                },
-                br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::INPUT_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            ))
+            .alloc_device_local_image(
+                br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .as_color_attachment()
+                    .as_input_attachment(),
+            )
             .expect("Failed to create hdr temp buffer");
         let hdr_temp_buffer = Rc::new(
             hdr_temp_buffer
@@ -4749,12 +4653,10 @@ impl EditorStageView {
             .app_subsystems()
             .borrow_mut()
             .mini_engine
-            .alloc_device_local_image(br::ImageDesc::new(
-                br::vk::VkExtent2D::spread1(128),
-                br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
-                br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            ))
+            .alloc_device_local_image(
+                br::ImageDesc::new(init_size, br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
+                    .as_depth_stencil_attachment(),
+            )
             .expect("Failed to create shared depth stencil buffer");
         let shared_depth_stencil_buffer = Rc::new(
             shared_depth_stencil_buffer
@@ -5194,12 +5096,6 @@ impl EditorStageView {
             .alloc(3, true)
             .expect("Failed to allocate command buffers");
 
-        let init_size = br::vk::VkExtent2D {
-            width: 128,
-            height: 128,
-        };
-        let rect = init_size.into_rect(br::vk::VkOffset2D::ZERO);
-        let viewport = rect.make_viewport(0.0..1.0);
         let mut back_buffer_resources = Vec::with_capacity(3);
         let mut back_buffer_render_resources = Vec::with_capacity(3);
         for mut cb in main_render_commands.into_iter() {
@@ -5254,22 +5150,18 @@ impl EditorStageView {
                     )
                     .expect("Failed to query external handle memory properties")
             };
-            let mut vk_image = br::ImageDesc::new(
-                init_size,
-                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-                br::ImageUsageFlags::COLOR_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            )
-            .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
-            .create(
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .mini_engine
-                    .device()
-                    .clone(),
-            )
-            .expect("Failed to create external backbuffer image");
+            let mut vk_image = br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                .as_color_attachment()
+                .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
+                .create(
+                    view_ctx
+                        .app_subsystems()
+                        .borrow()
+                        .mini_engine
+                        .device()
+                        .clone(),
+                )
+                .expect("Failed to create external backbuffer image");
             let vk_image_memory_req = vk_image.requirements();
             let vk_memory_index = view_ctx
                 .app_subsystems()
@@ -5371,7 +5263,7 @@ impl EditorStageView {
         Ok(new_cyclic_shared_mut(move |wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                view_ctx.hittest_context_mut().new_id(),
+                view_ctx.hittest_context().new_id(),
                 Rect {
                     X: 0.0,
                     Y: 0.0,
@@ -5498,12 +5390,11 @@ impl EditorStageView {
             .app_subsystems
             .borrow_mut()
             .mini_engine
-            .alloc_device_local_image(br::ImageDesc::new(
-                buffer_real_size,
-                br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::INPUT_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            ))
+            .alloc_device_local_image(
+                br::ImageDesc::new(buffer_real_size, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .as_color_attachment()
+                    .as_input_attachment(),
+            )
             .expect("Failed to create hdr temp buffer");
         let hdr_temp_buffer = Rc::new(
             hdr_temp_buffer
@@ -5516,12 +5407,10 @@ impl EditorStageView {
             .app_subsystems
             .borrow_mut()
             .mini_engine
-            .alloc_device_local_image(br::ImageDesc::new(
-                buffer_real_size,
-                br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
-                br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            ))
+            .alloc_device_local_image(
+                br::ImageDesc::new(buffer_real_size, br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
+                    .as_depth_stencil_attachment(),
+            )
             .expect("Failed to create shared depth stencil buffer");
         let shared_depth_stencil_buffer = Rc::new(
             shared_depth_stencil_buffer
@@ -5632,34 +5521,11 @@ impl EditorStageView {
             .iter_mut()
             .zip(self.back_buffer_resources.iter_mut())
         {
-            let texture_desc = D3D11_TEXTURE2D_DESC {
-                Width: buffer_real_size.width,
-                Height: buffer_real_size.height,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as _,
-                CPUAccessFlags: 0,
-                MiscFlags: (D3D11_RESOURCE_MISC_SHARED
-                    | D3D11_RESOURCE_MISC_SHARED_NTHANDLE
-                    | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE)
-                    .0 as _,
-            };
-            let mut texture = core::mem::MaybeUninit::uninit();
-            unsafe {
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
-                    .d3d11_device
-                    .CreateTexture2D(&texture_desc, None, Some(texture.as_mut_ptr()))
-                    .expect("Failed to create back buffer texture")
-            };
-            let texture = unsafe { texture.assume_init().expect("texture not created") };
+            let texture_desc =
+                d3d11_presentation_texture_desc(buffer_real_size.width, buffer_real_size.height);
+            let texture = texture_desc
+                .create(&resize_ctx.app_subsystems.borrow().d3d11_device)
+                .expect("Failed to create back buffer texture");
             let presentation_buffer = unsafe {
                 resize_ctx
                     .app_subsystems
@@ -5674,23 +5540,15 @@ impl EditorStageView {
                     .expect("Failed to get available event handle")
             };
 
-            let rt_desc = D3D11_TEXTURE2D_DESC {
+            let rt = D3D11_TEXTURE2D_DESC {
                 BindFlags: D3D11_BIND_RENDER_TARGET.0 as _,
                 MiscFlags: (D3D11_RESOURCE_MISC_SHARED_NTHANDLE
                     | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
                     .0 as _,
                 ..texture_desc
-            };
-            let mut rt = core::mem::MaybeUninit::uninit();
-            unsafe {
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
-                    .d3d11_device
-                    .CreateTexture2D(&rt_desc, None, Some(rt.as_mut_ptr()))
-                    .expect("Failed to create render target texture");
             }
-            let rt = unsafe { rt.assume_init().expect("rt not created") };
+            .create(&resize_ctx.app_subsystems.borrow().d3d11_device)
+            .expect("Failed to create render target texture");
 
             let texture_res = rt
                 .cast::<IDXGIResource1>()
@@ -5714,22 +5572,19 @@ impl EditorStageView {
                     )
                     .expect("Failed to query external handle memory properties")
             };
-            let mut vk_image = br::ImageDesc::new(
-                buffer_real_size.clone(),
-                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-                br::ImageUsageFlags::COLOR_ATTACHMENT,
-                br::ImageLayout::Undefined,
-            )
-            .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
-            .create(
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
-                    .mini_engine
-                    .device()
-                    .clone(),
-            )
-            .expect("Failed to create external backbuffer image");
+            let mut vk_image =
+                br::ImageDesc::new(buffer_real_size.clone(), br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                    .as_color_attachment()
+                    .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
+                    .create(
+                        resize_ctx
+                            .app_subsystems
+                            .borrow()
+                            .mini_engine
+                            .device()
+                            .clone(),
+                    )
+                    .expect("Failed to create external backbuffer image");
             let vk_image_memory_req = vk_image.requirements();
             let vk_memory_index = resize_ctx
                 .app_subsystems
@@ -6051,7 +5906,7 @@ impl PaneTabPresenter for PreviewTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &mut (impl ViewContext + ?Sized),
+        _view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
@@ -6072,7 +5927,7 @@ impl ObjectTreeElementRowView {
     const HOVER_ANIMATION_DURATION: TimeSpan = timespan_ms(50);
 
     pub fn new(
-        view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &(impl ViewContext + ?Sized),
         init_name: impl Into<Cow<'static, str>>,
         bound_object_id: Uuid,
     ) -> windows::core::Result<SharedMut<Self>> {
@@ -6172,7 +6027,7 @@ impl ObjectTreeElementRowView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                view_ctx.hittest_context_mut().new_id(),
+                view_ctx.hittest_context().new_id(),
                 Rect {
                     X: 0.0,
                     Y: 0.0,
@@ -6298,7 +6153,7 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &(impl ViewContext + ?Sized),
         app_state: &SharedMut<AppState>,
     ) -> Self {
         let app_state_borrow = app_state.borrow();
@@ -6352,77 +6207,10 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &mut (impl ViewContext + ?Sized),
+        _view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {}
-    }
-}
-
-pub trait MountableView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
-    ) -> windows::core::Result<()>;
-    fn unmount(&self) -> windows::core::Result<()>;
-}
-
-pub struct LabelView {
-    pub root: SpriteVisual,
-}
-impl LabelView {
-    pub fn new(
-        text: impl Into<Cow<'static, str>>,
-        ctx: &mut (impl ViewContext + ?Sized),
-    ) -> windows::core::Result<Self> {
-        let root = ctx
-            .app_subsystems()
-            .borrow()
-            .compositor
-            .CreateSpriteVisual()?;
-        let text_format = ctx.app_subsystems().borrow_mut().text_format_stock.get(
-            "system-ui",
-            12.0,
-            DWRITE_FONT_WEIGHT_NORMAL,
-        )?;
-        let text_surface = ctx.app_subsystems().borrow_mut().text_surface_stock.get(
-            &text_format,
-            ctx.current_dpi(),
-            text,
-        )?;
-        let brush = ctx
-            .app_subsystems()
-            .borrow()
-            .compositor
-            .CreateSurfaceBrushWithSurface(&text_surface.surface)?;
-        root.set_properties().brush(&brush)?.size(Vector2 {
-            X: text_surface.width,
-            Y: text_surface.height,
-        })?;
-
-        Ok(Self { root })
-    }
-
-    pub fn set_position(&self, pos: Vector3) -> windows::core::Result<()> {
-        self.root.SetOffset(pos)
-    }
-}
-impl MountableView for LabelView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        _onto_ht: &SharedMut<HitTestTree>,
-    ) -> windows::core::Result<()> {
-        onto.InsertAtTop(&self.root)?;
-
-        Ok(())
-    }
-
-    fn unmount(&self) -> windows::core::Result<()> {
-        self.root.Parent()?.Children()?.Remove(&self.root)?;
-
-        Ok(())
     }
 }
 
@@ -6477,7 +6265,7 @@ impl FloatSliderView {
     pub const BORDER_RECT_ROUNDING: f32 = 6.0;
 
     pub fn new(
-        view_ctx: &mut impl ViewContext,
+        view_ctx: &impl ViewContext,
         init_value: f32,
         max_value: f32,
     ) -> windows::core::Result<SharedMut<Self>> {
@@ -6581,7 +6369,7 @@ impl FloatSliderView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                view_ctx.hittest_context_mut().new_id(),
+                view_ctx.hittest_context().new_id(),
                 Rect {
                     X: 0.0,
                     Y: 0.0,
@@ -6950,8 +6738,8 @@ impl ViewContext for AppWindowState {
         &self.app_subsystem_instances
     }
 
-    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
-        &mut self.hittest_context
+    fn hittest_context(&self) -> &HitTestTreeContext {
+        &self.hittest_context
     }
 
     fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {

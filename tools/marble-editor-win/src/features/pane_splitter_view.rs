@@ -12,7 +12,9 @@ use windows::{
 
 use crate::{
     empty_weak_mut, new_cyclic_shared_mut,
-    uikit::{CursorStyle, HitTestTree, InputContext, InputEventHandler, ViewContext},
+    uikit::{
+        CursorStyle, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext,
+    },
     winapi_extras::{
         timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
         VisualExtensions,
@@ -44,7 +46,7 @@ impl PaneSplitterView {
     };
 
     pub fn new(
-        ctx: &mut (impl ViewContext + ?Sized),
+        ctx: &(impl ViewContext + ?Sized),
         dir: SplitDirection,
     ) -> windows::core::Result<SharedMut<Self>> {
         let visual = ctx
@@ -91,7 +93,7 @@ impl PaneSplitterView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                ctx.hittest_context_mut().new_id(),
+                ctx.hittest_context().new_id(),
                 Rect {
                     X: 0.0,
                     Y: 0.0,
@@ -134,8 +136,9 @@ impl PaneSplitterView {
 
         Ok(())
     }
-
-    pub fn mount(
+}
+impl MountableView for PaneSplitterView {
+    fn mount(
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
@@ -145,7 +148,8 @@ impl PaneSplitterView {
 
         Ok(())
     }
-    pub fn unmount(&self) -> windows::core::Result<()> {
+
+    fn unmount(&self) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
         self.ht.borrow_mut().unmount();
 

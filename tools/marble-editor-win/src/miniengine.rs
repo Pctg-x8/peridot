@@ -420,3 +420,93 @@ impl ColoredVertex {
         )
     }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UVVertex2D {
+    pub pos: peridot_math::Vector2F32,
+    pub uv: peridot_math::Vector2F32,
+}
+
+pub struct UtilityVertices {
+    pub buffer: peridot_memory_manager::Buffer,
+    pub uv_triangle_strip_fill_plane2d_offset: br::vk::VkDeviceSize,
+}
+impl UtilityVertices {
+    pub fn new(
+        e: &mut MiniEngine,
+        cmdrec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
+    ) -> br::Result<Self> {
+        let mut buffer_prealloc = peridot::BufferPrealloc::new(e.device(), e.adapter());
+        let uv_triangle_strip_fill_plane2d_offset =
+            buffer_prealloc.add(peridot::BufferContent::vertices::<UVVertex2D>(4));
+        let total_size = buffer_prealloc.total_size();
+
+        let buffer_desc =
+            buffer_prealloc.build_desc_custom_usage(br::BufferUsage::VERTEX_BUFFER.transfer_dest());
+        let buffer_stg_desc =
+            buffer_prealloc.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC);
+        drop(buffer_prealloc);
+
+        let buffer = e.alloc_device_local_buffer(buffer_desc)?;
+        let mut buffer_stg = e.alloc_upload_buffer(buffer_stg_desc)?;
+        buffer_stg.guard_map(peridot_memory_manager::BufferMapMode::Write, |ptr| unsafe {
+            ptr.copy_slice_to(
+                uv_triangle_strip_fill_plane2d_offset as _,
+                &[
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(-1.0, -1.0),
+                        uv: peridot_math::Vector2(0.0, 0.0),
+                    },
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(1.0, -1.0),
+                        uv: peridot_math::Vector2(1.0, 0.0),
+                    },
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(-1.0, 1.0),
+                        uv: peridot_math::Vector2(0.0, 1.0),
+                    },
+                    UVVertex2D {
+                        pos: peridot_math::Vector2(1.0, 1.0),
+                        uv: peridot_math::Vector2(1.0, 1.0),
+                    },
+                ],
+            );
+        })?;
+
+        unsafe {
+            // update_inplace
+            core::ptr::write(
+                cmdrec,
+                core::ptr::read(cmdrec)
+                    .copy_buffer(
+                        &buffer_stg,
+                        &buffer,
+                        &[br::vk::VkBufferCopy {
+                            srcOffset: 0,
+                            dstOffset: 0,
+                            size: total_size,
+                        }],
+                    )
+                    .pipeline_barrier_2(&br::DependencyInfo::new(
+                        &[br::MemoryBarrier2::new()
+                            .of_memory(
+                                br::AccessFlags2::TRANSFER.write,
+                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+                            )
+                            .of_execution(
+                                br::PipelineStageFlags2::COPY,
+                                br::PipelineStageFlags2::VERTEX_INPUT,
+                            )],
+                        &[],
+                        &[],
+                    )),
+            );
+        }
+
+        Ok(Self {
+            buffer,
+            uv_triangle_strip_fill_plane2d_offset,
+        })
+    }
+}

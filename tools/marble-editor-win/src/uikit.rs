@@ -5,7 +5,7 @@ use windows::{
     },
     UI::Composition::{
         CompositionColorBrush, CompositionLinearGradientBrush, CompositionNineGridBrush,
-        ScalarKeyFrameAnimation,
+        ScalarKeyFrameAnimation, VisualCollection,
     },
 };
 
@@ -36,7 +36,7 @@ pub trait ViewContext {
     fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances>;
     fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals>;
 
-    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext;
+    fn hittest_context(&self) -> &HitTestTreeContext;
     fn current_dpi(&self) -> f32;
 }
 pub trait InputContext: ViewContext {
@@ -46,6 +46,22 @@ pub trait InputContext: ViewContext {
     fn release_mouse_capture(&mut self);
 }
 
+impl<T: ViewContext + ?Sized> ViewContext for &'_ T {
+    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
+        T::app_subsystems(*self)
+    }
+    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
+        T::app_global_signals(*self)
+    }
+
+    fn hittest_context(&self) -> &HitTestTreeContext {
+        T::hittest_context(*self)
+    }
+
+    fn current_dpi(&self) -> f32 {
+        T::current_dpi(*self)
+    }
+}
 impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
     fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
         T::app_subsystems(*self)
@@ -54,8 +70,8 @@ impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
         T::app_global_signals(*self)
     }
 
-    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
-        T::hittest_context_mut(*self)
+    fn hittest_context(&self) -> &HitTestTreeContext {
+        T::hittest_context(*self)
     }
 
     fn current_dpi(&self) -> f32 {
@@ -79,7 +95,7 @@ impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
 pub struct ViewContext1<'r> {
     pub app_subsystems: &'r SharedMut<AppSubsystemInstances>,
     pub app_global_signals: &'r SharedMut<AppGlobalSignals>,
-    pub hittest_context: &'r mut HitTestTreeContext,
+    pub hittest_context: &'r HitTestTreeContext,
     pub current_dpi: f32,
 }
 impl ViewContext for ViewContext1<'_> {
@@ -90,7 +106,7 @@ impl ViewContext for ViewContext1<'_> {
         self.app_global_signals
     }
 
-    fn hittest_context_mut(&mut self) -> &mut HitTestTreeContext {
+    fn hittest_context(&self) -> &HitTestTreeContext {
         self.hittest_context
     }
 
@@ -175,3 +191,12 @@ impl<T: InputEventHandler + ?Sized> InputEventHandler for std::rc::Rc<T> {
     }
 }
 impl InputEventHandler for () {}
+
+pub trait MountableView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()>;
+    fn unmount(&self) -> windows::core::Result<()>;
+}

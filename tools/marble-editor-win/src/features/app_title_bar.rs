@@ -58,7 +58,7 @@ struct AppTitleBarControlButtonView {
 }
 impl AppTitleBarControlButtonView {
     fn new(
-        ctx: &mut (impl ViewContext + ?Sized),
+        ctx: &(impl ViewContext + ?Sized),
         ty: AppTitleBarControlButtonType,
         nth: usize,
     ) -> windows::core::Result<SharedMut<Self>> {
@@ -236,7 +236,7 @@ impl AppTitleBarControlButtonView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                ctx.hittest_context_mut().new_id(),
+                ctx.hittest_context().new_id(),
                 Rect::from_size(AppTitleBarView::BUTTON_WIDTH, AppTitleBarView::HEIGHT),
             );
 
@@ -442,7 +442,7 @@ impl AppTitleBarView {
     const BUTTON_ICON_SIZE: f32 = 10.0;
 
     pub fn new(
-        ctx: &mut (impl ViewContext + ?Sized),
+        ctx: &(impl ViewContext + ?Sized),
         init_dpi: f32,
         global_scale: f64,
     ) -> windows::core::Result<SharedMut<Self>> {
@@ -558,7 +558,7 @@ impl AppTitleBarView {
         let this = new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
-                ctx.hittest_context_mut().new_id(),
+                ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, Self::HEIGHT),
             );
 

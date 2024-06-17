@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     rc::{Rc, Weak},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use windows::{
@@ -565,15 +566,17 @@ impl core::fmt::Debug for HitTestTree {
 }
 
 pub struct HitTestTreeContext {
-    current_id: usize,
+    current_id: AtomicUsize,
 }
 impl HitTestTreeContext {
-    pub fn new() -> Self {
-        Self { current_id: 0 }
+    pub const fn new() -> Self {
+        Self {
+            current_id: AtomicUsize::new(0),
+        }
     }
 
-    pub fn new_id(&mut self) -> usize {
-        self.current_id += 1;
-        self.current_id
+    #[inline]
+    pub fn new_id(&self) -> usize {
+        self.current_id.fetch_add(1, Ordering::AcqRel)
     }
 }
