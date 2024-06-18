@@ -34,13 +34,14 @@ use windows::{
 };
 
 use crate::{
+    components::FloatSliderView,
     miniengine::MiniEngine,
     object_cache::{TextFormatStock, TextSurfaceStock},
     uikit::UICommonObjects,
     winapi_extras::{
         timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
     },
-    FloatSliderView, TAB_ACTIVE_BASE_COLOR, TAB_ACTIVE_LIT_COLOR,
+    TAB_ACTIVE_BASE_COLOR, TAB_ACTIVE_LIT_COLOR,
 };
 
 pub struct AppSubsystemInstances {
