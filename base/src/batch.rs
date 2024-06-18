@@ -169,7 +169,7 @@ impl PartialEq for CopyBufferPair {
 impl Eq for CopyBufferPair {}
 
 pub struct TransferBatch2 {
-    copy_buffers: HashMap<CopyBufferPair, Vec<br::vk::VkBufferCopy>>,
+    copy_buffers: HashMap<CopyBufferPair, Vec<br::BufferCopy>>,
     src_transition_sets: HashSet<(TransferrableBufferResourceCompareCell, Range<u64>)>,
     before_transitions: HashMap<
         br::vk::VkPipelineStageFlags,
@@ -215,11 +215,14 @@ impl TransferBatch2 {
         self.copy_buffers
             .entry(CopyBufferPair(Box::new(src.clone()), Box::new(dst)))
             .or_insert_with(Vec::new)
-            .push(br::vk::VkBufferCopy {
-                srcOffset: src_offset,
-                dstOffset: dst_offset,
-                size: byte_length,
-            });
+            .push(
+                br::vk::VkBufferCopy {
+                    srcOffset: src_offset,
+                    dstOffset: dst_offset,
+                    size: byte_length,
+                }
+                .into(),
+            );
         self.src_transition_sets.insert((
             TransferrableBufferResourceCompareCell(Box::new(src)),
             src_offset..src_offset + byte_length,
@@ -325,7 +328,7 @@ impl TransferBatch2 {
                             x.copy_buffer(
                                 &br::VkHandleRef::dangling(src.raw_handle()),
                                 &br::VkHandleRef::dangling(dst.raw_handle()),
-                                &ranges,
+                                &ranges[..],
                             )
                         });
                 self.after_transitions
@@ -389,8 +392,10 @@ pub struct TransferBatch<Device: br::Device = super::DeviceObject> {
     barrier_range_dst: BTreeMap<ResourceKey<br::vk::VkBuffer>, Range<br::vk::VkDeviceSize>>,
     org_layout_src: BTreeMap<ImageKey<Device>, br::ImageLayout>,
     org_layout_dst: BTreeMap<ImageKey<Device>, br::ImageLayout>,
-    copy_buffers:
-        HashMap<(ResourceKey<br::vk::VkBuffer>, ResourceKey<br::vk::VkBuffer>), Vec<VkBufferCopy>>,
+    copy_buffers: HashMap<
+        (ResourceKey<br::vk::VkBuffer>, ResourceKey<br::vk::VkBuffer>),
+        Vec<br::BufferCopy>,
+    >,
     init_images: BTreeMap<
         ImageKey<Device>,
         (
@@ -446,11 +451,14 @@ impl<Device: br::Device> TransferBatch<Device> {
         self.copy_buffers
             .entry((ResourceKey(src.buffer), ResourceKey(dst.buffer)))
             .or_insert_with(Vec::new)
-            .push(VkBufferCopy {
-                srcOffset: src.offset,
-                dstOffset: dst.offset,
-                size: bytes,
-            });
+            .push(
+                VkBufferCopy {
+                    srcOffset: src.offset,
+                    dstOffset: dst.offset,
+                    size: bytes,
+                }
+                .into(),
+            );
     }
 
     /// Add copying operation between buffers.

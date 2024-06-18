@@ -2758,37 +2758,11 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     ) -> Self;
 }
 
-pub struct InspectorTabValueChangeEventHandler {
-    app_state: SharedMut<AppState>,
-    bound_object_id: Uuid,
-}
-impl ValueChangeEventHandler<f32> for InspectorTabValueChangeEventHandler {
-    fn on_value_changed(
-        &self,
-        view_context: &mut dyn ViewContext,
-        sender_id: usize,
-        new_value: f32,
-    ) {
-        if sender_id == 1 {
-            // sun light - intensity slider
-            if let Some(e) = self
-                .app_state
-                .borrow_mut()
-                .current_scene
-                .objects
-                .get_mut(&self.bound_object_id)
-            {
-                e.update_sunlight_intensity(new_value, view_context);
-            }
-        }
-    }
-}
 pub struct InspectorTabSelectionChangedEventHandler {
     content_root: ContainerVisual,
     root_ht: SharedMut<HitTestTree>,
     current_mounted_views: RefCell<Vec<SharedMut<dyn MountableView>>>,
     observation_disconnectors: RefCell<Vec<Box<dyn ObservationDisconnector>>>,
-    value_change_event_handler_ref: RefCell<Option<Rc<InspectorTabValueChangeEventHandler>>>,
 }
 impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEventHandler {
     fn on_changed(&self, app_state: &SharedMut<AppState>, mut view_context: &mut dyn ViewContext) {
@@ -2799,7 +2773,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
         for c in self.current_mounted_views.borrow_mut().drain(..) {
             c.borrow().unmount().expect("Failed to unmount last views");
         }
-        self.value_change_event_handler_ref.replace(None);
 
         match app_state.borrow().current_selection_object_id.clone() {
             None => {
@@ -2893,22 +2866,29 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .borrow()
                                 .mount(&self.content_root.Children().unwrap(), &self.root_ht)
                                 .unwrap();
-                            let intensity_changed_event_handler =
-                                Rc::new(InspectorTabValueChangeEventHandler {
-                                    app_state: app_state.clone(),
-                                    bound_object_id: id.clone(),
-                                });
                             self.observation_disconnectors.borrow_mut().push(Box::new(
-                                FloatSliderView::observe_value_changes2(
+                                FloatSliderView::observe_value_changes(
                                     &intensity_control,
-                                    &intensity_changed_event_handler,
-                                    1,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let bound_object_id = id.clone();
+
+                                        move |view_ctx, new_value| {
+                                            // sun light - intensity slider
+                                            if let Some(e) = app_state
+                                                .borrow_mut()
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                            {
+                                                e.update_sunlight_intensity(new_value, view_ctx);
+                                            }
+                                        }
+                                    },
                                     view_context,
                                     false,
                                 ),
                             ));
-                            self.value_change_event_handler_ref
-                                .replace(Some(intensity_changed_event_handler));
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(intensity_control);
@@ -3019,7 +2999,6 @@ impl PaneTabPresenter for InspectorTabPresenter {
                 root_ht: content_root_ht,
                 current_mounted_views: RefCell::new(Vec::new()),
                 observation_disconnectors: RefCell::new(Vec::new()),
-                value_change_event_handler_ref: RefCell::new(None),
             }),
         }
     }
@@ -4227,23 +4206,23 @@ impl SkyboxRenderer {
             .copy_buffer(
                 &stg_buffer,
                 &vertex_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: core::mem::offset_of!(BufferInitializationContents, vertices) as _,
-                    dstOffset: 0,
-                    size: core::mem::size_of::<[SkyboxVertex; 4]>() as _,
-                }],
+                &[br::BufferCopy::copy_data::<[SkyboxVertex; 4]>(
+                    core::mem::offset_of!(BufferInitializationContents, vertices) as _,
+                    0,
+                )],
             )
             .copy_buffer(
                 &stg_buffer,
                 &primary_directional_light_data_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: core::mem::offset_of!(
+                &[br::BufferCopy::copy_data::<
+                    PrimaryDirectionalLightUniformData,
+                >(
+                    core::mem::offset_of!(
                         BufferInitializationContents,
                         primary_directional_light_data
                     ) as _,
-                    dstOffset: 0,
-                    size: core::mem::size_of::<PrimaryDirectionalLightUniformData>() as _,
-                }],
+                    0,
+                )],
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
@@ -4333,11 +4312,9 @@ impl SkyboxRenderer {
             .copy_buffer(
                 &upload_buffer,
                 &self.primary_directional_light_data_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: 0,
-                    dstOffset: 0,
-                    size: core::mem::size_of::<PrimaryDirectionalLightUniformData>() as _,
-                }],
+                &[br::BufferCopy::mirror_data::<
+                    PrimaryDirectionalLightUniformData,
+                >(0)],
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
@@ -4420,11 +4397,76 @@ impl D3D11ResourceDescriptor for D3D11_TEXTURE2D_DESC {
     }
 }
 
+pub struct TempRT {
+    org_desc: br::ImageDesc<'static>,
+    view_aspect_mask: br::AspectMask,
+    view_mip_range: core::ops::Range<u32>,
+    view_array_range: core::ops::Range<u32>,
+    resource: Rc<br::ImageViewObject<peridot_memory_manager::Image>>,
+}
+impl TempRT {
+    pub fn new(
+        org_desc: br::ImageDesc<'static>,
+        view_aspect_mask: br::AspectMask,
+        view_mip_range: core::ops::Range<u32>,
+        view_array_range: core::ops::Range<u32>,
+        e: &mut MiniEngine,
+    ) -> br::Result<Self> {
+        let resource = e.alloc_device_local_image(org_desc.clone())?;
+        let resource = resource
+            .subresource_range(
+                view_aspect_mask,
+                view_mip_range.clone(),
+                view_array_range.clone(),
+            )
+            .view_builder()
+            .create()?;
+
+        Ok(Self {
+            org_desc,
+            view_aspect_mask,
+            view_mip_range,
+            view_array_range,
+            resource: Rc::new(resource),
+        })
+    }
+
+    pub fn recreate_newsize(
+        &mut self,
+        size: impl br::ImageSize,
+        e: &mut MiniEngine,
+    ) -> br::Result<()> {
+        unsafe {
+            // update inplace
+            core::ptr::write(
+                &mut self.org_desc,
+                core::ptr::read(&self.org_desc).size(size),
+            );
+        }
+
+        let resource = e.alloc_device_local_image(self.org_desc.clone())?;
+        self.resource = Rc::new(
+            resource
+                .subresource_range(
+                    self.view_aspect_mask,
+                    self.view_mip_range.clone(),
+                    self.view_array_range.clone(),
+                )
+                .view_builder()
+                .create()?,
+        );
+
+        Ok(())
+    }
+}
+
 pub struct EditorStageView {
     root: SpriteVisual,
     ht: SharedMut<HitTestTree>,
     utility_verts: UtilityVertices,
     skybox_renderer: Rc<SkyboxRenderer>,
+    hdr_temp_rt: TempRT,
+    depth_stencil_temp_rt: TempRT,
     main_render_pass: br::RenderPassObject<StdVkDevice>,
     main_render_command_pool: br::CommandPoolObject<StdVkDevice>,
     hdr_final_pass_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
@@ -4447,7 +4489,6 @@ pub struct EditorStageView {
     )>,
     renderer: Rc<StageTabContentRenderer>,
     pointer_down_point: peridot_math::Vector2F32,
-    app_state: WeakMut<AppState>,
 }
 impl EditorStageView {
     pub fn new(
@@ -4644,39 +4685,25 @@ impl EditorStageView {
         let hdr_render_subpass = 0;
         let ldr_gizmos_render_subpass = 1;
 
-        let hdr_temp_buffer = view_ctx
-            .app_subsystems()
-            .borrow_mut()
-            .mini_engine
-            .alloc_device_local_image(
-                br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .as_color_attachment()
-                    .as_input_attachment(),
-            )
-            .expect("Failed to create hdr temp buffer");
-        let hdr_temp_buffer = Rc::new(
-            hdr_temp_buffer
-                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                .view_builder()
-                .create()
-                .expect("Failed to create shared hdr temp buffer"),
-        );
-        let shared_depth_stencil_buffer = view_ctx
-            .app_subsystems()
-            .borrow_mut()
-            .mini_engine
-            .alloc_device_local_image(
-                br::ImageDesc::new(init_size, br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
-                    .as_depth_stencil_attachment(),
-            )
-            .expect("Failed to create shared depth stencil buffer");
-        let shared_depth_stencil_buffer = Rc::new(
-            shared_depth_stencil_buffer
-                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
-                .view_builder()
-                .create()
-                .expect("Failed to create shared depth stencil buffer view"),
-        );
+        let hdr_temp_rt = TempRT::new(
+            br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                .as_color_attachment()
+                .as_input_attachment(),
+            br::AspectMask::COLOR,
+            0..1,
+            0..1,
+            &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
+        )
+        .expect("Failed to create hdr temp rt");
+        let depth_stencil_temp_rt = TempRT::new(
+            br::ImageDesc::new(init_size, br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
+                .as_depth_stencil_attachment(),
+            br::AspectMask::DEPTH.stencil(),
+            0..1,
+            0..1,
+            &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
+        )
+        .expect("Failed to create depth stencil temp rt");
 
         let descriptor_set_layout_ia1 = br::DescriptorSetLayoutBuilder::new()
             .bind(
@@ -4982,20 +5009,15 @@ impl EditorStageView {
             .copy_buffer(
                 &grid_buffer_stg,
                 &grid_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: 0,
-                    dstOffset: 0,
-                    size: grid_buffer.byte_length() as _,
-                }],
+                &[br::BufferCopy::mirror(0, grid_buffer.byte_length() as _)],
             )
             .copy_buffer(
                 &camera_buffer_stg,
                 &camera_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: 0,
-                    dstOffset: 0,
-                    size: camera_buffer_stg.byte_length() as _,
-                }],
+                &[br::BufferCopy::mirror(
+                    0,
+                    camera_buffer_stg.byte_length() as _,
+                )],
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
@@ -5071,7 +5093,7 @@ impl EditorStageView {
                     ),
                     hdr_final_pass_descriptor_set.binding_at(0).write(
                         br::DescriptorContents::input_attachment(
-                            &hdr_temp_buffer,
+                            &hdr_temp_rt.resource,
                             br::ImageLayout::ShaderReadOnlyOpt,
                         ),
                     ),
@@ -5231,8 +5253,8 @@ impl EditorStageView {
                         .create()
                         .expect("Failed to create image view"),
                 )
-                .with_attachment(hdr_temp_buffer.clone())
-                .with_attachment(shared_depth_stencil_buffer.clone())
+                .with_attachment(hdr_temp_rt.resource.clone())
+                .with_attachment(depth_stencil_temp_rt.resource.clone())
                 .create()
                 .expect("Failed to create framebuffer");
 
@@ -5312,6 +5334,8 @@ impl EditorStageView {
                 ht,
                 utility_verts,
                 skybox_renderer: skybox_renderer.clone(),
+                hdr_temp_rt,
+                depth_stencil_temp_rt,
                 main_render_pass,
                 main_render_command_pool,
                 hdr_final_pass_pipeline_layout,
@@ -5354,7 +5378,6 @@ impl EditorStageView {
                 }),
                 back_buffer_resources,
                 pointer_down_point: peridot_math::Vector2(0.0, 0.0),
-                app_state: Rc::downgrade(app_state),
             }
         }))
     }
@@ -5424,39 +5447,18 @@ impl EditorStageView {
             })?;
         }
 
-        let hdr_temp_buffer = resize_ctx
-            .app_subsystems
-            .borrow_mut()
-            .mini_engine
-            .alloc_device_local_image(
-                br::ImageDesc::new(buffer_real_size, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .as_color_attachment()
-                    .as_input_attachment(),
+        self.hdr_temp_rt
+            .recreate_newsize(
+                buffer_real_size,
+                &mut resize_ctx.app_subsystems.borrow_mut().mini_engine,
             )
-            .expect("Failed to create hdr temp buffer");
-        let hdr_temp_buffer = Rc::new(
-            hdr_temp_buffer
-                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                .view_builder()
-                .create()
-                .expect("Failed to create shared hdr temp buffer"),
-        );
-        let shared_depth_stencil_buffer = resize_ctx
-            .app_subsystems
-            .borrow_mut()
-            .mini_engine
-            .alloc_device_local_image(
-                br::ImageDesc::new(buffer_real_size, br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
-                    .as_depth_stencil_attachment(),
+            .expect("Failed to recreate hdr temp rt");
+        self.depth_stencil_temp_rt
+            .recreate_newsize(
+                buffer_real_size,
+                &mut resize_ctx.app_subsystems.borrow_mut().mini_engine,
             )
-            .expect("Failed to create shared depth stencil buffer");
-        let shared_depth_stencil_buffer = Rc::new(
-            shared_depth_stencil_buffer
-                .subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1)
-                .view_builder()
-                .create()
-                .expect("Failed to create shared depth stencil buffer view"),
-        );
+            .expect("Failed to recreate depth stencil temp rt");
 
         let mut camera_upload_buffer = resize_ctx
             .app_subsystems
@@ -5495,11 +5497,7 @@ impl EditorStageView {
             .copy_buffer(
                 &camera_upload_buffer,
                 &self.camera_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: 0,
-                    dstOffset: 0,
-                    size: core::mem::size_of::<RenderCameraUniformData>() as _,
-                }],
+                &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
@@ -5546,7 +5544,7 @@ impl EditorStageView {
             .update_descriptor_sets(
                 &[self.hdr_final_pass_descriptor_set.binding_at(0).write(
                     br::DescriptorContents::input_attachment(
-                        &hdr_temp_buffer,
+                        &self.hdr_temp_rt.resource,
                         br::ImageLayout::ShaderReadOnlyOpt,
                     ),
                 )],
@@ -5658,8 +5656,8 @@ impl EditorStageView {
                         .create()
                         .expect("Failed to create image view"),
                 )
-                .with_attachment(hdr_temp_buffer.clone())
-                .with_attachment(shared_depth_stencil_buffer.clone())
+                .with_attachment(self.hdr_temp_rt.resource.clone())
+                .with_attachment(self.depth_stencil_temp_rt.resource.clone())
                 .create()
                 .expect("Failed to create framebuffer");
 
@@ -5841,11 +5839,7 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             .copy_buffer(
                 &camera_upload_buffer,
                 &this.borrow().camera_buffer,
-                &[br::vk::VkBufferCopy {
-                    srcOffset: 0,
-                    dstOffset: 0,
-                    size: core::mem::size_of::<RenderCameraUniformData>() as _,
-                }],
+                &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
@@ -6226,20 +6220,18 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
     }
 }
 
-pub trait ValueChangeEventHandler<T> {
-    fn on_value_changed(&self, view_context: &mut dyn ViewContext, sender_id: usize, new_value: T);
-}
 #[repr(transparent)]
-pub struct ValueChangeEventHandlerHashKey<T>(pub Weak<dyn ValueChangeEventHandler<T>>);
-impl<T> PartialEq for ValueChangeEventHandlerHashKey<T> {
+#[derive(Clone)]
+struct ValueChangedEventHandlerHashKey<T>(SharedMut<dyn FnMut(&mut dyn ViewContext, T)>);
+impl<T> PartialEq for ValueChangedEventHandlerHashKey<T> {
     fn eq(&self, other: &Self) -> bool {
-        Weak::ptr_eq(&self.0, &other.0)
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
-impl<T> Eq for ValueChangeEventHandlerHashKey<T> {}
-impl<T> Hash for ValueChangeEventHandlerHashKey<T> {
+impl<T> Eq for ValueChangedEventHandlerHashKey<T> {}
+impl<T> Hash for ValueChangedEventHandlerHashKey<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.as_ptr().hash(state)
+        Rc::as_ptr(&self.0).hash(state)
     }
 }
 
@@ -6248,16 +6240,17 @@ pub trait ObservationDisconnector {
 }
 pub struct FloatSliderValueChangedObservationDisconnector {
     view_ref: WeakMut<FloatSliderView>,
-    handler_ref: Weak<dyn ValueChangeEventHandler<f32>>,
+    key: ValueChangedEventHandlerHashKey<f32>,
 }
 impl ObservationDisconnector for FloatSliderValueChangedObservationDisconnector {
     fn disconnect(&self) {
-        let (Some(view), Some(handler)) = (self.view_ref.upgrade(), self.handler_ref.upgrade())
-        else {
+        let Some(view) = self.view_ref.upgrade() else {
             return;
         };
 
-        view.borrow_mut().unobserve_value_changes_dyn(&handler);
+        view.borrow_mut()
+            .value_change_event_handlers
+            .remove(&self.key);
     }
 }
 
@@ -6271,7 +6264,7 @@ pub struct FloatSliderView {
     current_value: f32,
     max_value: f32,
     drag_base_x: f32,
-    value_change_event_handlers: HashMap<ValueChangeEventHandlerHashKey<f32>, usize>,
+    value_change_event_handlers: HashSet<ValueChangedEventHandlerHashKey<f32>>,
 }
 impl FloatSliderView {
     pub const BORDER_RECT_ROUNDING: f32 = 6.0;
@@ -6400,7 +6393,7 @@ impl FloatSliderView {
                 current_value: init_value,
                 max_value,
                 drag_base_x: 0.0,
-                value_change_event_handlers: HashMap::new(),
+                value_change_event_handlers: HashSet::new(),
             }
         }))
     }
@@ -6423,59 +6416,29 @@ impl FloatSliderView {
         Ok(())
     }
 
-    pub fn observe_value_changes2(
+    pub fn observe_value_changes(
         this: &SharedMut<Self>,
-        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
-        sender_id: usize,
+        handler: impl FnMut(&mut dyn ViewContext, f32) + 'static,
         view_context: &mut dyn ViewContext,
         request_current_value: bool,
     ) -> impl ObservationDisconnector {
-        let wh = Rc::downgrade(handler);
+        let key = ValueChangedEventHandlerHashKey(new_shared_mut(handler));
         this.borrow_mut()
             .value_change_event_handlers
-            .insert(ValueChangeEventHandlerHashKey(wh.clone()), sender_id);
+            .insert(key.clone());
         if request_current_value {
-            handler.on_value_changed(view_context, sender_id, this.borrow().current_value);
+            (&mut *key.0.borrow_mut())(view_context, this.borrow().current_value);
         }
 
         FloatSliderValueChangedObservationDisconnector {
             view_ref: Rc::downgrade(this),
-            handler_ref: wh,
+            key,
         }
     }
 
-    pub fn observe_value_changes(
-        &mut self,
-        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
-        sender_id: usize,
-        view_context: &mut dyn ViewContext,
-    ) {
-        let wh = Rc::downgrade(handler);
-        self.value_change_event_handlers
-            .insert(ValueChangeEventHandlerHashKey(wh), sender_id);
-        handler.on_value_changed(view_context, sender_id, self.current_value);
-    }
-
-    pub fn unobserve_value_changes(
-        &mut self,
-        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
-    ) {
-        let wh = Rc::downgrade(handler);
-        self.value_change_event_handlers
-            .remove(&ValueChangeEventHandlerHashKey(wh));
-    }
-
-    fn unobserve_value_changes_dyn(&mut self, handler: &Rc<dyn ValueChangeEventHandler<f32>>) {
-        let wh = Rc::downgrade(handler);
-        self.value_change_event_handlers
-            .remove(&ValueChangeEventHandlerHashKey(wh));
-    }
-
     fn notify_current_value(&self, view_context: &mut dyn ViewContext) {
-        for (e, id) in self.value_change_event_handlers.iter() {
-            if let Some(e) = e.0.upgrade() {
-                e.on_value_changed(view_context, *id, self.current_value);
-            }
+        for e in self.value_change_event_handlers.iter() {
+            (&mut *e.0.borrow_mut())(view_context, self.current_value);
         }
     }
 
@@ -6670,7 +6633,7 @@ impl ObjectEditState {
     pub fn update_sunlight_intensity(
         &mut self,
         new_intensity: f32,
-        view_ctx: &mut dyn ViewContext,
+        _view_ctx: &mut dyn ViewContext,
     ) {
         let ObjectDetails::SunLight {
             ref mut intensity, ..

@@ -482,11 +482,7 @@ impl UtilityVertices {
                     .copy_buffer(
                         &buffer_stg,
                         &buffer,
-                        &[br::vk::VkBufferCopy {
-                            srcOffset: 0,
-                            dstOffset: 0,
-                            size: total_size,
-                        }],
+                        &[br::BufferCopy::mirror(0, total_size)],
                     )
                     .pipeline_barrier_2(&br::DependencyInfo::new(
                         &[br::MemoryBarrier2::new()
