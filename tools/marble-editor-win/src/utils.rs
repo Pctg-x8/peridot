@@ -10,6 +10,11 @@ impl SafeF32 {
     }
 
     #[inline(always)]
+    pub const unsafe fn new_unchecked(value: f32) -> Self {
+        Self(value)
+    }
+
+    #[inline(always)]
     pub const fn value(&self) -> f32 {
         self.0
     }

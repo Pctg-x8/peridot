@@ -14,7 +14,9 @@ use br::{
 };
 use components::LabelView;
 use features::{AppTitleBarView, DockingPanePreview, PaneSplitterView, SplitDirection};
-use miniengine::{ColoredVertex, Mat4, StdVkDevice, UVVertex2D, UtilityVertices, Vec4};
+use miniengine::{
+    ColoredVertex, Mat4, SamplerDesc, StdVkDevice, UVVertex2D, UtilityVertices, Vec4,
+};
 use peridot_math::{Camera, One, ProjectionMethod};
 use uikit::{
     HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, MountableView,
@@ -3357,13 +3359,17 @@ impl SkyboxPrecomputedTextures {
             .image()
             .set_name(Some(c"PeridotSkyBox:Precompute:K-Gathered"))?;
 
-        let linear_sampler = br::SamplerBuilder::new()
-            .addressing(
+        let sampler = e.sampler(SamplerDesc {
+            address_mode: (
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
-            )
-            .create(e.device().clone())?;
+            ),
+            min_filter: br::FilterMode::Linear,
+            mag_filter: br::FilterMode::Linear,
+            mip_filter: br::MipmapFilterMode::Linear,
+            ..Default::default()
+        })?;
         let dsl_compute_si1 =
             br::DescriptorSetLayoutBuilder::with_bindings(vec![br::DescriptorType::StorageImage
                 .make_binding(1)
@@ -3382,7 +3388,7 @@ impl SkyboxPrecomputedTextures {
             br::DescriptorType::CombinedImageSampler
                 .make_binding(1)
                 .only_for_compute()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&linear_sampler)]),
+                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&sampler)]),
             br::DescriptorType::StorageImage
                 .make_binding(1)
                 .only_for_compute(),
@@ -3392,11 +3398,11 @@ impl SkyboxPrecomputedTextures {
             br::DescriptorType::CombinedImageSampler
                 .make_binding(1)
                 .only_for_compute()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&linear_sampler)]),
+                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&sampler)]),
             br::DescriptorType::CombinedImageSampler
                 .make_binding(1)
                 .only_for_compute()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&linear_sampler)]),
+                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&sampler)]),
             br::DescriptorType::StorageImage
                 .make_binding(1)
                 .only_for_compute(),
@@ -3908,7 +3914,6 @@ pub struct SkyboxVertex {
 
 pub struct SkyboxRenderer {
     pub precomputed: SkyboxPrecomputedTextures,
-    pub _linear_sampler: br::SamplerObject<StdVkDevice>,
     pub _descriptor_pool: br::DescriptorPoolObject<StdVkDevice>,
     pub renderer_descriptor: br::DescriptorSet,
     pub pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
@@ -3925,14 +3930,17 @@ impl SkyboxRenderer {
         precomputed: SkyboxPrecomputedTextures,
         init_light_data: PrimaryDirectionalLightUniformData,
     ) -> br::Result<Self> {
-        let linear_sampler = br::SamplerBuilder::new()
-            .addressing(
+        let linear_sampler = e.sampler(SamplerDesc {
+            address_mode: (
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
-            )
-            .filter(br::FilterMode::Linear, br::FilterMode::Linear)
-            .create(e.device().clone())?;
+            ),
+            min_filter: br::FilterMode::Linear,
+            mag_filter: br::FilterMode::Linear,
+            mip_filter: br::MipmapFilterMode::Linear,
+            ..Default::default()
+        })?;
         let dsl = br::DescriptorSetLayoutBuilder::with_bindings(vec![
             br::DescriptorType::UniformBuffer
                 .make_binding(1)
@@ -4128,7 +4136,6 @@ impl SkyboxRenderer {
 
         Ok(Self {
             precomputed,
-            _linear_sampler: linear_sampler,
             _descriptor_pool: dp,
             renderer_descriptor: descriptor,
             pipeline_layout,

@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::SharedMut;
+use crate::{utils::SafeF32, SharedMut};
 
 pub type StdVkDevice = Rc<br::DeviceObject<Rc<br::InstanceObject>>>;
 
@@ -61,12 +61,70 @@ impl peridot_memory_manager::MemoryAllocationSource for MiniEngineGraphicsObject
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SamplerDesc {
+    pub mag_filter: br::FilterMode,
+    pub min_filter: br::FilterMode,
+    pub mip_filter: br::MipmapFilterMode,
+    pub address_mode: (br::AddressingMode, br::AddressingMode, br::AddressingMode),
+    pub mip_lod_bias: SafeF32,
+    pub max_anisotropy: Option<SafeF32>,
+    pub compare_op: Option<br::CompareOp>,
+    pub lod_range: core::ops::Range<SafeF32>,
+    pub border_color: br::BorderColor,
+    pub unnormalized_coordinates: bool,
+}
+impl Default for SamplerDesc {
+    fn default() -> Self {
+        Self {
+            mag_filter: br::FilterMode::Linear,
+            min_filter: br::FilterMode::Linear,
+            mip_filter: br::MipmapFilterMode::Linear,
+            address_mode: (
+                br::AddressingMode::Repeat,
+                br::AddressingMode::Repeat,
+                br::AddressingMode::Repeat,
+            ),
+            mip_lod_bias: unsafe { SafeF32::new_unchecked(0.0) },
+            max_anisotropy: None,
+            compare_op: None,
+            lod_range: unsafe { SafeF32::new_unchecked(0.0)..SafeF32::new_unchecked(0.0) },
+            border_color: br::BorderColor::TransparentBlackF,
+            unnormalized_coordinates: false,
+        }
+    }
+}
+impl SamplerDesc {
+    pub fn build<Device: br::Device>(
+        &self,
+        device: Device,
+    ) -> br::Result<br::SamplerObject<Device>> {
+        unsafe {
+            br::SamplerBuilder::new()
+                .filter(self.mag_filter, self.min_filter)
+                .addressing(
+                    self.address_mode.0,
+                    self.address_mode.1,
+                    self.address_mode.2,
+                )
+                .comparison(self.compare_op)
+                .lod_bias(self.mip_lod_bias.value())
+                .lod_clamp(self.lod_range.start.value(), self.lod_range.end.value())
+                .max_anisotropy(self.max_anisotropy.map(|x| x.value()))
+                .mip_filter(self.mip_filter)
+                .unnormalized_coordinates(self.unnormalized_coordinates)
+                .create(device)
+        }
+    }
+}
+
 pub struct MiniEngine {
     pub graphics_objects: MiniEngineGraphicsObjects,
     pub memory_manager: peridot_memory_manager::MemoryManager,
     pub resources_base: PathBuf,
     pub temp_base: PathBuf,
     pub loaded_shaders: HashMap<String, Rc<br::ShaderModuleObject<StdVkDevice>>>,
+    pub sampler_store: HashMap<SamplerDesc, Rc<br::SamplerObject<StdVkDevice>>>,
     pub pipeline_cache: br::PipelineCacheObject<StdVkDevice>,
 }
 impl MiniEngine {
@@ -222,6 +280,7 @@ impl MiniEngine {
             temp_base,
             pipeline_cache,
             loaded_shaders: HashMap::new(),
+            sampler_store: HashMap::new(),
         })
     }
 
@@ -291,6 +350,18 @@ impl MiniEngine {
                     .new_shader_module(&code)?;
 
                 Ok(e.insert(Rc::new(object)).clone())
+            }
+        }
+    }
+
+    #[inline]
+    pub fn sampler(&mut self, desc: SamplerDesc) -> br::Result<Rc<br::SamplerObject<StdVkDevice>>> {
+        match self.sampler_store.entry(desc) {
+            std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let obj = e.key().build(self.graphics_objects.device.clone())?;
+
+                Ok(e.insert(Rc::new(obj)).clone())
             }
         }
     }
