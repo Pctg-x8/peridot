@@ -792,6 +792,35 @@ where
     }
 }
 
+impl Quaternion<f32> {
+    pub fn euler_angles(&self) -> Vector3<f32> {
+        let Quaternion(x, y, z, w) = self;
+
+        Vector3(
+            (2.0 * (w * x + y * z)).atan2(1.0 - 2.0 * (x * x + y * y)),
+            -std::f32::consts::PI / 2.0
+                + 2.0
+                    * (1.0 + 2.0 * (w * y - x * z))
+                        .sqrt()
+                        .atan2((1.0 - 2.0 * (w * y - x * z)).sqrt()),
+            (2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (y * y + z * z)),
+        )
+    }
+
+    pub fn from_euler_angles(Vector3(x, y, z): Vector3<f32>) -> Self {
+        let (xs, xc) = (x / 2.0).sin_cos();
+        let (ys, yc) = (y / 2.0).sin_cos();
+        let (zs, zc) = (z / 2.0).sin_cos();
+
+        Self(
+            xs * yc * zc - xc * ys * zs,
+            xc * ys * zc + xs * yc * zs,
+            xc * yc * zs - xs * ys * zc,
+            xc * yc * zc + xs * ys * zs,
+        )
+    }
+}
+
 // Bedrock Interop //
 use bedrock as br;
 impl<T: Into<u32> + Copy> br::ImageSize for Vector2<T> {

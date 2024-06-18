@@ -2820,14 +2820,9 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             intensity,
                             ..
                         } => {
-                            let rotation_label = LabelView::new(
-                                format!(
-                                    "Rotation: {}, {}, {}, {}",
-                                    rotation.0, rotation.1, rotation.2, rotation.3
-                                ),
-                                &mut view_context,
-                            )
-                            .unwrap();
+                            let re = rotation.euler_angles();
+                            let rotation_label =
+                                LabelView::new("Rotation", &mut view_context).unwrap();
                             rotation_label
                                 .set_position(Vector3 {
                                     X: 0.0,
@@ -2841,6 +2836,175 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(new_shared_mut(rotation_label));
+
+                            let rotation_x_control =
+                                RollableNumberView::new(&view_context, re.0.to_degrees()).unwrap();
+                            rotation_x_control
+                                .borrow()
+                                .set_position(0.5, 0.0, 60.0)
+                                .unwrap();
+                            rotation_x_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0)
+                                .unwrap();
+                            rotation_x_control
+                                .borrow()
+                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .unwrap();
+                            self.current_mounted_views
+                                .borrow_mut()
+                                .push(rotation_x_control.clone());
+
+                            let rotation_y_control =
+                                RollableNumberView::new(&view_context, re.1.to_degrees()).unwrap();
+                            rotation_y_control
+                                .borrow()
+                                .set_position(0.5 + 0.5 / 3.0, 0.0, 60.0)
+                                .unwrap();
+                            rotation_y_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0)
+                                .unwrap();
+                            rotation_y_control
+                                .borrow()
+                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .unwrap();
+                            self.current_mounted_views
+                                .borrow_mut()
+                                .push(rotation_y_control.clone());
+
+                            let rotation_z_control =
+                                RollableNumberView::new(&view_context, re.2.to_degrees()).unwrap();
+                            rotation_z_control
+                                .borrow()
+                                .set_position(1.0 - 0.5 / 3.0, 0.0, 60.0)
+                                .unwrap();
+                            rotation_z_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0)
+                                .unwrap();
+                            rotation_z_control
+                                .borrow()
+                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .unwrap();
+                            self.current_mounted_views
+                                .borrow_mut()
+                                .push(rotation_z_control.clone());
+
+                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &rotation_x_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let rotation_y_control = rotation_y_control.clone();
+                                        let rotation_z_control = rotation_z_control.clone();
+                                        let bound_object_id = id.clone();
+
+                                        move |view_ctx, new_value| {
+                                            app_state
+                                                .borrow_mut()
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap()
+                                                .update_sunlight_rotation(
+                                                    peridot_math::Quaternion::from_euler_angles(
+                                                        peridot_math::Vector3(
+                                                            new_value.to_radians(),
+                                                            rotation_y_control
+                                                                .borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            rotation_z_control
+                                                                .borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                        ),
+                                                    ),
+                                                    view_ctx,
+                                                )
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &rotation_y_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let rotation_x_control = rotation_x_control.clone();
+                                        let rotation_z_control = rotation_z_control.clone();
+                                        let bound_object_id = id.clone();
+
+                                        move |view_ctx, new_value| {
+                                            app_state
+                                                .borrow_mut()
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap()
+                                                .update_sunlight_rotation(
+                                                    peridot_math::Quaternion::from_euler_angles(
+                                                        peridot_math::Vector3(
+                                                            rotation_x_control
+                                                                .borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            new_value.to_radians(),
+                                                            rotation_z_control
+                                                                .borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                        ),
+                                                    ),
+                                                    view_ctx,
+                                                )
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &rotation_z_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let rotation_x_control = rotation_x_control.clone();
+                                        let rotation_y_control = rotation_y_control.clone();
+                                        let bound_object_id = id.clone();
+
+                                        move |view_ctx, new_value| {
+                                            app_state
+                                                .borrow_mut()
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap()
+                                                .update_sunlight_rotation(
+                                                    peridot_math::Quaternion::from_euler_angles(
+                                                        peridot_math::Vector3(
+                                                            rotation_x_control
+                                                                .borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            rotation_y_control
+                                                                .borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            new_value.to_radians(),
+                                                        ),
+                                                    ),
+                                                    view_ctx,
+                                                )
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
 
                             let intensity_label =
                                 LabelView::new("Intensity", &mut view_context).unwrap();
@@ -3173,15 +3337,19 @@ impl SignalEventReceiver for StageTabContentRenderer {
             {
                 o.is_dirty = false;
                 match o.details {
-                    ObjectDetails::SunLight { intensity, .. } => {
+                    ObjectDetails::SunLight {
+                        intensity,
+                        rotation,
+                    } => {
                         self.skybox_renderer
                             .update_primary_directional_light_data(
                                 &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
                                 PrimaryDirectionalLightUniformData {
-                                    // TODO: ライト方向はあとで
-                                    incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0)
-                                        .normalize(),
-                                    // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                                    incident_light_dir: peridot_math::Matrix3::from(
+                                        rotation.clone(),
+                                    ) * peridot_math::Vector3(
+                                        0.0f32, 0.0, -1.0,
+                                    ),
                                     light_intensity: intensity,
                                 },
                             )
@@ -5108,6 +5276,8 @@ impl EditorStageView {
                 .expect("Failed to create framebuffer");
 
             unsafe { cb.begin().expect("Failed to begin command recording") }
+                .set_viewport(0, &[viewport.clone()])
+                .set_scissor(0, &[rect])
                 .begin_render_pass(
                     &main_render_pass,
                     &vk_framebuffer,
@@ -5119,8 +5289,6 @@ impl EditorStageView {
                     ],
                     true,
                 )
-                .set_viewport(0, &[viewport.clone()])
-                .set_scissor(0, &[rect])
                 .bind_graphics_pipeline_pair(
                     &skybox_renderer.pipeline,
                     &skybox_renderer.pipeline_layout,
@@ -5400,6 +5568,8 @@ impl EditorStageView {
                 &[],
             );
 
+        let scissor = buffer_real_size.into_rect(br::vk::VkOffset2D::ZERO);
+        let viewport = scissor.make_viewport(0.0..1.0);
         for (renderer, bb) in Rc::get_mut(&mut self.renderer)
             .expect("non unique renderer")
             .back_buffers
@@ -5516,13 +5686,12 @@ impl EditorStageView {
                     .begin()
                     .expect("Failed to begin command recording")
             }
+            .set_viewport(0, &[viewport.clone()])
+            .set_scissor(0, &[scissor])
             .begin_render_pass(
                 &self.main_render_pass,
                 &vk_framebuffer,
-                br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: buffer_real_size.clone(),
-                },
+                scissor,
                 &[
                     br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
                     br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
@@ -5530,29 +5699,12 @@ impl EditorStageView {
                 ],
                 true,
             )
-            .set_viewport(
-                0,
-                &[br::vk::VkViewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: buffer_real_size.width as _,
-                    height: buffer_real_size.height as _,
-                    minDepth: 0.0,
-                    maxDepth: 1.0,
-                }],
-            )
-            .set_scissor(
-                0,
-                &[br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: buffer_real_size.clone(),
-                }],
-            )
+            .bind_graphics_pipeline_layout(&self.skybox_renderer.pipeline_layout)
+            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
             .bind_graphics_pipeline_pair(
                 &self.skybox_renderer.pipeline,
                 &self.skybox_renderer.pipeline_layout,
             )
-            // TODO: ここ0番はセットしなくてもいいはずなんだけど......後で調べる
             .bind_graphics_descriptor_sets(
                 0,
                 &[
@@ -6103,6 +6255,283 @@ impl ObservationDisconnector for FloatSliderValueChangedObservationDisconnector 
     }
 }
 
+pub struct RollableNumberValueChangedObservationDisconnector {
+    view_ref: WeakMut<RollableNumberView>,
+    key: ValueChangedEventHandlerHashKey<f32>,
+}
+impl ObservationDisconnector for RollableNumberValueChangedObservationDisconnector {
+    fn disconnect(&self) {
+        let Some(view) = self.view_ref.upgrade() else {
+            return;
+        };
+
+        view.borrow_mut()
+            .value_change_event_handlers
+            .remove(&self.key);
+    }
+}
+
+pub struct RollableNumberView {
+    root: SpriteVisual,
+    label_fmt: IDWriteTextFormat,
+    label: SpriteVisual,
+    label_brush: CompositionSurfaceBrush,
+    ht: SharedMut<HitTestTree>,
+    current_value: f32,
+    drag_point: peridot_math::Vector2F32,
+    drag_base_value: f32,
+    value_change_event_handlers: HashSet<ValueChangedEventHandlerHashKey<f32>>,
+}
+impl RollableNumberView {
+    pub fn new(
+        view_ctx: &impl ViewContext,
+        init_value: f32,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let label_fmt = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .text_format_stock
+            .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let label_surface = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .text_surface_stock
+            .get(
+                &label_fmt,
+                view_ctx.current_dpi(),
+                format!("{init_value:.1}"),
+            )?;
+        let label_brush = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSurfaceBrushWithSurface(&label_surface.surface)?;
+
+        let border_color_brush = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateColorBrushWithColor(Color {
+                A: 64,
+                R: 224,
+                G: 224,
+                B: 224,
+            })?;
+        let border_brush = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateNineGridBrush()?;
+        border_brush.SetSource(&border_color_brush)?;
+        border_brush.SetInsets(1.0)?;
+        border_brush.SetIsCenterHollow(true)?;
+
+        let root = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
+        root.set_properties()
+            .brush(&border_brush)?
+            .size(Vector2 { X: 64.0, Y: 16.0 })?;
+
+        let label = view_ctx
+            .app_subsystems()
+            .borrow()
+            .compositor
+            .CreateSpriteVisual()?;
+        label
+            .set_properties()
+            .center_point(Vector3::scalar(0.5))?
+            .anchor_point(Vector2::scalar(0.5))?
+            .relative_offset_adjustment(Vector3::scalar(0.5))?
+            .size(label_surface.visual_size())?
+            .brush(&label_brush)?;
+        root.Children()?.InsertAtTop(&label)?;
+
+        Ok(new_cyclic_shared_mut(move |wthis| {
+            let ht = HitTestTree::new(
+                Some(&Rc::new(wthis.clone())),
+                view_ctx.hittest_context().new_id(),
+                Rect {
+                    X: 0.0,
+                    Y: 0.0,
+                    Width: 64.0,
+                    Height: 16.0,
+                },
+            );
+
+            Self {
+                root,
+                label_fmt,
+                label,
+                label_brush,
+                ht,
+                current_value: init_value,
+                drag_point: peridot_math::Vector2(0.0, 0.0),
+                drag_base_value: 0.0,
+                value_change_event_handlers: HashSet::new(),
+            }
+        }))
+    }
+
+    pub fn current_value(&self) -> f32 {
+        self.current_value
+    }
+
+    pub fn observe_value_changes(
+        this: &SharedMut<Self>,
+        handler: impl FnMut(&mut dyn ViewContext, f32) + 'static,
+        view_context: &mut dyn ViewContext,
+        requires_current_value: bool,
+    ) -> impl ObservationDisconnector {
+        let key = ValueChangedEventHandlerHashKey(new_shared_mut(handler));
+        this.borrow_mut()
+            .value_change_event_handlers
+            .insert(key.clone());
+        if requires_current_value {
+            let cv = this.borrow().current_value;
+            (key.0.borrow_mut())(view_context, cv);
+        }
+
+        RollableNumberValueChangedObservationDisconnector {
+            view_ref: Rc::downgrade(this),
+            key,
+        }
+    }
+
+    fn notify_value_changes(&self, view_ctx: &mut impl ViewContext) {
+        let c = self.current_value;
+
+        for e in &self.value_change_event_handlers {
+            (e.0.borrow_mut())(view_ctx, c);
+        }
+    }
+
+    pub fn set_position(&self, x_rel: f32, x_offs: f32, y: f32) -> windows::core::Result<()> {
+        self.root.SetOffset(Vector3 {
+            X: x_offs,
+            Y: y,
+            Z: 0.0,
+        })?;
+        self.root.SetRelativeOffsetAdjustment(Vector3 {
+            X: x_rel,
+            Y: 0.0,
+            Z: 0.0,
+        })?;
+        self.ht.borrow_mut().set_top(y);
+        self.ht.borrow_mut().set_relative_left(x_rel, x_offs);
+
+        Ok(())
+    }
+    pub fn set_relative_width(&self, w: f32) -> windows::core::Result<()> {
+        self.root.SetSize(Vector2 { X: 0.0, Y: 16.0 })?;
+        self.root
+            .SetRelativeSizeAdjustment(Vector2 { X: w, Y: 0.0 })?;
+        self.ht.borrow_mut().set_width(0.0);
+        self.ht.borrow_mut().set_relative_width(w);
+
+        Ok(())
+    }
+
+    fn update_label(&self, view_ctx: &impl ViewContext) -> windows::core::Result<()> {
+        let label_text = format!("{:.1}", self.current_value);
+        let label_text_u16 = label_text.encode_utf16().collect::<Vec<_>>();
+        let label_layout = unsafe {
+            view_ctx
+                .app_subsystems()
+                .borrow_mut()
+                .dwrite_factory
+                .CreateTextLayout(
+                    &label_text_u16,
+                    &self.label_fmt,
+                    std::f32::MAX,
+                    std::f32::MAX,
+                )?
+        };
+        let label_surface = view_ctx
+            .app_subsystems()
+            .borrow_mut()
+            .text_surface_stock
+            .create_text_surface(&label_layout, view_ctx.current_dpi())?;
+
+        self.label_brush.SetSurface(&label_surface.surface)?;
+        self.label.SetSize(label_surface.visual_size())?;
+
+        Ok(())
+    }
+}
+impl MountableView for RollableNumberView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
+        HitTestTree::add_child(onto_ht, self.ht.clone());
+
+        Ok(())
+    }
+
+    fn unmount(&self) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+        self.ht.borrow_mut().unmount();
+
+        Ok(())
+    }
+}
+impl InputEventHandler for WeakMut<RollableNumberView> {
+    fn hover_cursor(&self) -> uikit::CursorStyle {
+        uikit::CursorStyle::SizeNS
+    }
+
+    fn on_pointer_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        let current = this.borrow().current_value;
+        this.borrow_mut().drag_point = peridot_math::Vector2(x, y);
+        this.borrow_mut().drag_base_value = current;
+        ctx.capture_mouse();
+        unsafe {
+            ShowCursor(false);
+        }
+    }
+
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, mut ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        let app_window = AppWindow::wrap(window);
+        let mut points = [POINT {
+            x: this.borrow().drag_point.0 as _,
+            y: this.borrow().drag_point.1 as _,
+        }];
+        app_window.map_points_to_desktop(&mut points);
+        unsafe {
+            SetCursorPos(points[0].x, points[0].y).expect("Failed to hold cursor");
+        }
+
+        let d = peridot_math::Vector2(x, y) - this.borrow().drag_point;
+        const SENSITIVITY: f32 = 0.1;
+        let new_value = this.borrow().current_value - d.1 * SENSITIVITY;
+        this.borrow_mut().current_value = new_value;
+        this.borrow()
+            .update_label(&ctx)
+            .expect("Failed to update view");
+        this.borrow().notify_value_changes(&mut ctx);
+    }
+
+    fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        ctx.release_mouse_capture();
+        unsafe {
+            ShowCursor(true);
+        }
+    }
+}
+
 pub struct FloatSliderView {
     root: SpriteVisual,
     gauge_clip: InsetClip,
@@ -6492,6 +6921,22 @@ impl ObjectEditState {
         };
 
         *intensity = new_intensity;
+        self.is_dirty = true;
+    }
+
+    pub fn update_sunlight_rotation(
+        &mut self,
+        new_rotation: peridot_math::QuaternionF32,
+        _view_ctx: &mut dyn ViewContext,
+    ) {
+        let ObjectDetails::SunLight {
+            ref mut rotation, ..
+        } = self.details
+        else {
+            return;
+        };
+
+        *rotation = new_rotation;
         self.is_dirty = true;
     }
 }
