@@ -592,8 +592,7 @@ impl<Device: br::Device> TransferBatch<Device> {
                     baseArrayLayer: 0,
                     layerCount: 1,
                 },
-                l0,
-                br::ImageLayout::TransferSrcOpt,
+                l0.to(br::ImageLayout::TransferSrcOpt),
             )
         });
         let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| {
@@ -606,8 +605,7 @@ impl<Device: br::Device> TransferBatch<Device> {
                     baseArrayLayer: 0,
                     layerCount: 1,
                 },
-                l0,
-                br::ImageLayout::TransferDestOpt,
+                l0.to(br::ImageLayout::TransferDestOpt),
             )
         });
         let barriers_i: Vec<_> = src_barriers_i.chain(dst_barriers_i).collect();
@@ -687,8 +685,7 @@ impl<Device: br::Device> TransferBatch<Device> {
                                 br::ImageMemoryBarrier::new(
                                     &r,
                                     range.clone(),
-                                    br::ImageLayout::TransferDestOpt,
-                                    *l,
+                                    br::ImageLayout::TransferDestOpt.to(*l),
                                 )
                             })
                             .collect();

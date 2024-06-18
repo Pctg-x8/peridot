@@ -3280,6 +3280,9 @@ impl PaneTabPresenter for StageTabPresenter {
 }
 
 macro_rules! ArrayBuilderOp {
+    ([try] $($base: tt).+, { $($vname: ident <- $arg: expr),* $(,)? }) => {
+        let [$($vname),*] = $($base).+([$($arg),*])?;
+    };
     ([ref, try] $($base: tt).+, { $($vname: ident <- $arg: expr),* $(,)? }) => {
         let [$($vname),*] = $($base).+(&[$($arg),*])?;
     }
@@ -3298,27 +3301,25 @@ impl SkyboxPrecomputedTextures {
     const GATHERED_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(32, 32);
 
     pub fn new(e: &mut MiniEngine) -> br::Result<Self> {
-        let [transmittance, scatter, gathered, k_scatter, k_gathered] = e
-            .alloc_device_local_image_array([
-                br::ImageDesc::new(
-                    Self::TRANSMITTANCE_SIZE,
-                    br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
-                )
-                .sampled()
-                .use_as_storage(),
-                br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+        ArrayBuilderOp! {
+            [try] e.alloc_device_local_image_array, {
+                transmittance <- br::ImageDesc::new(Self::TRANSMITTANCE_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
                     .sampled()
                     .use_as_storage(),
-                br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                scatter <- br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
                     .sampled()
                     .use_as_storage(),
-                br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                gathered <- br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
                     .sampled()
                     .use_as_storage(),
-                br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                k_scatter <- br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
                     .sampled()
                     .use_as_storage(),
-            ])?;
+                k_gathered <- br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+                    .sampled()
+                    .use_as_storage(),
+            }
+        }
         let transmittance = transmittance
             .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
             .view_builder()
@@ -3470,9 +3471,12 @@ impl SkyboxPrecomputedTextures {
         };
         e.device().update_descriptor_sets(
             &[
-                br::DescriptorPointer::new(transmittance_set.0, 0).write(
-                    br::DescriptorContents::storage_image(&transmittance, br::ImageLayout::General),
-                ),
+                transmittance_set
+                    .binding_at(0)
+                    .write(br::DescriptorContents::storage_image(
+                        &transmittance,
+                        br::ImageLayout::General,
+                    )),
                 transmittance_to_scatter_set.binding_at(0).write(
                     br::DescriptorContents::combined_image_sampler(
                         &transmittance,
@@ -3560,22 +3564,12 @@ impl SkyboxPrecomputedTextures {
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[],
                 &[],
-                &[br::ImageMemoryBarrier2::new(
-                    transmittance.image(),
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::COLOR.0,
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
-                )
-                .transferring_layout(br::ImageLayout::Undefined, br::ImageLayout::General)
-                .of_memory(br::AccessFlags2::NONE, br::AccessFlags2::SHADER.write)
-                .of_execution(
-                    br::PipelineStageFlags2::COMPUTE_SHADER,
-                    br::PipelineStageFlags2::COMPUTE_SHADER,
-                )],
+                &[transmittance
+                    .image()
+                    .by_ref()
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .memory_barrier2()
+                    .transit_to(br::ImageLayout::General.from_undefined())],
             ))
             .bind_compute_pipeline_pair(&transmittance_compute_pipeline, &input_only_layout)
             .bind_compute_descriptor_sets(0, &[transmittance_set.into()], &[])
@@ -3588,44 +3582,28 @@ impl SkyboxPrecomputedTextures {
                 &[],
                 &[],
                 &[
-                    br::ImageMemoryBarrier2::new(
-                        transmittance.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::General,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )
-                    .of_memory(
-                        br::AccessFlags2::SHADER.write,
-                        br::AccessFlags2::SHADER.read,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
-                    br::ImageMemoryBarrier2::new(
-                        scatter.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(br::ImageLayout::Undefined, br::ImageLayout::General)
-                    .of_memory(br::AccessFlags2::NONE, br::AccessFlags2::SHADER.write)
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
+                    transmittance
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                        )
+                        .from(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.write,
+                        )
+                        .to(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.read,
+                        ),
+                    scatter
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_to(br::ImageLayout::General.from_undefined()),
                 ],
             ))
             .bind_compute_pipeline_pair(&single_scatter_compute_pipeline, &tex_io_layout)
@@ -3639,44 +3617,28 @@ impl SkyboxPrecomputedTextures {
                 &[],
                 &[],
                 &[
-                    br::ImageMemoryBarrier2::new(
-                        scatter.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::General,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )
-                    .of_memory(
-                        br::AccessFlags2::SHADER.write,
-                        br::AccessFlags2::SHADER.read,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
-                    br::ImageMemoryBarrier2::new(
-                        gathered.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(br::ImageLayout::Undefined, br::ImageLayout::General)
-                    .of_memory(br::AccessFlags2::NONE, br::AccessFlags2::SHADER.write)
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
+                    scatter
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                        )
+                        .from(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.write,
+                        )
+                        .to(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.read,
+                        ),
+                    gathered
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_to(br::ImageLayout::General.from_undefined()),
                 ],
             ))
             .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
@@ -3686,44 +3648,28 @@ impl SkyboxPrecomputedTextures {
                 &[],
                 &[],
                 &[
-                    br::ImageMemoryBarrier2::new(
-                        gathered.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::General,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )
-                    .of_memory(
-                        br::AccessFlags2::SHADER.write,
-                        br::AccessFlags2::SHADER.read,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
-                    br::ImageMemoryBarrier2::new(
-                        k_scatter.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(br::ImageLayout::Undefined, br::ImageLayout::General)
-                    .of_memory(br::AccessFlags2::NONE, br::AccessFlags2::SHADER.write)
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
+                    gathered
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                        )
+                        .from(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.write,
+                        )
+                        .to(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.read,
+                        ),
+                    k_scatter
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_to(br::ImageLayout::General.from_undefined()),
                 ],
             ))
             .bind_compute_pipeline_pair(&multiple_scatter_compute_pipeline, &tex_i2o_layout)
@@ -3737,44 +3683,28 @@ impl SkyboxPrecomputedTextures {
                 &[],
                 &[],
                 &[
-                    br::ImageMemoryBarrier2::new(
-                        k_scatter.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::General,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )
-                    .of_memory(
-                        br::AccessFlags2::SHADER.write,
-                        br::AccessFlags2::SHADER.read,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
-                    br::ImageMemoryBarrier2::new(
-                        k_gathered.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(br::ImageLayout::Undefined, br::ImageLayout::General)
-                    .of_memory(br::AccessFlags2::NONE, br::AccessFlags2::SHADER.write)
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
+                    k_scatter
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                        )
+                        .from(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.write,
+                        )
+                        .to(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.read,
+                        ),
+                    k_gathered
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_to(br::ImageLayout::General.from_undefined()),
                 ],
             ))
             .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
@@ -3782,13 +3712,13 @@ impl SkyboxPrecomputedTextures {
             .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
-                    .of_memory(
+                    .from(
+                        br::PipelineStageFlags2::COMPUTE_SHADER,
                         br::AccessFlags2::SHADER.write,
-                        br::AccessFlags2::SHADER.read,
                     )
-                    .of_execution(
+                    .to(
                         br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
+                        br::AccessFlags2::SHADER.read,
                     )],
                 &[],
                 &[],
@@ -3800,46 +3730,22 @@ impl SkyboxPrecomputedTextures {
                 &[],
                 &[],
                 &[
-                    br::ImageMemoryBarrier2::new(
-                        scatter.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                        br::ImageLayout::General,
-                    )
-                    .of_memory(
-                        br::AccessFlags2::SHADER.read,
-                        br::AccessFlags2::SHADER.write,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
-                    br::ImageMemoryBarrier2::new(
-                        k_scatter.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                        br::ImageLayout::General,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    ),
+                    scatter
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                        ),
+                    k_scatter
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                        ),
                 ],
             ))
             .bind_compute_pipeline_pair(&accum3_pipeline, &tex_io_pure_layout)
@@ -3856,48 +3762,22 @@ impl SkyboxPrecomputedTextures {
                 .pipeline_barrier_2(&br::DependencyInfo::new(
                     &[],
                     &[],
-                    &[
-                        br::ImageMemoryBarrier2::new(
-                            k_gathered.image(),
-                            br::vk::VkImageSubresourceRange {
-                                aspectMask: br::AspectMask::COLOR.0,
-                                baseMipLevel: 0,
-                                levelCount: 1,
-                                baseArrayLayer: 0,
-                                layerCount: 1,
-                            },
+                    &[k_gathered
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
                         )
-                        .transferring_layout(
-                            br::ImageLayout::General,
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )
-                        .of_memory(
-                            br::AccessFlags2::SHADER.write,
-                            br::AccessFlags2::SHADER.read,
-                        )
-                        .of_execution(
+                        .from(
                             br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                        ),
-                        br::ImageMemoryBarrier2::new(
-                            k_scatter.image(),
-                            br::vk::VkImageSubresourceRange {
-                                aspectMask: br::AspectMask::COLOR.0,
-                                baseMipLevel: 0,
-                                levelCount: 1,
-                                baseArrayLayer: 0,
-                                layerCount: 1,
-                            },
-                        )
-                        .of_memory(
-                            br::AccessFlags2::SHADER.read,
                             br::AccessFlags2::SHADER.write,
                         )
-                        .of_execution(
+                        .to(
                             br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                        ),
-                    ],
+                            br::AccessFlags2::SHADER.read,
+                        )],
                 ))
                 .bind_compute_pipeline_pair(&multiple_scatter_compute_pipeline, &tex_i2o_layout)
                 .bind_compute_descriptor_sets(
@@ -3914,50 +3794,30 @@ impl SkyboxPrecomputedTextures {
                     &[],
                     &[],
                     &[
-                        br::ImageMemoryBarrier2::new(
-                            k_scatter.image(),
-                            br::vk::VkImageSubresourceRange {
-                                aspectMask: br::AspectMask::COLOR.0,
-                                baseMipLevel: 0,
-                                levelCount: 1,
-                                baseArrayLayer: 0,
-                                layerCount: 1,
-                            },
-                        )
-                        .transferring_layout(
-                            br::ImageLayout::General,
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )
-                        .of_memory(
-                            br::AccessFlags2::SHADER.write,
-                            br::AccessFlags2::SHADER.read,
-                        )
-                        .of_execution(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                        ),
-                        br::ImageMemoryBarrier2::new(
-                            k_gathered.image(),
-                            br::vk::VkImageSubresourceRange {
-                                aspectMask: br::AspectMask::COLOR.0,
-                                baseMipLevel: 0,
-                                levelCount: 1,
-                                baseArrayLayer: 0,
-                                layerCount: 1,
-                            },
-                        )
-                        .transferring_layout(
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                            br::ImageLayout::General,
-                        )
-                        .of_memory(
-                            br::AccessFlags2::SHADER.read,
-                            br::AccessFlags2::SHADER.write,
-                        )
-                        .of_execution(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                        ),
+                        k_scatter
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                            )
+                            .from(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.read,
+                            ),
+                        k_gathered
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                            ),
                     ],
                 ))
                 .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
@@ -3965,13 +3825,13 @@ impl SkyboxPrecomputedTextures {
                 .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
                 .pipeline_barrier_2(&br::DependencyInfo::new(
                     &[br::MemoryBarrier2::new()
-                        .of_memory(
+                        .from(
+                            br::PipelineStageFlags2::COMPUTE_SHADER,
                             br::AccessFlags2::SHADER.write,
-                            br::AccessFlags2::SHADER.read,
                         )
-                        .of_execution(
+                        .to(
                             br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
+                            br::AccessFlags2::SHADER.read,
                         )],
                     &[],
                     &[],
@@ -3982,24 +3842,14 @@ impl SkyboxPrecomputedTextures {
                 .pipeline_barrier_2(&br::DependencyInfo::new(
                     &[],
                     &[],
-                    &[br::ImageMemoryBarrier2::new(
-                        k_scatter.image(),
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.0,
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                        br::ImageLayout::General,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                    )],
+                    &[k_scatter
+                        .image()
+                        .by_ref()
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .memory_barrier2()
+                        .transit_from(
+                            br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                        )],
                 ))
                 .bind_compute_pipeline_pair(&accum3_pipeline, &tex_io_pure_layout)
                 .bind_compute_descriptor_sets(0, &[k_scatter_to_scatter_set.into()], &[])
@@ -4013,25 +3863,20 @@ impl SkyboxPrecomputedTextures {
         rec.pipeline_barrier_2(&br::DependencyInfo::new(
             &[],
             &[],
-            &[br::ImageMemoryBarrier2::new(
-                scatter.image(),
-                br::vk::VkImageSubresourceRange {
-                    aspectMask: br::AspectMask::COLOR.0,
-                    baseMipLevel: 0,
-                    levelCount: 1,
-                    baseArrayLayer: 0,
-                    layerCount: 1,
-                },
-            )
-            .transferring_layout(br::ImageLayout::General, br::ImageLayout::ShaderReadOnlyOpt)
-            .of_execution(
-                br::PipelineStageFlags2::COMPUTE_SHADER,
-                br::PipelineStageFlags2::FRAGMENT_SHADER,
-            )
-            .of_memory(
-                br::AccessFlags2::SHADER.write,
-                br::AccessFlags2::SHADER.read,
-            )],
+            &[scatter
+                .image()
+                .by_ref()
+                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                .memory_barrier2()
+                .transit_from(br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt))
+                .from(
+                    br::PipelineStageFlags2::COMPUTE_SHADER,
+                    br::AccessFlags2::SHADER.write,
+                )
+                .to(
+                    br::PipelineStageFlags2::FRAGMENT_SHADER,
+                    br::AccessFlags2::SHADER.read,
+                )],
         ))
         .end()?;
         e.graphics_queue().borrow_mut().submit2(
@@ -4541,6 +4386,17 @@ impl EditorStageView {
                     bottom: init_size.height as _,
                 })
                 .expect("Failed to set source rect");
+
+            presentation_surface
+                .SetAlphaMode(DXGI_ALPHA_MODE_IGNORE)
+                .expect("Failed to set alpha mode");
+            // TODO: G10(Linear色空間のはず)を使うとなんか挙動が怪しいのでいったんG22(Gamma補正バージョン)を使う
+            // presentation_surface
+            //     .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)
+            //     .expect("Failed to set color space");
+            presentation_surface
+                .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
+                .expect("Failed to set color space");
         }
 
         let brush = view_ctx
@@ -4554,23 +4410,6 @@ impl EditorStageView {
             .expect("Failed to resize visual");
         root.SetOffset(Vector3::zero())
             .expect("Failed to position visual");
-
-        unsafe {
-            presentation_surface
-                .SetAlphaMode(DXGI_ALPHA_MODE_IGNORE)
-                .expect("Failed to set alpha mode");
-            // TODO: G10(Linear色空間のはず)を使うとなんか挙動が怪しいのでいったんG22(Gamma補正バージョン)を使う
-            // presentation_surface
-            //     .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)
-            //     .expect("Failed to set color space");
-            presentation_surface
-                .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
-                .expect("Failed to set color space");
-        }
-
-        let skybox_precomputed_textures =
-            SkyboxPrecomputedTextures::new(&mut view_ctx.app_subsystems().borrow_mut().mini_engine)
-                .expect("Failed to precompute skybox textures");
 
         let mut initialization_cp = br::CommandPoolBuilder::new(
             view_ctx
@@ -4604,10 +4443,14 @@ impl EditorStageView {
         )
         .expect("Failed to create utility verts");
 
+        let skybox_precomputed_textures =
+            SkyboxPrecomputedTextures::new(&mut view_ctx.app_subsystems().borrow_mut().mini_engine)
+                .expect("Failed to precompute skybox textures");
+
         let main_render_pass = br::RenderPassBuilder2::new(
             &[
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
-                    .layout_transition(br::ImageLayout::Undefined, br::ImageLayout::General)
+                    .with_layout_from(br::ImageLayout::Undefined.to(br::ImageLayout::General))
                     .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
                     .layout_transition(
@@ -4616,9 +4459,8 @@ impl EditorStageView {
                     )
                     .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare),
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
-                    .layout_transition(
-                        br::ImageLayout::Undefined,
-                        br::ImageLayout::DepthStencilAttachmentOpt,
+                    .with_layout_from(
+                        br::ImageLayout::Undefined.to(br::ImageLayout::DepthStencilAttachmentOpt),
                     )
                     .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare),
             ],

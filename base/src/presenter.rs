@@ -240,8 +240,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
                         baseArrayLayer: 0,
                         layerCount: 1,
                     },
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::PresentSrc,
+                    br::ImageLayout::Undefined.to(br::ImageLayout::PresentSrc),
                 )
             })
             .collect::<Vec<_>>();
