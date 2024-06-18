@@ -3090,7 +3090,7 @@ impl PaneTabPresenter for TimelineTabPresenter {
 }
 
 pub trait SignalEventReceiver {
-    fn on_signal(&self, arg: usize);
+    fn on_signal(&self, arg: usize, view_ctx: &dyn ViewContext);
 }
 
 pub enum SignalEventType {
@@ -3170,14 +3170,45 @@ pub struct StageTabContentRenderer {
         ID3D11Texture2D,
         IDXGIKeyedMutex,
     )>,
+    skybox_renderer: Rc<SkyboxRenderer>,
+    app_state: WeakMut<AppState>,
 }
 impl SignalEventReceiver for StageTabContentRenderer {
-    fn on_signal(&self, arg: usize) {
+    fn on_signal(&self, arg: usize, view_ctx: &dyn ViewContext) {
         let (pb, cb, fin, rt, km) = &self.back_buffers[arg];
 
         unsafe {
             km.AcquireSync(0, INFINITE)
                 .expect("Failed to acquire keyed mutex");
+        }
+
+        if let Some(st) = self.app_state.upgrade() {
+            for o in st
+                .borrow_mut()
+                .current_scene
+                .objects
+                .values_mut()
+                .filter(|x| x.is_dirty)
+            {
+                o.is_dirty = false;
+                match o.details {
+                    ObjectDetails::SunLight { intensity, .. } => {
+                        self.skybox_renderer
+                            .update_primary_directional_light_data(
+                                &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
+                                PrimaryDirectionalLightUniformData {
+                                    // TODO: ライト方向はあとで
+                                    incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0)
+                                        .normalize(),
+                                    // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                                    light_intensity: intensity,
+                                },
+                            )
+                            .expect("Failed to update primary sunlight data");
+                    }
+                    ObjectDetails::Camera { .. } => (),
+                }
+            }
         }
         self.graphics_queue
             .borrow_mut()
@@ -3190,6 +3221,7 @@ impl SignalEventReceiver for StageTabContentRenderer {
             .borrow_mut()
             .wait()
             .expect("Failed to wait work");
+
         unsafe {
             km.ReleaseSync(1).expect("Failed to release keyed mutex");
         }
@@ -3228,20 +3260,9 @@ impl PaneTabContentPresenter for StageTabPresenter {
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
         view_context: &mut dyn ViewContext,
-        app_state: &SharedMut<AppState>,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.view.borrow().mount(onto, onto_ht, view_context)?;
-
-        // TODO: 仮でSunLightだけを探してそれのイベントを購読する
-        if let Some(sunlight) = app_state
-            .borrow_mut()
-            .current_scene
-            .objects
-            .values_mut()
-            .find(|x| x.is_sunlight_object())
-        {
-            sunlight.observe_sunlight_intensity_changes(&self.view, 1, view_context);
-        }
 
         Ok(())
     }
@@ -3249,20 +3270,9 @@ impl PaneTabContentPresenter for StageTabPresenter {
     fn on_hide_content_view(
         &mut self,
         view_context: &mut dyn ViewContext,
-        app_state: &SharedMut<AppState>,
+        _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.view.borrow().unmount(view_context)?;
-
-        // TODO: 仮でSunLightだけを探してそれのイベントを購読する
-        if let Some(sunlight) = app_state
-            .borrow_mut()
-            .current_scene
-            .objects
-            .values_mut()
-            .find(|x| x.is_sunlight_object())
-        {
-            sunlight.unobserve_sunlight_intensity_changes(&self.view);
-        }
 
         Ok(())
     }
@@ -3281,10 +3291,11 @@ impl PaneTabPresenter for StageTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &SharedMut<AppState>,
+        app_state: &SharedMut<AppState>,
     ) -> Self {
         Self {
-            view: EditorStageView::new(&view_ctx).expect("Failed to create EditorStageView"),
+            view: EditorStageView::new(&view_ctx, app_state)
+                .expect("Failed to create EditorStageView"),
         }
     }
 }
@@ -4088,6 +4099,7 @@ impl SkyboxRenderer {
         render_pass: &(impl br::RenderPass + ?Sized),
         subpass: u32,
         precomputed: SkyboxPrecomputedTextures,
+        init_light_data: PrimaryDirectionalLightUniformData,
     ) -> br::Result<Self> {
         let linear_sampler = br::SamplerBuilder::new()
             .addressing(
@@ -4194,11 +4206,7 @@ impl SkyboxRenderer {
                     uv: peridot_math::Vector2(1.0, 1.0),
                 },
             ],
-            primary_directional_light_data: PrimaryDirectionalLightUniformData {
-                incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
-                // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
-                light_intensity: 20.0,
-            },
+            primary_directional_light_data: init_light_data,
         })?;
 
         let mut cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
@@ -4416,7 +4424,7 @@ pub struct EditorStageView {
     root: SpriteVisual,
     ht: SharedMut<HitTestTree>,
     utility_verts: UtilityVertices,
-    skybox_renderer: SkyboxRenderer,
+    skybox_renderer: Rc<SkyboxRenderer>,
     main_render_pass: br::RenderPassObject<StdVkDevice>,
     main_render_command_pool: br::CommandPoolObject<StdVkDevice>,
     hdr_final_pass_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
@@ -4439,9 +4447,13 @@ pub struct EditorStageView {
     )>,
     renderer: Rc<StageTabContentRenderer>,
     pointer_down_point: peridot_math::Vector2F32,
+    app_state: WeakMut<AppState>,
 }
 impl EditorStageView {
-    pub fn new(view_ctx: &impl ViewContext) -> windows::core::Result<SharedMut<Self>> {
+    pub fn new(
+        view_ctx: &impl ViewContext,
+        app_state: &SharedMut<AppState>,
+    ) -> windows::core::Result<SharedMut<Self>> {
         let init_size = br::vk::VkExtent2D {
             width: 128,
             height: 128,
@@ -5073,6 +5085,28 @@ impl EditorStageView {
             &main_render_pass,
             hdr_render_subpass,
             skybox_precomputed_textures,
+            match app_state
+                .borrow()
+                .current_scene
+                .objects
+                .values()
+                .find(|x| x.is_sunlight_object())
+            {
+                Some(x) => PrimaryDirectionalLightUniformData {
+                    // TODO: ライト方向は後で
+                    incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
+                    // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                    light_intensity: match x.details {
+                        ObjectDetails::SunLight { intensity, .. } => intensity,
+                        _ => unreachable!(),
+                    },
+                },
+                None => PrimaryDirectionalLightUniformData {
+                    incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
+                    // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                    light_intensity: 20.0,
+                },
+            },
         )
         .expect("Failed to initialize skybox renderer");
 
@@ -5260,6 +5294,7 @@ impl EditorStageView {
             back_buffer_resources.push((eh, vk_image_memory, vk_framebuffer));
         }
 
+        let skybox_renderer = Rc::new(skybox_renderer);
         Ok(new_cyclic_shared_mut(move |wthis| {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
@@ -5276,7 +5311,7 @@ impl EditorStageView {
                 root,
                 ht,
                 utility_verts,
-                skybox_renderer,
+                skybox_renderer: skybox_renderer.clone(),
                 main_render_pass,
                 main_render_command_pool,
                 hdr_final_pass_pipeline_layout,
@@ -5314,9 +5349,12 @@ impl EditorStageView {
                             .GetImmediateContext()
                             .expect("Failed to get d3d imm context")
                     },
+                    skybox_renderer,
+                    app_state: Rc::downgrade(app_state),
                 }),
                 back_buffer_resources,
                 pointer_down_point: peridot_math::Vector2(0.0, 0.0),
+                app_state: Rc::downgrade(app_state),
             }
         }))
     }
@@ -5852,32 +5890,6 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             ShowCursor(true);
         }
         ctx.release_mouse_capture();
-    }
-}
-impl ValueChangeEventHandler<f32> for RefCell<EditorStageView> {
-    fn on_value_changed(
-        &self,
-        view_context: &mut dyn ViewContext,
-        sender_id: usize,
-        new_value: f32,
-    ) {
-        if sender_id != 1 {
-            // Intensity以外はいったん見ない
-            return;
-        }
-
-        let data = PrimaryDirectionalLightUniformData {
-            incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
-            // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
-            light_intensity: new_value,
-        };
-        self.borrow()
-            .skybox_renderer
-            .update_primary_directional_light_data(
-                &mut view_context.app_subsystems().borrow_mut().mini_engine,
-                data,
-            )
-            .expect("Failed to update uniform buffer");
     }
 }
 
@@ -6647,47 +6659,12 @@ pub struct ObjectEditState {
     pub id: Uuid,
     pub name: String,
     pub order: u32,
+    pub is_dirty: bool,
     pub details: ObjectDetails,
 }
 impl ObjectEditState {
     pub fn is_sunlight_object(&self) -> bool {
         matches!(self.details, ObjectDetails::SunLight { .. })
-    }
-
-    pub fn observe_sunlight_intensity_changes(
-        &mut self,
-        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
-        sender_id: usize,
-        view_context: &mut dyn ViewContext,
-    ) {
-        let ObjectDetails::SunLight {
-            intensity,
-            ref mut intensity_changed_handlers,
-            ..
-        } = self.details
-        else {
-            return;
-        };
-
-        let wh = Rc::downgrade(handler);
-        intensity_changed_handlers.insert(ValueChangeEventHandlerHashKey(wh), sender_id);
-        handler.on_value_changed(view_context, sender_id, intensity);
-    }
-
-    pub fn unobserve_sunlight_intensity_changes(
-        &mut self,
-        handler: &Rc<impl ValueChangeEventHandler<f32> + 'static>,
-    ) {
-        let ObjectDetails::SunLight {
-            ref mut intensity_changed_handlers,
-            ..
-        } = self.details
-        else {
-            return;
-        };
-
-        let wh = Rc::downgrade(handler);
-        intensity_changed_handlers.remove(&ValueChangeEventHandlerHashKey(wh));
     }
 
     pub fn update_sunlight_intensity(
@@ -6696,20 +6673,14 @@ impl ObjectEditState {
         view_ctx: &mut dyn ViewContext,
     ) {
         let ObjectDetails::SunLight {
-            ref mut intensity,
-            ref mut intensity_changed_handlers,
-            ..
+            ref mut intensity, ..
         } = self.details
         else {
             return;
         };
 
         *intensity = new_intensity;
-        for (e, id) in intensity_changed_handlers.iter() {
-            if let Some(e) = e.0.upgrade() {
-                e.on_value_changed(view_ctx, *id, new_intensity);
-            }
-        }
+        self.is_dirty = true;
     }
 }
 
@@ -6718,7 +6689,6 @@ pub enum ObjectDetails {
     SunLight {
         rotation: peridot_math::QuaternionF32,
         intensity: f32,
-        intensity_changed_handlers: HashMap<ValueChangeEventHandlerHashKey<f32>, usize>,
     },
 }
 
@@ -6990,6 +6960,7 @@ fn app() -> i32 {
         id: Uuid::new_v4(),
         name: "Camera".into(),
         order: 0,
+        is_dirty: false,
         details: ObjectDetails::Camera {},
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
@@ -6997,10 +6968,10 @@ fn app() -> i32 {
         id: Uuid::new_v4(),
         name: "Sun Light".into(),
         order: 1,
+        is_dirty: false,
         details: ObjectDetails::SunLight {
             rotation: peridot_math::QuaternionF32::ONE,
             intensity: 20.0,
-            intensity_changed_handlers: HashMap::new(),
         },
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
@@ -7399,7 +7370,7 @@ fn app() -> i32 {
                     }
                 }
             }
-            SignalEventType::Receiver(handler, arg) => handler.on_signal(arg),
+            SignalEventType::Receiver(handler, arg) => handler.on_signal(arg, &ws),
             SignalEventType::Unknown => (),
         }
     }
