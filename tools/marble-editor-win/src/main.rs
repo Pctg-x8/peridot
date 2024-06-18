@@ -2837,6 +2837,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .borrow_mut()
                                 .push(new_shared_mut(rotation_label));
 
+                            // TODO: これのUIレイアウト自動調整をしてくれるやつがほしい（伸縮はComposition APIがやってくれるんだけど、それの係数決めを自動化したい）
                             let rotation_x_control =
                                 RollableNumberView::new(&view_context, re.0.to_degrees()).unwrap();
                             rotation_x_control
