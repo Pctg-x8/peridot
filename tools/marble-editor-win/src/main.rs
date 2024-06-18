@@ -2845,7 +2845,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .unwrap();
                             rotation_x_control
                                 .borrow()
-                                .set_relative_width(0.5 / 3.0)
+                                .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
                             rotation_x_control
                                 .borrow()
@@ -2859,11 +2859,11 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 RollableNumberView::new(&view_context, re.1.to_degrees()).unwrap();
                             rotation_y_control
                                 .borrow()
-                                .set_position(0.5 + 0.5 / 3.0, 0.0, 60.0)
+                                .set_position(0.5 + 0.5 / 3.0, 1.0, 60.0)
                                 .unwrap();
                             rotation_y_control
                                 .borrow()
-                                .set_relative_width(0.5 / 3.0)
+                                .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
                             rotation_y_control
                                 .borrow()
@@ -2877,11 +2877,11 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 RollableNumberView::new(&view_context, re.2.to_degrees()).unwrap();
                             rotation_z_control
                                 .borrow()
-                                .set_position(1.0 - 0.5 / 3.0, 0.0, 60.0)
+                                .set_position(1.0 - 0.5 / 3.0, 2.0, 60.0)
                                 .unwrap();
                             rotation_z_control
                                 .borrow()
-                                .set_relative_width(0.5 / 3.0)
+                                .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
                             rotation_z_control
                                 .borrow()
@@ -6424,12 +6424,12 @@ impl RollableNumberView {
 
         Ok(())
     }
-    pub fn set_relative_width(&self, w: f32) -> windows::core::Result<()> {
-        self.root.SetSize(Vector2 { X: 0.0, Y: 16.0 })?;
+    pub fn set_relative_width(&self, rel: f32, offs: f32) -> windows::core::Result<()> {
+        self.root.SetSize(Vector2 { X: offs, Y: 16.0 })?;
         self.root
-            .SetRelativeSizeAdjustment(Vector2 { X: w, Y: 0.0 })?;
+            .SetRelativeSizeAdjustment(Vector2 { X: rel, Y: 0.0 })?;
         self.ht.borrow_mut().set_width(0.0);
-        self.ht.borrow_mut().set_relative_width(w);
+        self.ht.borrow_mut().set_relative_width(rel, offs);
 
         Ok(())
     }

@@ -509,8 +509,9 @@ impl HitTestTree {
         self.rect.Width = width;
     }
     #[inline]
-    pub fn set_relative_width(&mut self, width: f32) {
-        self.relative_adjustments.Width = width;
+    pub fn set_relative_width(&mut self, rate: f32, offset: f32) {
+        self.relative_adjustments.Width = rate;
+        self.rect.Width = offset;
     }
     #[inline]
     pub fn set_relative_left(&mut self, rate: f32, offset: f32) {
