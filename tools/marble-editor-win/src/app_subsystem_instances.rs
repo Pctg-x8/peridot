@@ -1,4 +1,5 @@
 use core::ffi::c_void;
+use std::cell::RefCell;
 use windows::{
     core::Interface,
     Foundation::{Numerics::Vector2, Size},
@@ -44,6 +45,15 @@ use crate::{
     TAB_ACTIVE_BASE_COLOR, TAB_ACTIVE_LIT_COLOR,
 };
 
+static mut APP_SUBSYSTEM_INSTANCES: *mut AppSubsystemInstances = core::ptr::null_mut();
+
+pub struct AppSubsystemFinalizer;
+impl Drop for AppSubsystemFinalizer {
+    fn drop(&mut self) {
+        AppSubsystemInstances::finalize();
+    }
+}
+
 pub struct AppSubsystemInstances {
     pub d3d11_device: ID3D11Device,
     pub d2d1_factory: ID2D1Factory1,
@@ -53,12 +63,29 @@ pub struct AppSubsystemInstances {
     pub compositor_interop: ICompositorInterop,
     pub ui_common_objects: UICommonObjects,
     pub presentation_manager: IPresentationManager,
-    pub mini_engine: MiniEngine,
-    pub text_format_stock: TextFormatStock,
-    pub text_surface_stock: TextSurfaceStock,
+    pub mini_engine: RefCell<MiniEngine>,
+    pub text_format_stock: RefCell<TextFormatStock>,
+    pub text_surface_stock: RefCell<TextSurfaceStock>,
 }
 impl AppSubsystemInstances {
-    pub fn new() -> Self {
+    pub fn initialize() -> AppSubsystemFinalizer {
+        unsafe { APP_SUBSYSTEM_INSTANCES = Box::into_raw(Box::new(Self::new())) }
+
+        AppSubsystemFinalizer
+    }
+
+    pub fn finalize() {
+        unsafe {
+            drop(Box::from_raw(APP_SUBSYSTEM_INSTANCES));
+            APP_SUBSYSTEM_INSTANCES = core::ptr::null_mut();
+        }
+    }
+
+    pub fn get<'a>() -> &'a AppSubsystemInstances {
+        unsafe { &*APP_SUBSYSTEM_INSTANCES }
+    }
+
+    fn new() -> Self {
         let mut d3d11_device = None;
         let mut feature_level = D3D_FEATURE_LEVEL(0);
         let mut d3d11_imm_context = None;
@@ -372,9 +399,9 @@ impl AppSubsystemInstances {
             compositor_interop,
             ui_common_objects,
             presentation_manager,
-            mini_engine: miniengine,
-            text_format_stock,
-            text_surface_stock,
+            mini_engine: RefCell::new(miniengine),
+            text_format_stock: RefCell::new(text_format_stock),
+            text_surface_stock: RefCell::new(text_surface_stock),
         }
     }
 }

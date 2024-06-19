@@ -360,17 +360,13 @@ impl HitTestTree {
         eh: Option<&Rc<impl InputEventHandler + 'static>>,
         id: usize,
         rect: Rect,
+        relative_adjustments: Rect,
     ) -> SharedMut<Self> {
         new_shared_mut(Self {
             eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| x.clone()),
             id,
             rect,
-            relative_adjustments: Rect {
-                X: 0.0,
-                Y: 0.0,
-                Width: 0.0,
-                Height: 0.0,
-            },
+            relative_adjustments,
             parent: empty_weak_mut(),
             children: HashMap::new(),
         })
@@ -391,6 +387,7 @@ impl HitTestTree {
                 Width: f32::MAX,
                 Height: f32::MAX,
             },
+            Rect::from_size(0.0, 0.0),
         )
     }
     #[inline]

@@ -26,8 +26,8 @@ use windows::{
 };
 
 use crate::{
+    app_subsystem_instances::AppSubsystemInstances,
     bindgen::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
-    uikit::ViewContext,
     utils::RectExtensions,
     winapi_extras::{
         register_window_class, timespan_ms, KeyFrameAnimationExtension,
@@ -58,18 +58,20 @@ impl DockingPanePreview {
     extern "system" fn window_callback(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         unsafe { DefWindowProcA(h, m, w, l) }
     }
-
-    pub fn new(ctx: &(impl ViewContext + ?Sized)) -> windows::core::Result<Self> {
-        let window_cls = WNDCLASSEXA {
+    fn register_window_class() -> windows::core::Result<u16> {
+        register_window_class(&WNDCLASSEXA {
             cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
             lpfnWndProc: Some(Self::window_callback),
             hInstance: unsafe { GetModuleHandleA(None)?.into() },
             lpszClassName: s!("io.ct2.peridot.marble.windows.overlays.floating_preview"),
             ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
-        };
+        })
+    }
+
+    pub fn new() -> windows::core::Result<Self> {
         let window = WindowBuilder::new(
-            window_cls.hInstance,
-            register_window_class(&window_cls)?,
+            unsafe { GetModuleHandleA(None)?.into() },
+            Self::register_window_class()?,
             s!(""),
         )
         .no_activate()
@@ -79,8 +81,7 @@ impl DockingPanePreview {
         .popup()
         .create()?;
         let composition_target = unsafe {
-            ctx.app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .compositor
                 .cast::<ICompositorDesktopInterop>()?
                 .CreateDesktopWindowTarget(window, true)?
@@ -90,22 +91,16 @@ impl DockingPanePreview {
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
         fx.SetBlurAmount(16.0)?;
         fx.SetOptimization(EffectOptimization::Balanced)?;
-        let effect_factory = ctx
-            .app_subsystems()
-            .borrow()
+        let effect_factory = AppSubsystemInstances::get()
             .compositor
             .CreateEffectFactory(&fx)?;
-        let backdrop_brush = ctx
-            .app_subsystems()
-            .borrow()
+        let backdrop_brush = AppSubsystemInstances::get()
             .compositor
             .CreateBackdropBrush()?;
         let blur_brush = effect_factory.CreateBrush()?;
         blur_brush.SetSourceParameter(h!("source"), &backdrop_brush)?;
 
-        let blur_visual = ctx
-            .app_subsystems()
-            .borrow()
+        let blur_visual = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         blur_visual
@@ -115,16 +110,13 @@ impl DockingPanePreview {
             .relative_offset_adjustment(Vector2::scalar(0.5).with_z(0.0))?
             .brush(&blur_brush)?;
 
-        let color_tint = ctx
-            .app_subsystems()
-            .borrow()
+        let color_tint = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         color_tint
             .set_properties()
             .brush(
-                &ctx.app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .compositor
                     .CreateColorBrushWithColor(Self::TINT_COLOR)?,
             )?
@@ -133,26 +125,18 @@ impl DockingPanePreview {
         blur_visual.Children()?.InsertAtTop(&color_tint)?;
 
         blur_visual.SetShadow(&{
-            let x = ctx
-                .app_subsystems()
-                .borrow()
-                .compositor
-                .CreateDropShadow()?;
+            let x = AppSubsystemInstances::get().compositor.CreateDropShadow()?;
             x.SetBlurRadius(32.0)?;
             x.SetOffset(Vector3::down(16.0))?;
             x.SetOpacity(0.3)?;
             x
         })?;
 
-        let linear_easing = ctx
-            .app_subsystems()
-            .borrow()
+        let linear_easing = AppSubsystemInstances::get()
             .compositor
             .CreateLinearEasingFunction()?;
 
-        let blink_animation = ctx
-            .app_subsystems()
-            .borrow()
+        let blink_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         blink_animation
@@ -163,15 +147,11 @@ impl DockingPanePreview {
             .set_properties()
             .duration(timespan_ms(2600))?;
 
-        let show_animation = ctx
-            .app_subsystems()
-            .borrow()
+        let show_animation = AppSubsystemInstances::get()
             .compositor
             .CreateAnimationGroup()?;
         show_animation.Add(&{
-            let a = ctx
-                .app_subsystems()
-                .borrow()
+            let a = AppSubsystemInstances::get()
                 .compositor
                 .CreateScalarKeyFrameAnimation()?;
             a.keyframe(0.0, 0.0)?
@@ -183,9 +163,7 @@ impl DockingPanePreview {
             a
         })?;
         show_animation.Add(&{
-            let a = ctx
-                .app_subsystems()
-                .borrow()
+            let a = AppSubsystemInstances::get()
                 .compositor
                 .CreateVector3KeyFrameAnimation()?;
             a.keyframe(0.0, Vector2::scalar(1.2).with_z(1.0))?
@@ -193,7 +171,7 @@ impl DockingPanePreview {
                     1.0,
                     Vector3::one(),
                     &CompositionEasingFunction::CreatePowerEasingFunction(
-                        &ctx.app_subsystems().borrow().compositor,
+                        &AppSubsystemInstances::get().compositor,
                         CompositionEasingFunctionMode::Out,
                         2.0,
                     )?,
@@ -204,15 +182,11 @@ impl DockingPanePreview {
 
             a
         })?;
-        let hide_animation = ctx
-            .app_subsystems()
-            .borrow()
+        let hide_animation = AppSubsystemInstances::get()
             .compositor
             .CreateAnimationGroup()?;
         hide_animation.Add(&{
-            let a = ctx
-                .app_subsystems()
-                .borrow()
+            let a = AppSubsystemInstances::get()
                 .compositor
                 .CreateScalarKeyFrameAnimation()?;
             a.keyframe(0.0, 1.0)?
@@ -224,9 +198,7 @@ impl DockingPanePreview {
             a
         })?;
         hide_animation.Add(&{
-            let a = ctx
-                .app_subsystems()
-                .borrow()
+            let a = AppSubsystemInstances::get()
                 .compositor
                 .CreateVector3KeyFrameAnimation()?;
             a.keyframe(0.0, Vector3::one())?

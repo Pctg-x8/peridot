@@ -9,9 +9,12 @@ use windows::{
     Graphics::IGeometrySource2D,
     Win32::{
         Graphics::{
-            Direct2D::Common::{
-                D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
-                D2D_POINT_2F,
+            Direct2D::{
+                Common::{
+                    D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
+                    D2D_POINT_2F,
+                },
+                ID2D1GeometrySink,
             },
             DirectWrite::{
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_RANGE,
@@ -29,6 +32,7 @@ use windows::{
 };
 
 use crate::{
+    app_subsystem_instances::AppSubsystemInstances,
     bindgen::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     new_cyclic_shared_mut,
     uikit::{HitTestTree, InputContext, InputEventHandler, ViewContext},
@@ -48,7 +52,6 @@ enum AppTitleBarControlButtonType {
 }
 struct AppTitleBarControlButtonView {
     ty: AppTitleBarControlButtonType,
-    nth: usize,
     root: ContainerVisual,
     bg: SpriteVisual,
     icon: ShapeVisual,
@@ -62,9 +65,7 @@ impl AppTitleBarControlButtonView {
         ty: AppTitleBarControlButtonType,
         nth: usize,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let root = ctx
-            .app_subsystems()
-            .borrow()
+        let root = AppSubsystemInstances::get()
             .compositor
             .CreateContainerVisual()?;
         root.set_properties()
@@ -83,15 +84,12 @@ impl AppTitleBarControlButtonView {
                 Y: 0.0,
                 Z: 0.0,
             })?;
-        let bg = ctx
-            .app_subsystems()
-            .borrow()
+        let bg = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         bg.set_properties()
             .brush(
-                &ctx.app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .compositor
                     .CreateColorBrushWithColor(if ty == AppTitleBarControlButtonType::Close {
                         Colors::Red()?
@@ -106,14 +104,10 @@ impl AppTitleBarControlButtonView {
             )?
             .expand_to_parent()?
             .opacity(0.0)?;
-        let linear_fn = ctx
-            .app_subsystems()
-            .borrow()
+        let linear_fn = AppSubsystemInstances::get()
             .compositor
             .CreateLinearEasingFunction()?;
-        let hover_animation = ctx
-            .app_subsystems()
-            .borrow()
+        let hover_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         hover_animation
@@ -121,9 +115,7 @@ impl AppTitleBarControlButtonView {
             .interpolate(1.0, 1.0, &linear_fn)?
             .set_properties()
             .duration(timespan_ms(100))?;
-        let hover_end_animation = ctx
-            .app_subsystems()
-            .borrow()
+        let hover_end_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         hover_end_animation
@@ -134,96 +126,33 @@ impl AppTitleBarControlButtonView {
         root.Children()?.InsertAtTop(&bg)?;
 
         let icon_geometry = unsafe {
-            ctx.app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .d2d1_factory
                 .CreatePathGeometry()?
         };
         let sink = unsafe { icon_geometry.Open()? };
         match ty {
-            AppTitleBarControlButtonType::Close => unsafe {
-                sink.BeginFigure(D2D_POINT_2F { x: 0.0, y: 0.0 }, D2D1_FIGURE_BEGIN_HOLLOW);
-                sink.AddLine(D2D_POINT_2F {
-                    x: AppTitleBarView::BUTTON_ICON_SIZE,
-                    y: AppTitleBarView::BUTTON_ICON_SIZE,
-                });
-                sink.EndFigure(D2D1_FIGURE_END_OPEN);
-                sink.BeginFigure(
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE,
-                        y: 0.0,
-                    },
-                    D2D1_FIGURE_BEGIN_HOLLOW,
-                );
-                sink.AddLine(D2D_POINT_2F {
-                    x: 0.0,
-                    y: AppTitleBarView::BUTTON_ICON_SIZE,
-                });
-                sink.EndFigure(D2D1_FIGURE_END_OPEN);
-            },
-            AppTitleBarControlButtonType::Minimize => unsafe {
-                sink.BeginFigure(
-                    D2D_POINT_2F {
-                        x: 0.0,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                    },
-                    D2D1_FIGURE_BEGIN_HOLLOW,
-                );
-                sink.AddLine(D2D_POINT_2F {
-                    x: AppTitleBarView::BUTTON_ICON_SIZE,
-                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                });
-                sink.EndFigure(D2D1_FIGURE_END_OPEN);
-            },
-            AppTitleBarControlButtonType::MaximizeRestore => unsafe {
-                sink.BeginFigure(
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                    },
-                    D2D1_FIGURE_BEGIN_HOLLOW,
-                );
-                sink.AddLines(&[
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                    },
-                ]);
-                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-            },
+            AppTitleBarControlButtonType::Close => Self::close_icon(&sink),
+            AppTitleBarControlButtonType::Minimize => Self::minimize_icon(&sink),
+            AppTitleBarControlButtonType::MaximizeRestore => Self::maximize_icon(&sink),
         }
         unsafe {
             sink.Close()?;
         }
         let icon_geometry: IGeometrySource2D = GeometryInterop(icon_geometry.into()).into();
-        let icon_geometry = ctx
-            .app_subsystems()
-            .borrow()
+        let icon_geometry = AppSubsystemInstances::get()
             .compositor
             .CreatePathGeometryWithPath(&CompositionPath::Create(&icon_geometry)?)?;
-        let icon_shape = ctx
-            .app_subsystems()
-            .borrow()
+        let icon_shape = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteShapeWithGeometry(&icon_geometry)?;
         icon_shape.SetStrokeBrush(
-            &ctx.app_subsystems()
-                .borrow()
+            &AppSubsystemInstances::get()
                 .compositor
                 .CreateColorBrushWithColor(Colors::White()?)?,
         )?;
         icon_shape.SetStrokeThickness(1.5)?;
-        let icon = ctx
-            .app_subsystems()
-            .borrow()
+        let icon = AppSubsystemInstances::get()
             .compositor
             .CreateShapeVisual()?;
         icon.Shapes()?.Append(&icon_shape)?;
@@ -237,12 +166,23 @@ impl AppTitleBarControlButtonView {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context().new_id(),
-                Rect::from_size(AppTitleBarView::BUTTON_WIDTH, AppTitleBarView::HEIGHT),
+                Rect {
+                    // Note: アンカーポイントのぶんを余分にずらす
+                    X: -((nth + 1) as f32 * AppTitleBarView::BUTTON_WIDTH),
+                    Y: 0.0,
+                    Width: AppTitleBarView::BUTTON_WIDTH,
+                    Height: AppTitleBarView::HEIGHT,
+                },
+                Rect {
+                    X: 1.0,
+                    Y: 0.0,
+                    Width: 0.0,
+                    Height: 0.0,
+                },
             );
 
             Self {
                 ty,
-                nth,
                 root,
                 bg,
                 icon,
@@ -264,125 +204,35 @@ impl AppTitleBarControlButtonView {
         Ok(())
     }
 
-    pub fn adjust_left(&self, parent_width: f32) {
-        self.ht
-            .borrow_mut()
-            .set_right(parent_width - (self.nth as f32 * AppTitleBarView::BUTTON_WIDTH));
-    }
-
-    pub fn change_maximize_restore_icon(
-        &self,
-        is_maximized: bool,
-        view_ctx: &mut (impl ViewContext + ?Sized),
-    ) -> windows::core::Result<()> {
+    pub fn change_maximize_restore_icon(&self, is_maximized: bool) -> windows::core::Result<()> {
         if self.ty != AppTitleBarControlButtonType::MaximizeRestore {
             // Maximize/Restore以外のボタンはアイコン変更なし
             return Ok(());
         }
 
         let icon_geometry = unsafe {
-            view_ctx
-                .app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .d2d1_factory
                 .CreatePathGeometry()?
         };
         let sink = unsafe { icon_geometry.Open()? };
-        if !is_maximized {
-            unsafe {
-                sink.BeginFigure(
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                    },
-                    D2D1_FIGURE_BEGIN_HOLLOW,
-                );
-                sink.AddLines(&[
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                    },
-                ]);
-                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-            }
+        if is_maximized {
+            Self::restore_icon(&sink);
         } else {
-            unsafe {
-                sink.BeginFigure(
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
-                    },
-                    D2D1_FIGURE_BEGIN_HOLLOW,
-                );
-                sink.AddLines(&[
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                    },
-                ]);
-                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-                sink.BeginFigure(
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.2,
-                    },
-                    D2D1_FIGURE_BEGIN_HOLLOW,
-                );
-                sink.AddLines(&[
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
-                    },
-                    D2D_POINT_2F {
-                        x: AppTitleBarView::BUTTON_ICON_SIZE * 0.8,
-                        y: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
-                    },
-                ]);
-                sink.EndFigure(D2D1_FIGURE_END_OPEN);
-            }
+            Self::maximize_icon(&sink);
         }
         unsafe {
             sink.Close()?;
         }
         let icon_geometry: IGeometrySource2D = GeometryInterop(icon_geometry.into()).into();
-        let icon_geometry = view_ctx
-            .app_subsystems()
-            .borrow()
+        let icon_geometry = AppSubsystemInstances::get()
             .compositor
             .CreatePathGeometryWithPath(&CompositionPath::Create(&icon_geometry)?)?;
-        let icon_shape = view_ctx
-            .app_subsystems()
-            .borrow()
+        let icon_shape = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteShapeWithGeometry(&icon_geometry)?;
         icon_shape.SetStrokeBrush(
-            &view_ctx
-                .app_subsystems()
-                .borrow()
+            &AppSubsystemInstances::get()
                 .compositor
                 .CreateColorBrushWithColor(Colors::White()?)?,
         )?;
@@ -390,6 +240,126 @@ impl AppTitleBarControlButtonView {
         self.icon.Shapes()?.SetAt(0, &icon_shape)?;
 
         Ok(())
+    }
+
+    fn close_icon(sink: &ID2D1GeometrySink) {
+        unsafe {
+            sink.BeginFigure(D2D_POINT_2F { x: 0.0, y: 0.0 }, D2D1_FIGURE_BEGIN_HOLLOW);
+            sink.AddLine(D2D_POINT_2F {
+                x: AppTitleBarView::BUTTON_ICON_SIZE,
+                y: AppTitleBarView::BUTTON_ICON_SIZE,
+            });
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            sink.BeginFigure(
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE,
+                    y: 0.0,
+                },
+                D2D1_FIGURE_BEGIN_HOLLOW,
+            );
+            sink.AddLine(D2D_POINT_2F {
+                x: 0.0,
+                y: AppTitleBarView::BUTTON_ICON_SIZE,
+            });
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        }
+    }
+
+    fn minimize_icon(sink: &ID2D1GeometrySink) {
+        unsafe {
+            sink.BeginFigure(
+                D2D_POINT_2F {
+                    x: 0.0,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                },
+                D2D1_FIGURE_BEGIN_HOLLOW,
+            );
+            sink.AddLine(D2D_POINT_2F {
+                x: AppTitleBarView::BUTTON_ICON_SIZE,
+                y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+            });
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        }
+    }
+
+    fn maximize_icon(sink: &ID2D1GeometrySink) {
+        unsafe {
+            sink.BeginFigure(
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                },
+                D2D1_FIGURE_BEGIN_HOLLOW,
+            );
+            sink.AddLines(&[
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                },
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                },
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                },
+            ]);
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        }
+    }
+
+    fn restore_icon(sink: &ID2D1GeometrySink) {
+        unsafe {
+            sink.BeginFigure(
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
+                },
+                D2D1_FIGURE_BEGIN_HOLLOW,
+            );
+            sink.AddLines(&[
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
+                },
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                },
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                },
+            ]);
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.BeginFigure(
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.2,
+                },
+                D2D1_FIGURE_BEGIN_HOLLOW,
+            );
+            sink.AddLines(&[
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.3,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                },
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.1,
+                },
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.9,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
+                },
+                D2D_POINT_2F {
+                    x: AppTitleBarView::BUTTON_ICON_SIZE * 0.8,
+                    y: AppTitleBarView::BUTTON_ICON_SIZE * 0.7,
+                },
+            ]);
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        }
     }
 }
 impl InputEventHandler for WeakMut<AppTitleBarControlButtonView> {
@@ -443,12 +413,9 @@ impl AppTitleBarView {
 
     pub fn new(
         ctx: &(impl ViewContext + ?Sized),
-        init_dpi: f32,
         global_scale: f64,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let root = ctx
-            .app_subsystems()
-            .borrow()
+        let root = AppSubsystemInstances::get()
             .compositor
             .CreateContainerVisual()?;
         root.set_properties()
@@ -462,15 +429,13 @@ impl AppTitleBarView {
                 Y: 0.0,
             })?;
 
-        let title_font = ctx.app_subsystems().borrow_mut().text_format_stock.get(
-            "system-ui",
-            10.0,
-            DWRITE_FONT_WEIGHT_NORMAL,
-        )?;
+        let title_font = AppSubsystemInstances::get()
+            .text_format_stock
+            .borrow_mut()
+            .get("system-ui", 10.0, DWRITE_FONT_WEIGHT_NORMAL)?;
         let title_text = "New Project Peridot Marble Editor 0.1.0";
         let title_layout = unsafe {
-            ctx.app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .dwrite_factory
                 .CreateTextLayout(
                     &title_text.encode_utf16().collect::<Vec<_>>(),
@@ -488,14 +453,11 @@ impl AppTitleBarView {
             title_layout.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, project_name_range)?;
             title_layout.SetFontSize(12.0, project_name_range)?;
         }
-        let title_text = ctx
-            .app_subsystems()
-            .borrow_mut()
+        let title_text = AppSubsystemInstances::get()
             .text_surface_stock
-            .create_text_surface(&title_layout, init_dpi)?;
-        let title = ctx
-            .app_subsystems()
-            .borrow()
+            .borrow_mut()
+            .create_text_surface(&title_layout, ctx.current_dpi())?;
+        let title = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         title
@@ -505,8 +467,7 @@ impl AppTitleBarView {
             .size(title_text.visual_size())?
             .relative_offset_adjustment(Vector3::scalar(0.5))?
             .brush(
-                &ctx.app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .compositor
                     .CreateSurfaceBrushWithSurface(&title_text.surface)?,
             )?;
@@ -515,22 +476,17 @@ impl AppTitleBarView {
         fx.SetSource(&CompositionEffectSourceParameter::Create(h!("source"))?)?;
         fx.SetBlurAmount(2.0)?;
         fx.SetOptimization(EffectOptimization::Balanced)?;
-        let effect_factory = ctx
-            .app_subsystems()
-            .borrow()
+        let effect_factory = AppSubsystemInstances::get()
             .compositor
             .CreateEffectFactory(&fx)?;
         let blur_brush = effect_factory.CreateBrush()?;
         blur_brush.SetSourceParameter(
             h!("source"),
-            &ctx.app_subsystems()
-                .borrow()
+            &AppSubsystemInstances::get()
                 .compositor
                 .CreateSurfaceBrushWithSurface(&title_text.surface)?,
         )?;
-        let title_fx = ctx
-            .app_subsystems()
-            .borrow()
+        let title_fx = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         title_fx
@@ -560,6 +516,7 @@ impl AppTitleBarView {
                 Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, Self::HEIGHT),
+                Rect::empty(),
             );
 
             Self {
@@ -590,9 +547,6 @@ impl AppTitleBarView {
 
     pub fn set_width(&self, width: f32) {
         self.ht.borrow_mut().set_width(width);
-        self.close_button.borrow().adjust_left(width);
-        self.maxres_button.borrow().adjust_left(width);
-        self.min_button.borrow().adjust_left(width);
     }
 
     pub fn mount(
@@ -606,14 +560,10 @@ impl AppTitleBarView {
         Ok(())
     }
 
-    pub fn change_maximize_restore_icon(
-        &self,
-        is_maximized: bool,
-        view_ctx: &mut (impl ViewContext + ?Sized),
-    ) -> windows::core::Result<()> {
+    pub fn change_maximize_restore_icon(&self, is_maximized: bool) -> windows::core::Result<()> {
         self.maxres_button
             .borrow()
-            .change_maximize_restore_icon(is_maximized, view_ctx)
+            .change_maximize_restore_icon(is_maximized)
     }
 }
 impl InputEventHandler for WeakMut<AppTitleBarView> {

@@ -11,15 +11,17 @@ use windows::{
 };
 
 use crate::{
+    app_subsystem_instances::AppSubsystemInstances,
     empty_weak_mut, new_cyclic_shared_mut,
     uikit::{
         CursorStyle, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext,
     },
+    utils::RectExtensions,
     winapi_extras::{
         timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
         VisualExtensions,
     },
-    AppWindow, PaneDockLayer, SharedMut, WeakMut,
+    AppWindow, DockDirection, PaneDockLayer, SharedMut, WeakMut,
 };
 
 #[derive(Clone, Copy)]
@@ -49,28 +51,21 @@ impl PaneSplitterView {
         ctx: &(impl ViewContext + ?Sized),
         dir: SplitDirection,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let visual = ctx
-            .app_subsystems()
-            .borrow()
+        let visual = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         visual.SetBrush(
-            &ctx.app_subsystems()
-                .borrow()
+            &AppSubsystemInstances::get()
                 .compositor
                 .CreateColorBrushWithColor(Self::SURFACE_COLOR)?,
         )?;
         visual.SetOpacity(0.0)?;
 
-        let linear_easing = ctx
-            .app_subsystems()
-            .borrow()
+        let linear_easing = AppSubsystemInstances::get()
             .compositor
             .CreateLinearEasingFunction()?;
 
-        let hover_animation = ctx
-            .app_subsystems()
-            .borrow()
+        let hover_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         hover_animation
@@ -79,9 +74,7 @@ impl PaneSplitterView {
             .set_properties()
             .duration(timespan_ms(100))?;
 
-        let hover_end_animation = ctx
-            .app_subsystems()
-            .borrow()
+        let hover_end_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         hover_end_animation
@@ -94,12 +87,8 @@ impl PaneSplitterView {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context().new_id(),
-                Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 1.0,
-                    Height: 1.0,
-                },
+                Rect::from_size(1.0, 1.0),
+                Rect::empty(),
             );
 
             Self {
@@ -142,6 +131,7 @@ impl MountableView for PaneSplitterView {
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.visual)?;
         HitTestTree::add_child(onto_ht, self.ht.clone());
@@ -149,7 +139,7 @@ impl MountableView for PaneSplitterView {
         Ok(())
     }
 
-    fn unmount(&self) -> windows::core::Result<()> {
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
         self.ht.borrow_mut().unmount();
 
@@ -213,10 +203,22 @@ impl InputEventHandler for WeakMut<PaneSplitterView> {
         let app_window = AppWindow::wrap(window);
         let new_size = match &*target_dock.borrow() {
             PaneDockLayer::EmptyRoot(_, _) => return,
-            PaneDockLayer::Left { .. } => bs + app_window.pixels_to_dip(x - bx),
-            PaneDockLayer::Top { .. } => bs + app_window.pixels_to_dip(y - by),
-            PaneDockLayer::Right { .. } => bs - app_window.pixels_to_dip(x - bx),
-            PaneDockLayer::Bottom { .. } => bs - app_window.pixels_to_dip(y - by),
+            PaneDockLayer::Docked {
+                direction: DockDirection::Left,
+                ..
+            } => bs + app_window.pixels_to_dip(x - bx),
+            PaneDockLayer::Docked {
+                direction: DockDirection::Top,
+                ..
+            } => bs + app_window.pixels_to_dip(y - by),
+            PaneDockLayer::Docked {
+                direction: DockDirection::Right,
+                ..
+            } => bs - app_window.pixels_to_dip(x - bx),
+            PaneDockLayer::Docked {
+                direction: DockDirection::Bottom,
+                ..
+            } => bs - app_window.pixels_to_dip(y - by),
             PaneDockLayer::Fill { .. } => return,
         }
         .max(1.0);

@@ -17,9 +17,11 @@ use windows::{
 };
 
 use crate::{
+    app_subsystem_instances::AppSubsystemInstances,
     new_cyclic_shared_mut, new_shared_mut,
     observable::{ObservationDisconnector, ValueChangedEventHandlerHashKey},
     uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext},
+    utils::RectExtensions,
     winapi_extras::{VectorScalarConstructor, VisualExtensions},
     AppWindow, SharedMut, WeakMut,
 };
@@ -30,6 +32,7 @@ pub struct RollableNumberView {
     label: SpriteVisual,
     label_brush: CompositionSurfaceBrush,
     ht: SharedMut<HitTestTree>,
+    rendered_dpi: f32,
     current_value: f32,
     drag_point: peridot_math::Vector2F32,
     drag_base_value: f32,
@@ -37,32 +40,26 @@ pub struct RollableNumberView {
 }
 impl RollableNumberView {
     pub fn new(
-        view_ctx: &impl ViewContext,
+        view_ctx: &(impl ViewContext + ?Sized),
         init_value: f32,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let label_fmt = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let label_fmt = AppSubsystemInstances::get()
             .text_format_stock
-            .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
-        let label_surface = view_ctx
-            .app_subsystems()
             .borrow_mut()
+            .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let label_surface = AppSubsystemInstances::get()
             .text_surface_stock
+            .borrow_mut()
             .get(
                 &label_fmt,
                 view_ctx.current_dpi(),
                 format!("{init_value:.1}"),
             )?;
-        let label_brush = view_ctx
-            .app_subsystems()
-            .borrow()
+        let label_brush = AppSubsystemInstances::get()
             .compositor
             .CreateSurfaceBrushWithSurface(&label_surface.surface)?;
 
-        let border_color_brush = view_ctx
-            .app_subsystems()
-            .borrow()
+        let border_color_brush = AppSubsystemInstances::get()
             .compositor
             .CreateColorBrushWithColor(Color {
                 A: 64,
@@ -70,27 +67,21 @@ impl RollableNumberView {
                 G: 224,
                 B: 224,
             })?;
-        let border_brush = view_ctx
-            .app_subsystems()
-            .borrow()
+        let border_brush = AppSubsystemInstances::get()
             .compositor
             .CreateNineGridBrush()?;
         border_brush.SetSource(&border_color_brush)?;
         border_brush.SetInsets(1.0)?;
         border_brush.SetIsCenterHollow(true)?;
 
-        let root = view_ctx
-            .app_subsystems()
-            .borrow()
+        let root = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         root.set_properties()
             .brush(&border_brush)?
             .size(Vector2 { X: 64.0, Y: 16.0 })?;
 
-        let label = view_ctx
-            .app_subsystems()
-            .borrow()
+        let label = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         label
@@ -106,12 +97,8 @@ impl RollableNumberView {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
                 view_ctx.hittest_context().new_id(),
-                Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 64.0,
-                    Height: 16.0,
-                },
+                Rect::from_size(64.0, 16.0),
+                Rect::empty(),
             );
 
             Self {
@@ -120,6 +107,7 @@ impl RollableNumberView {
                 label,
                 label_brush,
                 ht,
+                rendered_dpi: view_ctx.current_dpi(),
                 current_value: init_value,
                 drag_point: peridot_math::Vector2(0.0, 0.0),
                 drag_base_value: 0.0,
@@ -187,13 +175,11 @@ impl RollableNumberView {
         Ok(())
     }
 
-    fn update_label(&self, view_ctx: &impl ViewContext) -> windows::core::Result<()> {
+    fn update_label(&self) -> windows::core::Result<()> {
         let label_text = format!("{:.1}", self.current_value);
         let label_text_u16 = label_text.encode_utf16().collect::<Vec<_>>();
         let label_layout = unsafe {
-            view_ctx
-                .app_subsystems()
-                .borrow_mut()
+            AppSubsystemInstances::get()
                 .dwrite_factory
                 .CreateTextLayout(
                     &label_text_u16,
@@ -202,11 +188,10 @@ impl RollableNumberView {
                     std::f32::MAX,
                 )?
         };
-        let label_surface = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let label_surface = AppSubsystemInstances::get()
             .text_surface_stock
-            .create_text_surface(&label_layout, view_ctx.current_dpi())?;
+            .borrow_mut()
+            .create_text_surface(&label_layout, self.rendered_dpi)?;
 
         self.label_brush.SetSurface(&label_surface.surface)?;
         self.label.SetSize(label_surface.visual_size())?;
@@ -219,6 +204,7 @@ impl MountableView for RollableNumberView {
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         HitTestTree::add_child(onto_ht, self.ht.clone());
@@ -226,7 +212,7 @@ impl MountableView for RollableNumberView {
         Ok(())
     }
 
-    fn unmount(&self) -> windows::core::Result<()> {
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
         self.ht.borrow_mut().unmount();
 
@@ -271,9 +257,7 @@ impl InputEventHandler for WeakMut<RollableNumberView> {
         const SENSITIVITY: f32 = 0.1;
         let new_value = this.borrow().current_value - d.1 * SENSITIVITY;
         this.borrow_mut().current_value = new_value;
-        this.borrow()
-            .update_label(&ctx)
-            .expect("Failed to update view");
+        this.borrow().update_label().expect("Failed to update view");
         this.borrow().notify_value_changes(&mut ctx);
     }
 

@@ -1,5 +1,5 @@
-use bedrock as br;
-use br::{Device, Instance, PhysicalDevice, PipelineCache, VulkanStructure};
+use bedrock::{self as br, ImageSubresourceSlice};
+use br::{Device, Instance, PhysicalDevice, PipelineCache, Queue, VulkanStructure};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::{utils::SafeF32, SharedMut};
+use crate::{app_subsystem_instances::AppSubsystemInstances, utils::SafeF32, SharedMut};
 
 pub type StdVkDevice = Rc<br::DeviceObject<Rc<br::InstanceObject>>>;
 
@@ -305,8 +305,50 @@ impl MiniEngine {
     }
 
     #[inline(always)]
+    pub fn command_pool_builder_for_graphics_work(&self) -> br::CommandPoolBuilder {
+        br::CommandPoolBuilder::new(self.graphics_objects.graphics_queue_family)
+    }
+
+    #[inline(always)]
+    pub fn submit_graphics_works_and_wait(&self, works: &[br::SubmitInfo2]) -> br::Result<()> {
+        let mut q = self.graphics_objects.graphics_queue.borrow_mut();
+
+        q.submit2(works, None::<&mut br::FenceObject<StdVkDevice>>)?;
+        q.wait()?;
+
+        Ok(())
+    }
+
+    #[inline(always)]
     pub fn pipeline_cache(&self) -> &br::PipelineCacheObject<StdVkDevice> {
         &self.pipeline_cache
+    }
+
+    pub fn create_graphics_pipeline_array<const N: usize>(
+        &self,
+        infos: &[br::vk::VkGraphicsPipelineCreateInfo; N],
+    ) -> br::Result<[br::PipelineObject<StdVkDevice>; N]> {
+        let res = self
+            .graphics_objects
+            .device
+            .new_graphics_pipeline_array(infos, Some(&self.pipeline_cache))?;
+        self.writeback_pipeline_cache();
+
+        Ok(res)
+    }
+
+    pub fn create_compute_pipeline_array<const N: usize>(
+        &self,
+        infos: &[br::ComputePipelineBuilder<impl br::PipelineLayout, impl br::PipelineShaderProvider>;
+             N],
+    ) -> br::Result<[br::PipelineObject<StdVkDevice>; N]> {
+        let res = self
+            .graphics_objects
+            .device
+            .new_compute_pipeline_array(infos, Some(&self.pipeline_cache))?;
+        self.writeback_pipeline_cache();
+
+        Ok(res)
     }
 
     pub fn writeback_pipeline_cache(&self) {
@@ -505,10 +547,11 @@ pub struct UtilityVertices {
 }
 impl UtilityVertices {
     pub fn new(
-        e: &mut MiniEngine,
         cmdrec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
     ) -> br::Result<Self> {
-        let mut buffer_prealloc = peridot::BufferPrealloc::new(e.device(), e.adapter());
+        let mut engine = AppSubsystemInstances::get().mini_engine.borrow_mut();
+
+        let mut buffer_prealloc = peridot::BufferPrealloc::new(engine.device(), engine.adapter());
         let uv_triangle_strip_fill_plane2d_offset =
             buffer_prealloc.add(peridot::BufferContent::vertices::<UVVertex2D>(4));
         let total_size = buffer_prealloc.total_size();
@@ -519,8 +562,8 @@ impl UtilityVertices {
             buffer_prealloc.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC);
         drop(buffer_prealloc);
 
-        let buffer = e.alloc_device_local_buffer(buffer_desc)?;
-        let mut buffer_stg = e.alloc_upload_buffer(buffer_stg_desc)?;
+        let buffer = engine.alloc_device_local_buffer(buffer_desc)?;
+        let mut buffer_stg = engine.alloc_upload_buffer(buffer_stg_desc)?;
         buffer_stg.guard_map(peridot_memory_manager::BufferMapMode::Write, |ptr| unsafe {
             ptr.copy_slice_to(
                 uv_triangle_strip_fill_plane2d_offset as _,
@@ -557,13 +600,13 @@ impl UtilityVertices {
                     )
                     .pipeline_barrier_2(&br::DependencyInfo::new(
                         &[br::MemoryBarrier2::new()
-                            .of_memory(
-                                br::AccessFlags2::TRANSFER.write,
-                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
-                            )
-                            .of_execution(
+                            .from(
                                 br::PipelineStageFlags2::COPY,
+                                br::AccessFlags2::TRANSFER.write,
+                            )
+                            .to(
                                 br::PipelineStageFlags2::VERTEX_INPUT,
+                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
                             )],
                         &[],
                         &[],
@@ -575,5 +618,69 @@ impl UtilityVertices {
             buffer,
             uv_triangle_strip_fill_plane2d_offset,
         })
+    }
+}
+
+pub struct TempRT {
+    org_desc: br::ImageDesc<'static>,
+    view_aspect_mask: br::AspectMask,
+    view_mip_range: core::ops::Range<u32>,
+    view_array_range: core::ops::Range<u32>,
+    pub resource: Rc<br::ImageViewObject<peridot_memory_manager::Image>>,
+}
+impl TempRT {
+    pub fn new(
+        org_desc: br::ImageDesc<'static>,
+        view_aspect_mask: br::AspectMask,
+        view_mip_range: core::ops::Range<u32>,
+        view_array_range: core::ops::Range<u32>,
+    ) -> br::Result<Self> {
+        let resource = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .alloc_device_local_image(org_desc.clone())?;
+        let resource = resource
+            .subresource_range(
+                view_aspect_mask,
+                view_mip_range.clone(),
+                view_array_range.clone(),
+            )
+            .view_builder()
+            .create()?;
+
+        Ok(Self {
+            org_desc,
+            view_aspect_mask,
+            view_mip_range,
+            view_array_range,
+            resource: Rc::new(resource),
+        })
+    }
+
+    pub fn recreate_newsize(&mut self, size: impl br::ImageSize) -> br::Result<()> {
+        unsafe {
+            // update inplace
+            core::ptr::write(
+                &mut self.org_desc,
+                core::ptr::read(&self.org_desc).size(size),
+            );
+        }
+
+        let resource = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .alloc_device_local_image(self.org_desc.clone())?;
+        self.resource = Rc::new(
+            resource
+                .subresource_range(
+                    self.view_aspect_mask,
+                    self.view_mip_range.clone(),
+                    self.view_array_range.clone(),
+                )
+                .view_builder()
+                .create()?,
+        );
+
+        Ok(())
     }
 }

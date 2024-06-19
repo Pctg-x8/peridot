@@ -65,6 +65,9 @@ pub trait RectExtensions {
     fn with_offset(self, left: f32, top: f32) -> Self
     where
         Self: Sized;
+    fn empty() -> Self
+    where
+        Self: Sized;
     fn from_size(width: f32, height: f32) -> Self
     where
         Self: Sized;
@@ -83,6 +86,11 @@ impl RectExtensions for Rect {
             Y: self.Y + top,
             ..self
         }
+    }
+
+    #[inline]
+    fn empty() -> Self {
+        Self::from_size(0.0, 0.0)
     }
 
     #[inline(always)]

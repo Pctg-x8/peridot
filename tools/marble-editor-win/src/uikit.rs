@@ -9,7 +9,7 @@ use windows::{
     },
 };
 
-use crate::{app_subsystem_instances::AppSubsystemInstances, AppGlobalSignals, SharedMut};
+use crate::SharedMut;
 
 mod input;
 pub use self::input::*;
@@ -26,16 +26,11 @@ pub struct UICommonObjects {
     pub slider_base_brush: CompositionNineGridBrush,
 }
 
-pub struct ResizeContext<'r> {
-    pub app_subsystems: &'r SharedMut<AppSubsystemInstances>,
-    pub app_global_signals: &'r SharedMut<AppGlobalSignals>,
+pub struct ResizeContext {
     pub current_dpi: f32,
 }
 
 pub trait ViewContext {
-    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances>;
-    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals>;
-
     fn hittest_context(&self) -> &HitTestTreeContext;
     fn current_dpi(&self) -> f32;
 }
@@ -47,13 +42,6 @@ pub trait InputContext: ViewContext {
 }
 
 impl<T: ViewContext + ?Sized> ViewContext for &'_ T {
-    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
-        T::app_subsystems(*self)
-    }
-    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
-        T::app_global_signals(*self)
-    }
-
     fn hittest_context(&self) -> &HitTestTreeContext {
         T::hittest_context(*self)
     }
@@ -63,13 +51,6 @@ impl<T: ViewContext + ?Sized> ViewContext for &'_ T {
     }
 }
 impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
-    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
-        T::app_subsystems(*self)
-    }
-    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
-        T::app_global_signals(*self)
-    }
-
     fn hittest_context(&self) -> &HitTestTreeContext {
         T::hittest_context(*self)
     }
@@ -93,19 +74,10 @@ impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
 }
 
 pub struct ViewContext1<'r> {
-    pub app_subsystems: &'r SharedMut<AppSubsystemInstances>,
-    pub app_global_signals: &'r SharedMut<AppGlobalSignals>,
     pub hittest_context: &'r HitTestTreeContext,
     pub current_dpi: f32,
 }
 impl ViewContext for ViewContext1<'_> {
-    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
-        self.app_subsystems
-    }
-    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
-        self.app_global_signals
-    }
-
     fn hittest_context(&self) -> &HitTestTreeContext {
         self.hittest_context
     }
@@ -197,6 +169,7 @@ pub trait MountableView {
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
+        view_context: &dyn ViewContext,
     ) -> windows::core::Result<()>;
-    fn unmount(&self) -> windows::core::Result<()>;
+    fn unmount(&self, view_context: &dyn ViewContext) -> windows::core::Result<()>;
 }

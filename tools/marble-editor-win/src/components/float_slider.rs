@@ -16,9 +16,11 @@ use windows::{
 };
 
 use crate::{
+    app_subsystem_instances::AppSubsystemInstances,
     new_cyclic_shared_mut, new_shared_mut,
     observable::{ObservationDisconnector, ValueChangedEventHandlerHashKey},
     uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext},
+    utils::RectExtensions,
     winapi_extras::VisualExtensions,
     AppWindow, SharedMut, WeakMut,
 };
@@ -30,6 +32,7 @@ pub struct FloatSliderView {
     value_label: SpriteVisual,
     value_label_brush: CompositionSurfaceBrush,
     ht: SharedMut<HitTestTree>,
+    rendered_dpi: f32,
     current_value: f32,
     max_value: f32,
     drag_base_x: f32,
@@ -39,34 +42,26 @@ impl FloatSliderView {
     pub const BORDER_RECT_ROUNDING: f32 = 6.0;
 
     pub fn new(
-        view_ctx: &impl ViewContext,
+        view_ctx: &(impl ViewContext + ?Sized),
         init_value: f32,
         max_value: f32,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let root = view_ctx
-            .app_subsystems()
-            .borrow()
+        let root = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         root.set_properties()
             .size(Vector2 { X: 128.0, Y: 16.0 })?
             .brush(
-                &view_ctx
-                    .app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .ui_common_objects
                     .slider_base_brush,
             )?;
 
         let rate = (init_value / max_value).clamp(0.0, 1.0);
-        let gauge = view_ctx
-            .app_subsystems()
-            .borrow()
+        let gauge = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
-        let gauge_base_brush = view_ctx
-            .app_subsystems()
-            .borrow()
+        let gauge_base_brush = AppSubsystemInstances::get()
             .compositor
             .CreateColorBrushWithColor(Color {
                 A: 128,
@@ -74,16 +69,10 @@ impl FloatSliderView {
                 G: 255,
                 B: 128,
             })?;
-        let gauge_masked_brush = view_ctx
-            .app_subsystems()
-            .borrow()
-            .compositor
-            .CreateMaskBrush()?;
+        let gauge_masked_brush = AppSubsystemInstances::get().compositor.CreateMaskBrush()?;
         gauge_masked_brush.SetSource(&gauge_base_brush)?;
         gauge_masked_brush.SetMask(
-            &view_ctx
-                .app_subsystems()
-                .borrow()
+            &AppSubsystemInstances::get()
                 .ui_common_objects
                 .slider_base_brush,
         )?;
@@ -91,36 +80,28 @@ impl FloatSliderView {
             .set_properties()
             .expand_to_parent()?
             .brush(&gauge_masked_brush)?;
-        let gauge_clip = view_ctx
-            .app_subsystems()
-            .borrow()
+        let gauge_clip = AppSubsystemInstances::get()
             .compositor
             .CreateInsetClipWithInsets(0.0, 0.0, 128.0 * (1.0 - rate), 0.0)?;
         gauge.SetClip(&gauge_clip)?;
         root.Children()?.InsertAtTop(&gauge)?;
 
-        let value_text_fmt = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let value_text_fmt = AppSubsystemInstances::get()
             .text_format_stock
-            .get("system-ui", 10.0, DWRITE_FONT_WEIGHT_NORMAL)?;
-        let value_init_surface = view_ctx
-            .app_subsystems()
             .borrow_mut()
+            .get("system-ui", 10.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let value_init_surface = AppSubsystemInstances::get()
             .text_surface_stock
+            .borrow_mut()
             .get(
                 &value_text_fmt,
                 view_ctx.current_dpi(),
                 format!("{:.1}", init_value),
             )?;
-        let value_label = view_ctx
-            .app_subsystems()
-            .borrow()
+        let value_label = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
-        let value_label_brush = view_ctx
-            .app_subsystems()
-            .borrow()
+        let value_label_brush = AppSubsystemInstances::get()
             .compositor
             .CreateSurfaceBrushWithSurface(&value_init_surface.surface)?;
         value_label
@@ -144,12 +125,8 @@ impl FloatSliderView {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
                 view_ctx.hittest_context().new_id(),
-                Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 128.0,
-                    Height: 16.0,
-                },
+                Rect::from_size(128.0, 16.0),
+                Rect::empty(),
             );
 
             Self {
@@ -159,6 +136,7 @@ impl FloatSliderView {
                 value_label,
                 value_label_brush,
                 ht,
+                rendered_dpi: view_ctx.current_dpi(),
                 current_value: init_value,
                 max_value,
                 drag_base_x: 0.0,
@@ -219,13 +197,11 @@ impl FloatSliderView {
         Ok(())
     }
 
-    fn update_value_label(&self, view_context: &mut impl ViewContext) -> windows::core::Result<()> {
+    fn update_value_label(&self) -> windows::core::Result<()> {
         let label_text = format!("{:.1}", self.current_value);
         let label_text_u16 = label_text.encode_utf16().collect::<Vec<_>>();
         let label_text_layout = unsafe {
-            view_context
-                .app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .dwrite_factory
                 .CreateTextLayout(
                     &label_text_u16,
@@ -234,11 +210,10 @@ impl FloatSliderView {
                     core::f32::MAX,
                 )?
         };
-        let label_surface = view_context
-            .app_subsystems()
-            .borrow_mut()
+        let label_surface = AppSubsystemInstances::get()
             .text_surface_stock
-            .create_text_surface(&label_text_layout, view_context.current_dpi())?;
+            .borrow_mut()
+            .create_text_surface(&label_text_layout, self.rendered_dpi)?;
 
         self.value_label_brush.SetSurface(&label_surface.surface)?;
         self.value_label.SetSize(label_surface.visual_size())?;
@@ -251,6 +226,7 @@ impl MountableView for FloatSliderView {
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         HitTestTree::add_child(onto_ht, self.ht.clone());
@@ -258,7 +234,7 @@ impl MountableView for FloatSliderView {
         Ok(())
     }
 
-    fn unmount(&self) -> windows::core::Result<()> {
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
         self.ht.borrow_mut().unmount();
 
@@ -293,7 +269,7 @@ impl InputEventHandler for WeakMut<FloatSliderView> {
             .update_rate()
             .expect("Failed to update gauge rate");
         this.borrow()
-            .update_value_label(&mut ctx)
+            .update_value_label()
             .expect("Failed to update value label");
         this.borrow().notify_current_value(&mut ctx);
     }

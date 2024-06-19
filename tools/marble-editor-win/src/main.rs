@@ -6,6 +6,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
+use app_global_signals::{AppGlobalSignals, SignalEventReceiver, SignalEventType};
 use app_subsystem_instances::AppSubsystemInstances;
 use bedrock::{self as br, ImageChild, VkObject};
 use br::{
@@ -15,7 +16,7 @@ use br::{
 use components::{FloatSliderView, LabelView, RollableNumberView};
 use features::{AppTitleBarView, DockingPanePreview, PaneSplitterView, SplitDirection};
 use miniengine::{
-    ColoredVertex, Mat4, SamplerDesc, StdVkDevice, UVVertex2D, UtilityVertices, Vec4,
+    ColoredVertex, Mat4, SamplerDesc, StdVkDevice, TempRT, UVVertex2D, UtilityVertices, Vec4,
 };
 use observable::ObservationDisconnector;
 use peridot_math::{Camera, One, ProjectionMethod};
@@ -39,9 +40,7 @@ use windows::{
         Rect, TimeSpan,
     },
     Win32::{
-        Foundation::{
-            BOOL, GENERIC_ALL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM,
-        },
+        Foundation::{BOOL, GENERIC_ALL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
             CompositionSwapchain::{
                 IPresentationBuffer, IPresentationManager, IPresentationSurface,
@@ -82,14 +81,13 @@ use windows::{
             WindowsAndMessaging::{
                 DefWindowProcA, DispatchMessageA, GetClientRect, GetSystemMetrics,
                 GetWindowLongPtrA, GetWindowPlacement, GetWindowRect, LoadCursorA, LoadIconA,
-                MsgWaitForMultipleObjects, PeekMessageA, PostQuitMessage, SetCursorPos,
-                SetWindowLongPtrA, SetWindowPos, ShowCursor, ShowWindow, TranslateMessage,
-                HTCLIENT, HTTOP, IDC_ARROW, IDI_APPLICATION, MSG, NCCALCSIZE_PARAMS, PM_REMOVE,
-                QS_ALLEVENTS, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SW_MAXIMIZE,
-                SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE,
-                WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE,
-                WM_NCHITTEST, WM_NCMOUSEMOVE, WM_QUIT, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
-                WNDCLASSEXA, WNDCLASS_STYLES,
+                PeekMessageA, PostQuitMessage, SetCursorPos, SetWindowLongPtrA, SetWindowPos,
+                ShowCursor, ShowWindow, TranslateMessage, HTCLIENT, HTTOP, IDC_ARROW,
+                IDI_APPLICATION, MSG, NCCALCSIZE_PARAMS, PM_REMOVE, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
+                SWP_FRAMECHANGED, SW_MAXIMIZE, SW_SHOWNORMAL, WINDOWPLACEMENT,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSEMOVE, WM_QUIT,
+                WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -115,6 +113,7 @@ use crate::{
     winapi_extras::{register_window_class, VectorScalarConstructor, WindowBuilder},
 };
 
+mod app_global_signals;
 mod app_subsystem_instances;
 mod bindgen;
 mod components;
@@ -241,30 +240,17 @@ impl PaneDockingRecommendation {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DockDirection {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
 pub enum PaneDockLayer {
     EmptyRoot(Option<SharedMut<PaneDockLayer>>, Rect),
-    Left {
-        docked: SharedMut<PaneDockLayer>,
-        splitter: SharedMut<PaneSplitterView>,
-        container_region: Rect,
-        rest: SharedMut<PaneDockLayer>,
-        parent: WeakMut<PaneDockLayer>,
-    },
-    Right {
-        docked: SharedMut<PaneDockLayer>,
-        splitter: SharedMut<PaneSplitterView>,
-        container_region: Rect,
-        rest: SharedMut<PaneDockLayer>,
-        parent: WeakMut<PaneDockLayer>,
-    },
-    Top {
-        docked: SharedMut<PaneDockLayer>,
-        splitter: SharedMut<PaneSplitterView>,
-        container_region: Rect,
-        rest: SharedMut<PaneDockLayer>,
-        parent: WeakMut<PaneDockLayer>,
-    },
-    Bottom {
+    Docked {
+        direction: DockDirection,
         docked: SharedMut<PaneDockLayer>,
         splitter: SharedMut<PaneSplitterView>,
         container_region: Rect,
@@ -280,119 +266,38 @@ impl PaneDockLayer {
     fn new_root(
         content: impl FnOnce(&WeakMut<Self>) -> Option<SharedMut<Self>>,
     ) -> SharedMut<Self> {
-        new_cyclic_shared_mut(|wthis| {
-            Self::EmptyRoot(
-                content(wthis),
-                Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 0.0,
-                    Height: 0.0,
-                },
-            )
-        })
+        new_cyclic_shared_mut(|wthis| Self::EmptyRoot(content(wthis), Rect::empty()))
     }
 
-    fn new_on_left<VC: ViewContext + ?Sized>(
-        ctx: &mut VC,
+    fn new_on<VC: ViewContext + ?Sized>(
+        direction: DockDirection,
         parent: &WeakMut<Self>,
-        docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
-        rest: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
+        docked: impl FnOnce(&WeakMut<Self>, &VC) -> SharedMut<Self>,
+        rest: impl FnOnce(&WeakMut<Self>, &VC) -> SharedMut<Self>,
+        ctx: &VC,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let splitter = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
+        let splitter = PaneSplitterView::new(
+            ctx,
+            match direction {
+                DockDirection::Left | DockDirection::Right => SplitDirection::Vertical,
+                DockDirection::Top | DockDirection::Bottom => SplitDirection::Horizontal,
+            },
+        )?;
 
         Ok(new_cyclic_shared_mut(|wthis| {
             splitter.borrow_mut().bind_dock_layer(wthis);
 
-            Self::Left {
+            Self::Docked {
+                direction,
                 docked: docked(wthis, ctx),
                 splitter,
-                container_region: Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 0.0,
-                    Height: 0.0,
-                },
+                container_region: Rect::empty(),
                 rest: rest(wthis, ctx),
                 parent: parent.clone(),
             }
         }))
     }
-    fn new_on_right<VC: ViewContext + ?Sized>(
-        ctx: &mut VC,
-        parent: &WeakMut<Self>,
-        docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
-        rest: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
-    ) -> windows::core::Result<SharedMut<Self>> {
-        let splitter = PaneSplitterView::new(ctx, SplitDirection::Vertical)?;
 
-        Ok(new_cyclic_shared_mut(|wthis| {
-            splitter.borrow_mut().bind_dock_layer(wthis);
-
-            Self::Right {
-                docked: docked(wthis, ctx),
-                splitter,
-                container_region: Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 0.0,
-                    Height: 0.0,
-                },
-                rest: rest(wthis, ctx),
-                parent: parent.clone(),
-            }
-        }))
-    }
-    fn new_on_top<VC: ViewContext + ?Sized>(
-        ctx: &mut VC,
-        parent: &WeakMut<Self>,
-        docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
-        rest: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
-    ) -> windows::core::Result<SharedMut<Self>> {
-        let splitter = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
-
-        Ok(new_cyclic_shared_mut(|wthis| {
-            splitter.borrow_mut().bind_dock_layer(wthis);
-
-            Self::Top {
-                docked: docked(wthis, ctx),
-                splitter,
-                container_region: Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 0.0,
-                    Height: 0.0,
-                },
-                rest: rest(wthis, ctx),
-                parent: parent.clone(),
-            }
-        }))
-    }
-    fn new_on_bottom<VC: ViewContext + ?Sized>(
-        ctx: &mut VC,
-        parent: &WeakMut<Self>,
-        docked: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
-        rest: impl FnOnce(&WeakMut<Self>, &mut VC) -> SharedMut<Self>,
-    ) -> windows::core::Result<SharedMut<Self>> {
-        let splitter = PaneSplitterView::new(ctx, SplitDirection::Horizontal)?;
-
-        Ok(new_cyclic_shared_mut(|wthis| {
-            splitter.borrow_mut().bind_dock_layer(wthis);
-
-            Self::Bottom {
-                docked: docked(wthis, ctx),
-                splitter,
-                container_region: Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 0.0,
-                    Height: 0.0,
-                },
-                rest: rest(wthis, ctx),
-                parent: parent.clone(),
-            }
-        }))
-    }
     fn new_filled(
         inner_view: &SharedMut<TabGroupPaneView>,
         parent: &WeakMut<Self>,
@@ -413,13 +318,9 @@ impl PaneDockLayer {
     }
 
     #[inline]
-    pub fn parent(&self) -> Option<&WeakMut<Self>> {
+    pub const fn parent(&self) -> Option<&WeakMut<Self>> {
         match self {
-            Self::Fill { parent, .. }
-            | Self::Left { parent, .. }
-            | Self::Right { parent, .. }
-            | Self::Top { parent, .. }
-            | Self::Bottom { parent, .. } => Some(parent),
+            Self::Fill { parent, .. } | Self::Docked { parent, .. } => Some(parent),
             Self::EmptyRoot(_, _) => None,
         }
     }
@@ -427,16 +328,7 @@ impl PaneDockLayer {
     pub fn controlling_rect(&self) -> Rect {
         match self {
             Self::EmptyRoot(_, container_region)
-            | Self::Left {
-                container_region, ..
-            }
-            | Self::Right {
-                container_region, ..
-            }
-            | Self::Top {
-                container_region, ..
-            }
-            | Self::Bottom {
+            | Self::Docked {
                 container_region, ..
             } => container_region.clone(),
             Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.clone(),
@@ -445,16 +337,7 @@ impl PaneDockLayer {
     pub fn controlling_rect_left(&self) -> f32 {
         match self {
             Self::EmptyRoot(_, container_region)
-            | Self::Left {
-                container_region, ..
-            }
-            | Self::Right {
-                container_region, ..
-            }
-            | Self::Top {
-                container_region, ..
-            }
-            | Self::Bottom {
+            | Self::Docked {
                 container_region, ..
             } => container_region.X,
             Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.X,
@@ -463,16 +346,7 @@ impl PaneDockLayer {
     pub fn controlling_rect_right(&self) -> f32 {
         match self {
             Self::EmptyRoot(_, container_region)
-            | Self::Left {
-                container_region, ..
-            }
-            | Self::Right {
-                container_region, ..
-            }
-            | Self::Top {
-                container_region, ..
-            }
-            | Self::Bottom {
+            | Self::Docked {
                 container_region, ..
             } => container_region.X + container_region.Width,
             Self::Fill { inner_view, .. } => {
@@ -483,16 +357,7 @@ impl PaneDockLayer {
     pub fn controlling_rect_top(&self) -> f32 {
         match self {
             Self::EmptyRoot(_, container_region)
-            | Self::Left {
-                container_region, ..
-            }
-            | Self::Right {
-                container_region, ..
-            }
-            | Self::Top {
-                container_region, ..
-            }
-            | Self::Bottom {
+            | Self::Docked {
                 container_region, ..
             } => container_region.Y,
             Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.Y,
@@ -501,16 +366,7 @@ impl PaneDockLayer {
     pub fn controlling_rect_bottom(&self) -> f32 {
         match self {
             Self::EmptyRoot(_, container_region)
-            | Self::Left {
-                container_region, ..
-            }
-            | Self::Right {
-                container_region, ..
-            }
-            | Self::Top {
-                container_region, ..
-            }
-            | Self::Bottom {
+            | Self::Docked {
                 container_region, ..
             } => container_region.Y + container_region.Height,
             Self::Fill { inner_view, .. } => {
@@ -521,16 +377,7 @@ impl PaneDockLayer {
     pub fn controlling_rect_width(&self) -> f32 {
         match self {
             Self::EmptyRoot(_, container_region)
-            | Self::Left {
-                container_region, ..
-            }
-            | Self::Right {
-                container_region, ..
-            }
-            | Self::Top {
-                container_region, ..
-            }
-            | Self::Bottom {
+            | Self::Docked {
                 container_region, ..
             } => container_region.Width,
             Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.Width,
@@ -539,22 +386,26 @@ impl PaneDockLayer {
     pub fn controlling_rect_height(&self) -> f32 {
         match self {
             Self::EmptyRoot(_, container_region)
-            | Self::Left {
-                container_region, ..
-            }
-            | Self::Right {
-                container_region, ..
-            }
-            | Self::Top {
-                container_region, ..
-            }
-            | Self::Bottom {
+            | Self::Docked {
                 container_region, ..
             } => container_region.Height,
             Self::Fill { inner_view, .. } => inner_view.borrow().view_rect.Height,
         }
     }
 
+    #[inline]
+    fn split_region(
+        direction: DockDirection,
+        region: Rect,
+        docked_size: f32,
+    ) -> (Rect, Rect, Rect) {
+        match direction {
+            DockDirection::Left => Self::split_left(region, docked_size),
+            DockDirection::Right => Self::split_right(region, docked_size),
+            DockDirection::Top => Self::split_top(region, docked_size),
+            DockDirection::Bottom => Self::split_bottom(region, docked_size),
+        }
+    }
     #[inline]
     fn split_left(region: Rect, docked_size: f32) -> (Rect, Rect, Rect) {
         let (docked, a) = rect_slice_left(region, docked_size.max(1.0));
@@ -586,16 +437,20 @@ impl PaneDockLayer {
 
     pub fn dock_size(&self) -> f32 {
         match self {
-            Self::EmptyRoot(_, _) => 0.0,
-            Self::Left { docked, .. } | Self::Right { docked, .. } => {
-                docked.borrow().controlling_rect_width()
-            }
-            Self::Top { docked, .. } | Self::Bottom { docked, .. } => {
-                docked.borrow().controlling_rect_height()
-            }
-            Self::Fill { .. } => 0.0,
+            Self::EmptyRoot(_, _) | Self::Fill { .. } => 0.0,
+            Self::Docked {
+                direction, docked, ..
+            } => match direction {
+                DockDirection::Left | DockDirection::Right => {
+                    docked.borrow().controlling_rect_width()
+                }
+                DockDirection::Top | DockDirection::Bottom => {
+                    docked.borrow().controlling_rect_height()
+                }
+            },
         }
     }
+
     /// returns new split bar position
     pub fn set_dock_size(
         &mut self,
@@ -603,62 +458,23 @@ impl PaneDockLayer {
         resize_ctx: &ResizeContext,
     ) -> windows::core::Result<(f32, f32)> {
         match self {
-            Self::EmptyRoot(_, _) => Ok((0.0, 0.0)),
-            Self::Left {
-                docked,
-                container_region,
-                rest,
-                ..
-            } => {
-                let (docked_rect, splitter_rect, rest_rect) =
-                    Self::split_left(container_region.clone(), size);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)?;
-
-                Ok((splitter_rect.X, splitter_rect.Y))
-            }
-            Self::Right {
-                docked,
-                container_region,
-                rest,
-                ..
-            } => {
-                let (docked_rect, splitter_rect, rest_rect) =
-                    Self::split_right(container_region.clone(), size);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)?;
-
-                Ok((splitter_rect.X, splitter_rect.Y))
-            }
-            Self::Top {
-                docked,
-                container_region,
-                rest,
-                ..
-            } => {
-                let (docked_rect, splitter_rect, rest_rect) =
-                    Self::split_top(container_region.clone(), size);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)?;
-
-                Ok((splitter_rect.X, splitter_rect.Y))
-            }
-            Self::Bottom {
-                docked,
-                container_region,
-                rest,
-                ..
-            } => {
-                let (docked_rect, splitter_rect, rest_rect) =
-                    Self::split_bottom(container_region.clone(), size);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)?;
-
-                Ok((splitter_rect.X, splitter_rect.Y))
-            }
-            Self::Fill { .. } => {
-                // nop for filling container
+            Self::EmptyRoot(_, _) | Self::Fill { .. } => {
+                // nop for root/filling container
                 Ok((0.0, 0.0))
+            }
+            Self::Docked {
+                direction,
+                docked,
+                container_region,
+                rest,
+                ..
+            } => {
+                let (docked_rect, splitter_rect, rest_rect) =
+                    Self::split_region(*direction, container_region.clone(), size);
+                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
+                rest.borrow_mut().layout(rest_rect, resize_ctx)?;
+
+                Ok((splitter_rect.X, splitter_rect.Y))
             }
         }
     }
@@ -666,42 +482,20 @@ impl PaneDockLayer {
     fn reparent(&mut self, new_parent: &Weak<RefCell<Self>>) {
         match self {
             Self::EmptyRoot(_, _) => (),
-            Self::Left { parent, .. } => *parent = new_parent.clone(),
-            Self::Right { parent, .. } => *parent = new_parent.clone(),
-            Self::Top { parent, .. } => *parent = new_parent.clone(),
-            Self::Bottom { parent, .. } => *parent = new_parent.clone(),
-            Self::Fill { parent, .. } => *parent = new_parent.clone(),
+            Self::Docked { parent, .. } | Self::Fill { parent, .. } => *parent = new_parent.clone(),
         }
     }
 
     fn replace_child(&mut self, old_child_ref: &SharedMut<Self>, new_child: &SharedMut<Self>) {
         match self {
             Self::EmptyRoot(r, _) => *r = Some(new_child.clone()),
-            Self::Left { docked, .. } if Rc::ptr_eq(docked, old_child_ref) => {
+            Self::Docked { docked, .. } if Rc::ptr_eq(docked, old_child_ref) => {
                 *docked = new_child.clone();
             }
-            Self::Left { rest, .. } if Rc::ptr_eq(rest, old_child_ref) => {
+            Self::Docked { rest, .. } if Rc::ptr_eq(rest, old_child_ref) => {
                 *rest = new_child.clone();
             }
-            Self::Right { docked, .. } if Rc::ptr_eq(docked, old_child_ref) => {
-                *docked = new_child.clone();
-            }
-            Self::Right { rest, .. } if Rc::ptr_eq(rest, old_child_ref) => {
-                *rest = new_child.clone();
-            }
-            Self::Top { docked, .. } if Rc::ptr_eq(docked, old_child_ref) => {
-                *docked = new_child.clone();
-            }
-            Self::Top { rest, .. } if Rc::ptr_eq(rest, old_child_ref) => {
-                *rest = new_child.clone();
-            }
-            Self::Bottom { docked, .. } if Rc::ptr_eq(docked, old_child_ref) => {
-                *docked = new_child.clone();
-            }
-            Self::Bottom { rest, .. } if Rc::ptr_eq(rest, old_child_ref) => {
-                *rest = new_child.clone();
-            }
-            _ => unreachable!("invalid tree"),
+            _ => unreachable!("invalid tree or op"),
         }
     }
 
@@ -709,38 +503,23 @@ impl PaneDockLayer {
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
+        view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         match self {
             // no child
             Self::EmptyRoot(None, _) => Ok(()),
-            Self::EmptyRoot(Some(r), _) => r.borrow().mount_recursive(onto, onto_ht),
-            Self::Left {
-                docked,
-                splitter,
-                rest,
-                ..
-            }
-            | Self::Right {
-                docked,
-                splitter,
-                rest,
-                ..
-            }
-            | Self::Top {
-                docked,
-                splitter,
-                rest,
-                ..
-            }
-            | Self::Bottom {
+            Self::EmptyRoot(Some(r), _) => r.borrow().mount_recursive(onto, onto_ht, view_context),
+            Self::Docked {
                 docked,
                 splitter,
                 rest,
                 ..
             } => {
-                docked.borrow().mount_recursive(onto, onto_ht)?;
-                splitter.borrow().mount(onto, onto_ht)?;
-                rest.borrow().mount_recursive(onto, onto_ht)
+                docked
+                    .borrow()
+                    .mount_recursive(onto, onto_ht, view_context)?;
+                splitter.borrow().mount(onto, onto_ht, view_context)?;
+                rest.borrow().mount_recursive(onto, onto_ht, view_context)
             }
             Self::Fill { inner_view, .. } => inner_view.borrow().mount(onto, onto_ht),
         }
@@ -758,7 +537,8 @@ impl PaneDockLayer {
                 *rect = region.clone();
                 r.borrow_mut().layout(region, resize_ctx)
             }
-            Self::Left {
+            Self::Docked {
+                direction,
                 docked,
                 splitter,
                 container_region,
@@ -766,50 +546,16 @@ impl PaneDockLayer {
                 ..
             } => {
                 *container_region = region.clone();
-                let w = docked.borrow().controlling_rect_width();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_left(region, w);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                splitter.borrow().set_rect(splitter_rect)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)
-            }
-            Self::Right {
-                docked,
-                splitter,
-                container_region,
-                rest,
-                ..
-            } => {
-                *container_region = region.clone();
-                let w = docked.borrow().controlling_rect_width();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_right(region, w);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                splitter.borrow().set_rect(splitter_rect)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)
-            }
-            Self::Top {
-                docked,
-                splitter,
-                container_region,
-                rest,
-                ..
-            } => {
-                *container_region = region;
-                let h = docked.borrow().controlling_rect_height();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_top(region, h);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                splitter.borrow().set_rect(splitter_rect)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)
-            }
-            Self::Bottom {
-                docked,
-                splitter,
-                container_region,
-                rest,
-                ..
-            } => {
-                *container_region = region;
-                let h = docked.borrow().controlling_rect_height();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_bottom(region, h);
+                let docked_size = match direction {
+                    DockDirection::Left | DockDirection::Right => {
+                        docked.borrow().controlling_rect_width()
+                    }
+                    DockDirection::Top | DockDirection::Bottom => {
+                        docked.borrow().controlling_rect_height()
+                    }
+                };
+                let (docked_rect, splitter_rect, rest_rect) =
+                    Self::split_region(*direction, region, docked_size);
                 docked.borrow_mut().layout(docked_rect, resize_ctx)?;
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect, resize_ctx)
@@ -820,8 +566,8 @@ impl PaneDockLayer {
 
     fn layout(&mut self, region: Rect, resize_ctx: &ResizeContext) -> windows::core::Result<()> {
         match self {
-            // no child
             Self::EmptyRoot(None, r) => {
+                // no child
                 *r = region;
                 Ok(())
             }
@@ -829,7 +575,8 @@ impl PaneDockLayer {
                 *rect = region.clone();
                 r.borrow_mut().layout(region, resize_ctx)
             }
-            Self::Left {
+            Self::Docked {
+                direction,
                 docked,
                 splitter,
                 container_region,
@@ -837,66 +584,21 @@ impl PaneDockLayer {
                 ..
             } => {
                 if *container_region == region {
+                    // same size
                     return Ok(());
                 }
 
                 *container_region = region.clone();
-                let w = docked.borrow().controlling_rect_width();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_left(region, w);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                splitter.borrow().set_rect(splitter_rect)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)
-            }
-            Self::Right {
-                docked,
-                splitter,
-                container_region,
-                rest,
-                ..
-            } => {
-                if *container_region == region {
-                    return Ok(());
-                }
-
-                *container_region = region.clone();
-                let w = docked.borrow().controlling_rect_width();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_right(region, w);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                splitter.borrow().set_rect(splitter_rect)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)
-            }
-            Self::Top {
-                docked,
-                splitter,
-                container_region,
-                rest,
-                ..
-            } => {
-                if *container_region == region {
-                    return Ok(());
-                }
-
-                *container_region = region;
-                let h = docked.borrow().controlling_rect_height();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_top(region, h);
-                docked.borrow_mut().layout(docked_rect, resize_ctx)?;
-                splitter.borrow().set_rect(splitter_rect)?;
-                rest.borrow_mut().layout(rest_rect, resize_ctx)
-            }
-            Self::Bottom {
-                docked,
-                splitter,
-                container_region,
-                rest,
-                ..
-            } => {
-                if *container_region == region {
-                    return Ok(());
-                }
-
-                *container_region = region;
-                let h = docked.borrow().controlling_rect_height();
-                let (docked_rect, splitter_rect, rest_rect) = Self::split_bottom(region, h);
+                let docked_size = match direction {
+                    DockDirection::Left | DockDirection::Right => {
+                        docked.borrow().controlling_rect_width()
+                    }
+                    DockDirection::Top | DockDirection::Bottom => {
+                        docked.borrow().controlling_rect_height()
+                    }
+                };
+                let (docked_rect, splitter_rect, rest_rect) =
+                    Self::split_region(*direction, region, docked_size);
                 docked.borrow_mut().layout(docked_rect, resize_ctx)?;
                 splitter.borrow().set_rect(splitter_rect)?;
                 rest.borrow_mut().layout(rest_rect, resize_ctx)
@@ -906,7 +608,7 @@ impl PaneDockLayer {
     }
 
     /// returns: relayout root
-    pub fn undock(this: &SharedMut<Self>) -> SharedMut<Self> {
+    pub fn undock(this: &SharedMut<Self>, view_context: &dyn ViewContext) -> SharedMut<Self> {
         let parent = this
             .borrow()
             .parent()
@@ -919,7 +621,7 @@ impl PaneDockLayer {
                 *rest = None;
                 parent.clone()
             }
-            Self::Left {
+            Self::Docked {
                 docked,
                 rest,
                 parent: parent1,
@@ -940,82 +642,7 @@ impl PaneDockLayer {
                     .replace_child(&parent, new_child);
                 splitter
                     .borrow()
-                    .unmount()
-                    .expect("Failed to unmounting splitter");
-                parent1.upgrade().unwrap()
-            }
-            Self::Right {
-                docked,
-                rest,
-                parent: parent1,
-                splitter,
-                ..
-            } => {
-                let new_child = if Rc::ptr_eq(docked, this) {
-                    rest
-                } else {
-                    docked
-                };
-
-                new_child.borrow_mut().reparent(parent1);
-                parent1
-                    .upgrade()
-                    .unwrap()
-                    .borrow_mut()
-                    .replace_child(&parent, new_child);
-                splitter
-                    .borrow()
-                    .unmount()
-                    .expect("Failed to unmounting splitter");
-                parent1.upgrade().unwrap()
-            }
-            Self::Top {
-                docked,
-                rest,
-                parent: parent1,
-                splitter,
-                ..
-            } => {
-                let new_child = if Rc::ptr_eq(docked, this) {
-                    rest
-                } else {
-                    docked
-                };
-
-                new_child.borrow_mut().reparent(parent1);
-                parent1
-                    .upgrade()
-                    .unwrap()
-                    .borrow_mut()
-                    .replace_child(&parent, new_child);
-                splitter
-                    .borrow()
-                    .unmount()
-                    .expect("Failed to unmounting splitter");
-                parent1.upgrade().unwrap()
-            }
-            Self::Bottom {
-                docked,
-                rest,
-                parent: parent1,
-                splitter,
-                ..
-            } => {
-                let new_child = if Rc::ptr_eq(docked, this) {
-                    rest
-                } else {
-                    docked
-                };
-
-                new_child.borrow_mut().reparent(parent1);
-                parent1
-                    .upgrade()
-                    .unwrap()
-                    .borrow_mut()
-                    .replace_child(&parent, new_child);
-                splitter
-                    .borrow()
-                    .unmount()
+                    .unmount(view_context)
                     .expect("Failed to unmounting splitter");
                 parent1.upgrade().unwrap()
             }
@@ -1036,7 +663,12 @@ impl PaneDockLayer {
             Self::EmptyRoot(Some(r), _) => {
                 Self::compute_recommended_docking_destination(r, mode, local_x, local_y)
             }
-            Self::Left { docked, rest, .. } => {
+            Self::Docked {
+                direction: DockDirection::Left,
+                docked,
+                rest,
+                ..
+            } => {
                 let left_thres = docked.borrow().controlling_rect_width() + PANE_SPLITTER_GAP * 0.5;
                 if local_x < left_thres {
                     Self::compute_recommended_docking_destination(docked, mode, local_x, local_y)
@@ -1049,7 +681,12 @@ impl PaneDockLayer {
                     )
                 }
             }
-            Self::Right { docked, rest, .. } => {
+            Self::Docked {
+                direction: DockDirection::Right,
+                docked,
+                rest,
+                ..
+            } => {
                 let right_thres = rest.borrow().controlling_rect_width() + PANE_SPLITTER_GAP * 0.5;
                 if right_thres < local_x {
                     Self::compute_recommended_docking_destination(
@@ -1062,7 +699,12 @@ impl PaneDockLayer {
                     Self::compute_recommended_docking_destination(rest, mode, local_x, local_y)
                 }
             }
-            Self::Top { docked, rest, .. } => {
+            Self::Docked {
+                direction: DockDirection::Top,
+                docked,
+                rest,
+                ..
+            } => {
                 let top_thres = docked.borrow().controlling_rect_height() + PANE_SPLITTER_GAP * 0.5;
                 if local_y < top_thres {
                     Self::compute_recommended_docking_destination(docked, mode, local_x, local_y)
@@ -1075,7 +717,12 @@ impl PaneDockLayer {
                     )
                 }
             }
-            Self::Bottom { docked, rest, .. } => {
+            Self::Docked {
+                direction: DockDirection::Bottom,
+                docked,
+                rest,
+                ..
+            } => {
                 let bottom_thres =
                     rest.borrow().controlling_rect_height() + PANE_SPLITTER_GAP * 0.5;
                 if bottom_thres < local_y {
@@ -1158,23 +805,25 @@ impl PaneGroupDockingManager {
 
         Ok(Self {
             docks: PaneDockLayer::new_root(|_| None),
-            placement_visual: ctx
-                .app_subsystems()
-                .borrow()
+            placement_visual: AppSubsystemInstances::get()
                 .compositor
                 .CreateContainerVisual()?,
             ht_placement_root,
-            floating_preview: DockingPanePreview::new(ctx)?,
+            floating_preview: DockingPanePreview::new()?,
         })
     }
 
-    fn set_layout(&mut self, layout: SharedMut<PaneDockLayer>) -> windows::core::Result<()> {
+    fn set_layout(
+        &mut self,
+        layout: SharedMut<PaneDockLayer>,
+        view_context: &dyn ViewContext,
+    ) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
         self.ht_placement_root.borrow_mut().remove_all_children();
         layout
             .borrow()
-            .mount_recursive(&children, &self.ht_placement_root)?;
+            .mount_recursive(&children, &self.ht_placement_root, view_context)?;
 
         self.docks = layout;
         Ok(())
@@ -1208,15 +857,18 @@ impl PaneGroupDockingManager {
 
         Ok(())
     }
-    fn mount_splitter_only(&self, layout: &PaneDockLayer) -> windows::core::Result<()> {
+    fn mount_splitter_only(
+        &self,
+        layout: &PaneDockLayer,
+        view_context: &dyn ViewContext,
+    ) -> windows::core::Result<()> {
         match layout {
             PaneDockLayer::EmptyRoot(_, _) | PaneDockLayer::Fill { .. } => Ok(()),
-            PaneDockLayer::Left { splitter, .. }
-            | PaneDockLayer::Right { splitter, .. }
-            | PaneDockLayer::Top { splitter, .. }
-            | PaneDockLayer::Bottom { splitter, .. } => splitter
-                .borrow()
-                .mount(&self.placement_visual.Children()?, &self.ht_placement_root),
+            PaneDockLayer::Docked { splitter, .. } => splitter.borrow().mount(
+                &self.placement_visual.Children()?,
+                &self.ht_placement_root,
+                view_context,
+            ),
         }
     }
     fn mount_filled(&self, layout: &PaneDockLayer) -> windows::core::Result<()> {
@@ -1282,28 +934,21 @@ impl TabGroupPaneView {
         docking_manager: &SharedMut<PaneGroupDockingManager>,
         ctx: &(impl ViewContext + ?Sized),
     ) -> windows::core::Result<SharedMut<Self>> {
-        let root = ctx
-            .app_subsystems()
-            .borrow()
+        let root = AppSubsystemInstances::get()
             .compositor
             .CreateContainerVisual()?;
         root.SetSize(Vector2::scalar(128.0))?;
 
-        let content_area = ctx
-            .app_subsystems()
-            .borrow()
+        let content_area = AppSubsystemInstances::get()
             .compositor
             .CreateContainerVisual()?;
         root.Children()?.InsertAtBottom(&content_area)?;
 
-        let content_area_base = ctx
-            .app_subsystems()
-            .borrow()
+        let content_area_base = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         content_area_base.set_properties().brush(
-            &ctx.app_subsystems()
-                .borrow()
+            &AppSubsystemInstances::get()
                 .compositor
                 .CreateColorBrushWithColor(Self::CONTENT_AREA_BASE_COLOR)?,
         )?;
@@ -1320,11 +965,13 @@ impl TabGroupPaneView {
                 Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
+                Rect::empty(),
             );
             let ht_content = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
+                Rect::empty(),
             );
             HitTestTree::add_child(&ht, ht_content.clone());
 
@@ -1338,20 +985,10 @@ impl TabGroupPaneView {
                 ht_ref_content: ht_content,
                 current_active: 0,
                 tab_height: 0.0,
-                view_rect: Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 128.0,
-                    Height: 128.0,
-                },
+                view_rect: Rect::from_size(128.0, 128.0),
                 tabs: Vec::new(),
                 drag_base_point: None,
-                preview_rect: Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: 0.0,
-                    Height: 0.0,
-                },
+                preview_rect: Rect::empty(),
             }
         }))
     }
@@ -1363,7 +1000,7 @@ impl TabGroupPaneView {
         &mut self,
         tab: &SharedMut<PaneTabHeaderView>,
         target: &SharedMut<Self>,
-        mut view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &(impl ViewContext + ?Sized),
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let index = tab.borrow().index_in_group;
@@ -1371,12 +1008,12 @@ impl TabGroupPaneView {
         if tab.borrow().is_active && self.tabs.len() > 1 {
             // アクティブを付け替える（0個になる場合はどのみち消されるのでなにもしない）
             let new_active = if index == 0 { 1 } else { index - 1 };
-            self.switch_active(new_active, &mut view_ctx, app_state)?;
+            self.switch_active(new_active, view_ctx, app_state)?;
         }
-        tab.borrow().unmount()?;
+        tab.borrow().unmount(&view_ctx)?;
         let (tab, content) = self.tabs.remove(index);
 
-        let new_tab_index = Self::add_tab_raw(target, &tab, content.clone())?;
+        let new_tab_index = Self::add_tab_raw(target, &tab, content.clone(), view_ctx)?;
         // activate this tab
         target
             .borrow_mut()
@@ -1388,7 +1025,7 @@ impl TabGroupPaneView {
     pub fn split_tab(
         &mut self,
         tab: &SharedMut<PaneTabHeaderView>,
-        mut view_ctx: &mut (impl ViewContext + ?Sized),
+        view_ctx: &(impl ViewContext + ?Sized),
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<Option<SharedMut<Self>>> {
         let Some(index) = self.tabs.iter().position(|(h, _)| Rc::ptr_eq(h, tab)) else {
@@ -1399,9 +1036,9 @@ impl TabGroupPaneView {
         if tab.borrow().is_active && self.tabs.len() > 1 {
             // アクティブを付け替える（0個になる場合はどのみち消されるので何もしない）
             let new_active = if index == 0 { 1 } else { index - 1 };
-            self.switch_active(new_active, &mut view_ctx, app_state)?;
+            self.switch_active(new_active, view_ctx, app_state)?;
         }
-        tab.borrow().unmount()?;
+        tab.borrow().unmount(&view_ctx)?;
         let (tab, content) = self.tabs.remove(index);
 
         let new_group = Self::new(
@@ -1409,31 +1046,32 @@ impl TabGroupPaneView {
                 .docking_manager
                 .upgrade()
                 .expect("Docking Manager has dead"),
-            &mut view_ctx,
+            view_ctx,
         )?;
-        Self::add_tab_raw(&new_group, &tab, content.clone())?;
+        Self::add_tab_raw(&new_group, &tab, content.clone(), view_ctx)?;
 
         // this is the first tab
         content.borrow_mut().build_content_view(
             &new_group.borrow().content_area,
             &self.ht_ref_content,
-            &mut view_ctx,
+            &view_ctx,
             app_state,
         )?;
-        tab.borrow_mut().set_active_imm(true, view_ctx)?;
+        tab.borrow_mut()
+            .set_active(true, PaneTabTransitionMode::Immediate)?;
 
         Ok(Some(new_group))
     }
 
     pub fn add_tab<T: PaneTabPresenter + 'static>(
         this: &SharedMut<Self>,
-        ctx: &mut impl ViewContext,
+        ctx: &(impl ViewContext + ?Sized),
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<SharedMut<T>> {
         let header_view =
             PaneTabHeaderView::new(T::INIT_TAB_NAME, this.borrow().tabs.is_empty(), ctx)?;
         let content_presenter = new_shared_mut(T::new(&header_view, ctx, app_state));
-        Self::add_tab_raw(this, &header_view, content_presenter.clone())?;
+        Self::add_tab_raw(this, &header_view, content_presenter.clone(), ctx)?;
 
         let thisref = this.borrow();
         if thisref.tabs.len() == 1 {
@@ -1441,7 +1079,7 @@ impl TabGroupPaneView {
             content_presenter.borrow_mut().build_content_view(
                 &thisref.content_area,
                 &thisref.ht_ref_content,
-                ctx,
+                &ctx,
                 app_state,
             )?;
         }
@@ -1453,6 +1091,7 @@ impl TabGroupPaneView {
         this: &SharedMut<Self>,
         header: &SharedMut<PaneTabHeaderView>,
         content: SharedMut<dyn PaneTabContentPresenter>,
+        view_ctx: &(impl ViewContext + ?Sized),
     ) -> windows::core::Result<usize> {
         let new_index = this.borrow().tabs.len();
         header.borrow_mut().bind_group_view(this, new_index);
@@ -1460,7 +1099,7 @@ impl TabGroupPaneView {
         thisref.tabs.push((header.clone(), content));
         header
             .borrow()
-            .mount(&thisref.root.Children()?, &thisref.ht_ref)?;
+            .mount(&thisref.root.Children()?, &thisref.ht_ref, &view_ctx)?;
 
         Ok(new_index)
     }
@@ -1586,7 +1225,7 @@ impl TabGroupPaneView {
     pub fn switch_active(
         &mut self,
         new_active: usize,
-        mut view_ctx: impl ViewContext,
+        view_ctx: &(impl ViewContext + ?Sized),
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let new_active = new_active.min(self.tabs.len());
@@ -1598,11 +1237,11 @@ impl TabGroupPaneView {
         self.tabs[self.current_active]
             .1
             .borrow_mut()
-            .on_hide_content_view(&mut view_ctx, app_state)?;
+            .on_hide_content_view(&view_ctx, app_state)?;
         self.tabs[self.current_active]
             .0
             .borrow_mut()
-            .set_active(false, &mut view_ctx)?;
+            .set_active(false, PaneTabTransitionMode::Normal)?;
         self.content_area.Children()?.RemoveAll()?;
         self.current_active = new_active;
         self.tabs[self.current_active]
@@ -1611,13 +1250,13 @@ impl TabGroupPaneView {
             .build_content_view(
                 &self.content_area,
                 &self.ht_ref_content,
-                &mut view_ctx,
+                &view_ctx,
                 app_state,
             )?;
         self.tabs[self.current_active]
             .0
             .borrow_mut()
-            .set_active(true, &mut view_ctx)?;
+            .set_active(true, PaneTabTransitionMode::Normal)?;
 
         Ok(())
     }
@@ -1714,7 +1353,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Left(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
 
                     let dest_parent = d
                         .borrow()
@@ -1722,19 +1361,20 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_left(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Left,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1750,7 +1390,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Right(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
 
                     let dest_parent = d
                         .borrow()
@@ -1758,14 +1398,15 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_right(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Right,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     this.borrow()
@@ -1773,7 +1414,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .upgrade()
                         .unwrap()
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1789,7 +1430,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Top(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
 
                     let dest_parent = d
                         .borrow()
@@ -1797,14 +1438,15 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_top(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Top,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     this.borrow()
@@ -1812,7 +1454,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .upgrade()
                         .unwrap()
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1828,7 +1470,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Bottom(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
 
                     let dest_parent = d
                         .borrow()
@@ -1836,14 +1478,15 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_bottom(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Bottom,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| PaneDockLayer::new_filled(&this, parent),
                         |parent, _ctx| {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     this.borrow()
@@ -1851,7 +1494,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .upgrade()
                         .unwrap()
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1866,7 +1509,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             }
             PaneDockingRecommendation::Free => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
-                let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
 
                 this.borrow()
                     .unmount()
@@ -1889,6 +1532,12 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum PaneTabTransitionMode {
+    Normal,
+    Immediate,
+}
+
 pub struct PaneTabHeaderView {
     group_view: WeakMut<TabGroupPaneView>,
     index_in_group: usize,
@@ -1902,6 +1551,7 @@ pub struct PaneTabHeaderView {
     active_overlay_enter_animation: ScalarKeyFrameAnimation,
     active_overlay_leave_animation: ScalarKeyFrameAnimation,
     hittest_tree_self: SharedMut<HitTestTree>,
+    rendered_dpi: f32,
     bg_active: bool,
     is_active: bool,
     width: f32,
@@ -1913,11 +1563,8 @@ impl PaneTabHeaderView {
     fn create_geometry(
         text_width: f32,
         text_height: f32,
-        ctx: &impl ViewContext,
     ) -> windows::core::Result<CompositionRoundedRectangleGeometry> {
-        let g = ctx
-            .app_subsystems()
-            .borrow()
+        let g = AppSubsystemInstances::get()
             .compositor
             .CreateRoundedRectangleGeometry()?;
         g.SetCornerRadius(Vector2 {
@@ -1937,47 +1584,38 @@ impl PaneTabHeaderView {
     pub fn new(
         title: impl Into<Cow<'static, str>>,
         init_active: bool,
-        ctx: &impl ViewContext,
+        ctx: &(impl ViewContext + ?Sized),
     ) -> windows::core::Result<SharedMut<Self>> {
-        let base = ctx
-            .app_subsystems()
-            .borrow()
+        let base = AppSubsystemInstances::get()
             .compositor
             .CreateLayerVisual()?;
         let title = title.into();
         let font = if init_active {
-            ctx.app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .ui_common_objects
                 .tab_active_title_font
                 .clone()
         } else {
-            ctx.app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .ui_common_objects
                 .tab_title_font
                 .clone()
         };
-        let title_text = ctx.app_subsystems().borrow_mut().text_surface_stock.get(
-            &font,
-            ctx.current_dpi(),
-            title.clone(),
-        )?;
+        let title_text = AppSubsystemInstances::get()
+            .text_surface_stock
+            .borrow_mut()
+            .get(&font, ctx.current_dpi(), title.clone())?;
         let view_size = Vector2 {
             X: title_text.width + TAB_MARGIN_X * 2.0,
             Y: title_text.height + TAB_MARGIN_Y * 2.0,
         };
-        let label_content_brush = ctx
-            .app_subsystems()
-            .borrow()
+        let label_content_brush = AppSubsystemInstances::get()
             .compositor
             .CreateSurfaceBrushWithSurface(&title_text.surface)?;
         base.Children()
             .expect("Failed to get children collection")
             .InsertAtTop(&{
-                let v = ctx
-                    .app_subsystems()
-                    .borrow()
+                let v = AppSubsystemInstances::get()
                     .compositor
                     .CreateSpriteVisual()?;
                 v.SetBrush(&label_content_brush)?;
@@ -1993,23 +1631,18 @@ impl PaneTabHeaderView {
             })
             .expect("Failed to insert visual");
 
-        let geometry = Self::create_geometry(title_text.width, title_text.height, ctx)?;
+        let geometry = Self::create_geometry(title_text.width, title_text.height)?;
         let bg = {
-            let shape = ctx
-                .app_subsystems()
-                .borrow()
+            let shape = AppSubsystemInstances::get()
                 .compositor
                 .CreateSpriteShapeWithGeometry(&geometry)?;
             shape.SetFillBrush(
-                &ctx.app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_base_brush,
             )?;
 
-            let v = ctx
-                .app_subsystems()
-                .borrow()
+            let v = AppSubsystemInstances::get()
                 .compositor
                 .CreateShapeVisual()?;
             v.Shapes()?.Append(&shape)?;
@@ -2017,21 +1650,16 @@ impl PaneTabHeaderView {
             v
         };
         let active_overlay = {
-            let shape = ctx
-                .app_subsystems()
-                .borrow()
+            let shape = AppSubsystemInstances::get()
                 .compositor
                 .CreateSpriteShapeWithGeometry(&geometry)?;
             shape.SetFillBrush(
-                &ctx.app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_active_overlay_brush,
             )?;
 
-            let v = ctx
-                .app_subsystems()
-                .borrow()
+            let v = AppSubsystemInstances::get()
                 .compositor
                 .CreateShapeVisual()?;
             v.Shapes()?.Append(&shape)?;
@@ -2056,6 +1684,7 @@ impl PaneTabHeaderView {
                 Some(&Rc::new(wthis.clone())),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(view_size.X, view_size.Y),
+                Rect::empty(),
             );
 
             Self {
@@ -2066,31 +1695,24 @@ impl PaneTabHeaderView {
                 bg_visual: bg,
                 active_overlay_visual: active_overlay,
                 label_content_brush,
-                bg_hover_animation: ctx
-                    .app_subsystems()
-                    .borrow()
+                bg_hover_animation: AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_hover_animation
                     .clone(),
-                bg_hover_end_animation: ctx
-                    .app_subsystems()
-                    .borrow()
+                bg_hover_end_animation: AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_hover_end_animation
                     .clone(),
-                active_overlay_enter_animation: ctx
-                    .app_subsystems()
-                    .borrow()
+                active_overlay_enter_animation: AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_active_overlay_enter_animation
                     .clone(),
-                active_overlay_leave_animation: ctx
-                    .app_subsystems()
-                    .borrow()
+                active_overlay_leave_animation: AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_active_overlay_leave_animation
                     .clone(),
                 hittest_tree_self: ht_self,
+                rendered_dpi: ctx.current_dpi(),
                 bg_active: init_active,
                 is_active: init_active,
                 width: view_size.X,
@@ -2114,72 +1736,6 @@ impl PaneTabHeaderView {
         self.index_in_group = index_in_group;
     }
 
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
-    ) -> windows::core::Result<()> {
-        onto.InsertAtTop(&self.visual)?;
-        HitTestTree::add_child(onto_ht, self.hittest_tree_self.clone());
-
-        Ok(())
-    }
-    fn unmount(&self) -> windows::core::Result<()> {
-        self.visual.Parent()?.Children()?.Remove(&self.visual)?;
-        self.hittest_tree_self.borrow_mut().unmount();
-
-        Ok(())
-    }
-
-    fn activate_bg(&mut self) -> windows::core::Result<()> {
-        if self.bg_active {
-            return Ok(());
-        }
-
-        self.bg_visual
-            .StartAnimation(h!("Opacity"), &self.bg_hover_animation)?;
-        self.bg_active = true;
-        Ok(())
-    }
-    fn deactivate_bg(&mut self) -> windows::core::Result<()> {
-        if !self.bg_active {
-            return Ok(());
-        }
-
-        if self.is_active {
-            // アクティブ状態のときは非アクティブにできない
-            return Ok(());
-        }
-
-        self.bg_visual
-            .StartAnimation(h!("Opacity"), &self.bg_hover_end_animation)?;
-        self.bg_active = false;
-        Ok(())
-    }
-    fn activate_bg_imm(&mut self) -> windows::core::Result<()> {
-        if self.bg_active {
-            return Ok(());
-        }
-
-        self.bg_visual.SetOpacity(1.0)?;
-        self.bg_active = true;
-        Ok(())
-    }
-    fn deactivate_bg_imm(&mut self) -> windows::core::Result<()> {
-        if !self.bg_active {
-            return Ok(());
-        }
-
-        if self.is_active {
-            // アクティブ状態のときは非アクティブにできない
-            return Ok(());
-        }
-
-        self.bg_visual.SetOpacity(0.0)?;
-        self.bg_active = false;
-        Ok(())
-    }
-
     pub fn set_offset(&self, left: f32, top: f32) -> windows::core::Result<()> {
         self.visual.SetOffset(Vector3 {
             X: left,
@@ -2190,96 +1746,110 @@ impl PaneTabHeaderView {
 
         Ok(())
     }
+
+    fn activate_bg(&mut self, mode: PaneTabTransitionMode) -> windows::core::Result<()> {
+        if self.bg_active {
+            return Ok(());
+        }
+
+        match mode {
+            PaneTabTransitionMode::Normal => self
+                .bg_visual
+                .StartAnimation(h!("Opacity"), &self.bg_hover_animation)?,
+            PaneTabTransitionMode::Immediate => self.bg_visual.SetOpacity(1.0)?,
+        }
+
+        self.bg_active = true;
+        Ok(())
+    }
+    fn deactivate_bg(&mut self, mode: PaneTabTransitionMode) -> windows::core::Result<()> {
+        if !self.bg_active {
+            return Ok(());
+        }
+
+        if self.is_active {
+            // アクティブ状態のときは非アクティブにできない
+            return Ok(());
+        }
+
+        match mode {
+            PaneTabTransitionMode::Normal => self
+                .bg_visual
+                .StartAnimation(h!("Opacity"), &self.bg_hover_end_animation)?,
+            PaneTabTransitionMode::Immediate => self.bg_visual.SetOpacity(0.0)?,
+        }
+
+        self.bg_active = false;
+        Ok(())
+    }
+
     pub fn set_active(
         &mut self,
         is_active: bool,
-        view_ctx: &mut impl ViewContext,
+        mode: PaneTabTransitionMode,
     ) -> windows::core::Result<()> {
         let requires_transition = self.is_active != is_active;
         self.is_active = is_active;
 
         if self.is_active {
-            self.activate_bg()?;
+            self.activate_bg(mode)?;
         } else {
-            self.deactivate_bg()?;
+            self.deactivate_bg(mode)?;
         }
 
         if requires_transition {
-            self.active_overlay_visual.StartAnimation(
-                h!("Opacity"),
-                if is_active {
-                    &self.active_overlay_enter_animation
-                } else {
-                    &self.active_overlay_leave_animation
-                },
-            )?;
+            match mode {
+                PaneTabTransitionMode::Normal => self.active_overlay_visual.StartAnimation(
+                    h!("Opacity"),
+                    if is_active {
+                        &self.active_overlay_enter_animation
+                    } else {
+                        &self.active_overlay_leave_animation
+                    },
+                )?,
+                PaneTabTransitionMode::Immediate => self
+                    .active_overlay_visual
+                    .SetOpacity(if is_active { 1.0 } else { 0.0 })?,
+            }
+
             let font = if is_active {
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
+                AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_active_title_font
                     .clone()
             } else {
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
+                AppSubsystemInstances::get()
                     .ui_common_objects
                     .tab_title_font
                     .clone()
             };
-            let new_label_surface = view_ctx
-                .app_subsystems()
-                .borrow_mut()
+            let new_label_surface = AppSubsystemInstances::get()
                 .text_surface_stock
-                .get(&font, view_ctx.current_dpi(), self.label.clone())?;
+                .borrow_mut()
+                .get(&font, self.rendered_dpi, self.label.clone())?;
             self.label_content_brush
                 .SetSurface(&new_label_surface.surface)?;
         }
 
         Ok(())
     }
-
-    pub fn set_active_imm(
-        &mut self,
-        is_active: bool,
-        view_ctx: &mut (impl ViewContext + ?Sized),
+}
+impl MountableView for PaneTabHeaderView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
-        let requires_transition = self.is_active != is_active;
-        self.is_active = is_active;
+        onto.InsertAtTop(&self.visual)?;
+        HitTestTree::add_child(onto_ht, self.hittest_tree_self.clone());
 
-        if self.is_active {
-            self.activate_bg_imm()?;
-        } else {
-            self.deactivate_bg_imm()?;
-        }
+        Ok(())
+    }
 
-        if requires_transition {
-            self.active_overlay_visual
-                .SetOpacity(if is_active { 1.0 } else { 0.0 })?;
-            let font = if is_active {
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .ui_common_objects
-                    .tab_active_title_font
-                    .clone()
-            } else {
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
-                    .ui_common_objects
-                    .tab_title_font
-                    .clone()
-            };
-            let new_label_surface = view_ctx
-                .app_subsystems()
-                .borrow_mut()
-                .text_surface_stock
-                .get(&font, view_ctx.current_dpi(), self.label.clone())?;
-            self.label_content_brush
-                .SetSurface(&new_label_surface.surface)?;
-        }
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+        self.visual.Parent()?.Children()?.Remove(&self.visual)?;
+        self.hittest_tree_self.borrow_mut().unmount();
 
         Ok(())
     }
@@ -2291,7 +1861,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
         };
 
         this.borrow_mut()
-            .activate_bg()
+            .activate_bg(PaneTabTransitionMode::Normal)
             .expect("Failed to activate bg");
     }
     fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {
@@ -2300,7 +1870,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
         };
 
         this.borrow_mut()
-            .deactivate_bg()
+            .deactivate_bg(PaneTabTransitionMode::Normal)
             .expect("Failed to deactivate bg");
     }
     fn on_click(&self, window: HWND, ctx: &mut dyn InputContext) {
@@ -2423,7 +1993,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
                         group_view
                             .borrow()
                             .unmount()
@@ -2444,8 +2014,8 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_left(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Left,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
                             let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
@@ -2459,11 +2029,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2490,7 +2061,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
                         group_view
                             .borrow()
                             .unmount()
@@ -2511,8 +2082,8 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_right(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Right,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
                             let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
@@ -2526,11 +2097,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2557,7 +2129,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
                         group_view
                             .borrow()
                             .unmount()
@@ -2578,8 +2150,8 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_top(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Top,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
                             let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
@@ -2593,11 +2165,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2624,7 +2197,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
                         group_view
                             .borrow()
                             .unmount()
@@ -2645,8 +2218,8 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                         .expect("Docking on root?")
                         .upgrade()
                         .expect("Parent has gone?");
-                    let new_layer = PaneDockLayer::new_on_bottom(
-                        &mut *ctx,
+                    let new_layer = PaneDockLayer::new_on(
+                        DockDirection::Bottom,
                         &Rc::downgrade(&dest_parent),
                         |parent, _ctx| {
                             let new_filled = PaneDockLayer::new_filled(&new_group_view, parent);
@@ -2660,11 +2233,12 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                             d.borrow_mut().reparent(parent);
                             d.clone()
                         },
+                        &mut *ctx,
                     )
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow())
+                        .mount_splitter_only(&new_layer.borrow(), &ctx)
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2675,7 +2249,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             }
             PaneDockingRecommendation::Free => {
                 let bound_dock_layer = group_view.borrow().bound_dock_layer.upgrade().unwrap();
-                let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
 
                 group_view
                     .borrow()
@@ -2706,7 +2280,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                 if group_view.borrow().tabs.is_empty() {
                     // destroy group view
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
                     group_view
                         .borrow()
                         .unmount()
@@ -2736,12 +2310,12 @@ pub trait PaneTabContentPresenter {
         &mut self,
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
-        view_context: &mut dyn ViewContext,
+        view_context: &dyn ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()>;
     fn on_hide_content_view(
         &mut self,
-        view_context: &mut dyn ViewContext,
+        view_context: &dyn ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()>;
 
@@ -2769,20 +2343,26 @@ pub struct InspectorTabSelectionChangedEventHandler {
     observation_disconnectors: RefCell<Vec<Box<dyn ObservationDisconnector>>>,
 }
 impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEventHandler {
-    fn on_changed(&self, app_state: &SharedMut<AppState>, mut view_context: &mut dyn ViewContext) {
+    fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &dyn ViewContext) {
         // TODO: 本当は以前のViewを使いまわすとかしたほうがいいけどいったん見た目優先なのであとでやる
         for od in self.observation_disconnectors.borrow_mut().drain(..) {
             od.disconnect();
         }
         for c in self.current_mounted_views.borrow_mut().drain(..) {
-            c.borrow().unmount().expect("Failed to unmount last views");
+            c.borrow()
+                .unmount(view_context)
+                .expect("Failed to unmount last views");
         }
 
         match app_state.borrow().current_selection_object_id.clone() {
             None => {
-                let label = LabelView::new("None Selected", &mut view_context).unwrap();
+                let label = LabelView::new("None Selected", &view_context).unwrap();
                 label
-                    .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                    .mount(
+                        &self.content_root.Children().unwrap(),
+                        &self.root_ht,
+                        view_context,
+                    )
                     .unwrap();
                 self.current_mounted_views
                     .borrow_mut()
@@ -2790,17 +2370,20 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
             }
             Some(id) => {
                 if let Some(entity_ref) = app_state.borrow().current_scene.objects.get(&id) {
-                    let id_label =
-                        LabelView::new(format!("Object: {id:?}"), &mut view_context).unwrap();
+                    let id_label = LabelView::new(format!("Object: {id:?}"), view_context).unwrap();
                     id_label
-                        .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                        .mount(
+                            &self.content_root.Children().unwrap(),
+                            &self.root_ht,
+                            view_context,
+                        )
                         .unwrap();
                     self.current_mounted_views
                         .borrow_mut()
                         .push(new_shared_mut(id_label));
 
                     let object_name_label =
-                        LabelView::new(format!("Name: {:?}", entity_ref.name), &mut view_context)
+                        LabelView::new(format!("Name: {:?}", entity_ref.name), view_context)
                             .unwrap();
                     object_name_label
                         .set_position(Vector3 {
@@ -2810,7 +2393,11 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                         })
                         .unwrap();
                     object_name_label
-                        .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                        .mount(
+                            &self.content_root.Children().unwrap(),
+                            &self.root_ht,
+                            view_context,
+                        )
                         .unwrap();
                     self.current_mounted_views
                         .borrow_mut()
@@ -2823,8 +2410,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             ..
                         } => {
                             let re = rotation.euler_angles();
-                            let rotation_label =
-                                LabelView::new("Rotation", &mut view_context).unwrap();
+                            let rotation_label = LabelView::new("Rotation", view_context).unwrap();
                             rotation_label
                                 .set_position(Vector3 {
                                     X: 0.0,
@@ -2833,7 +2419,11 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 })
                                 .unwrap();
                             rotation_label
-                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .mount(
+                                    &self.content_root.Children().unwrap(),
+                                    &self.root_ht,
+                                    view_context,
+                                )
                                 .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
@@ -2841,7 +2431,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
 
                             // TODO: これのUIレイアウト自動調整をしてくれるやつがほしい（伸縮はComposition APIがやってくれるんだけど、それの係数決めを自動化したい）
                             let rotation_x_control =
-                                RollableNumberView::new(&view_context, re.0.to_degrees()).unwrap();
+                                RollableNumberView::new(view_context, re.0.to_degrees()).unwrap();
                             rotation_x_control
                                 .borrow()
                                 .set_position(0.5, 0.0, 60.0)
@@ -2852,14 +2442,18 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .unwrap();
                             rotation_x_control
                                 .borrow()
-                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .mount(
+                                    &self.content_root.Children().unwrap(),
+                                    &self.root_ht,
+                                    view_context,
+                                )
                                 .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(rotation_x_control.clone());
 
                             let rotation_y_control =
-                                RollableNumberView::new(&view_context, re.1.to_degrees()).unwrap();
+                                RollableNumberView::new(view_context, re.1.to_degrees()).unwrap();
                             rotation_y_control
                                 .borrow()
                                 .set_position(0.5 + 0.5 / 3.0, 1.0, 60.0)
@@ -2870,14 +2464,18 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .unwrap();
                             rotation_y_control
                                 .borrow()
-                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .mount(
+                                    &self.content_root.Children().unwrap(),
+                                    &self.root_ht,
+                                    view_context,
+                                )
                                 .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(rotation_y_control.clone());
 
                             let rotation_z_control =
-                                RollableNumberView::new(&view_context, re.2.to_degrees()).unwrap();
+                                RollableNumberView::new(view_context, re.2.to_degrees()).unwrap();
                             rotation_z_control
                                 .borrow()
                                 .set_position(1.0 - 0.5 / 3.0, 2.0, 60.0)
@@ -2888,7 +2486,11 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .unwrap();
                             rotation_z_control
                                 .borrow()
-                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .mount(
+                                    &self.content_root.Children().unwrap(),
+                                    &self.root_ht,
+                                    view_context,
+                                )
                                 .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
@@ -3025,7 +2627,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             ));
 
                             let intensity_label =
-                                LabelView::new("Intensity", &mut view_context).unwrap();
+                                LabelView::new("Intensity", view_context).unwrap();
                             intensity_label
                                 .set_position(Vector3 {
                                     X: 0.0,
@@ -3034,21 +2636,29 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 })
                                 .unwrap();
                             intensity_label
-                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .mount(
+                                    &self.content_root.Children().unwrap(),
+                                    &self.root_ht,
+                                    view_context,
+                                )
                                 .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(new_shared_mut(intensity_label));
 
                             let intensity_control =
-                                FloatSliderView::new(&mut view_context, intensity, 100.0).unwrap();
+                                FloatSliderView::new(view_context, intensity, 100.0).unwrap();
                             intensity_control
                                 .borrow()
                                 .reposition_xrel(0.5, 80.0)
                                 .unwrap();
                             intensity_control
                                 .borrow()
-                                .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                                .mount(
+                                    &self.content_root.Children().unwrap(),
+                                    &self.root_ht,
+                                    view_context,
+                                )
                                 .unwrap();
                             self.observation_disconnectors.borrow_mut().push(Box::new(
                                 FloatSliderView::observe_value_changes(
@@ -3081,10 +2691,13 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                     }
                 } else {
                     let id_label =
-                        LabelView::new(format!("Object: {id:?} (gone)"), &mut view_context)
-                            .unwrap();
+                        LabelView::new(format!("Object: {id:?} (gone)"), view_context).unwrap();
                     id_label
-                        .mount(&self.content_root.Children().unwrap(), &self.root_ht)
+                        .mount(
+                            &self.content_root.Children().unwrap(),
+                            &self.root_ht,
+                            view_context,
+                        )
                         .unwrap();
                     self.current_mounted_views
                         .borrow_mut()
@@ -3102,13 +2715,13 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
         &mut self,
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
-        mut view_context: &mut dyn ViewContext,
+        view_context: &dyn ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         AppState::observe_current_selection_changes(
             &app_state,
             &self.selection_changed_event_handler,
-            &mut view_context,
+            view_context,
         );
 
         onto.Children()?
@@ -3123,7 +2736,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.selection_changed_event_handler
@@ -3152,9 +2765,7 @@ impl PaneTabPresenter for InspectorTabPresenter {
         view_ctx: &(impl ViewContext + ?Sized),
         _app_state: &SharedMut<AppState>,
     ) -> Self {
-        let content_root = view_ctx
-            .app_subsystems()
-            .borrow()
+        let content_root = AppSubsystemInstances::get()
             .compositor
             .CreateContainerVisual()
             .expect("Failed to create content root");
@@ -3194,7 +2805,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
         &mut self,
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3202,7 +2813,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3226,7 +2837,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
         &mut self,
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3234,7 +2845,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -3252,71 +2863,10 @@ impl PaneTabPresenter for TimelineTabPresenter {
     }
 }
 
-pub trait SignalEventReceiver {
-    fn on_signal(&self, arg: usize, view_ctx: &dyn ViewContext);
-}
-
-pub enum SignalEventType {
-    Receiver(Rc<dyn SignalEventReceiver>, usize),
-    Message,
-    Unknown,
-}
-
 pub struct PresentationAvailableEventEntry {
     pub event: EventHandle,
     pub buffer: IPresentationBuffer,
     pub buffer_res: ID3D11Texture2D,
-}
-pub struct AppGlobalSignals {
-    pub entries: Vec<(Rc<dyn SignalEventReceiver>, usize)>,
-    pub raw_events: Vec<HANDLE>,
-}
-impl AppGlobalSignals {
-    pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            raw_events: Vec::new(),
-        }
-    }
-
-    pub fn wait(&self) -> SignalEventType {
-        let r = unsafe {
-            MsgWaitForMultipleObjects(Some(&self.raw_events), false, INFINITE, QS_ALLEVENTS)
-        };
-        if WAIT_OBJECT_0.0 <= r.0 && r.0 < WAIT_OBJECT_0.0 + self.raw_events.len() as u32 {
-            let index = (r.0 - WAIT_OBJECT_0.0) as usize;
-            SignalEventType::Receiver(self.entries[index].0.clone(), self.entries[index].1)
-        } else if WAIT_OBJECT_0.0 + self.raw_events.len() as u32 == r.0 {
-            SignalEventType::Message
-        } else {
-            SignalEventType::Unknown
-        }
-    }
-
-    pub fn register(
-        &mut self,
-        event: HANDLE,
-        handler: &Rc<(impl SignalEventReceiver + 'static)>,
-        arg: usize,
-    ) {
-        self.entries.push((handler.clone(), arg));
-        self.raw_events.push(event);
-    }
-    pub fn unregister(&mut self, handler: &Rc<impl SignalEventReceiver + 'static>, arg: usize) {
-        // Note: dynにするためにいったんcloneするしかない
-        let handler: Rc<dyn SignalEventReceiver> = handler.clone();
-        let Some(index) = self
-            .entries
-            .iter()
-            .position(|(h, a)| Rc::ptr_eq(h, &handler) && *a == arg)
-        else {
-            // ない
-            return;
-        };
-
-        self.raw_events.remove(index);
-        self.entries.remove(index);
-    }
 }
 
 const BACK_BUFFER_COUNT: usize = 3;
@@ -3337,7 +2887,7 @@ pub struct StageTabContentRenderer {
     app_state: WeakMut<AppState>,
 }
 impl SignalEventReceiver for StageTabContentRenderer {
-    fn on_signal(&self, arg: usize, view_ctx: &dyn ViewContext) {
+    fn on_signal(&self, arg: usize, _view_ctx: &dyn ViewContext) {
         let (pb, cb, fin, rt, km) = &self.back_buffers[arg];
 
         unsafe {
@@ -3361,13 +2911,11 @@ impl SignalEventReceiver for StageTabContentRenderer {
                     } => {
                         self.skybox_renderer
                             .update_primary_directional_light_data(
-                                &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
+                                &mut AppSubsystemInstances::get().mini_engine.borrow_mut(),
                                 PrimaryDirectionalLightUniformData {
                                     incident_light_dir: peridot_math::Matrix3::from(
                                         rotation.clone(),
-                                    ) * peridot_math::Vector3(
-                                        0.0f32, 0.0, -1.0,
-                                    ),
+                                    ) * peridot_math::Vector3::back(),
                                     light_intensity: intensity,
                                 },
                             )
@@ -3426,17 +2974,19 @@ impl PaneTabContentPresenter for StageTabPresenter {
         &mut self,
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
-        view_context: &mut dyn ViewContext,
+        view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        self.view.borrow().mount(onto, onto_ht, view_context)?;
+        self.view
+            .borrow()
+            .mount(&onto.Children()?, onto_ht, view_context)?;
 
         Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
-        view_context: &mut dyn ViewContext,
+        view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.view.borrow().unmount(view_context)?;
@@ -3488,9 +3038,11 @@ impl SkyboxPrecomputedTextures {
     const SCATTER_SIZE: peridot::math::Vector3<u32> = peridot::math::Vector3(32, 64 * 2, 32);
     const GATHERED_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(32, 32);
 
-    pub fn new(e: &mut MiniEngine) -> br::Result<Self> {
+    pub fn new() -> br::Result<Self> {
+        let mut engine = AppSubsystemInstances::get().mini_engine.borrow_mut();
+
         ArrayBuilderOp! {
-            [try] e.alloc_device_local_image_array, {
+            [try] engine.alloc_device_local_image_array, {
                 transmittance <- br::ImageDesc::new(Self::TRANSMITTANCE_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
                     .sampled()
                     .use_as_storage(),
@@ -3545,7 +3097,7 @@ impl SkyboxPrecomputedTextures {
             .image()
             .set_name(Some(c"PeridotSkyBox:Precompute:K-Gathered"))?;
 
-        let sampler = e.sampler(SamplerDesc {
+        let sampler = engine.sampler(SamplerDesc {
             address_mode: (
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
@@ -3560,7 +3112,7 @@ impl SkyboxPrecomputedTextures {
             br::DescriptorSetLayoutBuilder::with_bindings(vec![br::DescriptorType::StorageImage
                 .make_binding(1)
                 .only_for_compute()])
-            .create(e.device().clone())?;
+            .create(engine.device().clone())?;
         let dsl_compute_si1_si1 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
             br::DescriptorType::StorageImage
                 .make_binding(1)
@@ -3569,7 +3121,7 @@ impl SkyboxPrecomputedTextures {
                 .make_binding(1)
                 .only_for_compute(),
         ])
-        .create(e.device().clone())?;
+        .create(engine.device().clone())?;
         let dsl_compute_cis1_si1 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
             br::DescriptorType::CombinedImageSampler
                 .make_binding(1)
@@ -3579,7 +3131,7 @@ impl SkyboxPrecomputedTextures {
                 .make_binding(1)
                 .only_for_compute(),
         ])
-        .create(e.device().clone())?;
+        .create(engine.device().clone())?;
         let dsl_compute_cis1_cis1_si1 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
             br::DescriptorType::CombinedImageSampler
                 .make_binding(1)
@@ -3593,62 +3145,61 @@ impl SkyboxPrecomputedTextures {
                 .make_binding(1)
                 .only_for_compute(),
         ])
-        .create(e.device().clone())?;
+        .create(engine.device().clone())?;
 
         let input_only_layout = br::PipelineLayoutBuilder::new(vec![&dsl_compute_si1], vec![])
-            .create(e.device().clone())?;
+            .create(engine.device().clone())?;
         let tex_io_layout = br::PipelineLayoutBuilder::new(vec![&dsl_compute_cis1_si1], vec![])
-            .create(e.device().clone())?;
+            .create(engine.device().clone())?;
         let tex_i2o_layout =
             br::PipelineLayoutBuilder::new(vec![&dsl_compute_cis1_cis1_si1], vec![])
-                .create(e.device().clone())?;
+                .create(engine.device().clone())?;
         let tex_io_pure_layout = br::PipelineLayoutBuilder::new(vec![&dsl_compute_si1_si1], vec![])
-            .create(e.device().clone())?;
-        let transmittance_compute = e.shader("shaders/skybox/transmittance_precompute.cspv")?;
-        let single_scatter_compute = e.shader("shaders/skybox/single_scatter_precompute.cspv")?;
-        let gather_compute = e.shader("shaders/skybox/gather_precompute.cspv")?;
+            .create(engine.device().clone())?;
+        let transmittance_compute =
+            engine.shader("shaders/skybox/transmittance_precompute.cspv")?;
+        let single_scatter_compute =
+            engine.shader("shaders/skybox/single_scatter_precompute.cspv")?;
+        let gather_compute = engine.shader("shaders/skybox/gather_precompute.cspv")?;
         let multiple_scatter_compute =
-            e.shader("shaders/skybox/multiple_scatter_precompute.cspv")?;
-        let accum2_compute = e.shader("shaders/skybox/accum2.cspv")?;
-        let accum3_compute = e.shader("shaders/skybox/accum3.cspv")?;
-        let [transmittance_compute_pipeline, single_scatter_compute_pipeline, gather_compute_pipeline, multiple_scatter_compute_pipeline, accum2_pipeline, accum3_pipeline] =
-            e.device().clone().new_compute_pipeline_array(
-                &[
-                    br::ComputePipelineBuilder::new(
-                        &input_only_layout,
-                        br::PipelineShader2::new(&transmittance_compute, c"main".to_owned()),
-                    ),
-                    br::ComputePipelineBuilder::new(
-                        &tex_io_layout,
-                        br::PipelineShader2::new(&single_scatter_compute, c"main".to_owned()),
-                    ),
-                    br::ComputePipelineBuilder::new(
-                        &tex_io_layout,
-                        br::PipelineShader2::new(&gather_compute, c"main".to_owned()),
-                    ),
-                    br::ComputePipelineBuilder::new(
-                        &tex_i2o_layout,
-                        br::PipelineShader2::new(&multiple_scatter_compute, c"main".to_owned()),
-                    ),
-                    br::ComputePipelineBuilder::new(
-                        &tex_io_pure_layout,
-                        br::PipelineShader2::new(&accum2_compute, c"main".to_owned()),
-                    ),
-                    br::ComputePipelineBuilder::new(
-                        &tex_io_pure_layout,
-                        br::PipelineShader2::new(&accum3_compute, c"main".to_owned()),
-                    ),
-                ],
-                Some(e.pipeline_cache()),
-            )?;
-        e.writeback_pipeline_cache();
+            engine.shader("shaders/skybox/multiple_scatter_precompute.cspv")?;
+        let accum2_compute = engine.shader("shaders/skybox/accum2.cspv")?;
+        let accum3_compute = engine.shader("shaders/skybox/accum3.cspv")?;
+        ArrayBuilderOp! {
+            [ref, try] engine.create_compute_pipeline_array, {
+                transmittance_compute_pipeline <- br::ComputePipelineBuilder::new(
+                    &input_only_layout,
+                    br::PipelineShader2::new(&transmittance_compute, c"main".to_owned()),
+                ),
+                single_scatter_compute_pipeline <- br::ComputePipelineBuilder::new(
+                    &tex_io_layout,
+                    br::PipelineShader2::new(&single_scatter_compute, c"main".to_owned()),
+                ),
+                gather_compute_pipeline <- br::ComputePipelineBuilder::new(
+                    &tex_io_layout,
+                    br::PipelineShader2::new(&gather_compute, c"main".to_owned()),
+                ),
+                multiple_scatter_compute_pipeline <- br::ComputePipelineBuilder::new(
+                    &tex_i2o_layout,
+                    br::PipelineShader2::new(&multiple_scatter_compute, c"main".to_owned()),
+                ),
+                accum2_pipeline <- br::ComputePipelineBuilder::new(
+                    &tex_io_pure_layout,
+                    br::PipelineShader2::new(&accum2_compute, c"main".to_owned()),
+                ),
+                accum3_pipeline <- br::ComputePipelineBuilder::new(
+                    &tex_io_pure_layout,
+                    br::PipelineShader2::new(&accum3_compute, c"main".to_owned()),
+                ),
+            }
+        }
 
         let mut descriptor_pool = br::DescriptorPoolBuilder::new(8)
             .reserve_all([
                 br::DescriptorType::StorageImage.with_count(10),
                 br::DescriptorType::CombinedImageSampler.with_count(7),
             ])
-            .create(e.device().clone())?;
+            .create(engine.device().clone())?;
         ArrayBuilderOp! {
             [ref, try] descriptor_pool.alloc_array, {
                 transmittance_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1),
@@ -3661,7 +3212,7 @@ impl SkyboxPrecomputedTextures {
                 transmittance_k_gathered_to_k_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_cis1_si1),
             }
         };
-        e.device().update_descriptor_sets(
+        engine.device().update_descriptor_sets(
             &[
                 transmittance_set
                     .binding_at(0)
@@ -3748,11 +3299,12 @@ impl SkyboxPrecomputedTextures {
             &[],
         );
 
-        let mut cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
+        let mut cp = engine
+            .command_pool_builder_for_graphics_work()
             .transient()
-            .create(e.device().clone())?;
-        let mut cb = cp.alloc(1, true)?;
-        let mut rec = unsafe { cb[0].begin_once()? }
+            .create(engine.device().clone())?;
+        let [mut cb] = cp.alloc_array::<1>(true)?;
+        let mut rec = unsafe { cb.begin_once()? }
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[],
                 &[],
@@ -4071,15 +3623,11 @@ impl SkyboxPrecomputedTextures {
                 )],
         ))
         .end()?;
-        e.graphics_queue().borrow_mut().submit2(
-            &[br::SubmitInfo2::new(
-                &[],
-                &[br::CommandBufferSubmitInfo::new(&cb[0])],
-                &[],
-            )],
-            None::<&mut br::FenceObject<StdVkDevice>>,
-        )?;
-        e.graphics_queue().borrow_mut().wait()?;
+        engine.submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
+            &[],
+            &[br::CommandBufferSubmitInfo::new(&cb)],
+            &[],
+        )])?;
 
         Ok(Self {
             transmittance,
@@ -4109,14 +3657,15 @@ pub struct SkyboxRenderer {
 }
 impl SkyboxRenderer {
     pub fn new(
-        e: &mut MiniEngine,
         render_camera_descriptor_set_layout: &impl br::DescriptorSetLayout<ConcreteDevice = StdVkDevice>,
         render_pass: &(impl br::RenderPass + ?Sized),
         subpass: u32,
         precomputed: SkyboxPrecomputedTextures,
         init_light_data: PrimaryDirectionalLightUniformData,
     ) -> br::Result<Self> {
-        let linear_sampler = e.sampler(SamplerDesc {
+        let mut engine = AppSubsystemInstances::get().mini_engine.borrow_mut();
+
+        let linear_sampler = engine.sampler(SamplerDesc {
             address_mode: (
                 br::AddressingMode::ClampToEdge,
                 br::AddressingMode::ClampToEdge,
@@ -4140,13 +3689,13 @@ impl SkyboxRenderer {
                 .only_for_fragment()
                 .with_immutable_samplers(vec![br::SamplerObjectRef::new(&linear_sampler)]),
         ])
-        .create(e.device().clone())?;
+        .create(engine.device().clone())?;
 
         let pipeline_layout =
             br::PipelineLayoutBuilder::new(vec![render_camera_descriptor_set_layout, &dsl], vec![])
-                .create(e.device().clone())?;
-        let vsh = e.shader("shaders/skybox/vert.vspv")?;
-        let fsh = e.shader("shaders/skybox/frag.fspv")?;
+                .create(engine.device().clone())?;
+        let vsh = engine.shader("shaders/skybox/vert.vspv")?;
+        let fsh = engine.shader("shaders/skybox/frag.fspv")?;
         let vbinds = [br::VertexInputBindingDescription::per_vertex_typed::<
             SkyboxVertex,
         >(0)];
@@ -4183,14 +3732,14 @@ impl SkyboxRenderer {
                 br::DynamicArrayState::Dynamic(1),
             )
             .depth_test_settings(Some(br::CompareOp::LessOrEqual), false);
-        let pipeline = pipeline.create(e.device().clone(), Some(e.pipeline_cache()))?;
-        e.writeback_pipeline_cache();
+        let pipeline = pipeline.create(engine.device().clone(), Some(engine.pipeline_cache()))?;
+        engine.writeback_pipeline_cache();
 
         struct BufferInitializationContents {
             pub vertices: [SkyboxVertex; 4],
             pub primary_directional_light_data: PrimaryDirectionalLightUniformData,
         }
-        let [vertex_buffer, primary_directional_light_data_buffer] = e
+        let [vertex_buffer, primary_directional_light_data_buffer] = engine
             .alloc_device_local_buffer_array([
                 br::BufferDesc::new(
                     core::mem::size_of::<[SkyboxVertex; 4]>(),
@@ -4201,7 +3750,7 @@ impl SkyboxRenderer {
                     br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
                 ),
             ])?;
-        let mut stg_buffer = e.alloc_upload_buffer(br::BufferDesc::new(
+        let mut stg_buffer = engine.alloc_upload_buffer(br::BufferDesc::new(
             core::mem::size_of::<BufferInitializationContents>(),
             br::BufferUsage::TRANSFER_SRC,
         ))?;
@@ -4227,9 +3776,9 @@ impl SkyboxRenderer {
             primary_directional_light_data: init_light_data,
         })?;
 
-        let mut cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
+        let mut cp = br::CommandPoolBuilder::new(engine.graphics_queue_family_index())
             .transient()
-            .create(e.device().clone())?;
+            .create(engine.device().clone())?;
         let mut cb = cp.alloc(1, true)?;
         unsafe { cb[0].begin_once()? }
             .pipeline_barrier_2(&br::DependencyInfo::new(
@@ -4278,7 +3827,7 @@ impl SkyboxRenderer {
                 &[],
             ))
             .end()?;
-        e.graphics_queue().borrow_mut().submit2(
+        engine.graphics_queue().borrow_mut().submit2(
             &[br::SubmitInfo2::new(
                 &[],
                 &[br::CommandBufferSubmitInfo::new(&cb[0])],
@@ -4286,16 +3835,16 @@ impl SkyboxRenderer {
             )],
             None::<&mut br::FenceObject<StdVkDevice>>,
         )?;
-        br::Queue::wait(&mut *e.graphics_queue().borrow_mut())?;
+        br::Queue::wait(&mut *engine.graphics_queue().borrow_mut())?;
 
         let mut dp = br::DescriptorPoolBuilder::new(1)
             .with_reservations(vec![
                 br::DescriptorType::UniformBuffer.with_count(1),
                 br::DescriptorType::CombinedImageSampler.with_count(2),
             ])
-            .create(e.device().clone())?;
+            .create(engine.device().clone())?;
         let [descriptor] = dp.alloc_array(&[br::DescriptorSetLayoutObjectRef::new(&dsl)])?;
-        e.device().update_descriptor_sets(
+        engine.device().update_descriptor_sets(
             &[
                 descriptor
                     .binding_at(0)
@@ -4435,69 +3984,6 @@ impl D3D11ResourceDescriptor for D3D11_TEXTURE2D_DESC {
     }
 }
 
-pub struct TempRT {
-    org_desc: br::ImageDesc<'static>,
-    view_aspect_mask: br::AspectMask,
-    view_mip_range: core::ops::Range<u32>,
-    view_array_range: core::ops::Range<u32>,
-    resource: Rc<br::ImageViewObject<peridot_memory_manager::Image>>,
-}
-impl TempRT {
-    pub fn new(
-        org_desc: br::ImageDesc<'static>,
-        view_aspect_mask: br::AspectMask,
-        view_mip_range: core::ops::Range<u32>,
-        view_array_range: core::ops::Range<u32>,
-        e: &mut MiniEngine,
-    ) -> br::Result<Self> {
-        let resource = e.alloc_device_local_image(org_desc.clone())?;
-        let resource = resource
-            .subresource_range(
-                view_aspect_mask,
-                view_mip_range.clone(),
-                view_array_range.clone(),
-            )
-            .view_builder()
-            .create()?;
-
-        Ok(Self {
-            org_desc,
-            view_aspect_mask,
-            view_mip_range,
-            view_array_range,
-            resource: Rc::new(resource),
-        })
-    }
-
-    pub fn recreate_newsize(
-        &mut self,
-        size: impl br::ImageSize,
-        e: &mut MiniEngine,
-    ) -> br::Result<()> {
-        unsafe {
-            // update inplace
-            core::ptr::write(
-                &mut self.org_desc,
-                core::ptr::read(&self.org_desc).size(size),
-            );
-        }
-
-        let resource = e.alloc_device_local_image(self.org_desc.clone())?;
-        self.resource = Rc::new(
-            resource
-                .subresource_range(
-                    self.view_aspect_mask,
-                    self.view_mip_range.clone(),
-                    self.view_array_range.clone(),
-                )
-                .view_builder()
-                .create()?,
-        );
-
-        Ok(())
-    }
-}
-
 pub struct EditorStageView {
     root: SpriteVisual,
     ht: SharedMut<HitTestTree>,
@@ -4540,9 +4026,7 @@ impl EditorStageView {
         let rect = init_size.into_rect(br::vk::VkOffset2D::ZERO);
         let viewport = rect.make_viewport(0.0..1.0);
 
-        let root = view_ctx
-            .app_subsystems()
-            .borrow()
+        let root = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()
             .expect("Failed to create root visual");
@@ -4555,17 +4039,13 @@ impl EditorStageView {
             .expect("Failed to create composition surface handle")
         };
         let presentation_surface = unsafe {
-            view_ctx
-                .app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .presentation_manager
                 .CreatePresentationSurface(composition_surface_handle)
                 .expect("Failed to create presentation surface")
         };
         let surface = unsafe {
-            view_ctx
-                .app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .compositor_interop
                 .CreateCompositionSurfaceForHandle(composition_surface_handle)
                 .expect("Failed to create ui composition surface")
@@ -4592,9 +4072,7 @@ impl EditorStageView {
                 .expect("Failed to set color space");
         }
 
-        let brush = view_ctx
-            .app_subsystems()
-            .borrow()
+        let brush = AppSubsystemInstances::get()
             .compositor
             .CreateSurfaceBrushWithSurface(&surface)
             .expect("Failed to create surface brush");
@@ -4604,23 +4082,19 @@ impl EditorStageView {
         root.SetOffset(Vector3::zero())
             .expect("Failed to position visual");
 
-        let mut initialization_cp = br::CommandPoolBuilder::new(
-            view_ctx
-                .app_subsystems()
-                .borrow()
-                .mini_engine
-                .graphics_queue_family_index(),
-        )
-        .transient()
-        .create(
-            view_ctx
-                .app_subsystems()
-                .borrow()
-                .mini_engine
-                .device()
-                .clone(),
-        )
-        .expect("Failed to create initialization command pool");
+        let mut initialization_cp = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow()
+            .command_pool_builder_for_graphics_work()
+            .transient()
+            .create(
+                AppSubsystemInstances::get()
+                    .mini_engine
+                    .borrow()
+                    .device()
+                    .clone(),
+            )
+            .expect("Failed to create initialization command pool");
         let mut initialization_cb = initialization_cp
             .alloc(1, true)
             .expect("Failed to alloc initialization command buffer");
@@ -4630,15 +4104,10 @@ impl EditorStageView {
                 .expect("Failed to begin initialization command recording")
         };
 
-        let utility_verts = UtilityVertices::new(
-            &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
-            &mut initialization_cmd_rec,
-        )
-        .expect("Failed to create utility verts");
-
+        let utility_verts = UtilityVertices::new(&mut initialization_cmd_rec)
+            .expect("Failed to create utility verts");
         let skybox_precomputed_textures =
-            SkyboxPrecomputedTextures::new(&mut view_ctx.app_subsystems().borrow_mut().mini_engine)
-                .expect("Failed to precompute skybox textures");
+            SkyboxPrecomputedTextures::new().expect("Failed to precompute skybox textures");
 
         let main_render_pass = br::RenderPassBuilder2::new(
             &[
@@ -4709,10 +4178,9 @@ impl EditorStageView {
             ],
         )
         .create(
-            view_ctx
-                .app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .mini_engine
+                .borrow_mut()
                 .device()
                 .clone(),
         )
@@ -4727,7 +4195,6 @@ impl EditorStageView {
             br::AspectMask::COLOR,
             0..1,
             0..1,
-            &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
         )
         .expect("Failed to create hdr temp rt");
         let depth_stencil_temp_rt = TempRT::new(
@@ -4736,7 +4203,6 @@ impl EditorStageView {
             br::AspectMask::DEPTH.stencil(),
             0..1,
             0..1,
-            &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
         )
         .expect("Failed to create depth stencil temp rt");
 
@@ -4747,10 +4213,9 @@ impl EditorStageView {
                     .only_for_fragment(),
             )
             .create(
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
+                AppSubsystemInstances::get()
                     .mini_engine
+                    .borrow()
                     .device()
                     .clone(),
             )
@@ -4762,25 +4227,22 @@ impl EditorStageView {
                     .for_shader_stage(br::ShaderStage::VERTEX | br::ShaderStage::FRAGMENT),
             )
             .create(
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
+                AppSubsystemInstances::get()
                     .mini_engine
+                    .borrow()
                     .device()
                     .clone(),
             )
             .expect("Failed to create descriptor set layout");
 
-        let hdr_final_pass_vsh = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let hdr_final_pass_vsh = AppSubsystemInstances::get()
             .mini_engine
+            .borrow_mut()
             .shader("shaders/simple2d_notrans_with_uv.vspv")
             .expect("Failed to load final pass vertex shader");
-        let hdr_final_pass_fsh = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let hdr_final_pass_fsh = AppSubsystemInstances::get()
             .mini_engine
+            .borrow_mut()
             .shader("shaders/simple2d_hdr_final_pass.fspv")
             .expect("Failed to load final pass fragment shader");
         let hdr_final_pass_vbinds = [br::VertexInputBindingDescription::per_vertex_typed::<
@@ -4803,10 +4265,9 @@ impl EditorStageView {
         let hdr_final_pass_pipeline_layout =
             br::PipelineLayoutBuilder::new(vec![&descriptor_set_layout_ia1], vec![])
                 .create(
-                    view_ctx
-                        .app_subsystems()
-                        .borrow()
+                    AppSubsystemInstances::get()
                         .mini_engine
+                        .borrow()
                         .device()
                         .clone(),
                 )
@@ -4837,16 +4298,14 @@ impl EditorStageView {
             )
             .depth_test_settings(None, false);
 
-        let grid_vsh = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let grid_vsh = AppSubsystemInstances::get()
             .mini_engine
+            .borrow_mut()
             .shader("shaders/simple_transformed_static_pos.vspv")
             .expect("Failed to load vertex shader");
-        let grid_fsh = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let grid_fsh = AppSubsystemInstances::get()
             .mini_engine
+            .borrow_mut()
             .shader("shaders/vertex_color.fspv")
             .expect("Failed to load fragment shader");
         let (grid_vbinds, grid_vattrs) = ColoredVertex::single_binding(0, 1);
@@ -4855,10 +4314,9 @@ impl EditorStageView {
             vec![(br::ShaderStage::VERTEX, 0..64)],
         )
         .create(
-            view_ctx
-                .app_subsystems()
-                .borrow()
+            AppSubsystemInstances::get()
                 .mini_engine
+                .borrow()
                 .device()
                 .clone(),
         )
@@ -4878,10 +4336,9 @@ impl EditorStageView {
             ),
         );
         let mut rasterization_state = br::RasterizationState::default();
-        if view_ctx
-            .app_subsystems()
-            .borrow()
+        if AppSubsystemInstances::get()
             .mini_engine
+            .borrow()
             .has_extra_line_rasterization_enabled()
         {
             rasterization_state.line_state(br::RasterizationLineState::new(
@@ -4901,30 +4358,14 @@ impl EditorStageView {
 
         let hdr_final_pass_pipeline_extras = hdr_final_pass_pipeline.make_extras();
         let grid_pipeline_extras = grid_pipeline.make_extras();
-        let [hdr_final_pass_pipeline, grid_pipeline] = view_ctx
-            .app_subsystems()
-            .borrow()
+        let [hdr_final_pass_pipeline, grid_pipeline] = AppSubsystemInstances::get()
             .mini_engine
-            .device()
-            .new_graphics_pipeline_array(
-                &[
-                    hdr_final_pass_pipeline.build(&hdr_final_pass_pipeline_extras),
-                    grid_pipeline.build(&grid_pipeline_extras),
-                ],
-                Some(
-                    view_ctx
-                        .app_subsystems()
-                        .borrow()
-                        .mini_engine
-                        .pipeline_cache(),
-                ),
-            )
+            .borrow()
+            .create_graphics_pipeline_array(&[
+                hdr_final_pass_pipeline.build(&hdr_final_pass_pipeline_extras),
+                grid_pipeline.build(&grid_pipeline_extras),
+            ])
             .expect("Failed to create grid pipeline state");
-        view_ctx
-            .app_subsystems()
-            .borrow()
-            .mini_engine
-            .writeback_pipeline_cache();
 
         let grid_vertices = (-5..=5)
             .flat_map(|x| {
@@ -4987,32 +4428,28 @@ impl EditorStageView {
             depth_range: 0.1..100.0,
         };
 
-        let [grid_buffer, camera_buffer] = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let [grid_buffer, camera_buffer] = AppSubsystemInstances::get()
             .mini_engine
+            .borrow_mut()
             .alloc_device_local_buffer_array([
                 br::BufferDesc::new(
                     core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
-                br::BufferDesc::new(
-                    core::mem::size_of::<RenderCameraUniformData>(),
+                br::BufferDesc::new_for_type::<RenderCameraUniformData>(
                     br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
                 ),
             ])
             .expect("Failed to allocate device local buffers");
-        let [mut grid_buffer_stg, mut camera_buffer_stg] = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let [mut grid_buffer_stg, mut camera_buffer_stg] = AppSubsystemInstances::get()
             .mini_engine
+            .borrow_mut()
             .alloc_upload_buffer_array([
                 br::BufferDesc::new(
                     core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
                     br::BufferUsage::TRANSFER_SRC,
                 ),
-                br::BufferDesc::new(
-                    core::mem::size_of::<RenderCameraUniformData>(),
+                br::BufferDesc::new_for_type::<RenderCameraUniformData>(
                     br::BufferUsage::TRANSFER_SRC,
                 ),
             ])
@@ -5031,16 +4468,6 @@ impl EditorStageView {
 
         // initialize
         initialization_cmd_rec
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::HOST.write,
-                        br::AccessFlags2::TRANSFER.read,
-                    )
-                    .of_execution(br::PipelineStageFlags2::HOST, br::PipelineStageFlags2::COPY)],
-                &[],
-                &[],
-            ))
             .copy_buffer(
                 &grid_buffer_stg,
                 &grid_buffer,
@@ -5049,60 +4476,42 @@ impl EditorStageView {
             .copy_buffer(
                 &camera_buffer_stg,
                 &camera_buffer,
-                &[br::BufferCopy::mirror(
-                    0,
-                    camera_buffer_stg.byte_length() as _,
-                )],
+                &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::TRANSFER.write,
-                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::UNIFORM_READ,
-                    )
-                    .of_execution(
+                    .from(
                         br::PipelineStageFlags2::COPY,
+                        br::AccessFlags2::TRANSFER.write,
+                    )
+                    .to(
                         br::PipelineStageFlags2::VERTEX_INPUT
                             | br::PipelineStageFlags2::VERTEX_SHADER,
+                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::UNIFORM_READ,
                     )],
                 &[],
                 &[],
             ))
             .end()
             .expect("Failed to finish init commands");
-        view_ctx
-            .app_subsystems()
-            .borrow()
+        AppSubsystemInstances::get()
             .mini_engine
-            .graphics_queue()
-            .borrow_mut()
-            .submit2(
-                &[br::SubmitInfo2::new(
-                    &[],
-                    &[br::CommandBufferSubmitInfo::new(&initialization_cb[0])],
-                    &[],
-                )],
-                None::<&mut br::FenceObject<StdVkDevice>>,
-            )
+            .borrow()
+            .submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
+                &[],
+                &[br::CommandBufferSubmitInfo::new(&initialization_cb[0])],
+                &[],
+            )])
             .expect("Failed to submit init commands");
-        view_ctx
-            .app_subsystems()
-            .borrow()
-            .mini_engine
-            .graphics_queue()
-            .borrow_mut()
-            .wait()
-            .expect("Failed to wait init commands");
         drop(initialization_cp);
 
         let mut dp = br::DescriptorPoolBuilder::new(2)
             .reserve(br::DescriptorType::UniformBuffer.with_count(1))
             .reserve(br::DescriptorType::InputAttachment.with_count(1))
             .create(
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
+                AppSubsystemInstances::get()
                     .mini_engine
+                    .borrow()
                     .device()
                     .clone(),
             )
@@ -5113,18 +4522,17 @@ impl EditorStageView {
                 br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ia1),
             ])
             .expect("Failed to allocate camera descriptor set");
-        view_ctx
-            .app_subsystems()
-            .borrow()
+        AppSubsystemInstances::get()
             .mini_engine
+            .borrow()
             .device()
             .update_descriptor_sets(
                 &[
                     camera_descriptor_set.binding_at(0).write(
-                        br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
+                        br::DescriptorContents::uniform_buffer(
                             &camera_buffer,
                             0..core::mem::size_of::<RenderCameraUniformData>() as u64,
-                        )]),
+                        ),
                     ),
                     hdr_final_pass_descriptor_set.binding_at(0).write(
                         br::DescriptorContents::input_attachment(
@@ -5136,53 +4544,49 @@ impl EditorStageView {
                 &[],
             );
 
+        let init_light_data = match app_state
+            .borrow()
+            .current_scene
+            .objects
+            .values()
+            .find(|x| x.is_sunlight_object())
+        {
+            Some(x) => PrimaryDirectionalLightUniformData {
+                // TODO: ライト方向は後で
+                incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
+                // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                light_intensity: match x.details {
+                    ObjectDetails::SunLight { intensity, .. } => intensity,
+                    _ => unreachable!(),
+                },
+            },
+            None => PrimaryDirectionalLightUniformData {
+                incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
+                // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
+                light_intensity: 20.0,
+            },
+        };
         let skybox_renderer = SkyboxRenderer::new(
-            &mut view_ctx.app_subsystems().borrow_mut().mini_engine,
             &descriptor_set_layout_ub1,
             &main_render_pass,
             hdr_render_subpass,
             skybox_precomputed_textures,
-            match app_state
-                .borrow()
-                .current_scene
-                .objects
-                .values()
-                .find(|x| x.is_sunlight_object())
-            {
-                Some(x) => PrimaryDirectionalLightUniformData {
-                    // TODO: ライト方向は後で
-                    incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
-                    // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
-                    light_intensity: match x.details {
-                        ObjectDetails::SunLight { intensity, .. } => intensity,
-                        _ => unreachable!(),
-                    },
-                },
-                None => PrimaryDirectionalLightUniformData {
-                    incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
-                    // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
-                    light_intensity: 20.0,
-                },
-            },
+            init_light_data,
         )
         .expect("Failed to initialize skybox renderer");
 
-        let mut main_render_command_pool = br::CommandPoolBuilder::new(
-            view_ctx
-                .app_subsystems()
-                .borrow()
-                .mini_engine
-                .graphics_queue_family_index(),
-        )
-        .create(
-            view_ctx
-                .app_subsystems()
-                .borrow()
-                .mini_engine
-                .device()
-                .clone(),
-        )
-        .expect("Failed to create command pool");
+        let mut main_render_command_pool = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow()
+            .command_pool_builder_for_graphics_work()
+            .create(
+                AppSubsystemInstances::get()
+                    .mini_engine
+                    .borrow()
+                    .device()
+                    .clone(),
+            )
+            .expect("Failed to create command pool");
         let main_render_commands = main_render_command_pool
             .alloc(3, true)
             .expect("Failed to allocate command buffers");
@@ -5192,12 +4596,10 @@ impl EditorStageView {
         for mut cb in main_render_commands.into_iter() {
             let texture_desc = d3d11_presentation_texture_desc(init_size.width, init_size.height);
             let texture = texture_desc
-                .create(&view_ctx.app_subsystems().borrow().d3d11_device)
+                .create(&AppSubsystemInstances::get().d3d11_device)
                 .expect("Failed to create back buffer texture");
             let presentation_buffer = unsafe {
-                view_ctx
-                    .app_subsystems()
-                    .borrow()
+                AppSubsystemInstances::get()
                     .presentation_manager
                     .AddBufferFromResource(&texture)
                     .expect("Failed to add texture as presentation buffer")
@@ -5216,7 +4618,7 @@ impl EditorStageView {
                 ..texture_desc
             };
             let rt = rt_desc
-                .create(&view_ctx.app_subsystems().borrow().d3d11_device)
+                .create(&AppSubsystemInstances::get().d3d11_device)
                 .expect("Failed to create rt");
 
             let texture_res = rt
@@ -5236,7 +4638,7 @@ impl EditorStageView {
             let external_handle_image_memory_req = unsafe {
                 external_handle
                     .properties(
-                        view_ctx.app_subsystems().borrow().mini_engine.device(),
+                        AppSubsystemInstances::get().mini_engine.borrow().device(),
                         br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
                     )
                     .expect("Failed to query external handle memory properties")
@@ -5245,19 +4647,17 @@ impl EditorStageView {
                 .as_color_attachment()
                 .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
                 .create(
-                    view_ctx
-                        .app_subsystems()
-                        .borrow()
+                    AppSubsystemInstances::get()
                         .mini_engine
+                        .borrow()
                         .device()
                         .clone(),
                 )
                 .expect("Failed to create external backbuffer image");
             let vk_image_memory_req = vk_image.requirements();
-            let vk_memory_index = view_ctx
-                .app_subsystems()
-                .borrow()
+            let vk_memory_index = AppSubsystemInstances::get()
                 .mini_engine
+                .borrow()
                 .find_device_local_memory_index(
                     vk_image_memory_req.memoryTypeBits
                         & external_handle_image_memory_req.memoryTypeBits,
@@ -5266,10 +4666,9 @@ impl EditorStageView {
             let vk_image_memory = external_handle
                 .into_import_request(vk_memory_index, None)
                 .execute(
-                    view_ctx
-                        .app_subsystems()
-                        .borrow()
+                    AppSubsystemInstances::get()
                         .mini_engine
+                        .borrow()
                         .device()
                         .clone(),
                 )
@@ -5356,12 +4755,8 @@ impl EditorStageView {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
                 view_ctx.hittest_context().new_id(),
-                Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: init_size.width as _,
-                    Height: init_size.height as _,
-                },
+                Rect::from_size(init_size.width as _, init_size.height as _),
+                Rect::empty(),
             );
 
             Self {
@@ -5388,22 +4783,15 @@ impl EditorStageView {
                 hdr_final_pass_descriptor_set,
                 renderer: Rc::new(StageTabContentRenderer {
                     back_buffers: back_buffer_render_resources,
-                    presentation_manager: view_ctx
-                        .app_subsystems()
-                        .borrow()
-                        .presentation_manager
-                        .clone(),
+                    presentation_manager: AppSubsystemInstances::get().presentation_manager.clone(),
                     presentation_surface,
-                    graphics_queue: view_ctx
-                        .app_subsystems()
-                        .borrow()
+                    graphics_queue: AppSubsystemInstances::get()
                         .mini_engine
+                        .borrow()
                         .graphics_queue()
                         .clone(),
                     d3d11_device_context: unsafe {
-                        view_ctx
-                            .app_subsystems()
-                            .borrow()
+                        AppSubsystemInstances::get()
                             .d3d11_device
                             .GetImmediateContext()
                             .expect("Failed to get d3d imm context")
@@ -5415,39 +4803,6 @@ impl EditorStageView {
                 pointer_down_point: peridot_math::Vector2(0.0, 0.0),
             }
         }))
-    }
-
-    fn mount(
-        &self,
-        onto: &ContainerVisual,
-        onto_ht: &SharedMut<HitTestTree>,
-        view_context: &mut (impl ViewContext + ?Sized),
-    ) -> windows::core::Result<()> {
-        onto.Children()?.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(&onto_ht, self.ht.clone());
-
-        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
-            view_context
-                .app_global_signals()
-                .borrow_mut()
-                .register(*e, &self.renderer, n);
-        }
-
-        Ok(())
-    }
-
-    fn unmount(&self, view_context: &mut (impl ViewContext + ?Sized)) -> windows::core::Result<()> {
-        self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.borrow_mut().unmount();
-
-        for (n, _) in self.back_buffer_resources.iter().enumerate() {
-            view_context
-                .app_global_signals()
-                .borrow_mut()
-                .unregister(&self.renderer, n);
-        }
-
-        Ok(())
     }
 
     fn resize(
@@ -5462,10 +4817,7 @@ impl EditorStageView {
             .reset(true)
             .expect("Failed to reset old commands");
         for n in 0..BACK_BUFFER_COUNT {
-            resize_ctx
-                .app_global_signals
-                .borrow_mut()
-                .unregister(&self.renderer, n);
+            AppGlobalSignals::get_mut().unregister(&self.renderer, n);
         }
 
         let buffer_real_size = br::vk::VkExtent2D {
@@ -5483,24 +4835,16 @@ impl EditorStageView {
         }
 
         self.hdr_temp_rt
-            .recreate_newsize(
-                buffer_real_size,
-                &mut resize_ctx.app_subsystems.borrow_mut().mini_engine,
-            )
+            .recreate_newsize(buffer_real_size)
             .expect("Failed to recreate hdr temp rt");
         self.depth_stencil_temp_rt
-            .recreate_newsize(
-                buffer_real_size,
-                &mut resize_ctx.app_subsystems.borrow_mut().mini_engine,
-            )
+            .recreate_newsize(buffer_real_size)
             .expect("Failed to recreate depth stencil temp rt");
 
-        let mut camera_upload_buffer = resize_ctx
-            .app_subsystems
-            .borrow_mut()
+        let mut camera_upload_buffer = AppSubsystemInstances::get()
             .mini_engine
-            .alloc_upload_buffer(br::BufferDesc::new(
-                core::mem::size_of::<RenderCameraUniformData>(),
+            .borrow_mut()
+            .alloc_upload_buffer(br::BufferDesc::new_for_type::<RenderCameraUniformData>(
                 br::BufferUsage::TRANSFER_SRC,
             ))
             .expect("Failed to create upload buffer");
@@ -5516,19 +4860,16 @@ impl EditorStageView {
             })
             .expect("Failed to write camera vp matrix");
 
-        let app_subsystems_borrow = resize_ctx.app_subsystems.borrow();
-        let mut cp = br::CommandPoolBuilder::new(
-            app_subsystems_borrow
-                .mini_engine
-                .graphics_queue_family_index(),
-        )
-        .transient()
-        .create(app_subsystems_borrow.mini_engine.device())
-        .expect("Failed to create transient command pool");
-        let mut cb = cp
-            .alloc(1, true)
+        let mini_engine_ref = AppSubsystemInstances::get().mini_engine.borrow();
+        let mut cp = mini_engine_ref
+            .command_pool_builder_for_graphics_work()
+            .transient()
+            .create(mini_engine_ref.device())
+            .expect("Failed to create transient command pool");
+        let [mut cb] = cp
+            .alloc_array::<1>(true)
             .expect("Failed to allocate command buffer");
-        unsafe { cb[0].begin_once().expect("Failed to begin commands") }
+        unsafe { cb.begin_once().expect("Failed to begin commands") }
             .copy_buffer(
                 &camera_upload_buffer,
                 &self.camera_buffer,
@@ -5536,45 +4877,32 @@ impl EditorStageView {
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::TRANSFER.write,
-                        br::AccessFlags2::UNIFORM_READ,
-                    )
-                    .of_execution(
+                    .from(
                         br::PipelineStageFlags2::COPY,
+                        br::AccessFlags2::TRANSFER.write,
+                    )
+                    .to(
                         br::PipelineStageFlags2::VERTEX_SHADER,
+                        br::AccessFlags2::UNIFORM_READ,
                     )],
                 &[],
                 &[],
             ))
             .end()
             .expect("Failed to finish updating commands");
-        app_subsystems_borrow
-            .mini_engine
-            .graphics_queue()
-            .borrow_mut()
-            .submit2(
-                &[br::SubmitInfo2::new(
-                    &[],
-                    &[br::CommandBufferSubmitInfo::new(&cb[0])],
-                    &[],
-                )],
-                None::<&mut br::FenceObject<StdVkDevice>>,
-            )
+        mini_engine_ref
+            .submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
+                &[],
+                &[br::CommandBufferSubmitInfo::new(&cb)],
+                &[],
+            )])
             .expect("Failed to submit updating commands");
-        app_subsystems_borrow
-            .mini_engine
-            .graphics_queue()
-            .borrow_mut()
-            .wait()
-            .expect("Failed to wait update completion");
         drop(cp);
-        drop(app_subsystems_borrow);
+        drop(mini_engine_ref);
 
-        resize_ctx
-            .app_subsystems
-            .borrow()
+        AppSubsystemInstances::get()
             .mini_engine
+            .borrow()
             .device()
             .update_descriptor_sets(
                 &[self.hdr_final_pass_descriptor_set.binding_at(0).write(
@@ -5597,12 +4925,10 @@ impl EditorStageView {
             let texture_desc =
                 d3d11_presentation_texture_desc(buffer_real_size.width, buffer_real_size.height);
             let texture = texture_desc
-                .create(&resize_ctx.app_subsystems.borrow().d3d11_device)
+                .create(&AppSubsystemInstances::get().d3d11_device)
                 .expect("Failed to create back buffer texture");
             let presentation_buffer = unsafe {
-                resize_ctx
-                    .app_subsystems
-                    .borrow()
+                AppSubsystemInstances::get()
                     .presentation_manager
                     .AddBufferFromResource(&texture)
                     .expect("Failed to add texture as presentation buffer")
@@ -5620,7 +4946,7 @@ impl EditorStageView {
                     .0 as _,
                 ..texture_desc
             }
-            .create(&resize_ctx.app_subsystems.borrow().d3d11_device)
+            .create(&AppSubsystemInstances::get().d3d11_device)
             .expect("Failed to create render target texture");
 
             let texture_res = rt
@@ -5640,7 +4966,7 @@ impl EditorStageView {
             let external_handle_image_memory_req = unsafe {
                 external_handle
                     .properties(
-                        resize_ctx.app_subsystems.borrow().mini_engine.device(),
+                        AppSubsystemInstances::get().mini_engine.borrow().device(),
                         br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
                     )
                     .expect("Failed to query external handle memory properties")
@@ -5650,19 +4976,17 @@ impl EditorStageView {
                     .as_color_attachment()
                     .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
                     .create(
-                        resize_ctx
-                            .app_subsystems
-                            .borrow()
+                        AppSubsystemInstances::get()
                             .mini_engine
+                            .borrow()
                             .device()
                             .clone(),
                     )
                     .expect("Failed to create external backbuffer image");
             let vk_image_memory_req = vk_image.requirements();
-            let vk_memory_index = resize_ctx
-                .app_subsystems
-                .borrow()
+            let vk_memory_index = AppSubsystemInstances::get()
                 .mini_engine
+                .borrow()
                 .find_device_local_memory_index(
                     vk_image_memory_req.memoryTypeBits
                         & external_handle_image_memory_req.memoryTypeBits,
@@ -5671,10 +4995,9 @@ impl EditorStageView {
             let vk_image_memory = external_handle
                 .into_import_request(vk_memory_index, None)
                 .execute(
-                    resize_ctx
-                        .app_subsystems
-                        .borrow()
+                    AppSubsystemInstances::get()
                         .mini_engine
+                        .borrow()
                         .device()
                         .clone(),
                 )
@@ -5769,10 +5092,35 @@ impl EditorStageView {
         }
 
         for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
-            resize_ctx
-                .app_global_signals
-                .borrow_mut()
-                .register(*e, &self.renderer, n);
+            AppGlobalSignals::get_mut().register(*e, &self.renderer, n);
+        }
+
+        Ok(())
+    }
+}
+impl MountableView for EditorStageView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
+        HitTestTree::add_child(&onto_ht, self.ht.clone());
+
+        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
+            AppGlobalSignals::get_mut().register(*e, &self.renderer, n);
+        }
+
+        Ok(())
+    }
+
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+        self.ht.borrow_mut().unmount();
+
+        for (n, _) in self.back_buffer_resources.iter().enumerate() {
+            AppGlobalSignals::get_mut().unregister(&self.renderer, n);
         }
 
         Ok(())
@@ -5791,7 +5139,7 @@ impl InputEventHandler for WeakMut<EditorStageView> {
         }
     }
 
-    fn on_drag_move(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
             return;
         };
@@ -5820,10 +5168,9 @@ impl InputEventHandler for WeakMut<EditorStageView> {
         );
 
         let current_size = this.borrow().ht.borrow().rect().clone();
-        let mut camera_upload_buffer = ctx
-            .app_subsystems()
-            .borrow_mut()
+        let mut camera_upload_buffer = AppSubsystemInstances::get()
             .mini_engine
+            .borrow_mut()
             .alloc_upload_buffer(br::BufferDesc::new(
                 core::mem::size_of::<RenderCameraUniformData>(),
                 br::BufferUsage::TRANSFER_SRC,
@@ -5842,15 +5189,11 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             })
             .expect("Failed to write camera vp matrix");
 
-        let app_subsystems_borrow = ctx.app_subsystems().borrow();
-        let mut cp = br::CommandPoolBuilder::new(
-            app_subsystems_borrow
-                .mini_engine
-                .graphics_queue_family_index(),
-        )
-        .transient()
-        .create(app_subsystems_borrow.mini_engine.device())
-        .expect("Failed to create transient command pool");
+        let mini_engine_ref = AppSubsystemInstances::get().mini_engine.borrow();
+        let mut cp = br::CommandPoolBuilder::new(mini_engine_ref.graphics_queue_family_index())
+            .transient()
+            .create(mini_engine_ref.device())
+            .expect("Failed to create transient command pool");
         let mut cb = cp
             .alloc(1, true)
             .expect("Failed to allocate command buffer");
@@ -5875,8 +5218,7 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             ))
             .end()
             .expect("Failed to finish updating commands");
-        app_subsystems_borrow
-            .mini_engine
+        mini_engine_ref
             .graphics_queue()
             .borrow_mut()
             .submit2(
@@ -5888,14 +5230,13 @@ impl InputEventHandler for WeakMut<EditorStageView> {
                 None::<&mut br::FenceObject<StdVkDevice>>,
             )
             .expect("Failed to submit updating commands");
-        app_subsystems_borrow
-            .mini_engine
+        mini_engine_ref
             .graphics_queue()
             .borrow_mut()
             .wait()
             .expect("Failed to wait update completion");
         drop(cp);
-        drop(app_subsystems_borrow);
+        drop(mini_engine_ref);
     }
 
     fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
@@ -5912,7 +5253,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
         &mut self,
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -5920,7 +5261,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -5956,20 +5297,16 @@ impl ObjectTreeElementRowView {
         init_name: impl Into<Cow<'static, str>>,
         bound_object_id: Uuid,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let label_fmt = view_ctx
-            .app_subsystems()
-            .borrow_mut()
+        let label_fmt = AppSubsystemInstances::get()
             .text_format_stock
-            .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
-        let label_surface = view_ctx
-            .app_subsystems()
             .borrow_mut()
+            .get("system-ui", 12.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let label_surface = AppSubsystemInstances::get()
             .text_surface_stock
+            .borrow_mut()
             .get(&label_fmt, view_ctx.current_dpi(), init_name)?;
 
-        let root = view_ctx
-            .app_subsystems()
-            .borrow()
+        let root = AppSubsystemInstances::get()
             .compositor
             .CreateContainerVisual()?;
         root.set_properties()
@@ -5979,16 +5316,12 @@ impl ObjectTreeElementRowView {
             })?
             .relative_size_adjustment(Vector2 { X: 1.0, Y: 0.0 })?;
 
-        let bg = view_ctx
-            .app_subsystems()
-            .borrow()
+        let bg = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         bg.set_properties()
             .brush(
-                &view_ctx
-                    .app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .compositor
                     .CreateColorBrushWithColor(Color {
                         A: 16,
@@ -6001,17 +5334,13 @@ impl ObjectTreeElementRowView {
             .opacity(0.0)?;
         root.Children()?.InsertAtTop(&bg)?;
 
-        let label = view_ctx
-            .app_subsystems()
-            .borrow()
+        let label = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         label
             .set_properties()
             .brush(
-                &view_ctx
-                    .app_subsystems()
-                    .borrow()
+                &AppSubsystemInstances::get()
                     .compositor
                     .CreateSurfaceBrushWithSurface(&label_surface.surface)?,
             )?
@@ -6023,14 +5352,10 @@ impl ObjectTreeElementRowView {
             })?;
         root.Children()?.InsertAtTop(&label)?;
 
-        let linear_easing = view_ctx
-            .app_subsystems()
-            .borrow()
+        let linear_easing = AppSubsystemInstances::get()
             .compositor
             .CreateLinearEasingFunction()?;
-        let bg_hover_animation = view_ctx
-            .app_subsystems()
-            .borrow()
+        let bg_hover_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         bg_hover_animation
@@ -6038,9 +5363,7 @@ impl ObjectTreeElementRowView {
             .interpolate(1.0, 1.0, &linear_easing)?
             .set_properties()
             .duration(Self::HOVER_ANIMATION_DURATION)?;
-        let bg_hover_end_animation = view_ctx
-            .app_subsystems()
-            .borrow()
+        let bg_hover_end_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         bg_hover_end_animation
@@ -6053,12 +5376,8 @@ impl ObjectTreeElementRowView {
             let ht = HitTestTree::new(
                 Some(&Rc::new(wthis.clone())),
                 view_ctx.hittest_context().new_id(),
-                Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: core::f32::MAX,
-                    Height: label_surface.height + Self::PADDING_Y * 2.0,
-                },
+                Rect::from_size(core::f32::MAX, label_surface.height + Self::PADDING_Y * 2.0),
+                Rect::empty(),
             );
 
             Self {
@@ -6150,7 +5469,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         &mut self,
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let children = onto.Children()?;
@@ -6163,7 +5482,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         for r in &self.rows {
@@ -6213,7 +5532,7 @@ impl PaneTabContentPresenter for AssetExplorerTabPresenter {
         &mut self,
         _onto: &ContainerVisual,
         _onto_ht: &SharedMut<HitTestTree>,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -6221,7 +5540,7 @@ impl PaneTabContentPresenter for AssetExplorerTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &mut dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
@@ -6240,7 +5559,7 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
 }
 
 pub trait AppStateCurrentSelectionChangedHandler {
-    fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &mut dyn ViewContext);
+    fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &dyn ViewContext);
 }
 #[repr(transparent)]
 pub struct AppStateCurrentSelectionChangedHandlerEntry(
@@ -6275,7 +5594,7 @@ impl AppState {
     pub fn set_current_selection(
         this: &SharedMut<Self>,
         selection: Option<Uuid>,
-        view_context: &mut impl ViewContext,
+        view_context: &impl ViewContext,
     ) {
         this.borrow_mut().current_selection_object_id = selection;
 
@@ -6293,7 +5612,7 @@ impl AppState {
     pub fn observe_current_selection_changes(
         this: &SharedMut<Self>,
         handler: &Rc<impl AppStateCurrentSelectionChangedHandler + 'static>,
-        view_ctx: &mut impl ViewContext,
+        view_ctx: &dyn ViewContext,
     ) {
         let wh = Rc::downgrade(handler);
         this.borrow_mut()
@@ -6373,27 +5692,17 @@ pub enum ObjectDetails {
 }
 
 struct AppWindowState {
-    app_subsystem_instances: SharedMut<AppSubsystemInstances>,
     input_state: InputState,
     hittest_context: HitTestTreeContext,
     pane_group_docking_manager: SharedMut<PaneGroupDockingManager>,
     app_title_bar_view: SharedMut<AppTitleBarView>,
-    app_global_signals: SharedMut<AppGlobalSignals>,
     currently_maximized: bool,
     current_dpi: f32,
     app_state: SharedMut<AppState>,
 }
 impl ViewContext for AppWindowState {
-    fn app_subsystems(&self) -> &SharedMut<AppSubsystemInstances> {
-        &self.app_subsystem_instances
-    }
-
     fn hittest_context(&self) -> &HitTestTreeContext {
         &self.hittest_context
-    }
-
-    fn app_global_signals(&self) -> &SharedMut<AppGlobalSignals> {
-        &self.app_global_signals
     }
 
     fn current_dpi(&self) -> f32 {
@@ -6403,8 +5712,6 @@ impl ViewContext for AppWindowState {
 impl InputContext for AppWindowState {
     fn make_resize_context(&self) -> ResizeContext {
         ResizeContext {
-            app_subsystems: &self.app_subsystem_instances,
-            app_global_signals: &self.app_global_signals,
             current_dpi: self.current_dpi,
         }
     }
@@ -6666,8 +5973,9 @@ fn app() -> i32 {
         .expect("Failed to create dispatcher queue controller")
     };
 
-    let app_subsystem_instances = AppSubsystemInstances::new();
-    let app_global_signals = new_shared_mut(AppGlobalSignals::new());
+    let app_subsystem_instances_finalizer = AppSubsystemInstances::initialize();
+    let app_global_signals_finalizer = AppGlobalSignals::initialize();
+    let app_subsystem_instances = AppSubsystemInstances::get();
 
     let desktop_interop = app_subsystem_instances
         .compositor
@@ -6814,11 +6122,8 @@ fn app() -> i32 {
     let hittest_tree_root = HitTestTree::new_unsized(Some(&Rc::new(())), 0, 0.0, 0.0);
     let mut hittest_context = HitTestTreeContext::new();
 
-    let app_subsystem_instances = new_shared_mut(app_subsystem_instances);
     let mut view_context = ViewContext1 {
-        app_subsystems: &app_subsystem_instances,
         hittest_context: &mut hittest_context,
-        app_global_signals: &app_global_signals,
         current_dpi: window_handle.current_dpi,
     };
 
@@ -6832,8 +6137,6 @@ fn app() -> i32 {
     TabGroupPaneView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context, &state)
         .expect("Failed to create SceneViewPaneTabHeader");
     pane_group1.borrow_mut().rearrange(&ResizeContext {
-        app_subsystems: &app_subsystem_instances,
-        app_global_signals: &app_global_signals,
         current_dpi: window_handle.current_dpi,
     });
 
@@ -6846,8 +6149,6 @@ fn app() -> i32 {
     TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&main_pane, &mut view_context, &state)
         .expect("Failed to create ProjectSettingsPaneTabHeader");
     main_pane.borrow_mut().rearrange(&ResizeContext {
-        app_subsystems: &app_subsystem_instances,
-        app_global_signals: &app_global_signals,
         current_dpi: window_handle.current_dpi,
     });
 
@@ -6856,8 +6157,6 @@ fn app() -> i32 {
     TabGroupPaneView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context, &state)
         .expect("Failed to create InspectorPaneTabHeader");
     pane_group3.borrow_mut().rearrange(&ResizeContext {
-        app_subsystems: &app_subsystem_instances,
-        app_global_signals: &app_global_signals,
         current_dpi: window_handle.current_dpi,
     });
     pane_group3
@@ -6866,8 +6165,6 @@ fn app() -> i32 {
             256.0,
             256.0,
             &ResizeContext {
-                app_subsystems: &app_subsystem_instances,
-                app_global_signals: &app_global_signals,
                 current_dpi: window_handle.current_dpi,
             },
         )
@@ -6882,8 +6179,6 @@ fn app() -> i32 {
     )
     .expect("Failed to create AssetExplorerTab");
     explorers_pane.borrow_mut().rearrange(&ResizeContext {
-        app_subsystems: &app_subsystem_instances,
-        app_global_signals: &app_global_signals,
         current_dpi: window_handle.current_dpi,
     });
     explorers_pane
@@ -6892,8 +6187,6 @@ fn app() -> i32 {
             256.0,
             256.0,
             &ResizeContext {
-                app_subsystems: &app_subsystem_instances,
-                app_global_signals: &app_global_signals,
                 current_dpi: window_handle.current_dpi,
             },
         )
@@ -6908,8 +6201,6 @@ fn app() -> i32 {
     )
     .expect("Failed to create ObjectTreeTab");
     scene_subinfo_pane.borrow_mut().rearrange(&ResizeContext {
-        app_subsystems: &app_subsystem_instances,
-        app_global_signals: &app_global_signals,
         current_dpi: window_handle.current_dpi,
     });
     scene_subinfo_pane
@@ -6918,8 +6209,6 @@ fn app() -> i32 {
             256.0,
             256.0,
             &ResizeContext {
-                app_subsystems: &app_subsystem_instances,
-                app_global_signals: &app_global_signals,
                 current_dpi: window_handle.current_dpi,
             },
         )
@@ -6927,44 +6216,48 @@ fn app() -> i32 {
 
     let layout = PaneDockLayer::new_root(|parent| {
         Some(
-            PaneDockLayer::new_on_right(
-                &mut view_context,
+            PaneDockLayer::new_on(
+                DockDirection::Right,
                 parent,
                 |parent, _| PaneDockLayer::new_filled(&pane_group3, parent),
                 |parent, ctx| {
-                    PaneDockLayer::new_on_top(
-                        ctx,
+                    PaneDockLayer::new_on(
+                        DockDirection::Top,
                         parent,
                         |parent, _| PaneDockLayer::new_filled(&pane_group1, parent),
                         |parent, ctx| {
-                            PaneDockLayer::new_on_bottom(
-                                ctx,
+                            PaneDockLayer::new_on(
+                                DockDirection::Bottom,
                                 parent,
                                 |parent, _| PaneDockLayer::new_filled(&explorers_pane, parent),
                                 |parent, ctx| {
-                                    PaneDockLayer::new_on_left(
-                                        ctx,
+                                    PaneDockLayer::new_on(
+                                        DockDirection::Left,
                                         parent,
                                         |parent, _| {
                                             PaneDockLayer::new_filled(&scene_subinfo_pane, parent)
                                         },
                                         |parent, _| PaneDockLayer::new_filled(&main_pane, parent),
+                                        ctx,
                                     )
                                     .expect("Failed to create pane dock layer")
                                 },
+                                ctx,
                             )
                             .expect("Failed to create pane dock layer")
                         },
+                        ctx,
                     )
                     .expect("Failed to create pane dock state")
                 },
+                &mut view_context,
             )
             .expect("Failed to create pane dock state"),
         )
     });
     pane_group_docking_manager
         .borrow_mut()
-        .set_layout(layout)
+        .set_layout(layout, &view_context)
         .expect("Failed to setup initial layout");
 
     composition_root
@@ -6989,19 +6282,13 @@ fn app() -> i32 {
             client_width,
             client_height - AppTitleBarView::HEIGHT,
             &ResizeContext {
-                app_subsystems: &app_subsystem_instances,
-                app_global_signals: &app_global_signals,
                 current_dpi: window_handle.current_dpi,
             },
         )
         .expect("Failed to initial relayout");
 
-    let app_title = AppTitleBarView::new(
-        &mut view_context,
-        window_handle.current_dpi,
-        app_global_scale,
-    )
-    .expect("Failed to initialize app title bar");
+    let app_title = AppTitleBarView::new(&view_context, app_global_scale)
+        .expect("Failed to initialize app title bar");
     app_title
         .borrow()
         .mount(
@@ -7013,12 +6300,10 @@ fn app() -> i32 {
         .expect("Failed to mount app title bar");
 
     let mut ws = AppWindowState {
-        app_subsystem_instances,
         input_state: InputState::new(window_handle.handle, &hittest_tree_root),
         hittest_context,
         pane_group_docking_manager,
         app_title_bar_view: app_title,
-        app_global_signals: app_global_signals.clone(),
         currently_maximized: window_handle
             .is_maximized()
             .expect("Failed to query maximized state"),
@@ -7036,7 +6321,7 @@ fn app() -> i32 {
 
     let mut msg = core::mem::MaybeUninit::<MSG>::uninit();
     'app: loop {
-        let r = app_global_signals.borrow().wait();
+        let r = AppGlobalSignals::get().wait();
         match r {
             SignalEventType::Message => {
                 while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).0 != 0 } {
@@ -7056,6 +6341,8 @@ fn app() -> i32 {
     }
 
     window_handle.clear_state_store();
+    drop(app_global_signals_finalizer);
+    drop(app_subsystem_instances_finalizer);
 
     unsafe { msg.assume_init().wParam.0 as _ }
 }
@@ -7241,7 +6528,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
 
             title_bar_view
                 .borrow()
-                .change_maximize_restore_icon(maximized, state)
+                .change_maximize_restore_icon(maximized)
                 .expect("Failed to change maxres icon");
 
             state.currently_maximized = maximized;
