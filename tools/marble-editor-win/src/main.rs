@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::Hash,
     rc::{Rc, Weak},
 };
@@ -5689,6 +5689,288 @@ pub enum ObjectDetails {
         rotation: peridot_math::QuaternionF32,
         intensity: f32,
     },
+}
+
+pub trait System {}
+
+pub struct World {
+    entities: Vec<Entity>,
+    free_entity_slots: BTreeSet<u32>,
+    components: HashMap<core::any::TypeId, ComponentSparseSet>,
+    systems: Vec<Box<dyn System>>,
+}
+impl World {
+    pub fn new() -> Self {
+        Self {
+            entities: Vec::new(),
+            free_entity_slots: BTreeSet::new(),
+            components: HashMap::new(),
+            systems: Vec::new(),
+        }
+    }
+
+    pub fn new_entity(&mut self) -> EntityID {
+        match self.free_entity_slots.pop_first() {
+            Some(x) => {
+                self.entities[x as usize].id.version += 1;
+                let new_entity_id = self.entities[x as usize].id;
+
+                new_entity_id
+            }
+            None => {
+                let new_entity_id = EntityID {
+                    slot_index: self.entities.len() as _,
+                    version: 0,
+                };
+                self.entities.push(Entity {
+                    id: new_entity_id,
+                    name: String::from("New Entity"),
+                });
+
+                new_entity_id
+            }
+        }
+    }
+
+    pub fn remove_entity(&mut self, id: EntityID) {
+        self.free_entity_slots.insert(id.slot_index);
+    }
+
+    pub fn is_entity_dead(&self, id: EntityID) -> bool {
+        self.free_entity_slots.contains(&id.slot_index)
+            || self.entities[id.slot_index as usize].id.version != id.version
+    }
+
+    pub fn add_component<T: 'static>(&mut self, id: EntityID, component: T) {
+        self.components
+            .entry(core::any::TypeId::of::<T>())
+            .or_insert_with(ComponentSparseSet::new::<T>)
+            .set(id, component);
+    }
+
+    pub fn remove_component<T: 'static>(&mut self, id: EntityID) -> Option<T> {
+        let Some(components) = self.components.get_mut(&core::any::TypeId::of::<T>()) else {
+            return None;
+        };
+
+        components.clear::<T>(id)
+    }
+
+    pub fn get_component<T: 'static>(&self, id: EntityID) -> Option<&T> {
+        self.components
+            .get(&core::any::TypeId::of::<T>())
+            .and_then(|cs| cs.get(id))
+    }
+
+    pub fn get_component_mut<T: 'static>(&mut self, id: EntityID) -> Option<&mut T> {
+        self.components
+            .get_mut(&core::any::TypeId::of::<T>())
+            .and_then(|cs| cs.get_mut(id))
+    }
+
+    pub fn add_system(&mut self, sys: impl System + 'static) {
+        self.systems.push(Box::new(sys));
+    }
+}
+
+pub struct Entity {
+    pub id: EntityID,
+    pub name: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EntityID {
+    pub slot_index: u32,
+    pub version: u32,
+}
+
+pub struct AnyVec {
+    head_ptr: *mut u8,
+    count: usize,
+    capacity: usize,
+    element_size: usize,
+    element_alignment: usize,
+    drop_fn: fn(*mut u8),
+    init_type_id: core::any::TypeId,
+}
+impl AnyVec {
+    const INIT_CAPACITY: usize = 8;
+
+    pub fn new<T: 'static>() -> Self {
+        let dense_array_layout = core::alloc::Layout::from_size_align(
+            core::mem::size_of::<T>() * Self::INIT_CAPACITY,
+            core::mem::align_of::<T>(),
+        )
+        .expect("invalid memory layout");
+        let dense_array = unsafe { std::alloc::alloc(dense_array_layout) };
+
+        Self {
+            head_ptr: dense_array,
+            count: 0,
+            capacity: Self::INIT_CAPACITY,
+            element_size: core::mem::size_of::<T>(),
+            element_alignment: core::mem::align_of::<T>(),
+            drop_fn: |ptr| unsafe { core::ptr::drop_in_place(ptr as *mut T) },
+            init_type_id: core::any::TypeId::of::<T>(),
+        }
+    }
+
+    fn extend_capacity(&mut self, new_capacity: usize) {
+        let new_head_ptr = unsafe {
+            std::alloc::realloc(
+                self.head_ptr,
+                core::alloc::Layout::from_size_align_unchecked(
+                    self.element_size * self.capacity,
+                    self.element_alignment,
+                ),
+                self.element_size * new_capacity,
+            )
+        };
+
+        self.head_ptr = new_head_ptr;
+        self.capacity = new_capacity;
+    }
+
+    pub fn push<T: 'static>(&mut self, component: T) {
+        assert_eq!(core::any::TypeId::of::<T>(), self.init_type_id);
+
+        if self.capacity <= self.count {
+            self.extend_capacity(self.capacity * 2);
+        }
+
+        unsafe {
+            core::ptr::write((self.head_ptr as *mut T).add(self.count), component);
+        }
+        self.count += 1;
+    }
+
+    pub fn pop<T: 'static>(&mut self) -> Option<T> {
+        assert_eq!(core::any::TypeId::of::<T>(), self.init_type_id);
+
+        if self.count <= 0 {
+            return None;
+        }
+
+        let r = unsafe { core::ptr::read((self.head_ptr as *mut T).add(self.count - 1)) };
+        self.count -= 1;
+        Some(r)
+    }
+
+    pub fn swap_remove<T: 'static>(&mut self, at: usize) -> T {
+        let last_index = self.count - 1;
+        self.as_typed_slice_mut::<T>().swap(at, last_index);
+        self.count -= 1;
+        unsafe { core::ptr::read((self.head_ptr as *mut T).add(self.count)) }
+    }
+
+    pub fn as_typed_slice<T: 'static>(&self) -> &[T] {
+        assert_eq!(core::any::TypeId::of::<T>(), self.init_type_id);
+
+        unsafe { self.as_typed_slice_unchecked::<T>() }
+    }
+
+    #[inline(always)]
+    pub const unsafe fn as_typed_slice_unchecked<T>(&self) -> &[T] {
+        core::slice::from_raw_parts(self.head_ptr as *mut T, self.count)
+    }
+
+    pub fn as_typed_slice_mut<T: 'static>(&mut self) -> &mut [T] {
+        assert_eq!(core::any::TypeId::of::<T>(), self.init_type_id);
+
+        unsafe { self.as_typed_slice_mut_unchecked::<T>() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn as_typed_slice_mut_unchecked<T>(&mut self) -> &mut [T] {
+        core::slice::from_raw_parts_mut(self.head_ptr as *mut T, self.count)
+    }
+
+    #[inline(always)]
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+}
+impl Drop for AnyVec {
+    fn drop(&mut self) {
+        for x in 0..self.count {
+            (self.drop_fn)(unsafe { self.head_ptr.add(self.element_size * x) });
+        }
+
+        unsafe {
+            std::alloc::dealloc(
+                self.head_ptr,
+                core::alloc::Layout::from_size_align_unchecked(
+                    self.element_size * self.capacity,
+                    self.element_alignment,
+                ),
+            )
+        }
+    }
+}
+
+pub struct ComponentSparseSet {
+    sparse_array_index_to_dense: Vec<Option<usize>>,
+    dense_array: AnyVec,
+    dense_array_to_slot_index: Vec<usize>,
+}
+impl ComponentSparseSet {
+    pub fn new<T: 'static>() -> Self {
+        Self {
+            sparse_array_index_to_dense: Vec::new(),
+            dense_array: AnyVec::new::<T>(),
+            dense_array_to_slot_index: Vec::new(),
+        }
+    }
+
+    pub fn set<T: 'static>(&mut self, entity: EntityID, component: T) {
+        self.dense_array.push(component);
+        let component_index = self.dense_array.len() - 1;
+
+        if self.sparse_array_index_to_dense.len() <= entity.slot_index as usize {
+            self.sparse_array_index_to_dense
+                .resize(entity.slot_index as usize + 1, None);
+        }
+        self.sparse_array_index_to_dense[entity.slot_index as usize] = Some(component_index);
+        self.dense_array_to_slot_index
+            .push(entity.slot_index as usize);
+    }
+
+    pub fn clear<T: 'static>(&mut self, entity: EntityID) -> Option<T> {
+        let Some(component_index) =
+            self.sparse_array_index_to_dense[entity.slot_index as usize].take()
+        else {
+            return None;
+        };
+
+        let c = self.dense_array.swap_remove::<T>(component_index);
+        self.dense_array_to_slot_index.swap_remove(component_index);
+        if !self.dense_array_to_slot_index.is_empty() {
+            let swapped_slot_index = self.dense_array_to_slot_index[component_index];
+            self.sparse_array_index_to_dense[swapped_slot_index] = Some(component_index);
+        }
+
+        Some(c)
+    }
+
+    pub fn get<T: 'static>(&self, entity: EntityID) -> Option<&T> {
+        self.sparse_array_index_to_dense
+            .get(entity.slot_index as usize)
+            .copied()
+            .flatten()
+            .and_then(|x| self.dense_array.as_typed_slice::<T>().get(x))
+    }
+
+    pub fn get_mut<T: 'static>(&mut self, entity: EntityID) -> Option<&mut T> {
+        self.sparse_array_index_to_dense
+            .get(entity.slot_index as usize)
+            .copied()
+            .flatten()
+            .and_then(|x| self.dense_array.as_typed_slice_mut::<T>().get_mut(x))
+    }
+
+    pub fn iter_objects<'s, T: 'static>(&'s self) -> impl Iterator<Item = &'s T> + 's {
+        self.dense_array.as_typed_slice::<T>().iter()
+    }
 }
 
 struct AppWindowState {
