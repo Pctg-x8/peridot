@@ -91,11 +91,10 @@ impl peridot::PlatformPresenter for Presenter {
     fn emit_initialize_back_buffer_commands<
         'r,
         CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-        Device: br::Device + ?Sized,
     >(
         &self,
-        recorder: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
@@ -512,11 +511,10 @@ impl peridot::PlatformPresenter for Presenter {
     fn emit_initialize_back_buffer_commands<
         'r,
         CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-        Device: br::Device + ?Sized,
     >(
         &self,
-        recorder: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         let barriers = self
             .back_buffers
             .iter()
