@@ -244,7 +244,7 @@ impl peridot::PlatformPresenter for Presenter {
         &self,
         recorder: br::CmdRecord<'r, CB: peridot::DeviceObject>,
     ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
-        self.sc.emit_initialize_back_buffer_commands(recorder);
+        self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.sc.acquire_next_back_buffer_index()
