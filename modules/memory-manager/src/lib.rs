@@ -893,7 +893,7 @@ impl MemoryManager {
         let mut bp = peridot::BufferPrealloc::new(e);
         let mut offsets = [0u64; N];
         for (o, c) in offsets.iter_mut().zip(contents.iter()) {
-            *o = bp.add(c);
+            *o = bp.add(*c);
         }
         let obj = self.allocate_upload_buffer(e, bp.build_desc_custom_usage(usage))?;
 

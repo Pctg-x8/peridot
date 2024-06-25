@@ -226,14 +226,15 @@ impl Graphics {
     pub fn submit_commands(
         &mut self,
         generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
+            br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+        )
+            -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
     ) -> br::Result<()> {
         let mut cb = LocalCommandBundle(
             self.cp_onetime_submit.alloc(1, true)?,
             &mut self.cp_onetime_submit,
         );
-        generator(unsafe { cb[0].begin_once()? }).end()?;
+        generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
         self.graphics_queue.q.get_mut().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             None::<&mut br::FenceObject<DeviceObject>>,
@@ -265,8 +266,9 @@ impl Graphics {
     pub fn submit_commands_async<'s>(
         &'s self,
         generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
+            br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+        )
+            -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         let mut fence = std::sync::Arc::new(br::FenceBuilder::new().create(self.device.clone())?);
 
@@ -274,7 +276,7 @@ impl Graphics {
             .transient()
             .create(self.device.clone())?;
         let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
-        generator(unsafe { cb[0].begin_once()? }).end()?;
+        generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
         self.graphics_queue.q.lock().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),

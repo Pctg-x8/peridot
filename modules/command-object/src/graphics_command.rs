@@ -6,48 +6,70 @@ use crate::{
     IndexedMesh, Mesh,
 };
 
-pub trait GraphicsCommand {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>);
+pub trait GraphicsCommand<Device: br::Device + ?Sized> {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>;
 
     fn execute_and_finish(
         &self,
-        mut cb: br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>,
+        mut cb: br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::Result<()> {
-        self.execute(&mut cb);
-        cb.end()
+        self.execute(cb).end()
     }
 }
-impl<T: GraphicsCommand + ?Sized> GraphicsCommand for Box<T> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<T: GraphicsCommand<Device> + ?Sized, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for Box<T>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         T::execute(&*self, cb)
     }
 }
-impl<T: GraphicsCommand + ?Sized> GraphicsCommand for std::rc::Rc<T> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<T: GraphicsCommand<Device> + ?Sized, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for std::rc::Rc<T>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         T::execute(&*self, cb)
     }
 }
-impl<T: GraphicsCommand + ?Sized> GraphicsCommand for std::sync::Arc<T> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<T: GraphicsCommand<Device> + ?Sized, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for std::sync::Arc<T>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         T::execute(&*self, cb)
     }
 }
-impl<T: GraphicsCommand + ?Sized> GraphicsCommand for &'_ T {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<T: GraphicsCommand<Device> + ?Sized, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for &'_ T
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         T::execute(*self, cb)
     }
 }
 
-pub trait GraphicsCommandSubmission: GraphicsCommand {
+pub trait GraphicsCommandSubmission: GraphicsCommand<peridot::DeviceObject> {
     fn submit(&self, engine: &mut peridot::Engine<impl peridot::NativeLinker>) -> br::Result<()> {
         engine.submit_commands(|mut r| {
-            self.execute(&mut r.as_dyn_ref());
+            let _ = self.execute(r.as_dyn_ref());
             r
         })
     }
 }
-impl<T: GraphicsCommand> GraphicsCommandSubmission for T {}
-pub trait GraphicsCommandCombiner: GraphicsCommand + Sized {
+impl<T: GraphicsCommand<peridot::DeviceObject>> GraphicsCommandSubmission for T {}
+pub trait GraphicsCommandCombiner: Sized {
     #[inline]
     fn then<C>(self, next: C) -> (Self, C) {
         (self, next)
@@ -64,52 +86,73 @@ pub trait GraphicsCommandCombiner: GraphicsCommand + Sized {
     }
 
     #[inline]
-    fn boxed(self) -> Box<dyn GraphicsCommand>
+    fn boxed<Device: br::Device + ?Sized>(self) -> Box<dyn GraphicsCommand<Device>>
     where
-        Self: 'static,
+        Self: GraphicsCommand<Device> + 'static,
     {
         Box::new(self) as _
     }
 }
-impl<T: GraphicsCommand + Sized> GraphicsCommandCombiner for T {}
+impl<T: Sized> GraphicsCommandCombiner for T {}
 
 /// consecutive exec
-impl<A: GraphicsCommand, B: GraphicsCommand> GraphicsCommand for (A, B) {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        self.0.execute(cb);
-        self.1.execute(cb);
-    }
-}
-/// consecutive exec
-impl<A: GraphicsCommand, B: GraphicsCommand, C: GraphicsCommand> GraphicsCommand for (A, B, C) {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        self.0.execute(cb);
-        self.1.execute(cb);
-        self.2.execute(cb);
-    }
-}
-/// consecutive exec
-impl<T: GraphicsCommand> GraphicsCommand for Vec<T> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        for r in self {
-            r.execute(cb);
-        }
-    }
-}
-impl<'x, T> GraphicsCommand for &'x [T]
-where
-    &'x T: GraphicsCommand,
+impl<A: GraphicsCommand<Device>, B: GraphicsCommand<Device>, Device: br::Device + ?Sized>
+    GraphicsCommand<Device> for (A, B)
 {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        for r in *self {
-            r.execute(cb);
-        }
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        let cb = self.0.execute(cb);
+        self.1.execute(cb)
+    }
+}
+/// consecutive exec
+impl<
+        A: GraphicsCommand<Device>,
+        B: GraphicsCommand<Device>,
+        C: GraphicsCommand<Device>,
+        Device: br::Device,
+    > GraphicsCommand<Device> for (A, B, C)
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        let cb = self.0.execute(cb);
+        let cb = self.1.execute(cb);
+        self.2.execute(cb)
+    }
+}
+/// consecutive exec
+impl<T: GraphicsCommand<Device>, Device: br::Device + ?Sized> GraphicsCommand<Device> for Vec<T> {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        (&self[..]).execute(cb)
+    }
+}
+impl<T, Device: br::Device + ?Sized> GraphicsCommand<Device> for [T]
+where
+    for<'x> &'x T: GraphicsCommand<Device>,
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        self.iter().fold(cb, |cb, r| r.execute(cb))
     }
 }
 
-impl<P: br::Pipeline, L: br::PipelineLayout> GraphicsCommand for peridot::LayoutedPipeline<P, L> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        self.bind(cb);
+impl<P: br::Pipeline, L: br::PipelineLayout, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for peridot::LayoutedPipeline<P, L>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        self.bind(cb)
     }
 }
 
@@ -181,8 +224,11 @@ impl PipelineBarrier {
         iter.fold(self, |t, b| t.with_barrier(b))
     }
 }
-impl GraphicsCommand for PipelineBarrier {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for PipelineBarrier {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         // Note: src_stage_mask=0はVulkanの仕様上だめらしい
         let src_stage_mask = if self.src_stage_mask.0 == 0 {
             br::PipelineStageFlags::TOP_OF_PIPE
@@ -190,14 +236,14 @@ impl GraphicsCommand for PipelineBarrier {
             self.src_stage_mask
         };
 
-        let _ = cb.pipeline_barrier(
+        cb.pipeline_barrier(
             src_stage_mask,
             self.dst_stage_mask,
             self.by_region,
             &[],
             &self.buffer_barriers,
             &self.image_barriers,
-        );
+        )
     }
 }
 impl From<br::ImageMemoryBarrier> for PipelineBarrier {
@@ -214,7 +260,7 @@ impl<B: br::Buffer> From<BufferUsageTransitionBarrier<B>> for PipelineBarrier {
 pub struct CopyBuffer<
     S: br::VkHandle<Handle = br::vk::VkBuffer>,
     D: br::VkHandle<Handle = br::vk::VkBuffer>,
->(S, D, Vec<br::vk::VkBufferCopy>);
+>(S, D, Vec<br::BufferCopy>);
 impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk::VkBuffer>>
     CopyBuffer<S, D>
 {
@@ -222,18 +268,21 @@ impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk
         Self(source, dest, Vec::new())
     }
 
-    pub fn with_ranges(mut self, ranges: impl IntoIterator<Item = br::vk::VkBufferCopy>) -> Self {
+    pub fn with_ranges(mut self, ranges: impl IntoIterator<Item = br::BufferCopy>) -> Self {
         self.2.extend(ranges);
 
         self
     }
 
     pub fn with_range(mut self, src_offset: u64, dest_offset: u64, size: usize) -> Self {
-        self.2.push(br::vk::VkBufferCopy {
-            srcOffset: src_offset,
-            dstOffset: dest_offset,
-            size: size as _,
-        });
+        self.2.push(
+            br::vk::VkBufferCopy {
+                srcOffset: src_offset,
+                dstOffset: dest_offset,
+                size: size as _,
+            }
+            .into(),
+        );
         self
     }
 
@@ -249,11 +298,17 @@ impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk
         self.with_mirroring(offset, std::mem::size_of::<T>())
     }
 }
-impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk::VkBuffer>>
-    GraphicsCommand for CopyBuffer<S, D>
+impl<
+        S: br::VkHandle<Handle = br::vk::VkBuffer>,
+        D: br::VkHandle<Handle = br::vk::VkBuffer>,
+        Device: br::Device + ?Sized,
+    > GraphicsCommand<Device> for CopyBuffer<S, D>
 {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.copy_buffer(&self.0, &self.1, &self.2);
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.copy_buffer(&self.0, &self.1, &self.2)
     }
 }
 
@@ -295,14 +350,22 @@ impl<S: br::Buffer, D: br::Image> CopyBufferToImage<S, D> {
         self
     }
 }
-impl<S: br::Buffer, D: br::Image> GraphicsCommand for CopyBufferToImage<S, D> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.copy_buffer_to_image(
+impl<
+        S: br::Buffer<ConcreteDevice = Device>,
+        D: br::Image<ConcreteDevice = Device>,
+        Device: br::Device + ?Sized,
+    > GraphicsCommand<Device> for CopyBufferToImage<S, D>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.copy_buffer_to_image(
             &self.source,
             &self.dest,
             self.dest_image_layout,
             &self.regions,
-        );
+        )
     }
 }
 
@@ -358,15 +421,23 @@ where
         )
     }
 }
-impl<R: br::RenderPass, F: br::Framebuffer> GraphicsCommand for BeginRenderPass<R, F> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.begin_render_pass(
+impl<
+        R: br::RenderPass<ConcreteDevice = Device>,
+        F: br::Framebuffer<ConcreteDevice = Device>,
+        Device: br::Device + ?Sized,
+    > GraphicsCommand<Device> for BeginRenderPass<R, F>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.begin_render_pass(
             &self.render_pass,
             &self.framebuffer,
             self.rect.clone(),
             &self.clear_values,
             self.inline_commands,
-        );
+        )
     }
 }
 
@@ -375,16 +446,22 @@ impl NextSubpass {
     pub const WITH_INLINE_COMMANDS: Self = Self(true);
     pub const WITH_COMMAND_BUFFER_EXECUTIONS: Self = Self(false);
 }
-impl GraphicsCommand for NextSubpass {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.next_subpass(self.0);
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for NextSubpass {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.next_subpass(self.0)
     }
 }
 
 pub struct EndRenderPass;
-impl GraphicsCommand for EndRenderPass {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.end_render_pass();
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for EndRenderPass {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.end_render_pass()
     }
 }
 
@@ -447,17 +524,21 @@ where
         }
     }
 }
-impl<Sets, DynamicOffsets> GraphicsCommand for BindGraphicsDescriptorSets<Sets, DynamicOffsets>
+impl<Sets, DynamicOffsets, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for BindGraphicsDescriptorSets<Sets, DynamicOffsets>
 where
     Sets: AsRef<[br::vk::VkDescriptorSet]>,
     DynamicOffsets: AsRef<[u32]>,
 {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.bind_graphics_descriptor_sets(
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.bind_graphics_descriptor_sets(
             self.from,
             self.sets.as_ref(),
             self.dynamic_offsets.as_ref(),
-        );
+        )
     }
 }
 
@@ -483,31 +564,41 @@ impl<T> PushConstant<T> {
         }
     }
 }
-impl<T> GraphicsCommand for PushConstant<T> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<T, Device: br::Device + ?Sized> GraphicsCommand<Device> for PushConstant<T> {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         if (self.shader_stage.0 & br::vk::VK_SHADER_STAGE_COMPUTE_BIT) != 0 {
             // assumes compute pipeline
-            let _ = cb.push_compute_constant(self.shader_stage, self.offset, &self.value);
+            cb.push_compute_constant(self.shader_stage, self.offset, &self.value)
         } else {
-            let _ = cb.push_graphics_constant(self.shader_stage, self.offset, &self.value);
+            cb.push_graphics_constant(self.shader_stage, self.offset, &self.value)
         }
     }
 }
 
 pub struct ViewportWithScissorRect(pub br::vk::VkViewport, pub br::vk::VkRect2D);
-impl GraphicsCommand for ViewportWithScissorRect {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb
-            .set_viewport(0, &[self.0.clone()])
-            .set_scissor(0, &[self.1.clone()]);
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for ViewportWithScissorRect {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.set_viewport(0, &[self.0.clone()])
+            .set_scissor(0, &[self.1.clone()])
     }
 }
-impl<const N: usize> GraphicsCommand for [ViewportWithScissorRect; N] {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<const N: usize, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for [ViewportWithScissorRect; N]
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         let (viewports, scissors): (Vec<_>, Vec<_>) =
             self.iter().map(|a| (a.0.clone(), a.1.clone())).unzip();
 
-        let _ = cb.set_viewport(0, &viewports).set_scissor(0, &scissors);
+        cb.set_viewport(0, &viewports).set_scissor(0, &scissors)
     }
 }
 
@@ -558,17 +649,22 @@ impl<const N: usize> From<[ViewportWithScissorRect; N]> for ViewportScissorRects
         }
     }
 }
-impl GraphicsCommand for ViewportScissorRects {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb
-            .set_viewport(0, &self.viewports)
-            .set_scissor(0, &self.scissors);
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for ViewportScissorRects {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.set_viewport(0, &self.viewports)
+            .set_scissor(0, &self.scissors)
     }
 }
 
 pub struct PreConfigureDraw<M: Mesh>(pub M);
-impl<M: Mesh> GraphicsCommand for PreConfigureDraw<M> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<M: Mesh, Device: br::Device + ?Sized> GraphicsCommand<Device> for PreConfigureDraw<M> {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         let vertex_buffers = self
             .0
             .vertex_buffers()
@@ -576,13 +672,18 @@ impl<M: Mesh> GraphicsCommand for PreConfigureDraw<M> {
             .map(|rb| (&rb.0, rb.1.start as usize))
             .collect::<Vec<_>>();
 
-        let _ = cb.bind_vertex_buffers(0, &vertex_buffers);
+        cb.bind_vertex_buffers(0, &vertex_buffers)
     }
 }
 
 pub struct PreConfigureDrawIndexed<M: IndexedMesh>(pub M);
-impl<M: IndexedMesh> GraphicsCommand for PreConfigureDrawIndexed<M> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+impl<M: IndexedMesh, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for PreConfigureDrawIndexed<M>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         let vertex_buffers = self
             .0
             .vertex_buffers()
@@ -590,20 +691,22 @@ impl<M: IndexedMesh> GraphicsCommand for PreConfigureDrawIndexed<M> {
             .map(|rb| (&rb.0, rb.1.start as usize))
             .collect::<Vec<_>>();
 
-        let _ = cb
-            .bind_vertex_buffers(0, &vertex_buffers)
+        cb.bind_vertex_buffers(0, &vertex_buffers)
             .bind_index_buffer(
                 &self.0.index_buffer().inner_ref(),
                 self.0.index_buffer().offset() as _,
                 self.0.index_type(),
-            );
+            )
     }
 }
 
 pub struct SimpleDraw(pub u32, pub u32, pub u32, pub u32);
-impl GraphicsCommand for SimpleDraw {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.draw(self.0, self.1, self.2, self.3);
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for SimpleDraw {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.draw(self.0, self.1, self.2, self.3)
     }
 }
 
@@ -639,15 +742,18 @@ impl SimpleDrawIndexed {
         }
     }
 }
-impl GraphicsCommand for SimpleDrawIndexed {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = cb.draw_indexed(
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for SimpleDrawIndexed {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.draw_indexed(
             self.index_count,
             self.instance_count,
             self.first_index,
             self.vertex_offset,
             self.first_instance,
-        );
+        )
     }
 }
 
@@ -657,11 +763,14 @@ pub struct DrawMesh<M: Mesh> {
     pub vertex_start: u32,
     pub instance_start: u32,
 }
-impl<M: Mesh> GraphicsCommand for DrawMesh<M>
+impl<M: Mesh, Device: br::Device + ?Sized> GraphicsCommand<Device> for DrawMesh<M>
 where
     for<'r> &'r M: Mesh,
 {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         let vertex_count = self.mesh.vertex_count();
 
         (
@@ -673,7 +782,7 @@ where
                 self.instance_start,
             ),
         )
-            .execute(cb);
+            .execute(cb)
     }
 }
 
@@ -684,11 +793,14 @@ pub struct DrawIndexedMesh<M: IndexedMesh> {
     pub index_offset: i32,
     pub instance_start: u32,
 }
-impl<M: IndexedMesh> GraphicsCommand for DrawIndexedMesh<M>
+impl<M: IndexedMesh, Device: br::Device + ?Sized> GraphicsCommand<Device> for DrawIndexedMesh<M>
 where
     for<'r> &'r M: IndexedMesh,
 {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         (
             PreConfigureDrawIndexed(&self.mesh),
             SimpleDrawIndexed {
@@ -699,23 +811,40 @@ where
                 first_instance: self.instance_start,
             },
         )
-            .execute(cb);
+            .execute(cb)
     }
 }
 
-impl GraphicsCommand for &'_ [br::vk::VkCommandBuffer] {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = unsafe { cb.execute_commands(self) };
+#[repr(transparent)]
+pub struct CommandBuffers(pub Vec<VkCommandBuffer>);
+
+#[repr(transparent)]
+pub struct CommandBuffersRef<'s>(pub &'s [VkCommandBuffer]);
+
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for CommandBuffersRef<'_> {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        unsafe { cb.execute_commands(self.0) }
     }
 }
-impl<const N: usize> GraphicsCommand for [br::vk::VkCommandBuffer; N] {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = unsafe { cb.execute_commands(self) };
+impl<const N: usize, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for [br::vk::VkCommandBuffer; N]
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        unsafe { cb.execute_commands(self) }
     }
 }
-impl GraphicsCommand for Vec<br::vk::VkCommandBuffer> {
-    fn execute(&self, cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>>) {
-        let _ = unsafe { cb.execute_commands(&self[..]) };
+impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for CommandBuffers {
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        unsafe { cb.execute_commands(&self.0[..]) }
     }
 }
 
