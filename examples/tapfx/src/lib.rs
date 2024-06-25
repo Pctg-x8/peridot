@@ -42,7 +42,7 @@ fn init_controls(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 pub struct Game<NL: peridot::NativeLinker> {
     renderpass: br::RenderPassObject<peridot::DeviceObject>,
     framebuffers: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
-    color_renders: Box<dyn GraphicsCommand>,
+    color_renders: Box<dyn GraphicsCommand<peridot::DeviceObject>>,
     _smp: br::SamplerObject<peridot::DeviceObject>,
     _dsl: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
     _dsl2: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
@@ -162,12 +162,10 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let main_image = memory_manager
             .allocate_device_local_image(
                 e.graphics(),
-                br::ImageDesc::new(
-                    main_image_data.0.size,
-                    main_image_data.0.format as _,
-                    br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST,
-                    br::ImageLayout::Preinitialized,
-                ),
+                br::ImageDesc::new(main_image_data.0.size, main_image_data.0.format as _)
+                    .sampled()
+                    .transfer_dest()
+                    .init_layout(br::ImageLayout::Preinitialized),
             )
             .expect("Failed to allocate main image");
 
@@ -315,7 +313,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             copy.between(in_barriers, out_barriers)
                 .execute_and_finish(unsafe {
                     update_commands[0]
-                        .begin()
+                        .begin(e.graphics_device())
                         .expect("Failed to begin recording update commands")
                         .as_dyn_ref()
                 })
@@ -343,7 +341,7 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             (&color_renders)
                 .between(rp, EndRenderPass)
                 .execute_and_finish(unsafe {
-                    b.begin()
+                    b.begin(e.graphics_device())
                         .expect("Failed to begin recording main commands")
                         .as_dyn_ref()
                 })

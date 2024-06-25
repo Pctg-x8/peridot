@@ -159,14 +159,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let msaa_texture = memory_manager
             .allocate_device_local_image(
                 e.graphics(),
-                br::ImageDesc::new(
-                    rt_size.clone(),
-                    e.back_buffer_format(),
-                    br::ImageUsageFlags::COLOR_ATTACHMENT
-                        | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
-                    br::ImageLayout::Undefined,
-                )
-                .sample_counts(msaa_count),
+                br::ImageDesc::new(rt_size.clone(), e.back_buffer_format())
+                    .as_color_attachment()
+                    .as_transient_attachment()
+                    .sample_counts(msaa_count),
             )
             .expect("Failed to create msaa render target");
         let msaa_texture = SharedRef::new(
@@ -223,10 +219,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             let out_barrier = PipelineBarrier::new()
                 .with_barrier(all_buffer_out_barrier)
                 .with_barrier(
-                    RangedImage::single_color_plane(msaa_texture.image()).barrier(
-                        br::ImageLayout::Undefined,
-                        br::ImageLayout::ColorAttachmentOpt,
-                    ),
+                    RangedImage::single_color_plane(msaa_texture.image())
+                        .barrier(br::ImageLayout::ColorAttachmentOpt.from_undefined()),
                 );
 
             copy.between(in_barrier, out_barrier)
@@ -470,10 +464,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     br::ClearValue::color([1.0; 4]),
                 ]);
 
-            (&color_renders)
+            (&color_renders[..])
                 .between(rp, EndRenderPass)
                 .execute_and_finish(unsafe {
-                    r.begin()
+                    r.begin(e.graphics_device())
                         .expect("Failed to begin render command recording")
                         .as_dyn_ref()
                 })
@@ -525,14 +519,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .memory_manager
             .allocate_device_local_image(
                 e.graphics(),
-                br::ImageDesc::new(
-                    rt_size.clone(),
-                    e.back_buffer_format(),
-                    br::ImageUsageFlags::COLOR_ATTACHMENT
-                        | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
-                    br::ImageLayout::Undefined,
-                )
-                .sample_counts(msaa_count),
+                br::ImageDesc::new(rt_size.clone(), e.back_buffer_format())
+                    .as_color_attachment()
+                    .as_transient_attachment()
+                    .sample_counts(msaa_count),
             )
             .expect("Failed to create msaa render target");
         let msaa_texture = SharedRef::new(
@@ -544,10 +534,8 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         );
 
         PipelineBarrier::from(
-            RangedImage::single_color_plane(msaa_texture.image()).barrier(
-                br::ImageLayout::Undefined,
-                br::ImageLayout::ColorAttachmentOpt,
-            ),
+            RangedImage::single_color_plane(msaa_texture.image())
+                .barrier(br::ImageLayout::Undefined.to(br::ImageLayout::ColorAttachmentOpt)),
         )
         .submit(e)
         .expect("Failed to initialize msaa rt");
@@ -574,9 +562,13 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     br::ClearValue::color([1.0; 4]),
                 ]);
 
-            (&self.render_vgs)
+            (&self.render_vgs[..])
                 .between(rp, EndRenderPass)
-                .execute_and_finish(unsafe { r.begin().expect("Start Recording CB").as_dyn_ref() })
+                .execute_and_finish(unsafe {
+                    r.begin(e.graphics_device())
+                        .expect("Start Recording CB")
+                        .as_dyn_ref()
+                })
                 .expect("Failed to finish render commands");
         }
     }

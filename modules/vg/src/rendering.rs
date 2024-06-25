@@ -10,8 +10,8 @@ use peridot::{
     NativeLinker,
 };
 use peridot_command_object::{
-    DescriptorSets, GraphicsCommand, GraphicsCommandCombiner, PreConfigureDrawIndexed,
-    PushConstant, RangedBuffer, SimpleDrawIndexed, StandardIndexedMesh,
+    DescriptorSets, GraphicsCommand, GraphicsCommandCombiner, PushConstant, RangedBuffer,
+    SimpleDrawIndexed, StandardIndexedMesh,
 };
 use std::mem::size_of;
 use std::ops::Range;

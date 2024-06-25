@@ -14,7 +14,7 @@ pub trait GraphicsCommand<Device: br::Device + ?Sized> {
 
     fn execute_and_finish(
         &self,
-        mut cb: br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+        cb: br::CmdRecord<'_, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::Result<()> {
         self.execute(cb).end()
     }
