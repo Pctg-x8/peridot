@@ -228,7 +228,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn emit_initialize_back_buffer_commands<
         'r,
         CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-        Device: br::Device,
+        Device: br::Device + ?Sized,
     >(
         &self,
         recorder: br::CmdRecord<'r, CB, Device>,
