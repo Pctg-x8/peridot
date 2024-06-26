@@ -652,16 +652,17 @@ impl MemoryManager {
 
     pub fn allocate_device_local_buffer_with_content_array<const N: usize>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         contents: &[peridot::BufferContent; N],
         add_usage: br::BufferUsage,
     ) -> br::Result<(Buffer, [u64; N])> {
-        let mut bp = peridot::BufferPrealloc::new(e);
+        let mut bp = peridot::BufferPrealloc::new(alloc_src.device(), alloc_src.adapter());
         let mut offsets = [0u64; N];
         for (o, c) in offsets.iter_mut().zip(contents.iter()) {
             *o = bp.add(*c);
         }
-        let obj = self.allocate_device_local_buffer(e, bp.build_desc().and_usage(add_usage))?;
+        let obj =
+            self.allocate_device_local_buffer(alloc_src, bp.build_desc().and_usage(add_usage))?;
 
         Ok((obj, offsets))
     }
@@ -939,16 +940,16 @@ impl MemoryManager {
 
     pub fn allocate_upload_buffer_with_content_array<const N: usize>(
         &mut self,
-        e: &peridot::Graphics,
+        alloc_src: &(impl MemoryAllocationSource + ?Sized),
         contents: &[peridot::BufferContent; N],
         usage: br::BufferUsage,
     ) -> br::Result<(Buffer, [u64; N])> {
-        let mut bp = peridot::BufferPrealloc::new(e);
+        let mut bp = peridot::BufferPrealloc::new(alloc_src.device(), alloc_src.adapter());
         let mut offsets = [0u64; N];
         for (o, c) in offsets.iter_mut().zip(contents.iter()) {
             *o = bp.add(*c);
         }
-        let obj = self.allocate_upload_buffer(e, bp.build_desc_custom_usage(usage))?;
+        let obj = self.allocate_upload_buffer(alloc_src, bp.build_desc_custom_usage(usage))?;
 
         Ok((obj, offsets))
     }
