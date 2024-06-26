@@ -413,6 +413,18 @@ impl<T: One + Zero> Matrix4<T> {
     }
 }
 
+// TRS(Translate-Rotate-Scale) constructor //
+impl<T> Matrix4<T> {
+    pub fn trs(translate: Vector3<T>, rotate: Quaternion<T>, scale: Vector3<T>) -> Self
+    where
+        T: One + Zero + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T> + Copy,
+    {
+        Matrix4::translation(translate)
+            * Matrix4::from(rotate)
+            * Matrix4::scale(scale.with_w(T::ONE))
+    }
+}
+
 fn dotproduct2<T: Mul + Copy>(a: &[T; 2], b: &[T; 2]) -> <T as Mul>::Output
 where
     <T as Mul>::Output: Add<Output = <T as Mul>::Output>,

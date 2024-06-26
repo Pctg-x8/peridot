@@ -158,13 +158,18 @@ impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<B> {
         barrier.buffer_barriers.reserve(count);
     }
 }
-impl<const N: usize, B: br::Buffer + Clone> GraphicsCommand
+impl<const N: usize, B: br::Buffer + Clone> GraphicsCommand<B::ConcreteDevice>
     for [BufferUsageTransitionBarrier<B>; N]
 {
-    fn execute(
+    fn execute<'r>(
         &self,
-        cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
-    ) {
+        cb: br::CmdRecord<
+            'r,
+            dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>,
+            B::ConcreteDevice,
+        >,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, B::ConcreteDevice>
+    {
         PipelineBarrier::new()
             .with_barriers(self.iter().cloned())
             .execute(cb)

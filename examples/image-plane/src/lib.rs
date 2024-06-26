@@ -40,7 +40,7 @@ pub struct Game<PL: peridot::NativeLinker> {
         Vec<br::DescriptorSet>,
     ),
     _sampler: br::SamplerObject<peridot::DeviceObject>,
-    color_renders: Box<dyn GraphicsCommand>,
+    color_renders: Box<dyn GraphicsCommand<peridot::DeviceObject>>,
     mutable_uniform_buffer: RangedBuffer<peridot_memory_manager::Buffer>,
     _uniform_buffer: RangedBuffer<peridot_memory_manager::Buffer>,
     _image_view: br::ImageViewObject<peridot_memory_manager::Image>,
@@ -149,12 +149,10 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let image = memory_manager
             .allocate_device_local_image(
                 e.graphics(),
-                br::ImageDesc::new(
-                    image_data.0.size,
-                    image_data.0.format as _,
-                    br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST,
-                    br::ImageLayout::Preinitialized,
-                ),
+                br::ImageDesc::new(image_data.0.size, image_data.0.format as _)
+                    .sampled()
+                    .transfer_dest()
+                    .init_layout(br::ImageLayout::Preinitialized),
             )
             .expect("Failed to allocate main image");
         let mut image_data_stg_buffer = memory_manager
@@ -224,9 +222,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                     );
                 let copies = (init_vertex, init_uniform, init_tex);
 
-                copies
+                let _ = copies
                     .between(in_barriers, out_barriers)
-                    .execute(&mut r.as_dyn_ref());
+                    .execute(r.as_dyn_ref());
                 r
             })
             .expect("Failed to submit pre-configure commands");
@@ -396,7 +394,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             (&color_renders)
                 .between(begin_main_rp, EndRenderPass)
                 .execute_and_finish(unsafe {
-                    cb.begin()
+                    cb.begin(e.graphics_device())
                         .expect("Failed to begin command recording")
                         .as_dyn_ref()
                 })
@@ -463,7 +461,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 .as_ref()
                 .between(begin_main_rp, EndRenderPass)
                 .execute_and_finish(unsafe {
-                    cb.begin()
+                    cb.begin(e.graphics_device())
                         .expect("Failed to begin command recording")
                         .as_dyn_ref()
                 })

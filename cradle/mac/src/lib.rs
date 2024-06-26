@@ -237,11 +237,14 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.requesting_back_buffer_layout()
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
-        self.sc.emit_initialize_back_buffer_commands(recorder);
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
+        self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.sc.acquire_next_back_buffer_index()

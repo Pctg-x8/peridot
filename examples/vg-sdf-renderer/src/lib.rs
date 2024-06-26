@@ -509,9 +509,9 @@ pub struct TwoPassStencilSDFRendererBuffers {
 impl TwoPassStencilSDFRenderer {
     pub fn commands<'s>(
         &'s self,
-        framebuffer: &'s impl br::Framebuffer,
+        framebuffer: &'s impl br::Framebuffer<ConcreteDevice = peridot::DeviceObject>,
         buffers: &'s TwoPassStencilSDFRendererBuffers,
-    ) -> impl GraphicsCommand + 's {
+    ) -> impl GraphicsCommand<peridot::DeviceObject> + 's {
         let rp = BeginRenderPass::new(&self.render_pass, framebuffer, self.render_area())
             .with_clear_values(Self::CLEAR_VALUES.into());
 
@@ -645,12 +645,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
         let stencil_buffer = memory_manager
             .allocate_device_local_image(
                 e.graphics(),
-                br::ImageDesc::new(
-                    back_buffer_size.clone(),
-                    br::vk::VK_FORMAT_S8_UINT,
-                    br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                    br::ImageLayout::Undefined,
-                ),
+                br::ImageDesc::new(back_buffer_size.clone(), br::vk::VK_FORMAT_S8_UINT)
+                    .as_depth_stencil_attachment(),
             )
             .expect("Failed to allocate stencil buffer");
         let stencil_buffer_view = SharedRef::new(
@@ -726,10 +722,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             ];
             let out_barriers = PipelineBarrier::new()
                 .with_barrier(all_buffer_out_barrier)
-                .with_barrier(stencil_buffer.barrier(
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::DepthStencilReadOnlyOpt,
-                ))
+                .with_barrier(
+                    stencil_buffer
+                        .barrier(br::ImageLayout::DepthStencilReadOnlyOpt.from_undefined()),
+                )
                 .by_region();
 
             copy.between(in_barriers, out_barriers)
@@ -822,7 +818,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 .commands(fb, &buffers)
                 .execute_and_finish(unsafe {
                     cmd[cx]
-                        .begin()
+                        .begin(e.graphics_device())
                         .expect("Failed to begin recording commands")
                         .as_dyn_ref()
                 })
@@ -939,9 +935,8 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 br::ImageDesc::new(
                     peridot::math::Vector2(new_size.0 as u32, new_size.1 as u32),
                     br::vk::VK_FORMAT_S8_UINT,
-                    br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                    br::ImageLayout::Undefined,
-                ),
+                )
+                .as_depth_stencil_attachment(),
             )
             .expect("Failed to allocate stencil buffer");
         self.stencil_buffer_view = SharedRef::new(
@@ -1029,10 +1024,10 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
             ];
             let out_barriers = PipelineBarrier::new()
                 .with_barrier(all_buffer_out_barrier)
-                .with_barrier(stencil_buffer.barrier(
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::DepthStencilReadOnlyOpt,
-                ))
+                .with_barrier(
+                    stencil_buffer
+                        .barrier(br::ImageLayout::DepthStencilReadOnlyOpt.from_undefined()),
+                )
                 .by_region();
 
             copy.between(in_barriers, out_barriers)
@@ -1111,7 +1106,7 @@ impl<NL: peridot::NativeLinker> EngineEvents<NL> for Game<NL> {
                 .commands(fb, &self.buffers)
                 .execute_and_finish(unsafe {
                     self.cmd[cx]
-                        .begin()
+                        .begin(e.graphics_device())
                         .expect("Failed to begin recording commands")
                         .as_dyn_ref()
                 })
