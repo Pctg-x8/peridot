@@ -242,7 +242,7 @@ impl peridot::PlatformPresenter for Presenter {
         CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
     >(
         &self,
-        recorder: br::CmdRecord<'r, CB: peridot::DeviceObject>,
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
     ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
