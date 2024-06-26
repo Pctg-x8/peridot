@@ -5,7 +5,7 @@ use bedrock as br;
 use br::VkObject;
 use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
 
-use crate::{mthelper::SharedRef, update_inplace, DeviceObject};
+use crate::{mthelper::SharedRef, DeviceObject};
 
 pub trait PlatformPresenter {
     type BackBuffer: br::ImageView
@@ -17,10 +17,10 @@ pub trait PlatformPresenter {
     fn back_buffer_count(&self) -> usize;
     fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>>;
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<'r, CB: br::CommandBuffer + br::VkHandleMut + ?Sized>(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    );
+        recorder: br::CmdRecord<'r, CB, DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, DeviceObject>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s>(
@@ -221,42 +221,33 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         self.swapchain.get().back_buffer_images.get(index).cloned()
     }
 
-    pub fn emit_initialize_back_buffer_commands(
+    pub fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, DeviceObject> {
         let image_barriers = self
             .swapchain
             .get()
             .back_buffer_images
             .iter()
             .map(|v| {
-                br::ImageMemoryBarrier::new(
-                    &***v,
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::COLOR.0,
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
-                    br::ImageLayout::Undefined.to(br::ImageLayout::PresentSrc),
-                )
+                v.by_ref()
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .memory_barrier(br::ImageLayout::PresentSrc.from_undefined())
             })
             .collect::<Vec<_>>();
 
-        unsafe {
-            update_inplace(recorder, |x| {
-                x.pipeline_barrier(
-                    br::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    br::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    false,
-                    &[],
-                    &[],
-                    &image_barriers,
-                )
-            });
-        }
+        recorder.pipeline_barrier(
+            br::PipelineStageFlags::BOTTOM_OF_PIPE,
+            br::PipelineStageFlags::BOTTOM_OF_PIPE,
+            false,
+            &[],
+            &[],
+            &image_barriers,
+        )
     }
 
     #[inline]

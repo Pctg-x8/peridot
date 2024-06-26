@@ -21,13 +21,17 @@ pub trait ModelData {
 pub trait DefaultRenderCommands<'e, Device: br::Device> {
     type Extras: 'e;
 
-    fn default_render_commands<NL: NativeLinker>(
+    fn default_render_commands<
+        'r,
+        NL: NativeLinker,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+    >(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
+        cmd: br::CmdRecord<'r, CB, Device>,
         buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
-    );
+    ) -> br::CmdRecord<'r, CB, Device>;
 }
 
 #[derive(Debug, Clone)]

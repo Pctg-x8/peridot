@@ -10,8 +10,8 @@ use peridot::{
     NativeLinker,
 };
 use peridot_command_object::{
-    DescriptorSets, GraphicsCommand, GraphicsCommandCombiner, PreConfigureDrawIndexed,
-    PushConstant, RangedBuffer, SimpleDrawIndexed, StandardIndexedMesh,
+    DescriptorSets, GraphicsCommand, GraphicsCommandCombiner, PushConstant, RangedBuffer,
+    SimpleDrawIndexed, StandardIndexedMesh,
 };
 use std::mem::size_of;
 use std::ops::Range;
@@ -226,48 +226,46 @@ impl Context {
 impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for RendererParams {
     type Extras = RendererExternalInstances<'e, Device>;
 
-    fn default_render_commands<NL: NativeLinker>(
+    fn default_render_commands<
+        'r,
+        NL: NativeLinker,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+    >(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
+        cmd: br::CmdRecord<'r, CB, Device>,
         buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
-    ) {
+    ) -> br::CmdRecord<'r, CB, Device> {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
-        extras.interior_pipeline.bind(cmd);
-        let _ = cmd
+        let cmd = extras
+            .interior_pipeline
+            .bind(cmd)
             .push_graphics_constant(br::ShaderStage::VERTEX, 0, &renderscale)
             .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 3, &0u32)
-            .bind_graphics_descriptor_sets(
-                0,
-                &[extras.transform_buffer_descriptor_set.into()],
-                &[],
-            );
-
-        let _ = cmd
+            .bind_graphics_descriptor_sets(0, &[extras.transform_buffer_descriptor_set.into()], &[])
             .bind_vertex_buffers(0, &[(buffer, self.buffer_offsets.interior_positions)])
             .bind_index_buffer(
                 buffer,
                 self.buffer_offsets.interior_indices,
                 br::IndexType::U32,
-            );
-        for (n, ir) in self
-            .render_info
-            .interior_index_range_per_mesh
-            .iter()
-            .enumerate()
-        {
-            // skip if there is no indices
-            if ir.end == ir.start {
-                continue;
-            }
+            )
+            .inject(|r| {
+                self.render_info
+                    .interior_index_range_per_mesh
+                    .iter()
+                    .enumerate()
+                    // skip if there is no indices
+                    .filter(|(_, ir)| ir.end != ir.start)
+                    .fold(r, |r, (n, ir)| {
+                        r.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
+                            .draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0)
+                    })
+            });
 
-            let _ = cmd
-                .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
-                .draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
-        }
-        extras.curve_pipeline.bind(cmd);
-        let _ = cmd
+        extras
+            .curve_pipeline
+            .bind(cmd)
             .bind_vertex_buffers(
                 0,
                 &[
@@ -279,21 +277,18 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                 buffer,
                 self.buffer_offsets.curve_indices,
                 br::IndexType::U32,
-            );
-        for (n, ir) in self
-            .render_info
-            .curve_index_range_per_mesh
-            .iter()
-            .enumerate()
-        {
-            if ir.end == ir.start {
-                continue;
-            }
-
-            let _ = cmd
-                .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
-                .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
-        }
+            )
+            .inject(|r| {
+                self.render_info
+                    .curve_index_range_per_mesh
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ir)| ir.end != ir.start)
+                    .fold(r, |r, (n, ir)| {
+                        r.push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
+                            .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0)
+                    })
+            })
     }
 }
 
@@ -317,13 +312,13 @@ impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> RenderVG<D
         core::mem::replace(&mut self.buffer, new_buffer)
     }
 }
-impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCommand
+impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCommand<Device>
     for RenderVG<Device, Buffer>
 {
-    fn execute(
+    fn execute<'r>(
         &self,
-        cb: &mut br::CmdRecord<'_, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
-    ) {
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device> {
         let render_scale = self.target_pixels.clone() * self.rendering_precision.recip();
 
         let common_configs = (
@@ -405,6 +400,6 @@ impl<Device: br::Device, Buffer: br::Buffer<ConcreteDevice = Device>> GraphicsCo
             interior_render.after_of((&self.interior_pipeline).then(common_configs)),
             curve_render.after_of(&self.curve_pipeline),
         )
-            .execute(cb);
+            .execute(cb)
     }
 }

@@ -88,10 +88,13 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.back_buffer(index)
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
@@ -230,15 +233,12 @@ impl InteropBackbufferResource {
         });
         let vk_shared_handle =
             br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
-        let image = br::ImageDesc::new(
-            size,
-            format,
-            br::ImageUsageFlags::COLOR_ATTACHMENT,
-            br::ImageLayout::Preinitialized,
-        )
-        .exportable_as(vk_shared_handle.0.into())
-        .create(g.device().clone())
-        .expect("Failed to create Interop Image");
+        let image = br::ImageDesc::new(size, format)
+            .as_color_attachment()
+            .init_layout(br::ImageLayout::Preinitialized)
+            .exportable_as(vk_shared_handle.0.into())
+            .create(g.device().clone())
+            .expect("Failed to create Interop Image");
         let image_mreq = image.requirements();
         let handle_import_props = unsafe {
             vk_shared_handle
@@ -255,7 +255,7 @@ impl InteropBackbufferResource {
             .index();
         let memory = SharedRef::new(
             vk_shared_handle
-                .into_import_request(memory_type_index, &hname)
+                .into_import_request(memory_type_index, Some(&hname))
                 .execute(g.device().clone())
                 .expect("Failed to import memory")
                 .into(),
@@ -508,10 +508,13 @@ impl peridot::PlatformPresenter for Presenter {
         self.back_buffers.get(index).map(|b| b.image_view.clone())
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         let barriers = self
             .back_buffers
             .iter()
@@ -519,18 +522,18 @@ impl peridot::PlatformPresenter for Presenter {
                 b.image_view
                     .image()
                     .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
+                    .memory_barrier(br::ImageLayout::Preinitialized.to(br::ImageLayout::General))
             })
             .collect::<Vec<_>>();
 
-        let _ = recorder.pipeline_barrier(
+        recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::TOP_OF_PIPE,
             true,
             &[],
             &[],
             &barriers,
-        );
+        )
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         Ok(unsafe { self.sc.GetCurrentBackBufferIndex() })

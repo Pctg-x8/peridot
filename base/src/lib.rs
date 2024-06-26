@@ -208,11 +208,8 @@ impl<PL: NativeLinker> Engine<PL> {
         )
         .expect("Failed to initialize Graphics Base Driver");
         let presenter = native_link.new_presenter(&g);
-        g.submit_commands(|mut r| {
-            presenter.emit_initialize_back_buffer_commands(&mut r);
-            r
-        })
-        .expect("Initializing Back Buffers");
+        g.submit_commands(|r| presenter.emit_initialize_back_buffer_commands(r))
+            .expect("Initializing Back Buffers");
 
         Self {
             ip: InputProcess::new().into(),
@@ -288,8 +285,9 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn submit_commands(
         &mut self,
         generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-        ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
+            br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+        )
+            -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -308,8 +306,9 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn submit_commands_async<'s>(
         &'s self,
         generator: impl FnOnce(
-                br::CmdRecord<br::CommandBufferObject<DeviceObject>>,
-            ) -> br::CmdRecord<br::CommandBufferObject<DeviceObject>>
+                br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+            )
+                -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>
             + 's,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
@@ -402,10 +401,7 @@ impl<PL: NativeLinker> Engine<PL> {
             let pres = &self.presenter;
 
             self.g
-                .submit_commands(|mut r| {
-                    pres.emit_initialize_back_buffer_commands(&mut r);
-                    r
-                })
+                .submit_commands(|r| pres.emit_initialize_back_buffer_commands(r))
                 .expect("Initializing Back Buffers");
         }
         callback.on_resize(self, new_size);
@@ -568,12 +564,15 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self.1
     }
 
-    pub fn bind(
+    #[inline(always)]
+    pub fn bind<
+        'r,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+        Device: br::Device + ?Sized,
+    >(
         &self,
-        rec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized>,
-    ) {
-        unsafe {
-            update_inplace(rec, |x| x.bind_graphics_pipeline_pair(&self.0, &self.1));
-        }
+        rec: br::CmdRecord<'r, CB, Device>,
+    ) -> br::CmdRecord<'r, CB, Device> {
+        rec.bind_graphics_pipeline_pair(&self.0, &self.1)
     }
 }
