@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     hash::Hash,
     rc::{Rc, Weak},
 };
@@ -800,7 +800,7 @@ impl PaneGroupDockingManager {
         ht_root: &SharedMut<HitTestTree>,
     ) -> windows::core::Result<Self> {
         let ht_placement_root =
-            HitTestTree::new_unsized(Some(&Rc::new(())), ctx.hittest_context().new_id(), 0.0, 0.0);
+            HitTestTree::new_unsized(Some(()), ctx.hittest_context().new_id(), 0.0, 0.0);
         HitTestTree::add_child(ht_root, ht_placement_root.clone());
 
         Ok(Self {
@@ -962,13 +962,13 @@ impl TabGroupPaneView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
                 Rect::empty(),
             );
             let ht_content = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
                 Rect::empty(),
@@ -1681,7 +1681,7 @@ impl PaneTabHeaderView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht_self = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(view_size.X, view_size.Y),
                 Rect::empty(),
@@ -2783,7 +2783,7 @@ impl PaneTabPresenter for InspectorTabPresenter {
             .expect("Failed to set content size margin");
 
         let content_root_ht =
-            HitTestTree::new_fit_to_parent(None::<&Rc<()>>, view_ctx.hittest_context().new_id());
+            HitTestTree::new_fit_to_parent(None::<()>, view_ctx.hittest_context().new_id());
         content_root_ht
             .borrow_mut()
             .set_rect(8.0, 8.0, -16.0, -16.0);
@@ -3299,234 +3299,123 @@ impl SkyboxPrecomputedTextures {
             &[],
         );
 
-        let mut cp = engine
-            .command_pool_builder_for_graphics_work()
-            .transient()
-            .create(engine.device().clone())?;
-        let [mut cb] = cp.alloc_array::<1>(true)?;
-        let mut rec = unsafe { cb.begin_once()? }
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[],
-                &[],
-                &[transmittance
-                    .image()
-                    .by_ref()
-                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                    .memory_barrier2()
-                    .transit_to(br::ImageLayout::General.from_undefined())],
-            ))
-            .bind_compute_pipeline_pair(&transmittance_compute_pipeline, &input_only_layout)
-            .bind_compute_descriptor_sets(0, &[transmittance_set.into()], &[])
-            .dispatch(
-                Self::TRANSMITTANCE_SIZE.0 / 32,
-                Self::TRANSMITTANCE_SIZE.1 / 32,
-                1,
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[],
-                &[],
-                &[
-                    transmittance
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                        )
-                        .from(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.write,
-                        )
-                        .to(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.read,
-                        ),
-                    scatter
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_to(br::ImageLayout::General.from_undefined()),
-                ],
-            ))
-            .bind_compute_pipeline_pair(&single_scatter_compute_pipeline, &tex_io_layout)
-            .bind_compute_descriptor_sets(0, &[transmittance_to_scatter_set.into()], &[])
-            .dispatch(
-                Self::SCATTER_SIZE.0 / 8,
-                Self::SCATTER_SIZE.1 / 8,
-                Self::SCATTER_SIZE.2 / 8,
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[],
-                &[],
-                &[
-                    scatter
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                        )
-                        .from(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.write,
-                        )
-                        .to(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.read,
-                        ),
-                    gathered
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_to(br::ImageLayout::General.from_undefined()),
-                ],
-            ))
-            .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
-            .bind_compute_descriptor_sets(0, &[scatter_to_gathered_set.into()], &[])
-            .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[],
-                &[],
-                &[
-                    gathered
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                        )
-                        .from(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.write,
-                        )
-                        .to(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.read,
-                        ),
-                    k_scatter
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_to(br::ImageLayout::General.from_undefined()),
-                ],
-            ))
-            .bind_compute_pipeline_pair(&multiple_scatter_compute_pipeline, &tex_i2o_layout)
-            .bind_compute_descriptor_sets(0, &[transmittance_gathered_to_k_scatter_set.into()], &[])
-            .dispatch(
-                Self::SCATTER_SIZE.0 / 8,
-                Self::SCATTER_SIZE.1 / 8,
-                Self::SCATTER_SIZE.2 / 8,
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[],
-                &[],
-                &[
-                    k_scatter
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                        )
-                        .from(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.write,
-                        )
-                        .to(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.read,
-                        ),
-                    k_gathered
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_to(br::ImageLayout::General.from_undefined()),
-                ],
-            ))
-            .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
-            .bind_compute_descriptor_sets(0, &[k_scatter_to_k_gathered_set.into()], &[])
-            .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .from(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::AccessFlags2::SHADER.write,
-                    )
-                    .to(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::AccessFlags2::SHADER.read,
-                    )],
-                &[],
-                &[],
-            ))
-            .bind_compute_pipeline_pair(&accum2_pipeline, &tex_io_pure_layout)
-            .bind_compute_descriptor_sets(0, &[k_gathered_to_k_gathered_set.into()], &[])
-            .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[],
-                &[],
-                &[
-                    scatter
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                        ),
-                    k_scatter
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                        ),
-                ],
-            ))
-            .bind_compute_pipeline_pair(&accum3_pipeline, &tex_io_pure_layout)
-            .bind_compute_descriptor_sets(0, &[k_scatter_to_scatter_set.into()], &[])
-            .dispatch(
-                Self::SCATTER_SIZE.0 / 8,
-                Self::SCATTER_SIZE.1 / 8,
-                Self::SCATTER_SIZE.2 / 8,
-            );
-
-        // multiple scatters after 2nd
-        for _ in 0..2 {
-            rec = rec
+        engine.submit_transient_commands_and_wait(|rec| {
+            let mut rec = rec
                 .pipeline_barrier_2(&br::DependencyInfo::new(
                     &[],
                     &[],
-                    &[k_gathered
+                    &[transmittance
                         .image()
                         .by_ref()
                         .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                         .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                        )
-                        .from(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.write,
-                        )
-                        .to(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.read,
-                        )],
+                        .transit_to(br::ImageLayout::General.from_undefined())],
+                ))
+                .bind_compute_pipeline_pair(&transmittance_compute_pipeline, &input_only_layout)
+                .bind_compute_descriptor_sets(0, &[transmittance_set.into()], &[])
+                .dispatch(
+                    Self::TRANSMITTANCE_SIZE.0 / 32,
+                    Self::TRANSMITTANCE_SIZE.1 / 32,
+                    1,
+                )
+                .pipeline_barrier_2(&br::DependencyInfo::new(
+                    &[],
+                    &[],
+                    &[
+                        transmittance
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                            )
+                            .from(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.read,
+                            ),
+                        scatter
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_to(br::ImageLayout::General.from_undefined()),
+                    ],
+                ))
+                .bind_compute_pipeline_pair(&single_scatter_compute_pipeline, &tex_io_layout)
+                .bind_compute_descriptor_sets(0, &[transmittance_to_scatter_set.into()], &[])
+                .dispatch(
+                    Self::SCATTER_SIZE.0 / 8,
+                    Self::SCATTER_SIZE.1 / 8,
+                    Self::SCATTER_SIZE.2 / 8,
+                )
+                .pipeline_barrier_2(&br::DependencyInfo::new(
+                    &[],
+                    &[],
+                    &[
+                        scatter
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                            )
+                            .from(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.read,
+                            ),
+                        gathered
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_to(br::ImageLayout::General.from_undefined()),
+                    ],
+                ))
+                .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
+                .bind_compute_descriptor_sets(0, &[scatter_to_gathered_set.into()], &[])
+                .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
+                .pipeline_barrier_2(&br::DependencyInfo::new(
+                    &[],
+                    &[],
+                    &[
+                        gathered
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                            )
+                            .from(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.read,
+                            ),
+                        k_scatter
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_to(br::ImageLayout::General.from_undefined()),
+                    ],
                 ))
                 .bind_compute_pipeline_pair(&multiple_scatter_compute_pipeline, &tex_i2o_layout)
                 .bind_compute_descriptor_sets(
                     0,
-                    &[transmittance_k_gathered_to_k_scatter_set.into()],
+                    &[transmittance_gathered_to_k_scatter_set.into()],
                     &[],
                 )
                 .dispatch(
@@ -3559,9 +3448,7 @@ impl SkyboxPrecomputedTextures {
                             .by_ref()
                             .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                             .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                            ),
+                            .transit_to(br::ImageLayout::General.from_undefined()),
                     ],
                 ))
                 .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
@@ -3586,14 +3473,24 @@ impl SkyboxPrecomputedTextures {
                 .pipeline_barrier_2(&br::DependencyInfo::new(
                     &[],
                     &[],
-                    &[k_scatter
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_from(
-                            br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                        )],
+                    &[
+                        scatter
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                            ),
+                        k_scatter
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                            ),
+                    ],
                 ))
                 .bind_compute_pipeline_pair(&accum3_pipeline, &tex_io_pure_layout)
                 .bind_compute_descriptor_sets(0, &[k_scatter_to_scatter_set.into()], &[])
@@ -3602,32 +3499,130 @@ impl SkyboxPrecomputedTextures {
                     Self::SCATTER_SIZE.1 / 8,
                     Self::SCATTER_SIZE.2 / 8,
                 );
-        }
 
-        rec.pipeline_barrier_2(&br::DependencyInfo::new(
-            &[],
-            &[],
-            &[scatter
-                .image()
-                .by_ref()
-                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                .memory_barrier2()
-                .transit_from(br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt))
-                .from(
-                    br::PipelineStageFlags2::COMPUTE_SHADER,
-                    br::AccessFlags2::SHADER.write,
-                )
-                .to(
-                    br::PipelineStageFlags2::FRAGMENT_SHADER,
-                    br::AccessFlags2::SHADER.read,
-                )],
-        ))
-        .end()?;
-        engine.submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
-            &[],
-            &[br::CommandBufferSubmitInfo::new(&cb)],
-            &[],
-        )])?;
+            // multiple scatters after 2nd
+            for _ in 0..2 {
+                rec = rec
+                    .pipeline_barrier_2(&br::DependencyInfo::new(
+                        &[],
+                        &[],
+                        &[k_gathered
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                            )
+                            .from(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.read,
+                            )],
+                    ))
+                    .bind_compute_pipeline_pair(&multiple_scatter_compute_pipeline, &tex_i2o_layout)
+                    .bind_compute_descriptor_sets(
+                        0,
+                        &[transmittance_k_gathered_to_k_scatter_set.into()],
+                        &[],
+                    )
+                    .dispatch(
+                        Self::SCATTER_SIZE.0 / 8,
+                        Self::SCATTER_SIZE.1 / 8,
+                        Self::SCATTER_SIZE.2 / 8,
+                    )
+                    .pipeline_barrier_2(&br::DependencyInfo::new(
+                        &[],
+                        &[],
+                        &[
+                            k_scatter
+                                .image()
+                                .by_ref()
+                                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                                .memory_barrier2()
+                                .transit_from(
+                                    br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
+                                )
+                                .from(
+                                    br::PipelineStageFlags2::COMPUTE_SHADER,
+                                    br::AccessFlags2::SHADER.write,
+                                )
+                                .to(
+                                    br::PipelineStageFlags2::COMPUTE_SHADER,
+                                    br::AccessFlags2::SHADER.read,
+                                ),
+                            k_gathered
+                                .image()
+                                .by_ref()
+                                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                                .memory_barrier2()
+                                .transit_from(
+                                    br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                                ),
+                        ],
+                    ))
+                    .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
+                    .bind_compute_descriptor_sets(0, &[k_scatter_to_k_gathered_set.into()], &[])
+                    .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
+                    .pipeline_barrier_2(&br::DependencyInfo::new(
+                        &[br::MemoryBarrier2::new()
+                            .from(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::COMPUTE_SHADER,
+                                br::AccessFlags2::SHADER.read,
+                            )],
+                        &[],
+                        &[],
+                    ))
+                    .bind_compute_pipeline_pair(&accum2_pipeline, &tex_io_pure_layout)
+                    .bind_compute_descriptor_sets(0, &[k_gathered_to_k_gathered_set.into()], &[])
+                    .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
+                    .pipeline_barrier_2(&br::DependencyInfo::new(
+                        &[],
+                        &[],
+                        &[k_scatter
+                            .image()
+                            .by_ref()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .memory_barrier2()
+                            .transit_from(
+                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
+                            )],
+                    ))
+                    .bind_compute_pipeline_pair(&accum3_pipeline, &tex_io_pure_layout)
+                    .bind_compute_descriptor_sets(0, &[k_scatter_to_scatter_set.into()], &[])
+                    .dispatch(
+                        Self::SCATTER_SIZE.0 / 8,
+                        Self::SCATTER_SIZE.1 / 8,
+                        Self::SCATTER_SIZE.2 / 8,
+                    );
+            }
+
+            rec.pipeline_barrier_2(&br::DependencyInfo::new(
+                &[],
+                &[],
+                &[scatter
+                    .image()
+                    .by_ref()
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .memory_barrier2()
+                    .transit_from(br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt))
+                    .from(
+                        br::PipelineStageFlags2::COMPUTE_SHADER,
+                        br::AccessFlags2::SHADER.write,
+                    )
+                    .to(
+                        br::PipelineStageFlags2::FRAGMENT_SHADER,
+                        br::AccessFlags2::SHADER.read,
+                    )],
+            ))
+        })?;
 
         Ok(Self {
             transmittance,
@@ -3776,22 +3771,8 @@ impl SkyboxRenderer {
             primary_directional_light_data: init_light_data,
         })?;
 
-        let mut cp = br::CommandPoolBuilder::new(engine.graphics_queue_family_index())
-            .transient()
-            .create(engine.device().clone())?;
-        let mut cb = cp.alloc(1, true)?;
-        unsafe { cb[0].begin_once()? }
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::HOST.write,
-                        br::AccessFlags2::TRANSFER.read,
-                    )
-                    .of_execution(br::PipelineStageFlags2::HOST, br::PipelineStageFlags2::COPY)],
-                &[],
-                &[],
-            ))
-            .copy_buffer(
+        engine.submit_transient_commands_and_wait(|rec| {
+            rec.copy_buffer(
                 &stg_buffer,
                 &vertex_buffer,
                 &[br::BufferCopy::copy_data::<[SkyboxVertex; 4]>(
@@ -3814,28 +3795,19 @@ impl SkyboxRenderer {
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::TRANSFER.write,
-                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::SHADER.read,
-                    )
-                    .of_execution(
+                    .from(
                         br::PipelineStageFlags2::COPY,
+                        br::AccessFlags2::TRANSFER.write,
+                    )
+                    .to(
                         br::PipelineStageFlags2::VERTEX_INPUT
                             | br::PipelineStageFlags2::FRAGMENT_SHADER,
+                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::SHADER.read,
                     )],
                 &[],
                 &[],
             ))
-            .end()?;
-        engine.graphics_queue().borrow_mut().submit2(
-            &[br::SubmitInfo2::new(
-                &[],
-                &[br::CommandBufferSubmitInfo::new(&cb[0])],
-                &[],
-            )],
-            None::<&mut br::FenceObject<StdVkDevice>>,
-        )?;
-        br::Queue::wait(&mut *engine.graphics_queue().borrow_mut())?;
+        })?;
 
         let mut dp = br::DescriptorPoolBuilder::new(1)
             .with_reservations(vec![
@@ -3891,12 +3863,8 @@ impl SkyboxRenderer {
         ))?;
         upload_buffer.write_content(new_data)?;
 
-        let mut cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
-            .transient()
-            .create(e.device())?;
-        let mut cb = cp.alloc(1, true)?;
-        unsafe { cb[0].begin_once()? }
-            .copy_buffer(
+        e.submit_transient_commands_and_wait(|rec| {
+            rec.copy_buffer(
                 &upload_buffer,
                 &self.primary_directional_light_data_buffer,
                 &[br::BufferCopy::mirror_data::<
@@ -3905,27 +3873,18 @@ impl SkyboxRenderer {
             )
             .pipeline_barrier_2(&br::DependencyInfo::new(
                 &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::TRANSFER.write,
-                        br::AccessFlags2::UNIFORM_READ,
-                    )
-                    .of_execution(
+                    .from(
                         br::PipelineStageFlags2::COPY,
+                        br::AccessFlags2::TRANSFER.write,
+                    )
+                    .to(
                         br::PipelineStageFlags2::FRAGMENT_SHADER,
+                        br::AccessFlags2::UNIFORM_READ,
                     )],
                 &[],
                 &[],
             ))
-            .end()?;
-        e.graphics_queue().borrow_mut().submit2(
-            &[br::SubmitInfo2::new(
-                &[],
-                &[br::CommandBufferSubmitInfo::new(&cb[0])],
-                &[],
-            )],
-            None::<&mut br::FenceObject<StdVkDevice>>,
-        )?;
-        e.graphics_queue().borrow_mut().wait()?;
+        })?;
 
         Ok(())
     }
@@ -4015,72 +3974,111 @@ pub struct EditorStageView {
     pointer_down_point: peridot_math::Vector2F32,
 }
 impl EditorStageView {
+    fn grid_vertices() -> Vec<ColoredVertex> {
+        (-5..=5)
+            .flat_map(|x| {
+                [
+                    ColoredVertex {
+                        pos: Vec4::new(x as _, 0.0, -5.0, 1.0),
+                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
+                    },
+                    ColoredVertex {
+                        pos: Vec4::new(x as _, 0.0, 5.0, 1.0),
+                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
+                    },
+                ]
+            })
+            .chain((-5..=5).flat_map(|z| {
+                [
+                    ColoredVertex {
+                        pos: Vec4::new(-5.0, 0.0, z as _, 1.0),
+                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
+                    },
+                    ColoredVertex {
+                        pos: Vec4::new(5.0, 0.0, z as _, 1.0),
+                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
+                    },
+                ]
+            }))
+            .chain([
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(1000.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 1000.0, 0.0, 1.0),
+                    color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                },
+                ColoredVertex {
+                    pos: Vec4::new(0.0, 0.0, 1000.0, 1.0),
+                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                },
+            ])
+            .collect::<Vec<_>>()
+    }
+
     pub fn new(
         view_ctx: &impl ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let init_size = br::vk::VkExtent2D {
-            width: 128,
-            height: 128,
-        };
+        let init_size = br::vk::VkExtent2D::spread1(128);
         let rect = init_size.into_rect(br::vk::VkOffset2D::ZERO);
         let viewport = rect.make_viewport(0.0..1.0);
-
-        let root = AppSubsystemInstances::get()
-            .compositor
-            .CreateSpriteVisual()
-            .expect("Failed to create root visual");
 
         let composition_surface_handle = unsafe {
             DCompositionCreateSurfaceHandle(
                 (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as _,
                 None,
-            )
-            .expect("Failed to create composition surface handle")
+            )?
         };
         let presentation_surface = unsafe {
             AppSubsystemInstances::get()
                 .presentation_manager
-                .CreatePresentationSurface(composition_surface_handle)
-                .expect("Failed to create presentation surface")
+                .CreatePresentationSurface(composition_surface_handle)?
         };
         let surface = unsafe {
             AppSubsystemInstances::get()
                 .compositor_interop
-                .CreateCompositionSurfaceForHandle(composition_surface_handle)
-                .expect("Failed to create ui composition surface")
+                .CreateCompositionSurfaceForHandle(composition_surface_handle)?
         };
         unsafe {
-            presentation_surface
-                .SetSourceRect(&RECT {
-                    left: 0,
-                    top: 0,
-                    right: init_size.width as _,
-                    bottom: init_size.height as _,
-                })
-                .expect("Failed to set source rect");
+            presentation_surface.SetSourceRect(&RECT {
+                left: 0,
+                top: 0,
+                right: init_size.width as _,
+                bottom: init_size.height as _,
+            })?;
 
-            presentation_surface
-                .SetAlphaMode(DXGI_ALPHA_MODE_IGNORE)
-                .expect("Failed to set alpha mode");
+            presentation_surface.SetAlphaMode(DXGI_ALPHA_MODE_IGNORE)?;
             // TODO: G10(Linear色空間のはず)を使うとなんか挙動が怪しいのでいったんG22(Gamma補正バージョン)を使う
             // presentation_surface
-            //     .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)
-            //     .expect("Failed to set color space");
-            presentation_surface
-                .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
-                .expect("Failed to set color space");
+            //     .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)?;
+            presentation_surface.SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)?;
         }
 
-        let brush = AppSubsystemInstances::get()
+        let root = AppSubsystemInstances::get()
             .compositor
-            .CreateSurfaceBrushWithSurface(&surface)
-            .expect("Failed to create surface brush");
-        root.SetBrush(&brush).expect("Failed to set surface brush");
-        root.SetSize(Vector2::scalar(128.0))
-            .expect("Failed to resize visual");
-        root.SetOffset(Vector3::zero())
-            .expect("Failed to position visual");
+            .CreateSpriteVisual()?;
+        root.set_properties()
+            .brush(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateSurfaceBrushWithSurface(&surface)?,
+            )?
+            .size(Vector2::scalar(128.0))?
+            .offset(Vector3::zero())?;
 
         let mut initialization_cp = AppSubsystemInstances::get()
             .mini_engine
@@ -4095,12 +4093,17 @@ impl EditorStageView {
                     .clone(),
             )
             .expect("Failed to create initialization command pool");
-        let mut initialization_cb = initialization_cp
-            .alloc(1, true)
+        let [mut initialization_cb] = initialization_cp
+            .alloc_array::<1>(true)
             .expect("Failed to alloc initialization command buffer");
+        let cb_device = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow()
+            .device()
+            .clone();
         let mut initialization_cmd_rec = unsafe {
-            initialization_cb[0]
-                .begin_once()
+            initialization_cb
+                .begin_once(&cb_device)
                 .expect("Failed to begin initialization command recording")
         };
 
@@ -4111,15 +4114,17 @@ impl EditorStageView {
 
         let main_render_pass = br::RenderPassBuilder2::new(
             &[
+                // color
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
                     .with_layout_from(br::ImageLayout::Undefined.to(br::ImageLayout::General))
                     .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
+                // hdr color
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .layout_transition(
-                        br::ImageLayout::Undefined,
-                        br::ImageLayout::ShaderReadOnlyOpt,
+                    .with_layout_from(
+                        br::ImageLayout::Undefined.to(br::ImageLayout::ShaderReadOnlyOpt),
                     )
                     .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare),
+                // depth
                 br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
                     .with_layout_from(
                         br::ImageLayout::Undefined.to(br::ImageLayout::DepthStencilAttachmentOpt),
@@ -4276,14 +4281,11 @@ impl EditorStageView {
             &hdr_final_pass_pipeline_layout,
             (&main_render_pass, ldr_gizmos_render_subpass),
             br::VertexProcessingStages::new(
-                br::VertexShaderStage::new(br::PipelineShader2::new(
-                    &hdr_final_pass_vsh,
-                    c"main".to_owned(),
-                ))
-                .with_fragment_shader_stage(br::PipelineShader2::new(
-                    &hdr_final_pass_fsh,
-                    c"main".to_owned(),
-                )),
+                br::VertexShaderStage::new(br::PipelineShader2::new(&hdr_final_pass_vsh, c"main"))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(
+                        &hdr_final_pass_fsh,
+                        c"main",
+                    )),
                 &hdr_final_pass_vbinds,
                 &hdr_final_pass_vattrs,
                 br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
@@ -4325,11 +4327,8 @@ impl EditorStageView {
             &grid_pipeline_layout,
             (&main_render_pass, 1),
             br::VertexProcessingStages::new(
-                br::VertexShaderStage::new(br::PipelineShader2::new(&grid_vsh, c"main".to_owned()))
-                    .with_fragment_shader_stage(br::PipelineShader2::new(
-                        &grid_fsh,
-                        c"main".to_owned(),
-                    )),
+                br::VertexShaderStage::new(br::PipelineShader2::new(&grid_vsh, c"main"))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(&grid_fsh, c"main")),
                 &grid_vbinds,
                 &grid_vattrs,
                 br::vk::VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
@@ -4367,58 +4366,7 @@ impl EditorStageView {
             ])
             .expect("Failed to create grid pipeline state");
 
-        let grid_vertices = (-5..=5)
-            .flat_map(|x| {
-                [
-                    ColoredVertex {
-                        pos: Vec4::new(x as _, 0.0, -5.0, 1.0),
-                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
-                    },
-                    ColoredVertex {
-                        pos: Vec4::new(x as _, 0.0, 5.0, 1.0),
-                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
-                    },
-                ]
-            })
-            .chain((-5..=5).flat_map(|z| {
-                [
-                    ColoredVertex {
-                        pos: Vec4::new(-5.0, 0.0, z as _, 1.0),
-                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
-                    },
-                    ColoredVertex {
-                        pos: Vec4::new(5.0, 0.0, z as _, 1.0),
-                        color: Vec4::new(0.75, 0.75, 0.75, 0.5),
-                    },
-                ]
-            }))
-            .chain([
-                ColoredVertex {
-                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
-                    color: Vec4::new(1.0, 0.0, 0.0, 1.0),
-                },
-                ColoredVertex {
-                    pos: Vec4::new(1000.0, 0.0, 0.0, 1.0),
-                    color: Vec4::new(1.0, 0.0, 0.0, 1.0),
-                },
-                ColoredVertex {
-                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
-                    color: Vec4::new(0.0, 1.0, 0.0, 1.0),
-                },
-                ColoredVertex {
-                    pos: Vec4::new(0.0, 1000.0, 0.0, 1.0),
-                    color: Vec4::new(0.0, 1.0, 0.0, 1.0),
-                },
-                ColoredVertex {
-                    pos: Vec4::new(0.0, 0.0, 0.0, 1.0),
-                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
-                },
-                ColoredVertex {
-                    pos: Vec4::new(0.0, 0.0, 1000.0, 1.0),
-                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
-                },
-            ])
-            .collect::<Vec<_>>();
+        let grid_vertices = Self::grid_vertices();
         let default_camera = Camera {
             projection: Some(ProjectionMethod::Perspective {
                 fov: 60.0f32.to_radians(),
@@ -4499,15 +4447,17 @@ impl EditorStageView {
             .borrow()
             .submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
                 &[],
-                &[br::CommandBufferSubmitInfo::new(&initialization_cb[0])],
+                &[br::CommandBufferSubmitInfo::new(&initialization_cb)],
                 &[],
             )])
             .expect("Failed to submit init commands");
         drop(initialization_cp);
 
         let mut dp = br::DescriptorPoolBuilder::new(2)
-            .reserve(br::DescriptorType::UniformBuffer.with_count(1))
-            .reserve(br::DescriptorType::InputAttachment.with_count(1))
+            .with_reservations(vec![
+                br::DescriptorType::UniformBuffer.with_count(1),
+                br::DescriptorType::InputAttachment.with_count(1),
+            ])
             .create(
                 AppSubsystemInstances::get()
                     .mini_engine
@@ -4551,14 +4501,16 @@ impl EditorStageView {
             .values()
             .find(|x| x.is_sunlight_object())
         {
-            Some(x) => PrimaryDirectionalLightUniformData {
-                // TODO: ライト方向は後で
-                incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
-                // incident_light_dir: peridot_math::Vector3(0.0f32, -0.8, -0.2).normalize(),
-                light_intensity: match x.details {
-                    ObjectDetails::SunLight { intensity, .. } => intensity,
-                    _ => unreachable!(),
+            Some(x) => match x.details {
+                ObjectDetails::SunLight {
+                    rotation,
+                    intensity,
+                } => PrimaryDirectionalLightUniformData {
+                    incident_light_dir: peridot_math::Matrix3::from(rotation.clone())
+                        * peridot_math::Vector3(0.0f32, 0.0, -1.0),
+                    light_intensity: intensity,
                 },
+                _ => unreachable!(),
             },
             None => PrimaryDirectionalLightUniformData {
                 incident_light_dir: peridot_math::Vector3(0.0f32, -0.1, -1.0).normalize(),
@@ -4595,20 +4547,13 @@ impl EditorStageView {
         let mut back_buffer_render_resources = Vec::with_capacity(3);
         for mut cb in main_render_commands.into_iter() {
             let texture_desc = d3d11_presentation_texture_desc(init_size.width, init_size.height);
-            let texture = texture_desc
-                .create(&AppSubsystemInstances::get().d3d11_device)
-                .expect("Failed to create back buffer texture");
+            let texture = texture_desc.create(&AppSubsystemInstances::get().d3d11_device)?;
             let presentation_buffer = unsafe {
                 AppSubsystemInstances::get()
                     .presentation_manager
-                    .AddBufferFromResource(&texture)
-                    .expect("Failed to add texture as presentation buffer")
+                    .AddBufferFromResource(&texture)?
             };
-            let eh = unsafe {
-                presentation_buffer
-                    .GetAvailableEvent()
-                    .expect("Failed to get available event handle")
-            };
+            let eh = unsafe { presentation_buffer.GetAvailableEvent()? };
 
             let rt_desc = D3D11_TEXTURE2D_DESC {
                 BindFlags: D3D11_BIND_RENDER_TARGET.0 as _,
@@ -4617,21 +4562,14 @@ impl EditorStageView {
                     .0 as _,
                 ..texture_desc
             };
-            let rt = rt_desc
-                .create(&AppSubsystemInstances::get().d3d11_device)
-                .expect("Failed to create rt");
+            let rt = rt_desc.create(&AppSubsystemInstances::get().d3d11_device)?;
 
-            let texture_res = rt
-                .cast::<IDXGIResource1>()
-                .expect("Failed to query underlying resource");
             let tex_handle = unsafe {
-                texture_res
-                    .CreateSharedHandle(
-                        None,
-                        GENERIC_ALL.0 | DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-                        None,
-                    )
-                    .expect("Failed to get shared handle")
+                rt.cast::<IDXGIResource1>()?.CreateSharedHandle(
+                    None,
+                    GENERIC_ALL.0 | DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                    None,
+                )?
             };
             let external_handle = br::ExternalMemoryHandleTypeWin32::D3D11Texture
                 .with_handle(unsafe { core::mem::transmute(tex_handle.0) });
@@ -4643,28 +4581,29 @@ impl EditorStageView {
                     )
                     .expect("Failed to query external handle memory properties")
             };
-            let mut vk_image = br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R8G8B8A8_UNORM)
-                .as_color_attachment()
-                .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
-                .create(
-                    AppSubsystemInstances::get()
-                        .mini_engine
-                        .borrow()
-                        .device()
-                        .clone(),
-                )
-                .expect("Failed to create external backbuffer image");
-            let vk_image_memory_req = vk_image.requirements();
-            let vk_memory_index = AppSubsystemInstances::get()
+            let mut imported_image =
+                br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                    .as_color_attachment()
+                    .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
+                    .create(
+                        AppSubsystemInstances::get()
+                            .mini_engine
+                            .borrow()
+                            .device()
+                            .clone(),
+                    )
+                    .expect("Failed to create external backbuffer image");
+            let imported_image_memory_req = imported_image.requirements();
+            let imported_memory_index = AppSubsystemInstances::get()
                 .mini_engine
                 .borrow()
                 .find_device_local_memory_index(
-                    vk_image_memory_req.memoryTypeBits
+                    imported_image_memory_req.memoryTypeBits
                         & external_handle_image_memory_req.memoryTypeBits,
                 )
                 .expect("no suitable memory");
-            let vk_image_memory = external_handle
-                .into_import_request(vk_memory_index, None)
+            let imported_image_memory = external_handle
+                .into_import_request(imported_memory_index, None)
                 .execute(
                     AppSubsystemInstances::get()
                         .mini_engine
@@ -4673,14 +4612,14 @@ impl EditorStageView {
                         .clone(),
                 )
                 .expect("Failed to import d3d11 memory");
-            vk_image
-                .bind(&vk_image_memory, 0)
+            imported_image
+                .bind(&imported_image_memory, 0)
                 .expect("Failed to bind image to memory");
-            let vk_image = Rc::new(vk_image);
+            let imported_image = Rc::new(imported_image);
 
             let vk_framebuffer = br::FramebufferBuilder::new(&main_render_pass)
                 .with_attachment(
-                    vk_image
+                    imported_image
                         .clone()
                         .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                         .view_builder()
@@ -4692,68 +4631,66 @@ impl EditorStageView {
                 .create()
                 .expect("Failed to create framebuffer");
 
-            unsafe { cb.begin().expect("Failed to begin command recording") }
-                .set_viewport(0, &[viewport.clone()])
-                .set_scissor(0, &[rect])
-                .begin_render_pass(
-                    &main_render_pass,
-                    &vk_framebuffer,
-                    init_size.into_rect(br::vk::VkOffset2D::ZERO),
-                    &[
-                        br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                        br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                        br::ClearValue::depth_stencil(1.0, 0),
-                    ],
-                    true,
-                )
-                .bind_graphics_pipeline_pair(
-                    &skybox_renderer.pipeline,
-                    &skybox_renderer.pipeline_layout,
-                )
-                .bind_graphics_descriptor_sets(
-                    0,
-                    &[
-                        camera_descriptor_set.0,
-                        skybox_renderer.renderer_descriptor.0,
-                    ],
-                    &[],
-                )
-                .bind_vertex_buffers(0, &[(&skybox_renderer.vertex_buffer, 0)])
-                .draw(4, 1, 0, 0)
-                .next_subpass(true)
-                .bind_graphics_pipeline_pair(
-                    &hdr_final_pass_pipeline,
-                    &hdr_final_pass_pipeline_layout,
-                )
-                .bind_graphics_descriptor_sets(0, &[hdr_final_pass_descriptor_set.0], &[])
-                .bind_vertex_buffers(
-                    0,
-                    &[(
-                        &utility_verts.buffer,
-                        utility_verts.uv_triangle_strip_fill_plane2d_offset as _,
-                    )],
-                )
-                .draw(4, 1, 0, 0)
-                .bind_graphics_pipeline_pair(&grid_pipeline, &grid_pipeline_layout)
-                .bind_graphics_descriptor_sets(0, &[camera_descriptor_set.0], &[])
-                .bind_vertex_buffers(0, &[(&grid_buffer, 0)])
-                .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
-                .draw(grid_vertices.len() as _, 1, 0, 0)
-                .end_render_pass()
-                .end()
-                .expect("Failed to record commands");
+            unsafe {
+                cb.begin(AppSubsystemInstances::get().mini_engine.borrow().device())
+                    .expect("Failed to begin command recording")
+            }
+            .set_viewport(0, &[viewport.clone()])
+            .set_scissor(0, &[rect])
+            .begin_render_pass(
+                &main_render_pass,
+                &vk_framebuffer,
+                init_size.into_rect(br::vk::VkOffset2D::ZERO),
+                &[
+                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                    br::ClearValue::depth_stencil(1.0, 0),
+                ],
+                true,
+            )
+            .bind_graphics_pipeline_pair(
+                &skybox_renderer.pipeline,
+                &skybox_renderer.pipeline_layout,
+            )
+            .bind_graphics_descriptor_sets(
+                0,
+                &[
+                    camera_descriptor_set.0,
+                    skybox_renderer.renderer_descriptor.0,
+                ],
+                &[],
+            )
+            .bind_vertex_buffers(0, &[(&skybox_renderer.vertex_buffer, 0)])
+            .draw(4, 1, 0, 0)
+            .next_subpass(true)
+            .bind_graphics_pipeline_pair(&hdr_final_pass_pipeline, &hdr_final_pass_pipeline_layout)
+            .bind_graphics_descriptor_sets(0, &[hdr_final_pass_descriptor_set.0], &[])
+            .bind_vertex_buffers(
+                0,
+                &[(
+                    &utility_verts.buffer,
+                    utility_verts.uv_triangle_strip_fill_plane2d_offset as _,
+                )],
+            )
+            .draw(4, 1, 0, 0)
+            .bind_graphics_pipeline_pair(&grid_pipeline, &grid_pipeline_layout)
+            .bind_graphics_descriptor_sets(0, &[camera_descriptor_set.0], &[])
+            .bind_vertex_buffers(0, &[(&grid_buffer, 0)])
+            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
+            .draw(grid_vertices.len() as _, 1, 0, 0)
+            .end_render_pass()
+            .end()
+            .expect("Failed to record commands");
 
-            let rt_mutex = rt
-                .cast::<IDXGIKeyedMutex>()
-                .expect("Failed to get keyed mutex");
+            let rt_mutex = rt.cast::<IDXGIKeyedMutex>()?;
             back_buffer_render_resources.push((presentation_buffer, cb, texture, rt, rt_mutex));
-            back_buffer_resources.push((eh, vk_image_memory, vk_framebuffer));
+            back_buffer_resources.push((eh, imported_image_memory, vk_framebuffer));
         }
 
         let skybox_renderer = Rc::new(skybox_renderer);
         Ok(new_cyclic_shared_mut(move |wthis| {
             let ht = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 view_ctx.hittest_context().new_id(),
                 Rect::from_size(init_size.width as _, init_size.height as _),
                 Rect::empty(),
@@ -4869,27 +4806,30 @@ impl EditorStageView {
         let [mut cb] = cp
             .alloc_array::<1>(true)
             .expect("Failed to allocate command buffer");
-        unsafe { cb.begin_once().expect("Failed to begin commands") }
-            .copy_buffer(
-                &camera_upload_buffer,
-                &self.camera_buffer,
-                &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .from(
-                        br::PipelineStageFlags2::COPY,
-                        br::AccessFlags2::TRANSFER.write,
-                    )
-                    .to(
-                        br::PipelineStageFlags2::VERTEX_SHADER,
-                        br::AccessFlags2::UNIFORM_READ,
-                    )],
-                &[],
-                &[],
-            ))
-            .end()
-            .expect("Failed to finish updating commands");
+        unsafe {
+            cb.begin_once(mini_engine_ref.device())
+                .expect("Failed to begin commands")
+        }
+        .copy_buffer(
+            &camera_upload_buffer,
+            &self.camera_buffer,
+            &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
+        )
+        .pipeline_barrier_2(&br::DependencyInfo::new(
+            &[br::MemoryBarrier2::new()
+                .from(
+                    br::PipelineStageFlags2::COPY,
+                    br::AccessFlags2::TRANSFER.write,
+                )
+                .to(
+                    br::PipelineStageFlags2::VERTEX_SHADER,
+                    br::AccessFlags2::UNIFORM_READ,
+                )],
+            &[],
+            &[],
+        ))
+        .end()
+        .expect("Failed to finish updating commands");
         mini_engine_ref
             .submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
                 &[],
@@ -5021,10 +4961,11 @@ impl EditorStageView {
                 .create()
                 .expect("Failed to create framebuffer");
 
+            let mini_engine_ref = AppSubsystemInstances::get().mini_engine.borrow();
             unsafe {
                 renderer
                     .1
-                    .begin()
+                    .begin(mini_engine_ref.device())
                     .expect("Failed to begin command recording")
             }
             .set_viewport(0, &[viewport.clone()])
@@ -5189,54 +5130,30 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             })
             .expect("Failed to write camera vp matrix");
 
-        let mini_engine_ref = AppSubsystemInstances::get().mini_engine.borrow();
-        let mut cp = br::CommandPoolBuilder::new(mini_engine_ref.graphics_queue_family_index())
-            .transient()
-            .create(mini_engine_ref.device())
-            .expect("Failed to create transient command pool");
-        let mut cb = cp
-            .alloc(1, true)
-            .expect("Failed to allocate command buffer");
-        unsafe { cb[0].begin_once().expect("Failed to begin commands") }
-            .copy_buffer(
-                &camera_upload_buffer,
-                &this.borrow().camera_buffer,
-                &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .of_memory(
-                        br::AccessFlags2::TRANSFER.write,
-                        br::AccessFlags2::UNIFORM_READ,
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COPY,
-                        br::PipelineStageFlags2::VERTEX_SHADER,
-                    )],
-                &[],
-                &[],
-            ))
-            .end()
-            .expect("Failed to finish updating commands");
-        mini_engine_ref
-            .graphics_queue()
+        AppSubsystemInstances::get()
+            .mini_engine
             .borrow_mut()
-            .submit2(
-                &[br::SubmitInfo2::new(
+            .submit_transient_commands_and_wait(|rec| {
+                rec.copy_buffer(
+                    &camera_upload_buffer,
+                    &this.borrow().camera_buffer,
+                    &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
+                )
+                .pipeline_barrier_2(&br::DependencyInfo::new(
+                    &[br::MemoryBarrier2::new()
+                        .of_memory(
+                            br::AccessFlags2::TRANSFER.write,
+                            br::AccessFlags2::UNIFORM_READ,
+                        )
+                        .of_execution(
+                            br::PipelineStageFlags2::COPY,
+                            br::PipelineStageFlags2::VERTEX_SHADER,
+                        )],
                     &[],
-                    &[br::CommandBufferSubmitInfo::new(&cb[0])],
                     &[],
-                )],
-                None::<&mut br::FenceObject<StdVkDevice>>,
-            )
+                ))
+            })
             .expect("Failed to submit updating commands");
-        mini_engine_ref
-            .graphics_queue()
-            .borrow_mut()
-            .wait()
-            .expect("Failed to wait update completion");
-        drop(cp);
-        drop(mini_engine_ref);
     }
 
     fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
@@ -5291,6 +5208,12 @@ impl ObjectTreeElementRowView {
     const PADDING_Y: f32 = 2.0;
     const PADDING_X: f32 = 8.0;
     const HOVER_ANIMATION_DURATION: TimeSpan = timespan_ms(50);
+    const HOVER_COLOR: Color = Color {
+        A: 16,
+        R: 255,
+        G: 255,
+        B: 255,
+    };
 
     pub fn new(
         view_ctx: &(impl ViewContext + ?Sized),
@@ -5323,12 +5246,7 @@ impl ObjectTreeElementRowView {
             .brush(
                 &AppSubsystemInstances::get()
                     .compositor
-                    .CreateColorBrushWithColor(Color {
-                        A: 16,
-                        R: 255,
-                        G: 255,
-                        B: 255,
-                    })?,
+                    .CreateColorBrushWithColor(Self::HOVER_COLOR)?,
             )?
             .expand_to_parent()?
             .opacity(0.0)?;
@@ -5374,7 +5292,7 @@ impl ObjectTreeElementRowView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 view_ctx.hittest_context().new_id(),
                 Rect::from_size(core::f32::MAX, label_surface.height + Self::PADDING_Y * 2.0),
                 Rect::empty(),
@@ -5395,10 +5313,19 @@ impl ObjectTreeElementRowView {
         self.ht.borrow().rect().Height
     }
 
-    pub fn mount(
+    pub fn reposition(&mut self, pos: Vector2) -> windows::core::Result<()> {
+        self.root.SetOffset(pos.with_z(0.0))?;
+        self.ht.borrow_mut().set_offset(pos.X, pos.Y);
+
+        Ok(())
+    }
+}
+impl MountableView for ObjectTreeElementRowView {
+    fn mount(
         &self,
         onto: &VisualCollection,
         onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         HitTestTree::add_child(onto_ht, self.ht.clone());
@@ -5406,16 +5333,9 @@ impl ObjectTreeElementRowView {
         Ok(())
     }
 
-    pub fn unmount(&self) -> windows::core::Result<()> {
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
         self.ht.borrow_mut().unmount();
-
-        Ok(())
-    }
-
-    pub fn reposition(&mut self, pos: Vector2) -> windows::core::Result<()> {
-        self.root.SetOffset(pos.with_z(0.0))?;
-        self.ht.borrow_mut().set_offset(pos.X, pos.Y);
 
         Ok(())
     }
@@ -5469,12 +5389,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         &mut self,
         onto: &ContainerVisual,
         onto_ht: &SharedMut<HitTestTree>,
-        _view_context: &dyn ViewContext,
+        view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let children = onto.Children()?;
         for r in &self.rows {
-            r.borrow().mount(&children, onto_ht)?;
+            r.borrow().mount(&children, onto_ht, view_context)?;
         }
 
         Ok(())
@@ -5482,11 +5402,11 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        _view_context: &dyn ViewContext,
+        view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
         for r in &self.rows {
-            r.borrow().unmount()?;
+            r.borrow().unmount(view_context)?;
         }
 
         Ok(())
@@ -6401,7 +6321,7 @@ fn app() -> i32 {
             .expect("Failed to insert overlay layer");
     }
 
-    let hittest_tree_root = HitTestTree::new_unsized(Some(&Rc::new(())), 0, 0.0, 0.0);
+    let hittest_tree_root = HitTestTree::new_unsized(Some(()), 0, 0.0, 0.0);
     let mut hittest_context = HitTestTreeContext::new();
 
     let mut view_context = ViewContext1 {

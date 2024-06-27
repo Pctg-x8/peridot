@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use windows::{
     core::h,
     Foundation::{
@@ -164,7 +162,7 @@ impl AppTitleBarControlButtonView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 ctx.hittest_context().new_id(),
                 Rect {
                     // Note: アンカーポイントのぶんを余分にずらす
@@ -513,7 +511,7 @@ impl AppTitleBarView {
 
         let this = new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, Self::HEIGHT),
                 Rect::empty(),

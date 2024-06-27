@@ -1,4 +1,4 @@
-use bedrock::{self as br, ImageSubresourceSlice};
+use bedrock::{self as br, CommandBuffer, CommandPool, ImageSubresourceSlice};
 use br::{Device, Instance, PhysicalDevice, PipelineCache, Queue, VulkanStructure};
 use std::{
     cell::RefCell,
@@ -126,6 +126,8 @@ pub struct MiniEngine {
     pub loaded_shaders: HashMap<String, Rc<br::ShaderModuleObject<StdVkDevice>>>,
     pub sampler_store: HashMap<SamplerDesc, Rc<br::SamplerObject<StdVkDevice>>>,
     pub pipeline_cache: br::PipelineCacheObject<StdVkDevice>,
+    pub transient_command_pool: br::CommandPoolObject<StdVkDevice>,
+    pub transient_command_buffer: br::CommandBufferObject<StdVkDevice>,
 }
 impl MiniEngine {
     pub fn new() -> br::Result<Self> {
@@ -268,6 +270,15 @@ impl MiniEngine {
             .new_pipeline_cache(&pc_init_content)
             .expect("Failed to create pipeline cache");
 
+        let mut transient_command_pool =
+            br::CommandPoolBuilder::new(graphics_objects.graphics_queue_family)
+                .transient()
+                .create(graphics_objects.device.clone())
+                .expect("Failed to create transient command pool");
+        let [transient_command_buffer] = transient_command_pool
+            .alloc_array::<1>(true)
+            .expect("Failed to allocate transient command buffer");
+
         Ok(Self {
             graphics_objects,
             memory_manager,
@@ -281,6 +292,8 @@ impl MiniEngine {
             pipeline_cache,
             loaded_shaders: HashMap::new(),
             sampler_store: HashMap::new(),
+            transient_command_pool,
+            transient_command_buffer,
         })
     }
 
@@ -468,6 +481,28 @@ impl MiniEngine {
             .enabled_vk_extensions
             .contains("VK_KHR_line_rasterization")
     }
+
+    pub fn submit_transient_commands_and_wait(
+        &mut self,
+        rec: impl FnOnce(
+            br::CmdRecord<br::CommandBufferObject<StdVkDevice>, StdVkDevice>,
+        ) -> br::CmdRecord<br::CommandBufferObject<StdVkDevice>, StdVkDevice>,
+    ) -> br::Result<()> {
+        self.transient_command_pool.reset(true)?;
+        rec(unsafe {
+            self.transient_command_buffer
+                .begin_once(&self.graphics_objects.device)?
+        })
+        .end()?;
+
+        self.submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
+            &[],
+            &[br::CommandBufferSubmitInfo::new(
+                &self.transient_command_buffer,
+            )],
+            &[],
+        )])
+    }
 }
 
 #[repr(transparent)]
@@ -547,7 +582,10 @@ pub struct UtilityVertices {
 }
 impl UtilityVertices {
     pub fn new(
-        cmdrec: &mut br::CmdRecord<impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer>>,
+        cmdrec: &mut br::CmdRecord<
+            impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer>,
+            StdVkDevice,
+        >,
     ) -> br::Result<Self> {
         let mut engine = AppSubsystemInstances::get().mini_engine.borrow_mut();
 

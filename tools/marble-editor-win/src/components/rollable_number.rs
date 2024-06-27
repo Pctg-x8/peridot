@@ -95,7 +95,7 @@ impl RollableNumberView {
 
         Ok(new_cyclic_shared_mut(move |wthis| {
             let ht = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 view_ctx.hittest_context().new_id(),
                 Rect::from_size(64.0, 16.0),
                 Rect::empty(),

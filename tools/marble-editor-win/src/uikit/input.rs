@@ -357,13 +357,13 @@ pub struct HitTestTree {
 impl HitTestTree {
     #[inline]
     pub fn new(
-        eh: Option<&Rc<impl InputEventHandler + 'static>>,
+        eh: Option<impl InputEventHandler + 'static>,
         id: usize,
         rect: Rect,
         relative_adjustments: Rect,
     ) -> SharedMut<Self> {
         new_shared_mut(Self {
-            eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| x.clone()),
+            eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| Rc::new(x)),
             id,
             rect,
             relative_adjustments,
@@ -373,7 +373,7 @@ impl HitTestTree {
     }
     #[inline]
     pub fn new_unsized(
-        eh: Option<&Rc<impl InputEventHandler + 'static>>,
+        eh: Option<impl InputEventHandler + 'static>,
         id: usize,
         left: f32,
         top: f32,
@@ -392,11 +392,11 @@ impl HitTestTree {
     }
     #[inline]
     pub fn new_fit_to_parent(
-        eh: Option<&Rc<impl InputEventHandler + 'static>>,
+        eh: Option<impl InputEventHandler + 'static>,
         id: usize,
     ) -> SharedMut<Self> {
         new_shared_mut(Self {
-            eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| x.clone()),
+            eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| Rc::new(x)),
             id,
             rect: Rect {
                 X: 0.0,

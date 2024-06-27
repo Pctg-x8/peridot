@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use windows::{
     core::h,
     Foundation::{Numerics::Vector3, Rect},
@@ -85,7 +83,7 @@ impl PaneSplitterView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                Some(&Rc::new(wthis.clone())),
+                Some(wthis.clone()),
                 ctx.hittest_context().new_id(),
                 Rect::from_size(1.0, 1.0),
                 Rect::empty(),
