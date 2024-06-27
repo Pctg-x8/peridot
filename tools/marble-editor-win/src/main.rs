@@ -31,8 +31,8 @@ use utils::{
 };
 use uuid::Uuid;
 use winapi_extras::{
-    timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
-    Vector2Extension, Vector3Extension, VisualExtensions,
+    timespan_ms, GeometryInterop, KeyFrameAnimationExtension,
+    KeyFrameAnimationPropertySetterExtension, Vector2Extension, Vector3Extension, VisualExtensions,
 };
 use windows::{
     core::*,
@@ -40,12 +40,14 @@ use windows::{
         Numerics::{Vector2, Vector3},
         Rect, TimeSpan,
     },
+    Graphics::IGeometrySource2D,
     Win32::{
         Foundation::{BOOL, GENERIC_ALL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
             CompositionSwapchain::{
                 IPresentationBuffer, IPresentationManager, IPresentationSurface,
             },
+            Direct2D::Common::{D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D_POINT_2F},
             Direct3D11::{
                 ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
                 D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED,
@@ -83,7 +85,20 @@ use windows::{
                 TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TRACKMOUSEEVENT_FLAGS,
             },
             WindowsAndMessaging::{
-                CallNextHookEx, DefWindowProcA, DispatchMessageA, FindWindowA, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrA, GetWindowPlacement, GetWindowRect, LoadCursorA, LoadIconA, PeekMessageA, PostQuitMessage, SetCursorPos, SetWindowLongPtrA, SetWindowPos, SetWindowsHookExA, ShowCursor, ShowWindow, TranslateMessage, UnhookWindowsHookEx, GWLP_USERDATA, HHOOK, HTCLIENT, HTTOP, IDC_ARROW, IDI_APPLICATION, MA_NOACTIVATE, MSG, NCCALCSIZE_PARAMS, PM_REMOVE, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE, SW_SHOW, SW_SHOWNA, SW_SHOWNORMAL, WH_MOUSE, WINDOWPLACEMENT, WINDOWPOS, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES
+                CallNextHookEx, DefWindowProcA, DispatchMessageA, FindWindowA, GetClientRect,
+                GetCursorPos, GetSystemMetrics, GetWindowLongPtrA, GetWindowPlacement,
+                GetWindowRect, LoadCursorA, LoadIconA, PeekMessageA, PostQuitMessage, SetCursorPos,
+                SetWindowLongPtrA, SetWindowPos, SetWindowsHookExA, ShowCursor, ShowWindow,
+                TranslateMessage, UnhookWindowsHookEx, GWLP_USERDATA, HHOOK, HTCLIENT, HTTOP,
+                IDC_ARROW, IDI_APPLICATION, MA_NOACTIVATE, MSG, NCCALCSIZE_PARAMS, PM_REMOVE,
+                SM_CXSIZEFRAME, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE,
+                SW_SHOW, SW_SHOWNA, SW_SHOWNORMAL, WH_MOUSE, WINDOWPLACEMENT, WINDOWPOS,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
+                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEACTIVATE,
+                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMOUSELEAVE,
+                WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
+                WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -92,10 +107,10 @@ use windows::{
         Composition::{
             AnimationDelayBehavior, CompositionAnimationGroup, CompositionEasingFunction,
             CompositionEasingFunctionMode, CompositionEffectSourceParameter,
-            CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, ContainerVisual,
-            Desktop::DesktopWindowTarget, Diagnostics::CompositionDebugSettings, LayerVisual,
-            PowerEasingFunction, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
-            VisualCollection,
+            CompositionMappingMode, CompositionPath, CompositionRoundedRectangleGeometry,
+            CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget,
+            Diagnostics::CompositionDebugSettings, LayerVisual, PowerEasingFunction,
+            ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
         },
     },
 };
@@ -5477,15 +5492,93 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
     }
 }
 
+pub struct ContextMenuSeparatorView {
+    root: ContainerVisual,
+}
+impl ContextMenuSeparatorView {
+    const PADDING_X: f32 = 4.0;
+    const PADDING_Y: f32 = 1.0;
+
+    pub fn new(y: f32, _view_ctx: &(impl ViewContext + ?Sized)) -> windows::core::Result<Self> {
+        let root = AppSubsystemInstances::get()
+            .compositor
+            .CreateContainerVisual()?;
+        root.set_properties()
+            .relative_size_adjustment(Vector2 { X: 1.0, Y: 0.0 })?
+            .size(Vector2 {
+                X: 0.0,
+                Y: Self::PADDING_Y * 2.0 + 1.0,
+            })?
+            .offset(Vector3 {
+                X: 0.0,
+                Y: y,
+                Z: 0.0,
+            })?;
+
+        let line = AppSubsystemInstances::get()
+            .compositor
+            .CreateSpriteVisual()?;
+        line.set_properties()
+            .brush(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateColorBrushWithColor(Color {
+                        A: 192,
+                        R: 160,
+                        G: 160,
+                        B: 160,
+                    })?,
+            )?
+            .size(Vector2 {
+                X: -Self::PADDING_X * 2.0,
+                Y: 1.0,
+            })?
+            .relative_size_adjustment(Vector2 { X: 1.0, Y: 0.0 })?
+            .offset(Vector3 {
+                X: Self::PADDING_X,
+                Y: Self::PADDING_Y,
+                Z: 0.0,
+            })?;
+
+        root.Children()?.InsertAtTop(&line)?;
+
+        Ok(Self { root })
+    }
+
+    pub fn height(&self) -> f32 {
+        Self::PADDING_Y * 2.0 + 1.0
+    }
+}
+impl MountableView for ContextMenuSeparatorView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        _onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
+
+        Ok(())
+    }
+
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+
+        Ok(())
+    }
+}
+
 pub struct ContextMenuEntryView {
     root: ContainerVisual,
     label: SpriteVisual,
     back: SpriteVisual,
+    submenu_icon: Option<(ShapeVisual, CompositionAnimationGroup)>,
     enter_animation: CompositionAnimationGroup,
     hover_animation: ScalarKeyFrameAnimation,
     hover_end_animation: ScalarKeyFrameAnimation,
     ht: SharedMut<HitTestTree>,
     height: f32,
+    required_width: f32,
 }
 impl ContextMenuEntryView {
     const ENTER_ANIMATION_DURARION: TimeSpan = timespan_ms(100);
@@ -5493,9 +5586,11 @@ impl ContextMenuEntryView {
     const PADDING_X: f32 = 12.0;
     const PADDING_Y: f32 = 4.0;
     const BACK_INSET: f32 = 1.0;
+    const SUBMENU_ICON_SIZE: f32 = 10.0;
 
     pub fn new(
         text: impl Into<Cow<'static, str>>,
+        has_submenu: bool,
         enter_animation_delay: TimeSpan,
         y: f32,
         view_ctx: &(impl ViewContext + ?Sized),
@@ -5536,6 +5631,75 @@ impl ContextMenuEntryView {
             )?
             .size(text.visual_size())?;
 
+        let submenu_icon = if has_submenu {
+            let icon_geometry = unsafe {
+                AppSubsystemInstances::get()
+                    .d2d1_factory
+                    .CreatePathGeometry()?
+            };
+            unsafe {
+                let sink = icon_geometry.Open()?;
+                sink.BeginFigure(
+                    D2D_POINT_2F {
+                        x: Self::SUBMENU_ICON_SIZE,
+                        y: Self::SUBMENU_ICON_SIZE * 0.5,
+                    },
+                    D2D1_FIGURE_BEGIN_FILLED,
+                );
+                sink.AddLines(&[
+                    D2D_POINT_2F {
+                        x: Self::SUBMENU_ICON_SIZE * 0.5,
+                        y: 0.0,
+                    },
+                    D2D_POINT_2F {
+                        x: Self::SUBMENU_ICON_SIZE * 0.5,
+                        y: Self::SUBMENU_ICON_SIZE,
+                    },
+                ]);
+                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink.Close()?;
+            }
+
+            let icon_geometry: IGeometrySource2D = GeometryInterop(icon_geometry.into()).into();
+            let icon_geometry = AppSubsystemInstances::get()
+                .compositor
+                .CreatePathGeometryWithPath(&CompositionPath::Create(&icon_geometry)?)?;
+            let icon_shape = AppSubsystemInstances::get()
+                .compositor
+                .CreateSpriteShapeWithGeometry(&icon_geometry)?;
+            icon_shape.SetFillBrush(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateColorBrushWithColor(Color {
+                        A: 255,
+                        R: 224,
+                        G: 224,
+                        B: 224,
+                    })?,
+            )?;
+            let v = AppSubsystemInstances::get()
+                .compositor
+                .CreateShapeVisual()?;
+            v.Shapes()?.Append(&icon_shape)?;
+            v.set_properties()
+                .size(Vector2::scalar(Self::SUBMENU_ICON_SIZE))?
+                .offset(Vector3 {
+                    X: -Self::PADDING_X,
+                    Y: 0.0,
+                    Z: 0.0,
+                })?
+                .anchor_point(Vector2 { X: 1.0, Y: 0.5 })?
+                .relative_offset_adjustment(Vector3 {
+                    X: 1.0,
+                    Y: 0.5,
+                    Z: 0.0,
+                })?;
+
+            Some(v)
+        } else {
+            None
+        };
+
         let back = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
@@ -5545,16 +5709,54 @@ impl ContextMenuEntryView {
                 .ui_common_objects
                 .menu_item_back_mask_brush,
         )?;
-        back_brush.SetSource(
-            &AppSubsystemInstances::get()
+        back_brush.SetSource(&{
+            let b = AppSubsystemInstances::get()
                 .compositor
-                .CreateColorBrushWithColor(Color {
-                    A: 128,
-                    R: 32,
-                    G: 144,
-                    B: 224,
-                })?,
-        )?;
+                .CreateRadialGradientBrush()?;
+            b.ColorStops()?.Append(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateColorGradientStopWithOffsetAndColor(
+                        0.0,
+                        Color {
+                            A: 255,
+                            R: 128,
+                            G: 255,
+                            B: 255,
+                        },
+                    )?,
+            )?;
+            b.ColorStops()?.Append(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateColorGradientStopWithOffsetAndColor(
+                        0.3,
+                        Color {
+                            A: 192,
+                            R: 32,
+                            G: 160,
+                            B: 224,
+                        },
+                    )?,
+            )?;
+            b.ColorStops()?.Append(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateColorGradientStopWithOffsetAndColor(
+                        1.0,
+                        Color {
+                            A: 0,
+                            R: 32,
+                            G: 144,
+                            B: 224,
+                        },
+                    )?,
+            )?;
+            b.SetMappingMode(CompositionMappingMode::Relative)?;
+            b.SetEllipseRadius(Vector2 { X: 0.5, Y: 0.25 })?;
+            b.SetEllipseCenter(Vector2 { X: 0.5, Y: 0.75 })?;
+            b
+        })?;
         back.set_properties()
             .brush(&back_brush)?
             .expand_to_parent()?
@@ -5570,6 +5772,9 @@ impl ContextMenuEntryView {
             .opacity(0.0)?;
 
         root.Children()?.InsertAtTop(&back)?;
+        if let Some(v) = submenu_icon.as_ref() {
+            root.Children()?.InsertAtTop(v)?;
+        }
         root.Children()?.InsertAtTop(&label)?;
 
         let linear_easing_fn = AppSubsystemInstances::get()
@@ -5578,8 +5783,9 @@ impl ContextMenuEntryView {
         let ease_out_fn = CompositionEasingFunction::CreatePowerEasingFunction(
             &AppSubsystemInstances::get().compositor,
             CompositionEasingFunctionMode::Out,
-            2.0,
+            3.0,
         )?;
+
         let enter_opacity_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
@@ -5623,6 +5829,43 @@ impl ContextMenuEntryView {
         enter_animation.Add(&enter_opacity_animation)?;
         enter_animation.Add(&enter_offset_animation)?;
 
+        let submenu_icon_enter_animation = if has_submenu {
+            let enter_offset_animation = AppSubsystemInstances::get()
+                .compositor
+                .CreateVector3KeyFrameAnimation()?;
+            enter_offset_animation.InsertKeyFrame(
+                0.0,
+                Vector3 {
+                    X: -Self::PADDING_X - 8.0,
+                    Y: 0.0,
+                    Z: 0.0,
+                },
+            )?;
+            enter_offset_animation.InsertKeyFrameWithEasingFunction(
+                1.0,
+                Vector3 {
+                    X: -Self::PADDING_X,
+                    Y: 0.0,
+                    Z: 0.0,
+                },
+                &ease_out_fn,
+            )?;
+            enter_offset_animation.SetDelayTime(enter_animation_delay)?;
+            enter_offset_animation
+                .SetDelayBehavior(AnimationDelayBehavior::SetInitialValueBeforeDelay)?;
+            enter_offset_animation.SetDuration(Self::ENTER_ANIMATION_DURARION)?;
+            enter_offset_animation.SetTarget(h!("Offset"))?;
+            let enter_animation = AppSubsystemInstances::get()
+                .compositor
+                .CreateAnimationGroup()?;
+            enter_animation.Add(&enter_opacity_animation)?;
+            enter_animation.Add(&enter_offset_animation)?;
+
+            Some(enter_animation)
+        } else {
+            None
+        };
+
         let hover_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
@@ -5662,17 +5905,24 @@ impl ContextMenuEntryView {
                 root,
                 label,
                 back,
+                submenu_icon: submenu_icon
+                    .and_then(|v| submenu_icon_enter_animation.map(move |a| (v, a))),
                 enter_animation,
                 hover_animation,
                 hover_end_animation,
                 ht,
                 height: text.height + Self::PADDING_Y * 2.0,
+                required_width: text.width + Self::PADDING_X * 2.0,
             }
         }))
     }
 
     pub fn height(&self) -> f32 {
         self.height
+    }
+
+    pub fn required_width(&self) -> f32 {
+        self.required_width
     }
 }
 impl MountableView for ContextMenuEntryView {
@@ -5684,6 +5934,9 @@ impl MountableView for ContextMenuEntryView {
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         self.label.StartAnimationGroup(&self.enter_animation)?;
+        if let Some((v, a)) = self.submenu_icon.as_ref() {
+            v.StartAnimationGroup(a)?;
+        }
 
         HitTestTree::add_child(onto_ht, self.ht.clone());
 
@@ -5719,6 +5972,13 @@ impl InputEventHandler for WeakMut<ContextMenuEntryView> {
             .StartAnimation(h!("Opacity"), &this.borrow().hover_end_animation)
             .expect("Failed to start hover end animation");
     }
+}
+
+pub enum MenuItem {
+    Command(String),
+    SubMenu(String),
+    Separator,
+    Header(String),
 }
 
 static CONTEXT_MENU_WINDOW_CLASS: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
@@ -5761,10 +6021,18 @@ pub struct ContextMenu {
     unscaled_base: SpriteVisual,
     content_root: ContainerVisual,
     ht_root: SharedMut<HitTestTree>,
-    entries: Vec<SharedMut<ContextMenuEntryView>>,
+    entries: Vec<SharedMut<dyn MountableView>>,
     window_state: Box<SharedMut<ContextMenuWindowState>>,
+    content_size: Vector2,
 }
 impl ContextMenu {
+    const TINT_COLOR: Color = Color {
+        A: 96,
+        R: 0,
+        G: 0,
+        B: 0,
+    };
+
     fn window_class() -> u16 {
         *CONTEXT_MENU_WINDOW_CLASS.get_or_init(|| {
             register_window_class(&WNDCLASSEXA {
@@ -5783,7 +6051,7 @@ impl ContextMenu {
         })
     }
 
-    pub fn new() -> windows::core::Result<Self> {
+    pub fn new(app_window_dpi: f32) -> windows::core::Result<Self> {
         let w = WindowBuilder::new(
             unsafe { GetModuleHandleA(None)?.into() },
             Self::window_class(),
@@ -5837,15 +6105,9 @@ impl ContextMenu {
             .brush(
                 &AppSubsystemInstances::get()
                     .compositor
-                    .CreateColorBrushWithColor(Color {
-                        A: 96,
-                        R: 0,
-                        G: 0,
-                        B: 0,
-                    })?,
+                    .CreateColorBrushWithColor(Self::TINT_COLOR)?,
             )?
-            .relative_offset_adjustment(Vector3::zero())?
-            .relative_size_adjustment(Vector2::one())?;
+            .expand_to_parent()?;
         blur_visual.Children()?.InsertAtTop(&color_tint)?;
 
         blur_visual.SetShadow(&{
@@ -5869,7 +6131,7 @@ impl ContextMenu {
             input_state: InputState::new(w, &ht_root),
             mouse_hook_handle: None,
             ht_context: HitTestTreeContext::new(),
-            current_dpi: 96.0,
+            current_dpi: app_window_dpi,
         }));
         unsafe {
             SetWindowLongPtrA(
@@ -5888,34 +6150,66 @@ impl ContextMenu {
             ht_root,
             entries: Vec::new(),
             window_state,
+            content_size: Vector2 { X: 128.0, Y: 128.0 },
         })
     }
 
-    pub fn setup_contents(&mut self) -> windows::core::Result<()> {
+    pub fn setup_contents(&mut self, content: &[MenuItem]) -> windows::core::Result<()> {
         for e in self.entries.drain(..) {
             e.borrow().unmount(&*self.window_state.borrow())?;
         }
 
+        // Viewのpoolingとかはあとで
+        let mut yo = 0.0f32;
+        let mut xr = 128.0f32;
+        let mut delay = timespan_ms(0);
+        for c in content {
+            match c {
+                MenuItem::Command(title) => {
+                    let e = ContextMenuEntryView::new(
+                        title.to_owned(),
+                        false,
+                        delay,
+                        yo,
+                        &*self.window_state.borrow(),
+                    )?;
+                    yo += e.borrow().height();
+                    xr = xr.max(e.borrow().required_width());
+                    delay.Duration += timespan_ms(5).Duration;
+                    self.entries.push(e);
+                }
+                MenuItem::SubMenu(title) => {
+                    let e = ContextMenuEntryView::new(
+                        title.to_owned(),
+                        true,
+                        delay,
+                        yo,
+                        &*self.window_state.borrow(),
+                    )?;
+                    yo += e.borrow().height();
+                    xr = xr.max(e.borrow().required_width());
+                    delay.Duration += timespan_ms(5).Duration;
+                    self.entries.push(e);
+                }
+                MenuItem::Separator => {
+                    let e = new_shared_mut(ContextMenuSeparatorView::new(
+                        yo,
+                        &*self.window_state.borrow(),
+                    )?);
+                    yo += e.borrow().height();
+                    self.entries.push(e);
+                }
+                MenuItem::Header(h) => unimplemented!("Header {h:?}"),
+            }
+        }
+
         let children = self.content_root.Children()?;
-        let e = ContextMenuEntryView::new(
-            "MenuEntry1",
-            timespan_ms(0),
-            0.0,
-            &*self.window_state.borrow(),
-        )?;
-        let eh = e.borrow().height();
-        e.borrow()
-            .mount(&children, &self.ht_root, &*self.window_state.borrow())?;
-        self.entries.push(e);
-        let e = ContextMenuEntryView::new(
-            "MenuEntry2",
-            timespan_ms(5),
-            eh,
-            &*self.window_state.borrow(),
-        )?;
-        e.borrow()
-            .mount(&children, &self.ht_root, &*self.window_state.borrow())?;
-        self.entries.push(e);
+        for e in self.entries.iter() {
+            e.borrow()
+                .mount(&children, &self.ht_root, &*self.window_state.borrow())?;
+        }
+
+        self.content_size = Vector2 { X: xr, Y: yo };
 
         Ok(())
     }
@@ -5939,11 +6233,14 @@ impl ContextMenu {
         self.content_root.SetScale(Vector3::scalar(
             unsafe { GetDpiForWindow(self.w) as f32 } / 96.0,
         ))?;
+        self.set_size(self.content_size.X, self.content_size.Y, unsafe {
+            GetDpiForWindow(self.w) as f32
+        })?;
 
         Ok(())
     }
 
-    pub fn hide(&self) -> windows::core::Result<()> {
+    pub fn hide(&mut self) -> windows::core::Result<()> {
         unsafe {
             let _ = ShowWindow(self.w, SW_HIDE);
         }
@@ -7140,7 +7437,7 @@ fn app() -> i32 {
         )
         .expect("Failed to mount app title bar");
 
-    let cm = ContextMenu::new().expect("Failed to create ContextMenu");
+    let cm = ContextMenu::new(window_handle.current_dpi).expect("Failed to create ContextMenu");
 
     let mut ws = AppWindowState {
         input_state: InputState::new(window_handle.handle, &hittest_tree_root),
@@ -7429,13 +7726,14 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
 
         state
             .context_menu
-            .borrow()
-            .set_size(128.0, 160.0, app_window.current_dpi)
-            .expect("Failed to set ContextMenu rect");
-        state
-            .context_menu
             .borrow_mut()
-            .setup_contents()
+            .setup_contents(&[
+                MenuItem::Command("MenuCommand 1".into()),
+                MenuItem::Command("MenuCommand 2".into()),
+                MenuItem::Separator,
+                MenuItem::SubMenu("Create Object".into()),
+                MenuItem::Command("Delete".into()),
+            ])
             .expect("Failed to setup context menu contents");
         state
             .context_menu
@@ -7461,7 +7759,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         if let Some(state) = AppWindow::wrap(hwnd).get_state_store() {
             state
                 .context_menu
-                .borrow()
+                .borrow_mut()
                 .hide()
                 .expect("Failed to hide context menu");
         }
