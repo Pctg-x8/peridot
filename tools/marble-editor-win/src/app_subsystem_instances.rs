@@ -388,6 +388,95 @@ impl AppSubsystemInstances {
 
                 brush
             },
+            menu_item_back_mask_brush: {
+                let base_surface = composition_graphics_device
+                    .CreateDrawingSurface(
+                        Size {
+                            Width: FloatSliderView::BORDER_RECT_ROUNDING * 2.0 + 1.0 + 2.0,
+                            Height: FloatSliderView::BORDER_RECT_ROUNDING * 2.0 + 1.0 + 2.0,
+                        },
+                        DirectXPixelFormat::R8G8B8A8UIntNormalized,
+                        DirectXAlphaMode::Premultiplied,
+                    )
+                    .expect("Failed to create slider base surface");
+                let surface_interop = base_surface
+                    .cast::<ICompositionDrawingSurfaceInterop>()
+                    .expect("no ICompositionDrawingSurfaceInterop queried");
+                let mut update_offset = POINT { x: 0, y: 0 };
+                let dc: ID2D1DeviceContext = unsafe {
+                    surface_interop
+                        .BeginDraw(None, &mut update_offset)
+                        .expect("Failed to begin render slider base surface")
+                };
+                let res = 'rendering_block: {
+                    unsafe {
+                        const CLEAR_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
+                            a: 0.0,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                        };
+                        const COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
+                            a: 1.0,
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                        };
+                        let rounded_rect = D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: update_offset.x as f32 + 0.5,
+                                top: update_offset.y as f32 + 0.5,
+                                right: update_offset.x as f32
+                                    + FloatSliderView::BORDER_RECT_ROUNDING * 2.0
+                                    + 1.0
+                                    + 2.0
+                                    - 0.5,
+                                bottom: update_offset.y as f32
+                                    + FloatSliderView::BORDER_RECT_ROUNDING * 2.0
+                                    + 1.0
+                                    + 2.0
+                                    - 0.5,
+                            },
+                            radiusX: FloatSliderView::BORDER_RECT_ROUNDING,
+                            radiusY: FloatSliderView::BORDER_RECT_ROUNDING,
+                        };
+
+                        let brush = match dc.CreateSolidColorBrush(&COLOR, None) {
+                            Ok(b) => b,
+                            Err(e) => break 'rendering_block Err(e),
+                        };
+
+                        dc.Clear(Some(&CLEAR_COLOR));
+                        dc.FillRoundedRectangle(&rounded_rect, &brush);
+                    }
+
+                    Ok(())
+                };
+                unsafe {
+                    surface_interop
+                        .EndDraw()
+                        .expect("Failed to finish rendering")
+                };
+                res.expect("Error in rendering");
+
+                let base_brush = compositor
+                    .CreateSurfaceBrushWithSurface(&base_surface)
+                    .expect("Failed to create base composition brush");
+                let brush = compositor
+                    .CreateNineGridBrush()
+                    .expect("Failed to create slider base brush");
+                brush
+                    .SetSource(&base_brush)
+                    .expect("Failed to set slider brush base");
+                brush
+                    .SetInsets(FloatSliderView::BORDER_RECT_ROUNDING + 1.0)
+                    .expect("Failed to set slider brush insets");
+                base_brush
+                    .SetStretch(CompositionStretch::Fill)
+                    .expect("Failed to base brush stretching mode");
+
+                brush
+            },
         };
 
         Self {

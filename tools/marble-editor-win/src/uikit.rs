@@ -24,6 +24,7 @@ pub struct UICommonObjects {
     pub tab_active_overlay_enter_animation: ScalarKeyFrameAnimation,
     pub tab_active_overlay_leave_animation: ScalarKeyFrameAnimation,
     pub slider_base_brush: CompositionNineGridBrush,
+    pub menu_item_back_mask_brush: CompositionNineGridBrush,
 }
 
 pub struct ResizeContext {

@@ -271,6 +271,20 @@ impl InputState {
         actions
     }
 
+    pub fn on_mouse_leave(&mut self) -> Vec<InputAction> {
+        if let Some(e) = self
+            .mouse_current_enter_element
+            .take()
+            .and_then(|x| x.upgrade())
+        {
+            if let Some(eh) = e.borrow().eh.as_ref() {
+                return vec![InputAction::PointerLeave(eh.clone())];
+            }
+        }
+
+        vec![]
+    }
+
     pub fn set_cursor(&self) -> bool {
         if let Some(e) = self
             .mouse_capturing_element
