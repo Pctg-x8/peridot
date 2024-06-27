@@ -77,23 +77,13 @@ use windows::{
             },
         },
         UI::{
-            Controls::{MARGINS, WM_MOUSELEAVE},
+            Controls::{HOVER_DEFAULT, MARGINS, WM_MOUSELEAVE},
             HiDpi::GetDpiForWindow,
+            Input::KeyboardAndMouse::{
+                TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TRACKMOUSEEVENT_FLAGS,
+            },
             WindowsAndMessaging::{
-                CallNextHookEx, DefWindowProcA, DispatchMessageA, FindWindowA, GetClientRect,
-                GetCursorPos, GetSystemMetrics, GetWindowLongPtrA, GetWindowPlacement,
-                GetWindowRect, LoadCursorA, LoadIconA, PeekMessageA, PostQuitMessage, SetCursorPos,
-                SetWindowLongPtrA, SetWindowPos, SetWindowsHookExA, ShowCursor, ShowWindow,
-                TranslateMessage, UnhookWindowsHookEx, GWLP_USERDATA, HHOOK, HTCLIENT, HTTOP,
-                IDC_ARROW, IDI_APPLICATION, MA_NOACTIVATE, MSG, NCCALCSIZE_PARAMS, PM_REMOVE,
-                SM_CXSIZEFRAME, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-                SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE,
-                SW_SHOW, SW_SHOWNA, SW_SHOWNORMAL, WH_MOUSE, WINDOWPLACEMENT, WINDOWPOS,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
-                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEACTIVATE,
-                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMOUSEMOVE,
-                WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA,
-                WNDCLASS_STYLES,
+                CallNextHookEx, DefWindowProcA, DispatchMessageA, FindWindowA, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrA, GetWindowPlacement, GetWindowRect, LoadCursorA, LoadIconA, PeekMessageA, PostQuitMessage, SetCursorPos, SetWindowLongPtrA, SetWindowPos, SetWindowsHookExA, ShowCursor, ShowWindow, TranslateMessage, UnhookWindowsHookEx, GWLP_USERDATA, HHOOK, HTCLIENT, HTTOP, IDC_ARROW, IDI_APPLICATION, MA_NOACTIVATE, MSG, NCCALCSIZE_PARAMS, PM_REMOVE, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE, SW_SHOW, SW_SHOWNA, SW_SHOWNORMAL, WH_MOUSE, WINDOWPLACEMENT, WINDOWPOS, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES
             },
         },
     },
@@ -6034,6 +6024,16 @@ impl ContextMenu {
                 a.execute(x as _, y as _, &mut *state.borrow_mut(), w);
             }
 
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
+                dwFlags: TME_LEAVE,
+                hwndTrack: w,
+                dwHoverTime: HOVER_DEFAULT,
+            };
+            unsafe {
+                TrackMouseEvent(&mut tme).expect("Failed to track mouse event");
+            }
+
             return LRESULT(0);
         }
         if m == WM_LBUTTONDOWN {
@@ -7312,6 +7312,21 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             a.execute(x as _, y as _, state, hwnd);
         }
 
+        let mut tme = TRACKMOUSEEVENT {
+            cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
+            dwFlags: TME_LEAVE
+                | if msg == WM_NCMOUSEMOVE {
+                    TME_NONCLIENT
+                } else {
+                    TRACKMOUSEEVENT_FLAGS(0)
+                },
+            hwndTrack: hwnd,
+            dwHoverTime: HOVER_DEFAULT,
+        };
+        unsafe {
+            TrackMouseEvent(&mut tme).expect("Failed to track mouse event");
+        }
+
         return LRESULT(0);
     }
     if msg == WM_LBUTTONDOWN {
@@ -7427,6 +7442,20 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             .borrow()
             .pop_at(p[0].x as _, p[0].y as _)
             .expect("Failed to show ContextMenu");
+    }
+    if msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
+            // not initialized
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        };
+
+        let actions = state.input_state.on_mouse_leave();
+        for a in actions {
+            a.execute(0.0, 0.0, state, hwnd);
+        }
+
+        return LRESULT(0);
     }
     if msg == WM_KILLFOCUS {
         if let Some(state) = AppWindow::wrap(hwnd).get_state_store() {
