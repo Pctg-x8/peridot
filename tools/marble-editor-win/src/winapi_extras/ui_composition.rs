@@ -4,10 +4,10 @@ use windows::{
         Rect, TimeSpan,
     },
     UI::Composition::{
-        AnimationIterationBehavior, CompositionBrush, CompositionEasingFunction, ContainerVisual,
-        ICompositionAnimation2, IKeyFrameAnimation, IVisual, IVisual2, KeyFrameAnimation,
-        LayerVisual, RedirectVisual, ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual,
-        Vector3KeyFrameAnimation,
+        AnimationDelayBehavior, AnimationIterationBehavior, CompositionBrush,
+        CompositionEasingFunction, ContainerVisual, ICompositionAnimation2, IKeyFrameAnimation,
+        IVisual, IVisual2, KeyFrameAnimation, LayerVisual, RedirectVisual, ScalarKeyFrameAnimation,
+        ShapeVisual, SpriteVisual, Vector2KeyFrameAnimation, Vector3KeyFrameAnimation,
     },
 };
 use windows_core::{Interface, HSTRING};
@@ -21,6 +21,20 @@ impl<T: Interface> KeyFrameAnimationPropertySetter<'_, T> {
             .cast::<KeyFrameAnimation>()?
             .SetDuration(duration)
             .map(|_| self)
+    }
+
+    #[inline]
+    pub fn delay(
+        &self,
+        delay: TimeSpan,
+        mode: AnimationDelayBehavior,
+    ) -> windows::core::Result<&Self> {
+        let a = self.0.cast::<KeyFrameAnimation>()?;
+
+        a.SetDelayTime(delay)?;
+        a.SetDelayBehavior(mode)?;
+
+        Ok(self)
     }
 
     #[inline]
@@ -71,6 +85,22 @@ impl KeyFrameAnimationExtension for ScalarKeyFrameAnimation {
             .map(|_| self)
     }
 }
+impl KeyFrameAnimationExtension for Vector2KeyFrameAnimation {
+    type Element = Vector2;
+
+    fn keyframe(&self, at: f32, value: Self::Element) -> windows::core::Result<&Self> {
+        self.InsertKeyFrame(at, value).map(|_| self)
+    }
+    fn interpolate(
+        &self,
+        to: f32,
+        to_value: Self::Element,
+        f: impl windows_core::Param<CompositionEasingFunction>,
+    ) -> windows::core::Result<&Self> {
+        self.InsertKeyFrameWithEasingFunction(to, to_value, f)
+            .map(|_| self)
+    }
+}
 impl KeyFrameAnimationExtension for Vector3KeyFrameAnimation {
     type Element = Vector3;
 
@@ -97,6 +127,11 @@ impl KeyFrameAnimationPropertySetterExtension for KeyFrameAnimation {
     }
 }
 impl KeyFrameAnimationPropertySetterExtension for ScalarKeyFrameAnimation {
+    fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
+        KeyFrameAnimationPropertySetter(self)
+    }
+}
+impl KeyFrameAnimationPropertySetterExtension for Vector2KeyFrameAnimation {
     fn set_properties(&self) -> KeyFrameAnimationPropertySetter<Self> {
         KeyFrameAnimationPropertySetter(self)
     }

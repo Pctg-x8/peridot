@@ -4,8 +4,8 @@ use windows::{
         UI::WindowsAndMessaging::HTCLIENT,
     },
     UI::Composition::{
-        CompositionColorBrush, CompositionLinearGradientBrush, CompositionNineGridBrush,
-        ScalarKeyFrameAnimation, VisualCollection,
+        CompositionColorBrush, CompositionEasingFunction, CompositionLinearGradientBrush,
+        CompositionNineGridBrush, ScalarKeyFrameAnimation, VisualCollection,
     },
 };
 
@@ -25,6 +25,8 @@ pub struct UICommonObjects {
     pub tab_active_overlay_leave_animation: ScalarKeyFrameAnimation,
     pub slider_base_brush: CompositionNineGridBrush,
     pub menu_item_back_mask_brush: CompositionNineGridBrush,
+    pub menu_item_enter_opacity_easing_fn: CompositionEasingFunction,
+    pub menu_item_enter_offset_easing_fn: CompositionEasingFunction,
 }
 
 pub struct ResizeContext {

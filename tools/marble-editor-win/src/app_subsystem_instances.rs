@@ -30,7 +30,10 @@ use windows::{
     },
     UI::{
         Color,
-        Composition::{CompositionGraphicsDevice, CompositionStretch, Compositor},
+        Composition::{
+            CompositionEasingFunction, CompositionEasingFunctionMode, CompositionGraphicsDevice,
+            CompositionStretch, Compositor,
+        },
     },
 };
 
@@ -477,6 +480,18 @@ impl AppSubsystemInstances {
 
                 brush
             },
+            menu_item_enter_opacity_easing_fn: linear_easing_fn
+                .clone()
+                .cast()
+                .expect("Failed to cast to parent class"),
+            menu_item_enter_offset_easing_fn: CompositionEasingFunction::CreatePowerEasingFunction(
+                &compositor,
+                CompositionEasingFunctionMode::Out,
+                3.0,
+            )
+            .expect("Failed to create menu item enter offset easing fn")
+            .cast()
+            .expect("Failed to cast to parent class"),
         };
 
         Self {

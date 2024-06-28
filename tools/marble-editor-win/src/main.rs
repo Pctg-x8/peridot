@@ -57,7 +57,7 @@ use windows::{
             DirectComposition::{
                 DCompositionCreateSurfaceHandle, COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE,
             },
-            DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+            DirectWrite::{DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL},
             Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::{
                 Common::{
@@ -67,12 +67,12 @@ use windows::{
                 IDXGIKeyedMutex, IDXGIResource1, DXGI_SHARED_RESOURCE_READ,
                 DXGI_SHARED_RESOURCE_WRITE,
             },
-            Gdi::{MapWindowPoints, PtInRect, PtInRegion, HBRUSH},
+            Gdi::{MapWindowPoints, PtInRect, HBRUSH},
         },
         Storage::Packaging::Appx::PACKAGE_VERSION,
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
-            Threading::{GetCurrentThread, GetCurrentThreadId, INFINITE},
+            Threading::{GetCurrentThreadId, INFINITE},
             WinRT::{
                 Composition::ICompositorDesktopInterop, CreateDispatcherQueueController,
                 DispatcherQueueOptions, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
@@ -93,24 +93,23 @@ use windows::{
                 IDC_ARROW, IDI_APPLICATION, MA_NOACTIVATE, MSG, NCCALCSIZE_PARAMS, PM_REMOVE,
                 SM_CXSIZEFRAME, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE,
                 SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE,
-                SW_SHOW, SW_SHOWNA, SW_SHOWNORMAL, WH_MOUSE, WINDOWPLACEMENT, WINDOWPOS,
+                SW_SHOWNA, SW_SHOWNORMAL, WH_MOUSE, WINDOWPLACEMENT, WINDOWPOS,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
                 WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEACTIVATE,
-                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMOUSELEAVE,
-                WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
-                WNDCLASSEXA, WNDCLASS_STYLES,
+                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+                WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA,
+                WNDCLASS_STYLES,
             },
         },
     },
     UI::{
         Color,
         Composition::{
-            AnimationDelayBehavior, CompositionAnimationGroup, CompositionEasingFunction,
-            CompositionEasingFunctionMode, CompositionEffectSourceParameter,
+            AnimationDelayBehavior, CompositionAnimationGroup, CompositionEffectSourceParameter,
             CompositionMappingMode, CompositionPath, CompositionRoundedRectangleGeometry,
             CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget,
-            Diagnostics::CompositionDebugSettings, LayerVisual, PowerEasingFunction,
-            ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
+            Diagnostics::CompositionDebugSettings, LayerVisual, ScalarKeyFrameAnimation,
+            ShapeVisual, SpriteVisual, Vector3KeyFrameAnimation, VisualCollection,
         },
     },
 };
@@ -5492,6 +5491,163 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
     }
 }
 
+pub struct ContextMenuHeaderView {
+    root: SpriteVisual,
+    label: SpriteVisual,
+    enter_opacity_animation: ScalarKeyFrameAnimation,
+    enter_offset_animation: Vector3KeyFrameAnimation,
+    height: f32,
+    required_width: f32,
+}
+impl ContextMenuHeaderView {
+    const PADDING_X: f32 = 8.0;
+    const PADDING_Y: f32 = 4.0;
+    const BACK_COLOR: Color = Color {
+        A: 160,
+        R: 160,
+        G: 160,
+        B: 160,
+    };
+
+    pub fn new(
+        text: impl Into<Cow<'static, str>>,
+        y: f32,
+        enter_animation_delay: TimeSpan,
+        view_ctx: &(impl ViewContext + ?Sized),
+    ) -> windows::core::Result<Self> {
+        let text_fmt = AppSubsystemInstances::get()
+            .text_format_stock
+            .borrow_mut()
+            .get("system-ui", 10.0, DWRITE_FONT_WEIGHT_BOLD)?;
+        let text = text.into().to_uppercase();
+        let text_surface = AppSubsystemInstances::get()
+            .text_surface_stock
+            .borrow_mut()
+            .get(&text_fmt, view_ctx.current_dpi(), text)?;
+
+        let root = AppSubsystemInstances::get()
+            .compositor
+            .CreateSpriteVisual()?;
+        root.set_properties()
+            .brush(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateColorBrushWithColor(Self::BACK_COLOR)?,
+            )?
+            .offset(Vector3 {
+                X: 0.0,
+                Y: y,
+                Z: 0.0,
+            })?
+            .relative_size_adjustment(Vector2 { X: 1.0, Y: 0.0 })?
+            .size(Vector2 {
+                X: 0.0,
+                Y: text_surface.height + Self::PADDING_Y * 2.0,
+            })?;
+
+        let label = AppSubsystemInstances::get()
+            .compositor
+            .CreateSpriteVisual()?;
+        label
+            .set_properties()
+            .brush(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateSurfaceBrushWithSurface(&text_surface.surface)?,
+            )?
+            .size(text_surface.visual_size())?;
+
+        root.Children()?.InsertAtTop(&label)?;
+
+        let enter_opacity_animation = AppSubsystemInstances::get()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
+        enter_opacity_animation
+            .keyframe(0.0, 0.0)?
+            .interpolate(
+                1.0,
+                1.0,
+                &AppSubsystemInstances::get()
+                    .ui_common_objects
+                    .menu_item_enter_opacity_easing_fn,
+            )?
+            .set_properties()
+            .duration(ContextMenuEntryView::ENTER_ANIMATION_DURARION)?
+            .delay(
+                enter_animation_delay,
+                AnimationDelayBehavior::SetInitialValueBeforeDelay,
+            )?;
+        let enter_offset_animation = AppSubsystemInstances::get()
+            .compositor
+            .CreateVector3KeyFrameAnimation()?;
+        enter_offset_animation
+            .keyframe(
+                0.0,
+                Vector3 {
+                    X: Self::PADDING_X + 8.0,
+                    Y: Self::PADDING_Y,
+                    Z: 0.0,
+                },
+            )?
+            .interpolate(
+                1.0,
+                Vector3 {
+                    X: Self::PADDING_X,
+                    Y: Self::PADDING_Y,
+                    Z: 0.0,
+                },
+                &AppSubsystemInstances::get()
+                    .ui_common_objects
+                    .menu_item_enter_offset_easing_fn,
+            )?
+            .set_properties()
+            .duration(ContextMenuEntryView::ENTER_ANIMATION_DURARION)?
+            .delay(
+                enter_animation_delay,
+                AnimationDelayBehavior::SetInitialValueBeforeDelay,
+            )?;
+
+        Ok(Self {
+            root,
+            label,
+            enter_opacity_animation,
+            enter_offset_animation,
+            height: text_surface.height + Self::PADDING_Y * 2.0,
+            required_width: text_surface.width + Self::PADDING_X * 2.0,
+        })
+    }
+
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
+    pub fn required_width(&self) -> f32 {
+        self.required_width
+    }
+}
+impl MountableView for ContextMenuHeaderView {
+    fn mount(
+        &self,
+        onto: &VisualCollection,
+        _onto_ht: &SharedMut<HitTestTree>,
+        _view_context: &dyn ViewContext,
+    ) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
+        self.root
+            .StartAnimation(h!("Opacity"), &self.enter_opacity_animation)?;
+        self.label
+            .StartAnimation(h!("Offset"), &self.enter_offset_animation)?;
+
+        Ok(())
+    }
+
+    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+
+        Ok(())
+    }
+}
+
 pub struct ContextMenuSeparatorView {
     root: ContainerVisual,
 }
@@ -5777,21 +5933,18 @@ impl ContextMenuEntryView {
         }
         root.Children()?.InsertAtTop(&label)?;
 
-        let linear_easing_fn = AppSubsystemInstances::get()
-            .compositor
-            .CreateLinearEasingFunction()?;
-        let ease_out_fn = CompositionEasingFunction::CreatePowerEasingFunction(
-            &AppSubsystemInstances::get().compositor,
-            CompositionEasingFunctionMode::Out,
-            3.0,
-        )?;
-
         let enter_opacity_animation = AppSubsystemInstances::get()
             .compositor
             .CreateScalarKeyFrameAnimation()?;
         enter_opacity_animation
             .keyframe(0.0, 0.0)?
-            .interpolate(1.0, 1.0, &linear_easing_fn)?
+            .interpolate(
+                1.0,
+                1.0,
+                &AppSubsystemInstances::get()
+                    .ui_common_objects
+                    .menu_item_enter_opacity_easing_fn,
+            )?
             .set_properties()
             .duration(Self::ENTER_ANIMATION_DURARION)?
             .target(h!("Opacity"))?;
@@ -5816,7 +5969,9 @@ impl ContextMenuEntryView {
                 Y: Self::PADDING_Y,
                 Z: 0.0,
             },
-            &ease_out_fn,
+            &AppSubsystemInstances::get()
+                .ui_common_objects
+                .menu_item_enter_offset_easing_fn,
         )?;
         enter_offset_animation.SetDelayTime(enter_animation_delay)?;
         enter_offset_animation
@@ -5848,7 +6003,9 @@ impl ContextMenuEntryView {
                     Y: 0.0,
                     Z: 0.0,
                 },
-                &ease_out_fn,
+                &AppSubsystemInstances::get()
+                    .ui_common_objects
+                    .menu_item_enter_offset_easing_fn,
             )?;
             enter_offset_animation.SetDelayTime(enter_animation_delay)?;
             enter_offset_animation
@@ -5865,6 +6022,10 @@ impl ContextMenuEntryView {
         } else {
             None
         };
+
+        let linear_easing_fn = AppSubsystemInstances::get()
+            .compositor
+            .CreateLinearEasingFunction()?;
 
         let hover_animation = AppSubsystemInstances::get()
             .compositor
@@ -6199,7 +6360,18 @@ impl ContextMenu {
                     yo += e.borrow().height();
                     self.entries.push(e);
                 }
-                MenuItem::Header(h) => unimplemented!("Header {h:?}"),
+                MenuItem::Header(h) => {
+                    let e = new_shared_mut(ContextMenuHeaderView::new(
+                        h.to_owned(),
+                        yo,
+                        delay,
+                        &*self.window_state.borrow(),
+                    )?);
+                    yo += e.borrow().height();
+                    xr = xr.max(e.borrow().required_width());
+                    delay.Duration += timespan_ms(5).Duration;
+                    self.entries.push(e);
+                }
             }
         }
 
@@ -7728,6 +7900,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             .context_menu
             .borrow_mut()
             .setup_contents(&[
+                MenuItem::Header("Common Commands".into()),
                 MenuItem::Command("MenuCommand 1".into()),
                 MenuItem::Command("MenuCommand 2".into()),
                 MenuItem::Separator,
