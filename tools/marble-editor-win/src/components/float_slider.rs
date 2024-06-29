@@ -31,7 +31,7 @@ pub struct FloatSliderView {
     value_label_format: IDWriteTextFormat,
     value_label: SpriteVisual,
     value_label_brush: CompositionSurfaceBrush,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
     rendered_dpi: f32,
     current_value: f32,
     max_value: f32,
@@ -157,8 +157,8 @@ impl FloatSliderView {
             Y: 0.0,
             Z: 0.0,
         })?;
-        self.ht.borrow_mut().set_top(y);
-        self.ht.borrow_mut().set_relative_left(x_rel, 0.0);
+        self.ht.set_top(y);
+        self.ht.set_relative_left(x_rel, 0.0);
 
         Ok(())
     }
@@ -193,7 +193,7 @@ impl FloatSliderView {
         let rate = self.current_value / self.max_value;
 
         self.gauge_clip
-            .SetRightInset(self.ht.borrow().rect().Width * (1.0 - rate))?;
+            .SetRightInset(self.ht.rect().Width * (1.0 - rate))?;
         Ok(())
     }
 
@@ -225,18 +225,18 @@ impl MountableView for FloatSliderView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.borrow_mut().unmount();
+        self.ht.unmount();
 
         Ok(())
     }
@@ -251,7 +251,7 @@ impl InputEventHandler for WeakMut<FloatSliderView> {
             return;
         };
         ctx.capture_mouse();
-        let component_global_x = this.borrow().ht.borrow().global_rect().X;
+        let component_global_x = this.borrow().ht.global_rect().X;
         this.borrow_mut().drag_base_x = component_global_x;
     }
 
@@ -263,7 +263,7 @@ impl InputEventHandler for WeakMut<FloatSliderView> {
 
         let d = app_window.pixels_to_dip(x) - this.borrow().drag_base_x;
         let max_value = this.borrow().max_value;
-        let component_width = this.borrow().ht.borrow().rect().Width;
+        let component_width = this.borrow().ht.rect().Width;
         this.borrow_mut().current_value = d * max_value / component_width;
         this.borrow()
             .update_rate()

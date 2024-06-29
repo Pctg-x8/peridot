@@ -32,7 +32,7 @@ pub struct PaneSplitterView {
     visual: SpriteVisual,
     hover_animation: ScalarKeyFrameAnimation,
     hover_end_animation: ScalarKeyFrameAnimation,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
     dir: SplitDirection,
     controlling_dock_layer: WeakMut<PaneDockLayer>,
     drag_start_values: Option<(f32, f32, f32)>,
@@ -111,15 +111,13 @@ impl PaneSplitterView {
             Y: top,
             Z: 0.0,
         })?;
-        self.ht.borrow_mut().set_offset(left, top);
+        self.ht.set_offset(left, top);
 
         Ok(())
     }
     pub fn set_rect(&self, rect: Rect) -> windows::core::Result<()> {
         self.visual.set_properties().rect(&rect)?;
-        self.ht
-            .borrow_mut()
-            .set_rect(rect.X, rect.Y, rect.Width, rect.Height);
+        self.ht.set_rect(rect.X, rect.Y, rect.Width, rect.Height);
 
         Ok(())
     }
@@ -128,18 +126,18 @@ impl MountableView for PaneSplitterView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.visual)?;
-        HitTestTree::add_child(onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
-        self.ht.borrow_mut().unmount();
+        self.ht.unmount();
 
         Ok(())
     }

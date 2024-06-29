@@ -55,7 +55,7 @@ struct AppTitleBarControlButtonView {
     icon: ShapeVisual,
     hover_animation: ScalarKeyFrameAnimation,
     hover_end_animation: ScalarKeyFrameAnimation,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
 }
 impl AppTitleBarControlButtonView {
     fn new(
@@ -194,10 +194,10 @@ impl AppTitleBarControlButtonView {
     pub fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         Ok(())
     }
@@ -402,7 +402,7 @@ pub struct AppTitleBarView {
     close_button: SharedMut<AppTitleBarControlButtonView>,
     maxres_button: SharedMut<AppTitleBarControlButtonView>,
     min_button: SharedMut<AppTitleBarControlButtonView>,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
 }
 impl AppTitleBarView {
     pub const HEIGHT: f32 = 32.0;
@@ -544,16 +544,16 @@ impl AppTitleBarView {
     }
 
     pub fn set_width(&self, width: f32) {
-        self.ht.borrow_mut().set_width(width);
+        self.ht.set_width(width);
     }
 
     pub fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         Ok(())
     }

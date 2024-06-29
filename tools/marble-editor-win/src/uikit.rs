@@ -9,8 +9,6 @@ use windows::{
     },
 };
 
-use crate::SharedMut;
-
 mod input;
 pub use self::input::*;
 
@@ -171,7 +169,7 @@ pub trait MountableView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
     ) -> windows::core::Result<()>;
     fn unmount(&self, view_context: &dyn ViewContext) -> windows::core::Result<()>;

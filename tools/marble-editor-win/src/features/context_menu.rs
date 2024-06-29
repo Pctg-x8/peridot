@@ -1,8 +1,7 @@
 use std::{
     borrow::Cow,
     cell::{Ref, RefCell, RefMut},
-    rc::Rc,
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 use windows::{
@@ -12,7 +11,7 @@ use windows::{
         Rect, TimeSpan, TypedEventHandler,
     },
     Graphics::IGeometrySource2D,
-    System::{DispatcherQueueHandler, DispatcherQueueTimer},
+    System::DispatcherQueueTimer,
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
@@ -212,7 +211,7 @@ impl MountableView for ContextMenuHeaderView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        _onto_ht: &SharedMut<HitTestTree>,
+        _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
@@ -295,7 +294,7 @@ impl MountableView for ContextMenuSeparatorView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        _onto_ht: &SharedMut<HitTestTree>,
+        _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
@@ -322,7 +321,7 @@ pub struct ContextMenuCommandView {
     enter_animation: CompositionAnimationGroup,
     hover_animation: ScalarKeyFrameAnimation,
     hover_end_animation: ScalarKeyFrameAnimation,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
     y: f32,
     height: f32,
     required_width: f32,
@@ -723,7 +722,7 @@ impl MountableView for ContextMenuCommandView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
@@ -732,14 +731,14 @@ impl MountableView for ContextMenuCommandView {
             v.StartAnimationGroup(a)?;
         }
 
-        HitTestTree::add_child(onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.borrow_mut().unmount();
+        self.ht.unmount();
 
         Ok(())
     }
@@ -807,7 +806,7 @@ pub struct ContextMenuInstance {
     _composition_target: DesktopWindowTarget,
     unscaled_base: SpriteVisual,
     content_root: ContainerVisual,
-    ht_root: SharedMut<HitTestTree>,
+    ht_root: HitTestTree,
     ht_context: Arc<HitTestTreeContext>,
     entries: Vec<SharedMut<dyn ContextMenuEntryView>>,
     current_dpi: f32,
@@ -1055,7 +1054,7 @@ impl ContextMenuInstance {
             X: width,
             Y: height,
         })?;
-        self.ht_root.borrow_mut().set_size(width, height);
+        self.ht_root.set_size(width, height);
 
         // 影の分を考慮してウィンドウサイズを計算する
         unsafe {

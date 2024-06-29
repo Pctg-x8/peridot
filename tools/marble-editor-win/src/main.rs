@@ -525,7 +525,7 @@ impl PaneDockLayer {
     fn mount_recursive(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         match self {
@@ -814,17 +814,14 @@ impl PaneDockLayer {
 pub struct PaneGroupDockingManager {
     docks: SharedMut<PaneDockLayer>,
     placement_visual: ContainerVisual,
-    ht_placement_root: SharedMut<HitTestTree>,
+    ht_placement_root: HitTestTree,
     floating_preview: DockingPanePreview,
 }
 impl PaneGroupDockingManager {
-    fn new(
-        ctx: &impl ViewContext,
-        ht_root: &SharedMut<HitTestTree>,
-    ) -> windows::core::Result<Self> {
+    fn new(ctx: &impl ViewContext, ht_root: &HitTestTree) -> windows::core::Result<Self> {
         let ht_placement_root =
             HitTestTree::new_unsized(Some(()), ctx.hittest_context().new_id(), 0.0, 0.0);
-        HitTestTree::add_child(ht_root, ht_placement_root.clone());
+        ht_root.add_child(&ht_placement_root);
 
         Ok(Self {
             docks: PaneDockLayer::new_root(|_| None),
@@ -843,7 +840,7 @@ impl PaneGroupDockingManager {
     ) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
-        self.ht_placement_root.borrow_mut().remove_all_children();
+        self.ht_placement_root.remove_all_children();
         layout
             .borrow()
             .mount_recursive(&children, &self.ht_placement_root, view_context)?;
@@ -857,15 +854,15 @@ impl PaneGroupDockingManager {
             Y: top,
             Z: 0.0,
         })?;
-        self.ht_placement_root.borrow_mut().set_offset(left, top);
+        self.ht_placement_root.set_offset(left, top);
 
         Ok(())
     }
     #[inline]
     fn offset(&self) -> (f32, f32) {
         (
-            self.ht_placement_root.borrow().rect().X,
-            self.ht_placement_root.borrow().rect().Y,
+            self.ht_placement_root.rect().X,
+            self.ht_placement_root.rect().Y,
         )
     }
     fn resize_root(
@@ -933,8 +930,8 @@ pub struct TabGroupPaneView {
     root: ContainerVisual,
     content_area: ContainerVisual,
     content_area_base: SpriteVisual,
-    ht_ref: SharedMut<HitTestTree>,
-    ht_ref_content: SharedMut<HitTestTree>,
+    ht_ref: HitTestTree,
+    ht_ref_content: HitTestTree,
     current_active: usize,
     tab_height: f32,
     view_rect: Rect,
@@ -996,7 +993,7 @@ impl TabGroupPaneView {
                 Rect::from_size(128.0, 128.0),
                 Rect::empty(),
             );
-            HitTestTree::add_child(&ht, ht_content.clone());
+            ht.add_child(&ht_content);
 
             Self {
                 docking_manager: Rc::downgrade(docking_manager),
@@ -1139,7 +1136,7 @@ impl TabGroupPaneView {
         self.content_area_base
             .set_properties()
             .rect(&content_area)?;
-        self.ht_ref_content.borrow_mut().set_rect(
+        self.ht_ref_content.set_rect(
             content_area.X,
             content_area.Y,
             content_area.Width,
@@ -1188,9 +1185,7 @@ impl TabGroupPaneView {
             X: width,
             Y: self.view_rect.Height,
         })?;
-        self.ht_ref
-            .borrow_mut()
-            .set_size(width, self.view_rect.Height);
+        self.ht_ref.set_size(width, self.view_rect.Height);
         self.view_rect.Width = width;
 
         self.readjust_content_area(resize_ctx)?;
@@ -1205,9 +1200,7 @@ impl TabGroupPaneView {
             X: self.view_rect.Width,
             Y: height,
         })?;
-        self.ht_ref
-            .borrow_mut()
-            .set_size(self.view_rect.Width, height);
+        self.ht_ref.set_size(self.view_rect.Width, height);
         self.view_rect.Height = height;
 
         self.readjust_content_area(resize_ctx)?;
@@ -1223,7 +1216,7 @@ impl TabGroupPaneView {
             X: width,
             Y: height,
         })?;
-        self.ht_ref.borrow_mut().set_size(width, height);
+        self.ht_ref.set_size(width, height);
         self.view_rect.Width = width;
         self.view_rect.Height = height;
 
@@ -1237,7 +1230,6 @@ impl TabGroupPaneView {
     ) -> windows::core::Result<()> {
         self.root.set_properties().rect(&rect)?;
         self.ht_ref
-            .borrow_mut()
             .set_rect(rect.X, rect.Y, rect.Width, rect.Height);
         self.view_rect = rect;
 
@@ -1287,16 +1279,16 @@ impl TabGroupPaneView {
     pub fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(onto_ht, self.ht_ref.clone());
+        onto_ht.add_child(&self.ht_ref);
 
         Ok(())
     }
     pub fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht_ref.borrow_mut().unmount();
+        self.ht_ref.unmount();
 
         Ok(())
     }
@@ -1311,7 +1303,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
         };
 
         let mut thisref = this.borrow_mut();
-        let rect = thisref.ht_ref.borrow().rect().clone();
+        let rect = thisref.ht_ref.rect().clone();
 
         let app_window = AppWindow::wrap(window);
 
@@ -1573,7 +1565,7 @@ pub struct PaneTabHeaderView {
     bg_hover_end_animation: ScalarKeyFrameAnimation,
     active_overlay_enter_animation: ScalarKeyFrameAnimation,
     active_overlay_leave_animation: ScalarKeyFrameAnimation,
-    hittest_tree_self: SharedMut<HitTestTree>,
+    hittest_tree_self: HitTestTree,
     rendered_dpi: f32,
     bg_active: bool,
     is_active: bool,
@@ -1765,7 +1757,7 @@ impl PaneTabHeaderView {
             Y: top,
             Z: 0.0,
         })?;
-        self.hittest_tree_self.borrow_mut().set_offset(left, top);
+        self.hittest_tree_self.set_offset(left, top);
 
         Ok(())
     }
@@ -1861,18 +1853,18 @@ impl MountableView for PaneTabHeaderView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.visual)?;
-        HitTestTree::add_child(onto_ht, self.hittest_tree_self.clone());
+        onto_ht.add_child(&self.hittest_tree_self);
 
         Ok(())
     }
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
-        self.hittest_tree_self.borrow_mut().unmount();
+        self.hittest_tree_self.unmount();
 
         Ok(())
     }
@@ -1928,7 +1920,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             return;
         };
 
-        let rect = group_view.borrow_mut().ht_ref.borrow().rect().clone();
+        let rect = group_view.borrow_mut().ht_ref.rect().clone();
 
         let app_window = AppWindow::wrap(window);
 
@@ -2332,7 +2324,7 @@ pub trait PaneTabContentPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()>;
@@ -2361,7 +2353,7 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
 
 pub struct InspectorTabSelectionChangedEventHandler {
     content_root: ContainerVisual,
-    root_ht: SharedMut<HitTestTree>,
+    root_ht: HitTestTree,
     current_mounted_views: RefCell<Vec<SharedMut<dyn MountableView>>>,
     observation_disconnectors: RefCell<Vec<Box<dyn ObservationDisconnector>>>,
 }
@@ -2528,7 +2520,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                         let rotation_z_control = Rc::downgrade(&rotation_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |view_ctx, new_value| {
+                                        move |_view_ctx, new_value| {
                                             let (Some(ry), Some(rz)) = (
                                                 rotation_y_control.upgrade(),
                                                 rotation_z_control.upgrade(),
@@ -2554,7 +2546,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                                 .to_radians(),
                                                         ),
                                                     ),
-                                                    view_ctx,
                                                 );
                                         }
                                     },
@@ -2571,7 +2562,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                         let rotation_z_control = Rc::downgrade(&rotation_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |view_ctx, new_value| {
+                                        move |_view_ctx, new_value| {
                                             let (Some(rx), Some(rz)) = (
                                                 rotation_x_control.upgrade(),
                                                 rotation_z_control.upgrade(),
@@ -2597,7 +2588,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                                 .to_radians(),
                                                         ),
                                                     ),
-                                                    view_ctx,
                                                 );
                                         }
                                     },
@@ -2614,7 +2604,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                         let rotation_y_control = Rc::downgrade(&rotation_y_control);
                                         let bound_object_id = id.clone();
 
-                                        move |view_ctx, new_value| {
+                                        move |_view_ctx, new_value| {
                                             let (Some(rx), Some(ry)) = (
                                                 rotation_x_control.upgrade(),
                                                 rotation_y_control.upgrade(),
@@ -2640,7 +2630,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                             new_value.to_radians(),
                                                         ),
                                                     ),
-                                                    view_ctx,
                                                 );
                                         }
                                     },
@@ -2690,7 +2679,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                         let app_state = app_state.clone();
                                         let bound_object_id = id.clone();
 
-                                        move |view_ctx, new_value| {
+                                        move |_view_ctx, new_value| {
                                             // sun light - intensity slider
                                             if let Some(e) = app_state
                                                 .borrow_mut()
@@ -2698,7 +2687,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 .objects
                                                 .get_mut(&bound_object_id)
                                             {
-                                                e.update_sunlight_intensity(new_value, view_ctx);
+                                                e.update_sunlight_intensity(new_value);
                                             }
                                         }
                                     },
@@ -2737,7 +2726,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
         app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -2749,10 +2738,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
 
         onto.Children()?
             .InsertAtTop(&self.selection_changed_event_handler.content_root)?;
-        HitTestTree::add_child(
-            onto_ht,
-            self.selection_changed_event_handler.root_ht.clone(),
-        );
+        onto_ht.add_child(&self.selection_changed_event_handler.root_ht);
 
         Ok(())
     }
@@ -2767,10 +2753,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
             .Parent()?
             .Children()?
             .Remove(&self.selection_changed_event_handler.content_root)?;
-        self.selection_changed_event_handler
-            .root_ht
-            .borrow_mut()
-            .unmount();
+        self.selection_changed_event_handler.root_ht.unmount();
         app_state
             .borrow_mut()
             .unobserve_current_selection_changes(&Rc::downgrade(
@@ -2807,9 +2790,7 @@ impl PaneTabPresenter for InspectorTabPresenter {
 
         let content_root_ht =
             HitTestTree::new_fit_to_parent(None::<()>, view_ctx.hittest_context().new_id());
-        content_root_ht
-            .borrow_mut()
-            .set_rect(8.0, 8.0, -16.0, -16.0);
+        content_root_ht.set_rect(8.0, 8.0, -16.0, -16.0);
 
         Self {
             selection_changed_event_handler: Rc::new(InspectorTabSelectionChangedEventHandler {
@@ -2827,7 +2808,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _onto_ht: &SharedMut<HitTestTree>,
+        _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -2859,7 +2840,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _onto_ht: &SharedMut<HitTestTree>,
+        _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -2996,7 +2977,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -3968,7 +3949,7 @@ impl D3D11ResourceDescriptor for D3D11_TEXTURE2D_DESC {
 
 pub struct EditorStageView {
     root: SpriteVisual,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
     utility_verts: UtilityVertices,
     skybox_renderer: Rc<SkyboxRenderer>,
     hdr_temp_rt: TempRT,
@@ -4771,7 +4752,7 @@ impl EditorStageView {
         resize_ctx: &ResizeContext,
     ) -> windows::core::Result<()> {
         self.root.SetSize(new_size)?;
-        self.ht.borrow_mut().set_size(new_size.X, new_size.Y);
+        self.ht.set_size(new_size.X, new_size.Y);
 
         self.main_render_command_pool
             .reset(true)
@@ -5066,11 +5047,11 @@ impl MountableView for EditorStageView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(&onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
             AppGlobalSignals::get_mut().register(*e, &self.renderer, n);
@@ -5081,7 +5062,7 @@ impl MountableView for EditorStageView {
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.borrow_mut().unmount();
+        self.ht.unmount();
 
         for (n, _) in self.back_buffer_resources.iter().enumerate() {
             AppGlobalSignals::get_mut().unregister(&self.renderer, n);
@@ -5131,7 +5112,7 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             peridot_math::Vector3::down(),
         );
 
-        let current_size = this.borrow().ht.borrow().rect().clone();
+        let current_size = this.borrow().ht.rect().clone();
         let mut camera_upload_buffer = AppSubsystemInstances::get()
             .mini_engine
             .borrow_mut()
@@ -5192,7 +5173,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _onto_ht: &SharedMut<HitTestTree>,
+        _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -5221,7 +5202,7 @@ impl PaneTabPresenter for PreviewTabPresenter {
 
 pub struct ObjectTreeElementRowView {
     root: ContainerVisual,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
     bg: SpriteVisual,
     bg_hover_animation: ScalarKeyFrameAnimation,
     bg_hover_end_animation: ScalarKeyFrameAnimation,
@@ -5333,12 +5314,12 @@ impl ObjectTreeElementRowView {
     }
 
     pub fn height(&self) -> f32 {
-        self.ht.borrow().rect().Height
+        self.ht.rect().Height
     }
 
     pub fn reposition(&mut self, pos: Vector2) -> windows::core::Result<()> {
         self.root.SetOffset(pos.with_z(0.0))?;
-        self.ht.borrow_mut().set_offset(pos.X, pos.Y);
+        self.ht.set_offset(pos.X, pos.Y);
 
         Ok(())
     }
@@ -5347,18 +5328,18 @@ impl MountableView for ObjectTreeElementRowView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.borrow_mut().unmount();
+        self.ht.unmount();
 
         Ok(())
     }
@@ -5411,7 +5392,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
     fn build_content_view(
         &mut self,
         onto: &ContainerVisual,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -5474,7 +5455,7 @@ impl PaneTabContentPresenter for AssetExplorerTabPresenter {
     fn build_content_view(
         &mut self,
         _onto: &ContainerVisual,
-        _onto_ht: &SharedMut<HitTestTree>,
+        _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
         _app_state: &SharedMut<AppState>,
     ) -> windows::core::Result<()> {
@@ -5597,7 +5578,7 @@ impl ObjectEditState {
         matches!(self.details, ObjectDetails::SunLight { .. })
     }
 
-    pub fn update_sunlight_intensity(&mut self, new_intensity: f32, _view_ctx: &dyn ViewContext) {
+    pub fn update_sunlight_intensity(&mut self, new_intensity: f32) {
         let ObjectDetails::SunLight {
             ref mut intensity, ..
         } = self.details
@@ -5609,11 +5590,7 @@ impl ObjectEditState {
         self.is_dirty = true;
     }
 
-    pub fn update_sunlight_rotation(
-        &mut self,
-        new_rotation: peridot_math::QuaternionF32,
-        _view_ctx: &dyn ViewContext,
-    ) {
+    pub fn update_sunlight_rotation(&mut self, new_rotation: peridot_math::QuaternionF32) {
         let ObjectDetails::SunLight {
             ref mut rotation, ..
         } = self.details

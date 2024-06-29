@@ -31,7 +31,7 @@ pub struct RollableNumberView {
     label_fmt: IDWriteTextFormat,
     label: SpriteVisual,
     label_brush: CompositionSurfaceBrush,
-    ht: SharedMut<HitTestTree>,
+    ht: HitTestTree,
     rendered_dpi: f32,
     current_value: f32,
     drag_point: peridot_math::Vector2F32,
@@ -160,8 +160,8 @@ impl RollableNumberView {
             Y: 0.0,
             Z: 0.0,
         })?;
-        self.ht.borrow_mut().set_top(y);
-        self.ht.borrow_mut().set_relative_left(x_rel, x_offs);
+        self.ht.set_top(y);
+        self.ht.set_relative_left(x_rel, x_offs);
 
         Ok(())
     }
@@ -169,8 +169,8 @@ impl RollableNumberView {
         self.root.SetSize(Vector2 { X: offs, Y: 16.0 })?;
         self.root
             .SetRelativeSizeAdjustment(Vector2 { X: rel, Y: 0.0 })?;
-        self.ht.borrow_mut().set_width(0.0);
-        self.ht.borrow_mut().set_relative_width(rel, offs);
+        self.ht.set_width(0.0);
+        self.ht.set_relative_width(rel, offs);
 
         Ok(())
     }
@@ -203,18 +203,18 @@ impl MountableView for RollableNumberView {
     fn mount(
         &self,
         onto: &VisualCollection,
-        onto_ht: &SharedMut<HitTestTree>,
+        onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
-        HitTestTree::add_child(onto_ht, self.ht.clone());
+        onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.borrow_mut().unmount();
+        self.ht.unmount();
 
         Ok(())
     }

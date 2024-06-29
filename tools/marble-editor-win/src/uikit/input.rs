@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    rc::{Rc, Weak},
+    rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -54,14 +54,14 @@ impl InputAction {
 const DRAG_THRESHOLD_DIST2: f32 = 5.0 * 5.0;
 pub struct InputState {
     bound_window: HWND,
-    ht_tree: SharedMut<HitTestTree>,
-    mouse_capturing_element: Option<WeakMut<HitTestTree>>,
-    mouse_current_enter_element: Option<WeakMut<HitTestTree>>,
-    mouse_down_point: Option<(f32, f32, Option<WeakMut<HitTestTree>>)>,
+    ht_tree: HitTestTree,
+    mouse_capturing_element: Option<HitTestTreeWeakRef>,
+    mouse_current_enter_element: Option<HitTestTreeWeakRef>,
+    mouse_down_point: Option<(f32, f32, Option<HitTestTreeWeakRef>)>,
     is_mouse_dragging: bool,
 }
 impl InputState {
-    pub fn new(bound_window: HWND, ht_tree: &SharedMut<HitTestTree>) -> Self {
+    pub fn new(bound_window: HWND, ht_tree: &HitTestTree) -> Self {
         Self {
             bound_window,
             ht_tree: ht_tree.clone(),
@@ -72,47 +72,45 @@ impl InputState {
         }
     }
 
-    fn update_mouse_pos(&mut self, x: f32, y: f32, actions: &mut Vec<InputAction>) {
-        let over_tree = HitTestTree::check(
-            &self.ht_tree,
-            x,
-            y,
-            Rect {
-                X: 0.0,
-                Y: 0.0,
-                Width: 0.0,
-                Height: 0.0,
-            },
-        );
-        let over_changes = over_tree.as_ref().map(|x| x.borrow().id)
-            != self
-                .mouse_current_enter_element
-                .as_ref()
-                .and_then(Weak::upgrade)
-                .map(|x| x.borrow().id);
-        if let Some(x) = self
-            .mouse_current_enter_element
+    #[inline]
+    fn mouse_current_entering_strong_ref(&self) -> Option<HitTestTree> {
+        self.mouse_current_enter_element
             .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            if Some(x.borrow().id) != over_tree.as_ref().map(|x| x.borrow().id) {
-                // leave
-                actions.push(InputAction::PointerLeave(
-                    x.borrow().eh.as_ref().unwrap().clone(),
-                ));
-            }
-        }
-        self.mouse_current_enter_element = over_tree.as_ref().map(Rc::downgrade);
+            .and_then(HitTestTreeWeakRef::upgrade)
+    }
+
+    #[inline]
+    fn mouse_capturing_strong_ref(&self) -> Option<HitTestTree> {
+        self.mouse_capturing_element
+            .as_ref()
+            .and_then(HitTestTreeWeakRef::upgrade)
+    }
+
+    fn update_mouse_pos(&mut self, x: f32, y: f32, actions: &mut Vec<InputAction>) {
+        let current_entering = self.mouse_current_entering_strong_ref();
+        let over_tree = self.ht_tree.check(x, y, Rect::empty());
+        let over_changes = match (current_entering.as_ref(), over_tree.as_ref()) {
+            (Some(_), None) | (None, Some(_)) => true,
+            (Some(old), Some(new)) => !old.ptr_eq(new),
+            _ => false,
+        };
+
         if over_changes {
-            if let Some(x) = self
-                .mouse_current_enter_element
-                .as_ref()
-                .and_then(Weak::upgrade)
-            {
-                actions.push(InputAction::PointerEnter(
-                    x.borrow().eh.as_ref().unwrap().clone(),
-                ));
-            }
+            actions.extend(
+                current_entering
+                    .and_then(|x| x.clone_event_handler())
+                    .map(InputAction::PointerLeave),
+            );
+        }
+
+        self.mouse_current_enter_element = over_tree.as_ref().map(HitTestTree::weak_ref);
+
+        if over_changes {
+            actions.extend(
+                over_tree
+                    .and_then(|x| x.clone_event_handler())
+                    .map(InputAction::PointerEnter),
+            );
         }
     }
 
@@ -141,27 +139,19 @@ impl InputState {
     pub fn on_mouse_move(&mut self, x: f32, y: f32) -> Vec<InputAction> {
         let mut actions = Vec::with_capacity(16);
 
-        if let Some(e) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
+        if let Some(e) = self.mouse_capturing_strong_ref() {
             if let Some((dx, dy, _)) = self.mouse_down_point.as_ref() {
                 if !self.is_mouse_dragging {
                     // 閾値を超えた後は永続的にドラッグ状態になる
                     let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
                     if dist2 >= DRAG_THRESHOLD_DIST2 {
                         self.is_mouse_dragging = true;
-                        actions.push(InputAction::BeginDrag(
-                            e.borrow().eh.as_ref().unwrap().clone(),
-                        ));
+                        actions.extend(e.clone_event_handler().map(InputAction::BeginDrag));
                     }
                 }
 
                 if self.is_mouse_dragging {
-                    actions.push(InputAction::DragMove(
-                        e.borrow().eh.as_ref().unwrap().clone(),
-                    ));
+                    actions.extend(e.clone_event_handler().map(InputAction::DragMove));
                 }
             }
 
@@ -176,20 +166,22 @@ impl InputState {
                 let dist2 = (dx - x).powi(2) + (dy - y).powi(2);
                 if dist2 >= DRAG_THRESHOLD_DIST2 {
                     self.is_mouse_dragging = true;
-                    if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
-                        actions.push(InputAction::BeginDrag(
-                            e.borrow().eh.as_ref().unwrap().clone(),
-                        ));
-                    }
+                    actions.extend(
+                        down_element
+                            .as_ref()
+                            .and_then(|x| x.upgrade()?.clone_event_handler())
+                            .map(InputAction::BeginDrag),
+                    );
                 }
             }
 
             if self.is_mouse_dragging {
-                if let Some(e) = down_element.as_ref().and_then(Weak::upgrade) {
-                    actions.push(InputAction::DragMove(
-                        e.borrow().eh.as_ref().unwrap().clone(),
-                    ));
-                }
+                actions.extend(
+                    down_element
+                        .as_ref()
+                        .and_then(|x| x.upgrade()?.clone_event_handler())
+                        .map(InputAction::DragMove),
+                );
             }
         }
 
@@ -199,24 +191,23 @@ impl InputState {
     pub fn on_mouse_down(&mut self, x: f32, y: f32) -> Vec<InputAction> {
         let mut actions = Vec::with_capacity(16);
 
-        let active_target = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-            .or_else(|| {
-                self.update_mouse_pos(x, y, &mut actions);
-                self.mouse_current_enter_element
-                    .as_ref()
-                    .and_then(Weak::upgrade)
-            });
+        let active_target = if let Some(e) = self.mouse_capturing_strong_ref() {
+            // キャプチャしている要素があるならこれを優先する
+            Some(e)
+        } else {
+            self.update_mouse_pos(x, y, &mut actions);
+
+            self.mouse_current_entering_strong_ref()
+        };
 
         self.mouse_down_point = Some((x, y, self.mouse_current_enter_element.clone()));
         self.is_mouse_dragging = false;
-        if let Some(e) = active_target {
-            actions.push(InputAction::PointerDown(
-                e.borrow().eh.as_ref().unwrap().clone(),
-            ));
-        }
+        actions.extend(
+            active_target
+                .as_ref()
+                .and_then(HitTestTree::clone_event_handler)
+                .map(InputAction::PointerDown),
+        );
 
         actions
     }
@@ -224,47 +215,35 @@ impl InputState {
     pub fn on_mouse_up(&mut self, x: f32, y: f32) -> Vec<InputAction> {
         let mut actions = Vec::with_capacity(16);
 
-        if let Some(e) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
-            actions.push(InputAction::PointerUp(
-                e.borrow().eh.as_ref().unwrap().clone(),
-            ));
-            if !self.is_mouse_dragging {
-                actions.push(InputAction::Click(e.borrow().eh.as_ref().unwrap().clone()));
-            } else {
-                actions.push(InputAction::EndDrag(
-                    e.borrow().eh.as_ref().unwrap().clone(),
-                ));
-            }
-            self.mouse_down_point = None;
+        if let Some(e) = self.mouse_capturing_strong_ref() {
+            actions.extend(e.clone_event_handler().map(InputAction::PointerUp));
 
+            if !self.is_mouse_dragging {
+                actions.extend(e.clone_event_handler().map(InputAction::Click));
+            } else {
+                actions.extend(e.clone_event_handler().map(InputAction::EndDrag));
+            }
+
+            self.mouse_down_point = None;
             return actions;
         }
 
         self.update_mouse_pos(x, y, &mut actions);
 
         if !self.is_mouse_dragging {
-            if let Some(x) = self
-                .mouse_current_enter_element
-                .as_ref()
-                .and_then(Weak::upgrade)
-            {
-                actions.push(InputAction::Click(x.borrow().eh.as_ref().unwrap().clone()));
-            }
+            actions.extend(
+                self.mouse_current_entering_strong_ref()
+                    .and_then(|x| x.clone_event_handler())
+                    .map(InputAction::Click),
+            );
         } else {
-            if let Some(x) = self
-                .mouse_down_point
-                .as_ref()
-                .and_then(|x| x.2.as_ref())
-                .and_then(std::rc::Weak::upgrade)
-            {
-                actions.push(InputAction::EndDrag(
-                    x.borrow().eh.as_ref().unwrap().clone(),
-                ));
-            }
+            // こっち（ドラッグ終了イベント）はマウスダウンした時の対象に送る
+            actions.extend(
+                self.mouse_down_point
+                    .as_ref()
+                    .and_then(|x| x.2.as_ref()?.upgrade()?.clone_event_handler())
+                    .map(InputAction::EndDrag),
+            );
         }
         self.mouse_down_point = None;
 
@@ -272,27 +251,23 @@ impl InputState {
     }
 
     pub fn on_mouse_leave(&mut self) -> Vec<InputAction> {
-        if let Some(e) = self
-            .mouse_current_enter_element
+        self.mouse_current_enter_element
             .take()
-            .and_then(|x| x.upgrade())
-        {
-            if let Some(eh) = e.borrow().eh.as_ref() {
-                return vec![InputAction::PointerLeave(eh.clone())];
-            }
-        }
-
-        vec![]
+            .and_then(|x| x.upgrade()?.clone_event_handler())
+            .map(InputAction::PointerLeave)
+            .into_iter()
+            .collect()
     }
 
     pub fn set_cursor(&self) -> bool {
-        if let Some(e) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
+        if let Some(e) = self.mouse_capturing_strong_ref() {
             // TODO: caching loaded cursors
-            let c = match e.borrow().eh.as_ref().unwrap().hover_cursor() {
+            let c = match e
+                .event_handler_ref()
+                .as_ref()
+                .map(InputEventHandler::hover_cursor)
+                .unwrap_or(CursorStyle::Arrow)
+            {
                 CursorStyle::Arrow => unsafe {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
                 },
@@ -303,18 +278,19 @@ impl InputState {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZEWE))
                 },
             };
-            unsafe { SetCursor(c.expect("Failed to load cursor")) };
 
+            unsafe { SetCursor(c.expect("Failed to load cursor")) };
             return true;
         }
 
-        if let Some(e) = self
-            .mouse_current_enter_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
+        if let Some(e) = self.mouse_current_entering_strong_ref() {
             // TODO: caching loaded cursors
-            let c = match e.borrow().eh.as_ref().unwrap().hover_cursor() {
+            let c = match e
+                .event_handler_ref()
+                .as_ref()
+                .map(InputEventHandler::hover_cursor)
+                .unwrap_or(CursorStyle::Arrow)
+            {
                 CursorStyle::Arrow => unsafe {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_ARROW))
                 },
@@ -325,49 +301,53 @@ impl InputState {
                     LoadCursorA(None, core::mem::transmute::<_, PCSTR>(IDC_SIZEWE))
                 },
             };
-            unsafe { SetCursor(c.expect("Failed to load cursor")) };
 
-            true
-        } else {
-            false
+            unsafe { SetCursor(c.expect("Failed to load cursor")) };
+            return true;
         }
+
+        false
     }
 
     pub fn nc_hittest(&self, x: f32, y: f32) -> u32 {
         let Some(active_element) = self
-            .mouse_capturing_element
-            .as_ref()
-            .and_then(Weak::upgrade)
-            .or_else(|| {
-                HitTestTree::check(
-                    &self.ht_tree,
-                    x,
-                    y,
-                    Rect {
-                        X: 0.0,
-                        Y: 0.0,
-                        Width: 0.0,
-                        Height: 0.0,
-                    },
-                )
-            })
+            .mouse_capturing_strong_ref()
+            .or_else(|| self.ht_tree.check(x, y, Rect::empty()))
         else {
             return HTCLIENT;
         };
 
-        let r = active_element.borrow().eh.as_ref().unwrap().nc_hittest();
+        // Note: ここはなんかライフタイム推論がうまくいかなくて変数きらないといけないっぽい
+        let r = active_element
+            .event_handler_ref()
+            .as_ref()
+            .map_or(HTCLIENT, InputEventHandler::nc_hittest);
         r
     }
 }
 
-pub struct HitTestTree {
+pub struct HitTestTreeState {
     eh: Option<Rc<dyn InputEventHandler>>,
     id: usize,
     rect: Rect,
     relative_adjustments: Rect,
-    parent: WeakMut<HitTestTree>,
-    children: HashMap<usize, SharedMut<HitTestTree>>,
+    parent: WeakMut<HitTestTreeState>,
+    children: HashMap<usize, HitTestTree>,
 }
+
+#[derive(Clone)]
+#[repr(transparent)]
+pub struct HitTestTreeWeakRef(WeakMut<HitTestTreeState>);
+impl HitTestTreeWeakRef {
+    #[inline]
+    pub fn upgrade(&self) -> Option<HitTestTree> {
+        self.0.upgrade().map(HitTestTree)
+    }
+}
+
+#[derive(Clone)]
+#[repr(transparent)]
+pub struct HitTestTree(SharedMut<HitTestTreeState>);
 impl HitTestTree {
     #[inline]
     pub fn new(
@@ -375,23 +355,24 @@ impl HitTestTree {
         id: usize,
         rect: Rect,
         relative_adjustments: Rect,
-    ) -> SharedMut<Self> {
-        new_shared_mut(Self {
+    ) -> Self {
+        Self(new_shared_mut(HitTestTreeState {
             eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| Rc::new(x)),
             id,
             rect,
             relative_adjustments,
             parent: empty_weak_mut(),
             children: HashMap::new(),
-        })
+        }))
     }
+
     #[inline]
     pub fn new_unsized(
         eh: Option<impl InputEventHandler + 'static>,
         id: usize,
         left: f32,
         top: f32,
-    ) -> SharedMut<Self> {
+    ) -> Self {
         Self::new(
             eh,
             id,
@@ -401,142 +382,156 @@ impl HitTestTree {
                 Width: f32::MAX,
                 Height: f32::MAX,
             },
-            Rect::from_size(0.0, 0.0),
+            Rect::empty(),
         )
     }
+
     #[inline]
-    pub fn new_fit_to_parent(
-        eh: Option<impl InputEventHandler + 'static>,
-        id: usize,
-    ) -> SharedMut<Self> {
-        new_shared_mut(Self {
+    pub fn new_fit_to_parent(eh: Option<impl InputEventHandler + 'static>, id: usize) -> Self {
+        Self(new_shared_mut(HitTestTreeState {
             eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| Rc::new(x)),
             id,
-            rect: Rect {
-                X: 0.0,
-                Y: 0.0,
-                Width: 0.0,
-                Height: 0.0,
-            },
-            relative_adjustments: Rect {
-                X: 0.0,
-                Y: 0.0,
-                Width: 1.0,
-                Height: 1.0,
-            },
+            rect: Rect::empty(),
+            relative_adjustments: Rect::from_size(1.0, 1.0),
             parent: empty_weak_mut(),
             children: HashMap::new(),
-        })
+        }))
     }
 
     #[inline]
-    pub fn add_child(this: &SharedMut<Self>, child: SharedMut<HitTestTree>) {
-        child.borrow_mut().parent = Rc::downgrade(this);
-        let cid = child.borrow().id;
-        this.borrow_mut().children.insert(cid, child);
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
     }
 
     #[inline]
-    pub fn remove_child(&mut self, child: &SharedMut<HitTestTree>) {
-        let cb = child.borrow();
-        self.children.remove(&cb.id);
+    pub fn weak_ref(&self) -> HitTestTreeWeakRef {
+        HitTestTreeWeakRef(Rc::downgrade(&self.0))
+    }
+
+    #[inline]
+    pub fn clone_event_handler(&self) -> Option<Rc<dyn InputEventHandler>> {
+        self.0.borrow().eh.clone()
+    }
+
+    #[inline]
+    pub fn event_handler_ref(&self) -> core::cell::Ref<Option<Rc<dyn InputEventHandler>>> {
+        core::cell::Ref::map(self.0.borrow(), |x| &x.eh)
+    }
+
+    #[inline]
+    pub fn id(&self) -> usize {
+        self.0.borrow().id
+    }
+
+    #[inline]
+    pub fn add_child(&self, child: &Self) {
+        child.0.borrow_mut().parent = Rc::downgrade(&self.0);
+        let cid = child.0.borrow().id;
+        self.0.borrow_mut().children.insert(cid, child.clone());
+    }
+
+    #[inline]
+    pub fn remove_child(&self, child: &HitTestTree) {
+        let cb = child.0.borrow();
+        self.0.borrow_mut().children.remove(&cb.id);
         drop(cb);
-        child.borrow_mut().parent = empty_weak_mut();
+        child.0.borrow_mut().parent = empty_weak_mut();
     }
 
     #[inline]
-    pub fn remove_all_children(&mut self) {
-        for c in self.children.values() {
-            c.borrow_mut().parent = empty_weak_mut();
+    pub fn remove_all_children(&self) {
+        for (_, c) in self.0.borrow_mut().children.drain() {
+            c.0.borrow_mut().parent = empty_weak_mut();
         }
-
-        self.children.clear();
     }
 
     #[inline]
-    pub fn unmount(&mut self) {
-        if let Some(parent) = self.parent.upgrade() {
-            parent.borrow_mut().children.remove(&self.id);
-            self.parent = empty_weak_mut();
-        }
+    pub fn unmount(&self) {
+        let Some(parent) = self.0.borrow().parent.upgrade() else {
+            // 親がいないツリーはunmountしようがないのでなにもしない
+            return;
+        };
+
+        let id = self.id();
+        parent.borrow_mut().children.remove(&id);
+        self.0.borrow_mut().parent = empty_weak_mut();
     }
 
     #[inline]
     pub fn global_rect(&self) -> Rect {
-        let parent_rect = self.parent.upgrade().map_or_else(
+        let parent_rect = self.0.borrow().parent.upgrade().map_or_else(
             || Rect {
                 X: 0.0,
                 Y: 0.0,
                 Width: 0.0,
                 Height: 0.0,
             },
-            |p| p.borrow().global_rect(),
+            |p| HitTestTree(p).global_rect(),
         );
+        let thisref = self.0.borrow();
+
         Rect {
-            X: parent_rect.X + parent_rect.Width * self.relative_adjustments.X + self.rect.X,
-            Y: parent_rect.Y + parent_rect.Height * self.relative_adjustments.Y + self.rect.Y,
-            Width: parent_rect.Width * self.relative_adjustments.Width + self.rect.Width,
-            Height: parent_rect.Height * self.relative_adjustments.Height + self.rect.Height,
+            X: parent_rect.X + parent_rect.Width * thisref.relative_adjustments.X + thisref.rect.X,
+            Y: parent_rect.Y + parent_rect.Height * thisref.relative_adjustments.Y + thisref.rect.Y,
+            Width: parent_rect.Width * thisref.relative_adjustments.Width + thisref.rect.Width,
+            Height: parent_rect.Height * thisref.relative_adjustments.Height + thisref.rect.Height,
         }
     }
 
     #[inline]
-    pub const fn rect(&self) -> &Rect {
-        &self.rect
+    pub fn rect(&self) -> Rect {
+        self.0.borrow().rect.clone()
     }
+
     #[inline]
-    pub fn set_rect(&mut self, left: f32, top: f32, width: f32, height: f32) {
-        self.rect = Rect {
+    pub fn set_rect(&self, left: f32, top: f32, width: f32, height: f32) {
+        self.0.borrow_mut().rect = Rect {
             X: left,
             Y: top,
             Width: width,
             Height: height,
         };
     }
+
     #[inline]
-    pub fn set_size(&mut self, width: f32, height: f32) {
-        self.rect.Width = width;
-        self.rect.Height = height;
+    pub fn set_size(&self, width: f32, height: f32) {
+        self.0.borrow_mut().rect.Width = width;
+        self.0.borrow_mut().rect.Height = height;
     }
     #[inline]
-    pub fn set_offset(&mut self, left: f32, top: f32) {
-        self.rect.X = left;
-        self.rect.Y = top;
+    pub fn set_offset(&self, left: f32, top: f32) {
+        self.0.borrow_mut().rect.X = left;
+        self.0.borrow_mut().rect.Y = top;
     }
     #[inline]
-    pub fn set_left(&mut self, left: f32) {
-        self.rect.X = left;
+    pub fn set_left(&self, left: f32) {
+        self.0.borrow_mut().rect.X = left;
     }
     #[inline]
-    pub fn set_right(&mut self, right: f32) {
-        self.rect.X = right - self.rect.Width;
+    pub fn set_right(&self, right: f32) {
+        self.0.borrow_mut().rect.X = right - self.0.borrow_mut().rect.Width;
     }
     #[inline]
-    pub fn set_top(&mut self, top: f32) {
-        self.rect.Y = top;
+    pub fn set_top(&self, top: f32) {
+        self.0.borrow_mut().rect.Y = top;
     }
     #[inline]
-    pub fn set_width(&mut self, width: f32) {
-        self.rect.Width = width;
+    pub fn set_width(&self, width: f32) {
+        self.0.borrow_mut().rect.Width = width;
     }
     #[inline]
-    pub fn set_relative_width(&mut self, rate: f32, offset: f32) {
-        self.relative_adjustments.Width = rate;
-        self.rect.Width = offset;
+    pub fn set_relative_width(&self, rate: f32, offset: f32) {
+        self.0.borrow_mut().relative_adjustments.Width = rate;
+        self.0.borrow_mut().rect.Width = offset;
     }
     #[inline]
-    pub fn set_relative_left(&mut self, rate: f32, offset: f32) {
-        self.rect.X = offset;
-        self.relative_adjustments.X = rate;
+    pub fn set_relative_left(&self, rate: f32, offset: f32) {
+        self.0.borrow_mut().rect.X = offset;
+        self.0.borrow_mut().relative_adjustments.X = rate;
     }
 
-    pub fn check(
-        this: &SharedMut<Self>,
-        x: f32,
-        y: f32,
-        ref_rect: Rect,
-    ) -> Option<SharedMut<Self>> {
-        let this1 = this.borrow();
+    pub fn check(&self, x: f32, y: f32, ref_rect: Rect) -> Option<Self> {
+        let this1 = self.0.borrow();
         let real_rect = Rect {
             X: ref_rect.Width * this1.relative_adjustments.X + this1.rect.X,
             Y: ref_rect.Height * this1.relative_adjustments.Y + this1.rect.Y,
@@ -560,7 +555,7 @@ impl HitTestTree {
             match child {
                 Some(c) => Some(c),
                 // EventHandlerの設定がない場合はイベント透過なので親に戻す
-                None if this.borrow().eh.is_some() => Some(this.clone()),
+                None if self.0.borrow().eh.is_some() => Some(self.clone()),
                 None => None,
             }
         } else {
@@ -570,13 +565,15 @@ impl HitTestTree {
 }
 impl core::fmt::Debug for HitTestTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let thisref = self.0.borrow();
+
         f.debug_struct("HitTestTree")
-            .field("id", &self.id)
-            .field("left", &self.rect.X)
-            .field("top", &self.rect.Y)
-            .field("width", &self.rect.Width)
-            .field("height", &self.rect.Height)
-            .field("children", &self.children)
+            .field("id", &thisref.id)
+            .field("left", &thisref.rect.X)
+            .field("top", &thisref.rect.Y)
+            .field("width", &thisref.rect.Width)
+            .field("height", &thisref.rect.Height)
+            .field("children", &thisref.children)
             .finish_non_exhaustive()
     }
 }
