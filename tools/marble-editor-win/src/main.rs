@@ -1025,10 +1025,14 @@ impl TabGroupPaneView {
     ) -> windows::core::Result<()> {
         let index = tab.borrow().index_in_group;
 
-        if tab.borrow().is_active && self.tabs.len() > 1 {
-            // アクティブを付け替える（0個になる場合はどのみち消されるのでなにもしない）
-            let new_active = if index == 0 { 1 } else { index - 1 };
-            self.switch_active(new_active, view_ctx, app_state)?;
+        if tab.borrow().is_active {
+            // アクティブを付け替える（0個になる場合はどのみち消されるのでコンテンツのunmountだけしておく）
+            if self.tabs.len() > 1 {
+                let new_active = if index == 0 { 1 } else { index - 1 };
+                self.switch_active(new_active, view_ctx, app_state)?;
+            } else {
+                self.inactive_current(view_ctx, app_state, PaneTabTransitionMode::Normal)?;
+            }
         }
         tab.borrow().unmount(&view_ctx)?;
         let (tab, content) = self.tabs.remove(index);
@@ -1053,10 +1057,14 @@ impl TabGroupPaneView {
             return Ok(None);
         };
 
-        if tab.borrow().is_active && self.tabs.len() > 1 {
-            // アクティブを付け替える（0個になる場合はどのみち消されるので何もしない）
-            let new_active = if index == 0 { 1 } else { index - 1 };
-            self.switch_active(new_active, view_ctx, app_state)?;
+        if tab.borrow().is_active {
+            // アクティブを付け替える（0個になる場合はどのみち消されるのでコンテンツのunmountだけしておく）
+            if self.tabs.len() > 1 {
+                let new_active = if index == 0 { 1 } else { index - 1 };
+                self.switch_active(new_active, view_ctx, app_state)?;
+            } else {
+                self.inactive_current(view_ctx, app_state, PaneTabTransitionMode::Normal)?;
+            }
         }
         tab.borrow().unmount(&view_ctx)?;
         let (tab, content) = self.tabs.remove(index);
@@ -1237,6 +1245,25 @@ impl TabGroupPaneView {
         Ok(())
     }
 
+    fn inactive_current(
+        &mut self,
+        view_ctx: &(impl ViewContext + ?Sized),
+        app_state: &SharedMut<AppState>,
+        tab_transition_mode: PaneTabTransitionMode,
+    ) -> windows::core::Result<()> {
+        self.tabs[self.current_active]
+            .1
+            .borrow_mut()
+            .on_hide_content_view(&view_ctx, app_state)?;
+        self.tabs[self.current_active]
+            .0
+            .borrow_mut()
+            .set_active(false, tab_transition_mode)?;
+        self.content_area.Children()?.RemoveAll()?;
+
+        Ok(())
+    }
+
     pub fn switch_active(
         &mut self,
         new_active: usize,
@@ -1249,15 +1276,7 @@ impl TabGroupPaneView {
             return Ok(());
         }
 
-        self.tabs[self.current_active]
-            .1
-            .borrow_mut()
-            .on_hide_content_view(&view_ctx, app_state)?;
-        self.tabs[self.current_active]
-            .0
-            .borrow_mut()
-            .set_active(false, PaneTabTransitionMode::Normal)?;
-        self.content_area.Children()?.RemoveAll()?;
+        self.inactive_current(view_ctx, app_state, PaneTabTransitionMode::Normal)?;
         self.current_active = new_active;
         self.tabs[self.current_active]
             .1
