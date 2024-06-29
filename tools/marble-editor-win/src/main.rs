@@ -2372,13 +2372,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
         match app_state.borrow().current_selection_object_id.clone() {
             None => {
                 let label = LabelView::new("None Selected", &view_context).unwrap();
-                label
-                    .mount(
-                        &self.content_root.Children().unwrap(),
-                        &self.root_ht,
-                        view_context,
-                    )
-                    .unwrap();
                 self.current_mounted_views
                     .borrow_mut()
                     .push(new_shared_mut(label));
@@ -2386,13 +2379,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
             Some(id) => {
                 if let Some(entity_ref) = app_state.borrow().current_scene.objects.get(&id) {
                     let id_label = LabelView::new(format!("Object: {id:?}"), view_context).unwrap();
-                    id_label
-                        .mount(
-                            &self.content_root.Children().unwrap(),
-                            &self.root_ht,
-                            view_context,
-                        )
-                        .unwrap();
                     self.current_mounted_views
                         .borrow_mut()
                         .push(new_shared_mut(id_label));
@@ -2406,13 +2392,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             Y: 20.0,
                             Z: 0.0,
                         })
-                        .unwrap();
-                    object_name_label
-                        .mount(
-                            &self.content_root.Children().unwrap(),
-                            &self.root_ht,
-                            view_context,
-                        )
                         .unwrap();
                     self.current_mounted_views
                         .borrow_mut()
@@ -2433,13 +2412,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                     Z: 0.0,
                                 })
                                 .unwrap();
-                            rotation_label
-                                .mount(
-                                    &self.content_root.Children().unwrap(),
-                                    &self.root_ht,
-                                    view_context,
-                                )
-                                .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(new_shared_mut(rotation_label));
@@ -2455,14 +2427,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .borrow()
                                 .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
-                            rotation_x_control
-                                .borrow()
-                                .mount(
-                                    &self.content_root.Children().unwrap(),
-                                    &self.root_ht,
-                                    view_context,
-                                )
-                                .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(rotation_x_control.clone());
@@ -2477,14 +2441,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .borrow()
                                 .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
-                            rotation_y_control
-                                .borrow()
-                                .mount(
-                                    &self.content_root.Children().unwrap(),
-                                    &self.root_ht,
-                                    view_context,
-                                )
-                                .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(rotation_y_control.clone());
@@ -2498,14 +2454,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             rotation_z_control
                                 .borrow()
                                 .set_relative_width(0.5 / 3.0, -2.0)
-                                .unwrap();
-                            rotation_z_control
-                                .borrow()
-                                .mount(
-                                    &self.content_root.Children().unwrap(),
-                                    &self.root_ht,
-                                    view_context,
-                                )
                                 .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
@@ -2647,13 +2595,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                     Z: 0.0,
                                 })
                                 .unwrap();
-                            intensity_label
-                                .mount(
-                                    &self.content_root.Children().unwrap(),
-                                    &self.root_ht,
-                                    view_context,
-                                )
-                                .unwrap();
                             self.current_mounted_views
                                 .borrow_mut()
                                 .push(new_shared_mut(intensity_label));
@@ -2664,14 +2605,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .borrow()
                                 .reposition_xrel(0.5, 80.0)
                                 .unwrap();
-                            intensity_control
-                                .borrow()
-                                .mount(
-                                    &self.content_root.Children().unwrap(),
-                                    &self.root_ht,
-                                    view_context,
-                                )
-                                .unwrap();
                             self.observation_disconnectors.borrow_mut().push(Box::new(
                                 FloatSliderView::observe_value_changes(
                                     &intensity_control,
@@ -2680,7 +2613,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                         let bound_object_id = id.clone();
 
                                         move |_view_ctx, new_value| {
-                                            // sun light - intensity slider
                                             if let Some(e) = app_state
                                                 .borrow_mut()
                                                 .current_scene
@@ -2704,18 +2636,18 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                 } else {
                     let id_label =
                         LabelView::new(format!("Object: {id:?} (gone)"), view_context).unwrap();
-                    id_label
-                        .mount(
-                            &self.content_root.Children().unwrap(),
-                            &self.root_ht,
-                            view_context,
-                        )
-                        .unwrap();
                     self.current_mounted_views
                         .borrow_mut()
                         .push(new_shared_mut(id_label));
                 }
             }
+        }
+
+        let children = self.content_root.Children().unwrap();
+        for v in self.current_mounted_views.borrow().iter() {
+            v.borrow()
+                .mount(&children, &self.root_ht, view_context)
+                .unwrap();
         }
     }
 }
