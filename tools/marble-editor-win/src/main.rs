@@ -6738,20 +6738,20 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             .pop_new(
                 &[
                     MenuItem::Header("Common Commands".into()),
-                    MenuItem::Command("MenuCommand 1".into()),
-                    MenuItem::Command("MenuCommand 2".into()),
+                    MenuItem::Command("MenuCommand 1".into(), || println!("Select MenuCommand 1")),
+                    MenuItem::Command("MenuCommand 2".into(), || println!("Select MenuCommand 2")),
                     MenuItem::Separator,
                     MenuItem::SubMenu(
                         "Create Object".into(),
                         vec![
-                            MenuItem::Command("Empty".into()),
+                            MenuItem::Command("Empty".into(), || println!("Create Empty")),
                             MenuItem::Header("General Meshes".into()),
-                            MenuItem::Command("Cube".into()),
-                            MenuItem::Command("Plane".into()),
-                            MenuItem::Command("Icosphere".into()),
+                            MenuItem::Command("Cube".into(), || println!("Create Cube")),
+                            MenuItem::Command("Plane".into(), || println!("Create Plane")),
+                            MenuItem::Command("Icosphere".into(), || println!("Create Icosphere")),
                         ],
                     ),
-                    MenuItem::Command("Delete".into()),
+                    MenuItem::Command("Delete".into(), || println!("Delete selected")),
                 ],
                 p[0].x as _,
                 p[0].y as _,

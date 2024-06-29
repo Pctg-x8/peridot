@@ -327,6 +327,7 @@ pub struct ContextMenuCommandView {
     required_width: f32,
     current_dpi: f32,
     submenu_contents: Vec<MenuItem>,
+    select_action: Option<fn()>,
 }
 impl ContextMenuCommandView {
     const ENTER_ANIMATION_DURARION: TimeSpan = timespan_ms(100);
@@ -340,6 +341,7 @@ impl ContextMenuCommandView {
     pub fn new(
         text: impl Into<Cow<'static, str>>,
         submenu_contents: Vec<MenuItem>,
+        select_action: Option<fn()>,
         enter_animation_delay: TimeSpan,
         y: f32,
         view_ctx: &(impl ViewContext + ?Sized),
@@ -674,6 +676,7 @@ impl ContextMenuCommandView {
                 required_width: text.width + Self::PADDING_X * 2.0,
                 current_dpi: view_ctx.current_dpi(),
                 submenu_contents,
+                select_action,
             }
         }))
     }
@@ -759,11 +762,25 @@ impl InputEventHandler for ContextMenuCommandViewInputEventDelegate {
 
         m.write().on_leave_element(&this);
     }
+
+    fn on_click(&self, _window: HWND, _ctx: &mut dyn InputContext) {
+        let Some(this) = self.this_ref.upgrade() else {
+            return;
+        };
+
+        ContextMenu::get_mut()
+            .hide_all()
+            .expect("Failed to close context menu");
+        let thisref = this.borrow();
+        if let Some(a) = thisref.select_action {
+            a();
+        }
+    }
 }
 
 #[derive(Clone)]
 pub enum MenuItem {
-    Command(String),
+    Command(String, fn()),
     SubMenu(String, Vec<MenuItem>),
     Separator,
     Header(String),
@@ -941,10 +958,11 @@ impl ContextMenuInstance {
         let mut delay = timespan_ms(0);
         for c in content {
             match c {
-                MenuItem::Command(title) => {
+                MenuItem::Command(title, select_action) => {
                     let e = ContextMenuCommandView::new(
                         title.to_owned(),
                         Vec::new(),
+                        Some(select_action.clone()),
                         delay,
                         yo,
                         &*this.read(),
@@ -959,6 +977,7 @@ impl ContextMenuInstance {
                     let e = ContextMenuCommandView::new(
                         title.to_owned(),
                         contents.clone(),
+                        None,
                         delay,
                         yo,
                         &*this.read(),
