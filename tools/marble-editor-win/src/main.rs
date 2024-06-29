@@ -94,8 +94,8 @@ use windows::{
                 SWP_FRAMECHANGED, SW_MAXIMIZE, SW_SHOWNORMAL, WINDOWPLACEMENT,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_KILLFOCUS,
                 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
-                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR,
-                WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
+                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -5334,6 +5334,42 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
             &mut ctx,
         );
     }
+
+    fn on_sub_pointer_up(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        let mut p = [POINT {
+            x: x as _,
+            y: y as _,
+        }];
+        unsafe {
+            MapWindowPoints(window, None, &mut p);
+        }
+
+        ContextMenu::get_mut()
+            .pop_new(
+                &[
+                    MenuItem::SubMenu(
+                        "Create child...".into(),
+                        vec![
+                            MenuItem::Command("Empty".into(), || println!("Create Empty")),
+                            MenuItem::Header("General Meshes".into()),
+                            MenuItem::Command("Cube".into(), || println!("Create Cube")),
+                            MenuItem::Command("Plane".into(), || println!("Create Plane")),
+                            MenuItem::Command("Icosphere".into(), || println!("Create Icosphere")),
+                            MenuItem::Header("Special".into()),
+                            MenuItem::Command("Terrain".into(), || println!("Create Terrain")),
+                        ],
+                    ),
+                    MenuItem::Command("Create Empty at Parent".into(), || {
+                        println!("Create Empty at Parent")
+                    }),
+                    MenuItem::Command("Delete".into(), || println!("Delete Object")),
+                ],
+                p[0].x as _,
+                p[0].y as _,
+                ctx.current_dpi(),
+            )
+            .expect("Failed to pop context menu");
+    }
 }
 
 pub struct ObjectTreeTabPresenter {
@@ -6724,40 +6760,22 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
         }
     }
-    if msg == WM_RBUTTONDOWN {
+    if msg == WM_RBUTTONUP {
         let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
+            return LRESULT(0);
+        };
 
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        let mut p = [POINT {
-            x: x as _,
-            y: y as _,
-        }];
-        app_window.map_points_to_desktop(&mut p);
+        let actions = state.input_state.on_mouse_right_up(
+            app_window.pixels_to_dip(x as _),
+            app_window.pixels_to_dip(y as _),
+        );
+        for a in actions {
+            a.execute(x as _, y as _, state, hwnd);
+        }
 
-        ContextMenu::get_mut()
-            .pop_new(
-                &[
-                    MenuItem::Header("Common Commands".into()),
-                    MenuItem::Command("MenuCommand 1".into(), || println!("Select MenuCommand 1")),
-                    MenuItem::Command("MenuCommand 2".into(), || println!("Select MenuCommand 2")),
-                    MenuItem::Separator,
-                    MenuItem::SubMenu(
-                        "Create Object".into(),
-                        vec![
-                            MenuItem::Command("Empty".into(), || println!("Create Empty")),
-                            MenuItem::Header("General Meshes".into()),
-                            MenuItem::Command("Cube".into(), || println!("Create Cube")),
-                            MenuItem::Command("Plane".into(), || println!("Create Plane")),
-                            MenuItem::Command("Icosphere".into(), || println!("Create Icosphere")),
-                        ],
-                    ),
-                    MenuItem::Command("Delete".into(), || println!("Delete selected")),
-                ],
-                p[0].x as _,
-                p[0].y as _,
-                app_window.current_dpi,
-            )
-            .expect("Failed to show ContextMenu");
+        return LRESULT(0);
     }
     if msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE {
         let app_window = AppWindow::wrap(hwnd);

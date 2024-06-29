@@ -30,6 +30,7 @@ pub enum InputAction {
     PointerEnter(Rc<dyn InputEventHandler>),
     PointerDown(Rc<dyn InputEventHandler>),
     PointerUp(Rc<dyn InputEventHandler>),
+    SubPointerUp(Rc<dyn InputEventHandler>),
     Click(Rc<dyn InputEventHandler>),
     BeginDrag(Rc<dyn InputEventHandler>),
     DragMove(Rc<dyn InputEventHandler>),
@@ -43,6 +44,7 @@ impl InputAction {
             Self::PointerEnter(e) => e.on_pointer_enter(ctx),
             Self::PointerDown(e) => e.on_pointer_down(x, y, ctx),
             Self::PointerUp(e) => e.on_pointer_up(x, y, ctx),
+            Self::SubPointerUp(e) => e.on_sub_pointer_up(x, y, window, ctx),
             Self::Click(e) => e.on_click(window, &mut ctx),
             Self::BeginDrag(e) => e.on_begin_drag(x, y, window, ctx),
             Self::DragMove(e) => e.on_drag_move(x, y, window, ctx),
@@ -230,6 +232,11 @@ impl InputState {
 
         self.update_mouse_pos(x, y, &mut actions);
 
+        actions.extend(
+            self.mouse_current_entering_strong_ref()
+                .and_then(|x| x.clone_event_handler())
+                .map(InputAction::PointerUp),
+        );
         if !self.is_mouse_dragging {
             actions.extend(
                 self.mouse_current_entering_strong_ref()
@@ -246,6 +253,26 @@ impl InputState {
             );
         }
         self.mouse_down_point = None;
+
+        actions
+    }
+
+    pub fn on_mouse_right_up(&mut self, x: f32, y: f32) -> Vec<InputAction> {
+        let mut actions = Vec::with_capacity(16);
+
+        if let Some(e) = self.mouse_capturing_strong_ref() {
+            actions.extend(e.clone_event_handler().map(InputAction::SubPointerUp));
+
+            return actions;
+        }
+
+        self.update_mouse_pos(x, y, &mut actions);
+
+        actions.extend(
+            self.mouse_current_entering_strong_ref()
+                .and_then(|x| x.clone_event_handler())
+                .map(InputAction::SubPointerUp),
+        );
 
         actions
     }
