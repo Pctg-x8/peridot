@@ -30,6 +30,7 @@ peridot = { path = "../../base" }
 peridot-math = { path = "../../modules/math" }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
 uuid = { version = "1.8.0", features = ["v4"] }
+parking_lot = "0.12.3"
 
 [dependencies.windows]
 version = "0.56.0"

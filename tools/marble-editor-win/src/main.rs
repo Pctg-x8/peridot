@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     hash::Hash,
     rc::{Rc, Weak},
+    sync::{Arc, Weak as AtomicWeak},
 };
 
 use app_global_signals::{AppGlobalSignals, SignalEventReceiver, SignalEventType};
@@ -21,6 +22,7 @@ use miniengine::{
     ColoredVertex, Mat4, SamplerDesc, StdVkDevice, TempRT, UVVertex2D, UtilityVertices, Vec4,
 };
 use observable::ObservationDisconnector;
+use parking_lot::RwLock;
 use peridot_math::{Camera, One, ProjectionMethod};
 use uikit::{
     HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, MountableView,
@@ -145,6 +147,21 @@ fn new_cyclic_shared_mut<T>(ctor: impl FnOnce(&WeakMut<T>) -> T) -> SharedMut<T>
 #[inline]
 const fn empty_weak_mut<T>() -> WeakMut<T> {
     Weak::new()
+}
+
+type MTSharedMut<T> = Arc<RwLock<T>>;
+type MTWeakMut<T> = AtomicWeak<RwLock<T>>;
+#[inline]
+fn new_mt_shared_mut<T>(value: T) -> MTSharedMut<T> {
+    Arc::new(RwLock::new(value))
+}
+#[inline]
+fn new_cyclic_mt_shared_mut<T>(ctor: impl FnOnce(&MTWeakMut<T>) -> T) -> MTSharedMut<T> {
+    Arc::new_cyclic(|w| RwLock::new(ctor(w)))
+}
+#[inline]
+const fn empty_mt_weak_mut<T>() -> MTWeakMut<T> {
+    AtomicWeak::new()
 }
 
 const TAB_MARGIN_X: f32 = 10.0;
@@ -5907,7 +5924,6 @@ struct AppWindowState {
     currently_maximized: bool,
     current_dpi: f32,
     app_state: SharedMut<AppState>,
-    context_menu: SharedMut<ContextMenu>,
 }
 impl ViewContext for AppWindowState {
     fn hittest_context(&self) -> &HitTestTreeContext {
@@ -6185,6 +6201,7 @@ fn app() -> i32 {
     let app_subsystem_instances_finalizer = AppSubsystemInstances::initialize();
     let app_global_signals_finalizer = AppGlobalSignals::initialize();
     let app_subsystem_instances = AppSubsystemInstances::get();
+    let cm_finalizer = ContextMenu::initialize();
 
     let desktop_interop = app_subsystem_instances
         .compositor
@@ -6508,8 +6525,6 @@ fn app() -> i32 {
         )
         .expect("Failed to mount app title bar");
 
-    let cm = ContextMenu::new(window_handle.current_dpi).expect("Failed to create ContextMenu");
-
     let mut ws = AppWindowState {
         input_state: InputState::new(window_handle.handle, &hittest_tree_root),
         hittest_context,
@@ -6520,7 +6535,6 @@ fn app() -> i32 {
             .expect("Failed to query maximized state"),
         current_dpi: window_handle.current_dpi,
         app_state: state,
-        context_menu: new_shared_mut(cm),
     };
     window_handle.set_state_store(&mut ws);
     window_handle.show();
@@ -6553,6 +6567,7 @@ fn app() -> i32 {
     }
 
     window_handle.clear_state_store();
+    drop(cm_finalizer);
     drop(app_global_signals_finalizer);
     drop(app_subsystem_instances_finalizer);
 
@@ -6783,10 +6798,6 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
     }
     if msg == WM_RBUTTONDOWN {
         let app_window = AppWindow::wrap(hwnd);
-        let Some(state) = app_window.get_state_store() else {
-            // not initialized
-            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
-        };
 
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
         let mut p = [POINT {
@@ -6795,22 +6806,29 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }];
         app_window.map_points_to_desktop(&mut p);
 
-        state
-            .context_menu
-            .borrow_mut()
-            .setup_contents(&[
-                MenuItem::Header("Common Commands".into()),
-                MenuItem::Command("MenuCommand 1".into()),
-                MenuItem::Command("MenuCommand 2".into()),
-                MenuItem::Separator,
-                MenuItem::SubMenu("Create Object".into()),
-                MenuItem::Command("Delete".into()),
-            ])
-            .expect("Failed to setup context menu contents");
-        state
-            .context_menu
-            .borrow()
-            .pop_at(p[0].x as _, p[0].y as _)
+        ContextMenu::get_mut()
+            .pop_new(
+                &[
+                    MenuItem::Header("Common Commands".into()),
+                    MenuItem::Command("MenuCommand 1".into()),
+                    MenuItem::Command("MenuCommand 2".into()),
+                    MenuItem::Separator,
+                    MenuItem::SubMenu(
+                        "Create Object".into(),
+                        vec![
+                            MenuItem::Command("Empty".into()),
+                            MenuItem::Header("General Meshes".into()),
+                            MenuItem::Command("Cube".into()),
+                            MenuItem::Command("Plane".into()),
+                            MenuItem::Command("Icosphere".into()),
+                        ],
+                    ),
+                    MenuItem::Command("Delete".into()),
+                ],
+                p[0].x as _,
+                p[0].y as _,
+                app_window.current_dpi,
+            )
             .expect("Failed to show ContextMenu");
     }
     if msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE {
@@ -6828,13 +6846,9 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         return LRESULT(0);
     }
     if msg == WM_KILLFOCUS {
-        if let Some(state) = AppWindow::wrap(hwnd).get_state_store() {
-            state
-                .context_menu
-                .borrow_mut()
-                .hide()
-                .expect("Failed to hide context menu");
-        }
+        ContextMenu::get_mut()
+            .hide_all()
+            .expect("Failed to hide context menu");
     }
 
     unsafe { DefWindowProcA(hwnd, msg, wp, lp) }

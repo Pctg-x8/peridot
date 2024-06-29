@@ -1,12 +1,18 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    cell::{Ref, RefCell, RefMut},
+    rc::Rc,
+    sync::{Arc, RwLock},
+};
 
 use windows::{
     core::{h, s, Interface, PCSTR},
     Foundation::{
         Numerics::{Vector2, Vector3},
-        Rect, TimeSpan,
+        Rect, TimeSpan, TypedEventHandler,
     },
     Graphics::IGeometrySource2D,
+    System::{DispatcherQueueHandler, DispatcherQueueTimer},
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
@@ -23,12 +29,13 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT},
             WindowsAndMessaging::{
-                CallNextHookEx, DefWindowProcA, FindWindowA, GetCursorPos, GetWindowLongPtrA,
-                GetWindowRect, SetWindowLongPtrA, SetWindowPos, SetWindowsHookExA, ShowWindow,
-                UnhookWindowsHookEx, GWLP_USERDATA, HHOOK, MA_NOACTIVATE, SWP_HIDEWINDOW,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-                SW_SHOWNA, WH_MOUSE, WINDOWPOS, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MBUTTONDBLCLK, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXA,
+                CallNextHookEx, DefWindowProcA, DestroyWindow, FindWindowExA, GetCursorPos,
+                GetWindowLongPtrA, GetWindowRect, SetWindowLongPtrA, SetWindowPos,
+                SetWindowsHookExA, ShowWindow, UnhookWindowsHookEx, HHOOK, MA_NOACTIVATE,
+                SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                SWP_SHOWWINDOW, SW_SHOWNA, WH_MOUSE, WINDOWPOS, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
+                WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEACTIVATE,
+                WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXA,
             },
         },
     },
@@ -46,7 +53,7 @@ use windows::{
 use crate::{
     app_subsystem_instances::AppSubsystemInstances,
     bindgen::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
-    new_cyclic_shared_mut, new_shared_mut,
+    new_cyclic_shared_mut, new_mt_shared_mut, new_shared_mut,
     uikit::{
         HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState,
         MountableView, ResizeContext, ViewContext,
@@ -57,8 +64,12 @@ use crate::{
         KeyFrameAnimationPropertySetterExtension, Vector3Extension, VectorScalarConstructor,
         VisualExtensions, WindowBuilder,
     },
-    SharedMut, WeakMut,
+    MTSharedMut, MTWeakMut, SharedMut, WeakMut,
 };
+
+trait ContextMenuEntryView: MountableView {
+    fn set_menu_position(&mut self, x: f32, y: f32);
+}
 
 pub struct ContextMenuHeaderView {
     root: SpriteVisual,
@@ -141,7 +152,7 @@ impl ContextMenuHeaderView {
                     .menu_item_enter_opacity_easing_fn,
             )?
             .set_properties()
-            .duration(ContextMenuEntryView::ENTER_ANIMATION_DURARION)?
+            .duration(ContextMenuCommandView::ENTER_ANIMATION_DURARION)?
             .delay(
                 enter_animation_delay,
                 AnimationDelayBehavior::SetInitialValueBeforeDelay,
@@ -170,7 +181,7 @@ impl ContextMenuHeaderView {
                     .menu_item_enter_offset_easing_fn,
             )?
             .set_properties()
-            .duration(ContextMenuEntryView::ENTER_ANIMATION_DURARION)?
+            .duration(ContextMenuCommandView::ENTER_ANIMATION_DURARION)?
             .delay(
                 enter_animation_delay,
                 AnimationDelayBehavior::SetInitialValueBeforeDelay,
@@ -193,6 +204,9 @@ impl ContextMenuHeaderView {
     pub fn required_width(&self) -> f32 {
         self.required_width
     }
+}
+impl ContextMenuEntryView for ContextMenuHeaderView {
+    fn set_menu_position(&mut self, _x: f32, _y: f32) {}
 }
 impl MountableView for ContextMenuHeaderView {
     fn mount(
@@ -274,6 +288,9 @@ impl ContextMenuSeparatorView {
         Self::PADDING_Y * 2.0 + 1.0
     }
 }
+impl ContextMenuEntryView for ContextMenuSeparatorView {
+    fn set_menu_position(&mut self, _x: f32, _y: f32) {}
+}
 impl MountableView for ContextMenuSeparatorView {
     fn mount(
         &self,
@@ -293,7 +310,11 @@ impl MountableView for ContextMenuSeparatorView {
     }
 }
 
-pub struct ContextMenuEntryView {
+pub struct ContextMenuCommandViewInputEventDelegate {
+    this_ref: WeakMut<ContextMenuCommandView>,
+    menu_ref: MTWeakMut<ContextMenuInstance>,
+}
+pub struct ContextMenuCommandView {
     root: ContainerVisual,
     label: SpriteVisual,
     back: SpriteVisual,
@@ -302,23 +323,28 @@ pub struct ContextMenuEntryView {
     hover_animation: ScalarKeyFrameAnimation,
     hover_end_animation: ScalarKeyFrameAnimation,
     ht: SharedMut<HitTestTree>,
+    y: f32,
     height: f32,
     required_width: f32,
+    current_dpi: f32,
+    submenu_contents: Vec<MenuItem>,
 }
-impl ContextMenuEntryView {
+impl ContextMenuCommandView {
     const ENTER_ANIMATION_DURARION: TimeSpan = timespan_ms(100);
     const HOVER_ANIMATION_DURATION: TimeSpan = timespan_ms(100);
     const PADDING_X: f32 = 12.0;
     const PADDING_Y: f32 = 4.0;
     const BACK_INSET: f32 = 1.0;
     const SUBMENU_ICON_SIZE: f32 = 10.0;
+    const POP_SUBMENU_DELAY: TimeSpan = timespan_ms(200);
 
     pub fn new(
         text: impl Into<Cow<'static, str>>,
-        has_submenu: bool,
+        submenu_contents: Vec<MenuItem>,
         enter_animation_delay: TimeSpan,
         y: f32,
         view_ctx: &(impl ViewContext + ?Sized),
+        menu_instance: &MTSharedMut<ContextMenuInstance>,
     ) -> windows::core::Result<SharedMut<Self>> {
         let text_fmt = AppSubsystemInstances::get()
             .text_format_stock
@@ -356,7 +382,7 @@ impl ContextMenuEntryView {
             )?
             .size(text.visual_size())?;
 
-        let submenu_icon = if has_submenu {
+        let submenu_icon = if !submenu_contents.is_empty() {
             let icon_geometry = unsafe {
                 AppSubsystemInstances::get()
                     .d2d1_factory
@@ -553,7 +579,7 @@ impl ContextMenuEntryView {
         enter_animation.Add(&enter_opacity_animation)?;
         enter_animation.Add(&enter_offset_animation)?;
 
-        let submenu_icon_enter_animation = if has_submenu {
+        let submenu_icon_enter_animation = if !submenu_contents.is_empty() {
             let enter_offset_animation = AppSubsystemInstances::get()
                 .compositor
                 .CreateVector3KeyFrameAnimation()?;
@@ -615,7 +641,10 @@ impl ContextMenuEntryView {
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                Some(wthis.clone()),
+                Some(ContextMenuCommandViewInputEventDelegate {
+                    this_ref: wthis.clone(),
+                    menu_ref: Arc::downgrade(menu_instance),
+                }),
                 view_ctx.hittest_context().new_id(),
                 Rect {
                     X: 0.0,
@@ -641,10 +670,17 @@ impl ContextMenuEntryView {
                 hover_animation,
                 hover_end_animation,
                 ht,
+                y,
                 height: text.height + Self::PADDING_Y * 2.0,
                 required_width: text.width + Self::PADDING_X * 2.0,
+                current_dpi: view_ctx.current_dpi(),
+                submenu_contents,
             }
         }))
+    }
+
+    pub fn y(&self) -> f32 {
+        self.y
     }
 
     pub fn height(&self) -> f32 {
@@ -654,8 +690,36 @@ impl ContextMenuEntryView {
     pub fn required_width(&self) -> f32 {
         self.required_width
     }
+
+    pub fn lit(&self) -> windows::core::Result<()> {
+        self.back
+            .StartAnimation(h!("Opacity"), &self.hover_animation)
+    }
+
+    pub fn unlit(&self) -> windows::core::Result<()> {
+        self.back
+            .StartAnimation(h!("Opacity"), &self.hover_end_animation)
+    }
+
+    pub fn pop_submenu(
+        contents: &[MenuItem],
+        ref_dpi: f32,
+        menu_pos: Vector2,
+        menu_width: f32,
+        element_y: f32,
+    ) -> windows::core::Result<MTSharedMut<ContextMenuInstance>> {
+        ContextMenu::get_mut().pop_new(
+            contents,
+            menu_pos.X + menu_width,
+            menu_pos.Y + element_y,
+            ref_dpi,
+        )
+    }
 }
-impl MountableView for ContextMenuEntryView {
+impl ContextMenuEntryView for ContextMenuCommandView {
+    fn set_menu_position(&mut self, _x: f32, _y: f32) {}
+}
+impl MountableView for ContextMenuCommandView {
     fn mount(
         &self,
         onto: &VisualCollection,
@@ -680,57 +744,51 @@ impl MountableView for ContextMenuEntryView {
         Ok(())
     }
 }
-impl InputEventHandler for WeakMut<ContextMenuEntryView> {
+impl InputEventHandler for ContextMenuCommandViewInputEventDelegate {
     fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
-        let Some(this) = self.upgrade() else {
+        let (Some(this), Some(m)) = (self.this_ref.upgrade(), self.menu_ref.upgrade()) else {
             return;
         };
 
-        this.borrow()
-            .back
-            .StartAnimation(h!("Opacity"), &this.borrow().hover_animation)
-            .expect("Failed to start hover animation");
+        m.write().on_hover_element(&this);
     }
 
     fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {
-        let Some(this) = self.upgrade() else {
+        let (Some(this), Some(m)) = (self.this_ref.upgrade(), self.menu_ref.upgrade()) else {
             return;
         };
 
-        this.borrow()
-            .back
-            .StartAnimation(h!("Opacity"), &this.borrow().hover_end_animation)
-            .expect("Failed to start hover end animation");
+        m.write().on_leave_element(&this);
     }
 }
 
+#[derive(Clone)]
 pub enum MenuItem {
     Command(String),
-    SubMenu(String),
+    SubMenu(String, Vec<MenuItem>),
     Separator,
     Header(String),
 }
 
 static CONTEXT_MENU_WINDOW_CLASS: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
-pub struct ContextMenuWindowState {
-    input_state: InputState,
-    ht_context: HitTestTreeContext,
-    mouse_hook_handle: Option<HHOOK>,
+pub struct ContextMenuInputContext {
+    input_state_ref: MTSharedMut<InputState>,
+    ht_context: Arc<HitTestTreeContext>,
     current_dpi: f32,
 }
-impl ViewContext for ContextMenuWindowState {
+impl ViewContext for ContextMenuInputContext {
     fn current_dpi(&self) -> f32 {
         self.current_dpi
     }
 
     fn hittest_context(&self) -> &HitTestTreeContext {
-        &self.ht_context
+        &*self.ht_context
     }
 }
-impl InputContext for ContextMenuWindowState {
+impl InputContext for ContextMenuInputContext {
     fn capture_mouse(&mut self) {
-        self.input_state.capture_mouse();
+        self.input_state_ref.write().capture_mouse();
     }
 
     fn make_resize_context(&self) -> ResizeContext {
@@ -740,22 +798,30 @@ impl InputContext for ContextMenuWindowState {
     }
 
     fn release_mouse_capture(&mut self) {
-        self.input_state.release_mouse_capture()
+        self.input_state_ref.write().release_mouse_capture();
     }
 }
 
-pub struct ContextMenu {
+pub struct ContextMenuInstance {
     w: HWND,
     _composition_target: DesktopWindowTarget,
-    root: ContainerVisual,
     unscaled_base: SpriteVisual,
     content_root: ContainerVisual,
     ht_root: SharedMut<HitTestTree>,
-    entries: Vec<SharedMut<dyn MountableView>>,
-    window_state: Box<SharedMut<ContextMenuWindowState>>,
+    ht_context: Arc<HitTestTreeContext>,
+    entries: Vec<SharedMut<dyn ContextMenuEntryView>>,
+    current_dpi: f32,
+    input_state: MTSharedMut<InputState>,
     content_size: Vector2,
+    pos: Vector2,
+    submenu_delay_timer: MTSharedMut<Option<DispatcherQueueTimer>>,
+    submenu_instance_ref: MTSharedMut<Option<MTSharedMut<ContextMenuInstance>>>,
 }
-impl ContextMenu {
+// TODO: これあとでなんとかしたい
+unsafe impl Sync for ContextMenuInstance {}
+unsafe impl Send for ContextMenuInstance {}
+impl ContextMenuInstance {
+    const SHADOW_SIZE: f32 = 32.0;
     const TINT_COLOR: Color = Color {
         A: 96,
         R: 0,
@@ -763,28 +829,10 @@ impl ContextMenu {
         B: 0,
     };
 
-    fn window_class() -> u16 {
-        *CONTEXT_MENU_WINDOW_CLASS.get_or_init(|| {
-            register_window_class(&WNDCLASSEXA {
-                cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
-                lpfnWndProc: Some(Self::wndproc),
-                hInstance: unsafe {
-                    GetModuleHandleA(None)
-                        .expect("Failed to get instance handle")
-                        .into()
-                },
-                lpszClassName: s!("io.ct2.peridot.marble.windows.overlays.context_menu"),
-                cbWndExtra: core::mem::size_of::<*const ContextMenuWindowState>() as _,
-                ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
-            })
-            .expect("Failed to register context menu window class")
-        })
-    }
-
-    pub fn new(app_window_dpi: f32) -> windows::core::Result<Self> {
+    pub fn new(ref_dpi: f32) -> windows::core::Result<MTSharedMut<Self>> {
         let w = WindowBuilder::new(
             unsafe { GetModuleHandleA(None)?.into() },
-            Self::window_class(),
+            ContextMenu::window_class(),
             s!(""),
         )
         .no_activate()
@@ -803,8 +851,8 @@ impl ContextMenu {
             .compositor
             .CreateContainerVisual()?;
         root.SetOffset(Vector3 {
-            X: 32.0,
-            Y: 32.0,
+            X: Self::SHADOW_SIZE,
+            Y: Self::SHADOW_SIZE,
             Z: 0.0,
         })?;
         composition_target.SetRoot(&root)?;
@@ -842,8 +890,8 @@ impl ContextMenu {
 
         blur_visual.SetShadow(&{
             let x = AppSubsystemInstances::get().compositor.CreateDropShadow()?;
-            x.SetBlurRadius(32.0)?;
-            x.SetOffset(Vector3::down(16.0))?;
+            x.SetBlurRadius(Self::SHADOW_SIZE)?;
+            x.SetOffset(Vector3::down(Self::SHADOW_SIZE * 0.5))?;
             x.SetOpacity(0.3)?;
             x
         })?;
@@ -857,37 +905,36 @@ impl ContextMenu {
         children.InsertAtTop(&content_root)?;
 
         let ht_root = HitTestTree::new(None::<()>, 0, Rect::from_size(128.0, 160.0), Rect::empty());
-        let window_state = Box::new(new_shared_mut(ContextMenuWindowState {
-            input_state: InputState::new(w, &ht_root),
-            mouse_hook_handle: None,
-            ht_context: HitTestTreeContext::new(),
-            current_dpi: app_window_dpi,
-        }));
-        unsafe {
-            SetWindowLongPtrA(
-                w,
-                GWLP_USERDATA,
-                (&*window_state) as *const SharedMut<ContextMenuWindowState> as _,
-            );
-        }
-
-        Ok(Self {
+        let this = new_mt_shared_mut(Self {
             w,
             _composition_target: composition_target,
-            root,
             unscaled_base: blur_visual,
             content_root,
+            input_state: new_mt_shared_mut(InputState::new(w, &ht_root)),
             ht_root,
+            ht_context: Arc::new(HitTestTreeContext::new()),
             entries: Vec::new(),
-            window_state,
-            content_size: Vector2 { X: 128.0, Y: 128.0 },
-        })
+            current_dpi: ref_dpi,
+            content_size: Vector2 { X: 128.0, Y: 160.0 },
+            pos: Vector2 { X: 0.0, Y: 0.0 },
+            submenu_delay_timer: new_mt_shared_mut(None),
+            submenu_instance_ref: new_mt_shared_mut(None),
+        });
+        ContextMenu::bind_window_instance(w, &this);
+
+        Ok(this)
     }
 
-    pub fn setup_contents(&mut self, content: &[MenuItem]) -> windows::core::Result<()> {
-        for e in self.entries.drain(..) {
-            e.borrow().unmount(&*self.window_state.borrow())?;
+    pub fn setup_contents(
+        this: &MTSharedMut<Self>,
+        content: &[MenuItem],
+    ) -> windows::core::Result<()> {
+        let thisref = this.read();
+        for e in thisref.entries.iter() {
+            e.borrow().unmount(&*thisref)?;
         }
+        drop(thisref);
+        this.write().entries.clear();
 
         // Viewのpoolingとかはあとで
         let mut yo = 0.0f32;
@@ -896,73 +943,73 @@ impl ContextMenu {
         for c in content {
             match c {
                 MenuItem::Command(title) => {
-                    let e = ContextMenuEntryView::new(
+                    let e = ContextMenuCommandView::new(
                         title.to_owned(),
-                        false,
+                        Vec::new(),
                         delay,
                         yo,
-                        &*self.window_state.borrow(),
+                        &*this.read(),
+                        this,
                     )?;
                     yo += e.borrow().height();
                     xr = xr.max(e.borrow().required_width());
                     delay.Duration += timespan_ms(5).Duration;
-                    self.entries.push(e);
+                    this.write().entries.push(e);
                 }
-                MenuItem::SubMenu(title) => {
-                    let e = ContextMenuEntryView::new(
+                MenuItem::SubMenu(title, contents) => {
+                    let e = ContextMenuCommandView::new(
                         title.to_owned(),
-                        true,
+                        contents.clone(),
                         delay,
                         yo,
-                        &*self.window_state.borrow(),
+                        &*this.read(),
+                        this,
                     )?;
                     yo += e.borrow().height();
                     xr = xr.max(e.borrow().required_width());
                     delay.Duration += timespan_ms(5).Duration;
-                    self.entries.push(e);
+                    this.write().entries.push(e);
                 }
                 MenuItem::Separator => {
-                    let e = new_shared_mut(ContextMenuSeparatorView::new(
-                        yo,
-                        &*self.window_state.borrow(),
-                    )?);
+                    let e = new_shared_mut(ContextMenuSeparatorView::new(yo, &*this.read())?);
                     yo += e.borrow().height();
-                    self.entries.push(e);
+                    this.write().entries.push(e);
                 }
                 MenuItem::Header(h) => {
                     let e = new_shared_mut(ContextMenuHeaderView::new(
                         h.to_owned(),
                         yo,
                         delay,
-                        &*self.window_state.borrow(),
+                        &*this.read(),
                     )?);
                     yo += e.borrow().height();
                     xr = xr.max(e.borrow().required_width());
                     delay.Duration += timespan_ms(5).Duration;
-                    self.entries.push(e);
+                    this.write().entries.push(e);
                 }
             }
         }
 
-        let children = self.content_root.Children()?;
-        for e in self.entries.iter() {
-            e.borrow()
-                .mount(&children, &self.ht_root, &*self.window_state.borrow())?;
+        let thisref = this.read();
+        let children = thisref.content_root.Children()?;
+        for e in thisref.entries.iter() {
+            e.borrow().mount(&children, &thisref.ht_root, &*thisref)?;
         }
+        drop(thisref);
 
-        self.content_size = Vector2 { X: xr, Y: yo };
+        this.write().content_size = Vector2 { X: xr, Y: yo };
 
         Ok(())
     }
 
-    pub fn pop_at(&self, x: f32, y: f32) -> windows::core::Result<()> {
+    pub fn pop_at(&mut self, x: f32, y: f32) -> windows::core::Result<()> {
         // 影の分を考慮してウィンドウ位置を計算する
         unsafe {
             SetWindowPos(
                 self.w,
                 None,
-                x as i32 - 32,
-                y as i32 - 32,
+                (x - Self::SHADOW_SIZE) as _,
+                (y - Self::SHADOW_SIZE) as _,
                 0,
                 0,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE,
@@ -977,13 +1024,23 @@ impl ContextMenu {
         self.set_size(self.content_size.X, self.content_size.Y, unsafe {
             GetDpiForWindow(self.w) as f32
         })?;
+        self.pos = Vector2 { X: x, Y: y };
 
         Ok(())
     }
 
-    pub fn hide(&mut self) -> windows::core::Result<()> {
+    pub fn destroy(&mut self) -> windows::core::Result<()> {
+        for e in self.entries.iter() {
+            e.borrow().unmount(self)?;
+        }
+        self.entries.clear();
+
+        if let Some(sub) = self.submenu_instance_ref.write().take() {
+            sub.write().destroy()?;
+        }
+
         unsafe {
-            let _ = ShowWindow(self.w, SW_HIDE);
+            DestroyWindow(self.w)?;
         }
 
         Ok(())
@@ -1007,8 +1064,8 @@ impl ContextMenu {
                 None,
                 0,
                 0,
-                (width * for_dpi / 96.0) as i32 + 64,
-                (height * for_dpi / 96.0) as i32 + 64,
+                (width * for_dpi / 96.0 + Self::SHADOW_SIZE * 2.0) as _,
+                (height * for_dpi / 96.0 + Self::SHADOW_SIZE * 2.0) as _,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
             )?;
         }
@@ -1016,50 +1073,257 @@ impl ContextMenu {
         Ok(())
     }
 
+    pub fn on_hover_element(&self, e: &SharedMut<ContextMenuCommandView>) {
+        e.borrow().lit().expect("Failed to lit element");
+
+        let dq = e.borrow().root.DispatcherQueue().unwrap();
+        let tmr = dq.CreateTimer().expect("Failed to create dispatcher timer");
+        tmr.SetInterval(ContextMenuCommandView::POP_SUBMENU_DELAY)
+            .expect("Failed to set timeout");
+        let ref_dpi = e.borrow().current_dpi;
+        let menu_pos = self.pos.clone();
+        let menu_size = self.content_size.clone();
+        let element_y = e.borrow().y();
+        let contents_ref = e.borrow().submenu_contents.clone();
+        let tmr_ref = self.submenu_delay_timer.clone();
+        let subinst_ref = self.submenu_instance_ref.clone();
+        tmr.Tick(&TypedEventHandler::new(move |_, _| {
+            *subinst_ref.write() = Some(ContextMenuCommandView::pop_submenu(
+                &contents_ref,
+                ref_dpi,
+                menu_pos,
+                (menu_size.X - 8.0) * ref_dpi / 96.0,
+                element_y * ref_dpi / 96.0,
+            )?);
+            *tmr_ref.write() = None;
+
+            Ok(())
+        }))
+        .expect("Failed to set tick");
+        tmr.Start().expect("Failed to start timer");
+        *self.submenu_delay_timer.write() = Some(tmr);
+    }
+
+    pub fn on_leave_element(&self, e: &SharedMut<ContextMenuCommandView>) {
+        e.borrow().unlit().expect("Failed to unlit element");
+
+        if let Some(sub) = self.submenu_instance_ref.write().take() {
+            sub.write()
+                .destroy()
+                .expect("Failed to destroy spawned submenu");
+        }
+        *self.submenu_delay_timer.write() = None;
+    }
+}
+impl ViewContext for ContextMenuInstance {
+    fn current_dpi(&self) -> f32 {
+        self.current_dpi
+    }
+
+    fn hittest_context(&self) -> &HitTestTreeContext {
+        &*self.ht_context
+    }
+}
+
+struct ContextMenuSharedState {
+    mouse_hook_handle: Option<HHOOK>,
+}
+
+static mut CONTEXT_MENU_MANAGER: *mut RefCell<ContextMenu> = core::ptr::null_mut();
+
+pub struct ContextMenuManagerFinalizer;
+impl Drop for ContextMenuManagerFinalizer {
+    fn drop(&mut self) {
+        ContextMenu::finalize();
+    }
+}
+
+pub struct ContextMenu {
+    shared_state_root_ref: SharedMut<ContextMenuSharedState>,
+    instances: Vec<MTWeakMut<ContextMenuInstance>>,
+}
+impl ContextMenu {
+    pub fn initialize() -> ContextMenuManagerFinalizer {
+        unsafe {
+            CONTEXT_MENU_MANAGER = Box::into_raw(Box::new(RefCell::new(Self::new())));
+        }
+
+        ContextMenuManagerFinalizer
+    }
+
+    pub fn finalize() {
+        unsafe {
+            if CONTEXT_MENU_MANAGER.is_null() {
+                return;
+            }
+
+            drop(Box::from_raw(core::mem::replace(
+                &mut *core::ptr::addr_of_mut!(CONTEXT_MENU_MANAGER),
+                core::ptr::null_mut(),
+            )));
+        }
+    }
+
+    #[inline(always)]
+    pub fn get<'a>() -> Ref<'a, Self> {
+        unsafe { (&*CONTEXT_MENU_MANAGER).borrow() }
+    }
+
+    #[inline(always)]
+    pub fn get_mut<'a>() -> RefMut<'a, Self> {
+        unsafe { (&*CONTEXT_MENU_MANAGER).borrow_mut() }
+    }
+
+    fn window_class() -> u16 {
+        *CONTEXT_MENU_WINDOW_CLASS.get_or_init(|| {
+            register_window_class(&WNDCLASSEXA {
+                cbSize: core::mem::size_of::<WNDCLASSEXA>() as _,
+                lpfnWndProc: Some(Self::wndproc),
+                hInstance: unsafe {
+                    GetModuleHandleA(None)
+                        .expect("Failed to get instance handle")
+                        .into()
+                },
+                lpszClassName: s!("io.ct2.peridot.marble.windows.overlays.context_menu"),
+                cbWndExtra: core::mem::size_of::<[*const (); 2]>() as _,
+                ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
+            })
+            .expect("Failed to register context menu window class")
+        })
+    }
+
+    const WINDOW_PTR_INSTANCE: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+    const WINDOW_PTR_SHARED_STATE: WINDOW_LONG_PTR_INDEX =
+        WINDOW_LONG_PTR_INDEX(core::mem::size_of::<*const ()>() as _);
+
+    #[inline(always)]
+    fn set_shared_state_ref(&self, window: HWND) {
+        unsafe {
+            SetWindowLongPtrA(
+                window,
+                Self::WINDOW_PTR_SHARED_STATE,
+                Box::into_raw(Box::new(self.shared_state_root_ref.clone())) as _,
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn get_shared_state_ref<'a>(window: HWND) -> &'a SharedMut<ContextMenuSharedState> {
+        unsafe {
+            &*(GetWindowLongPtrA(window, Self::WINDOW_PTR_SHARED_STATE)
+                as *const SharedMut<ContextMenuSharedState>)
+        }
+    }
+
+    #[inline(always)]
+    fn bind_window_instance(window: HWND, instance_ref: &MTSharedMut<ContextMenuInstance>) {
+        unsafe {
+            SetWindowLongPtrA(
+                window,
+                Self::WINDOW_PTR_INSTANCE,
+                Box::into_raw(Box::new(instance_ref.clone())) as _,
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn get_window_instance<'a>(window: HWND) -> &'a MTSharedMut<ContextMenuInstance> {
+        unsafe {
+            &*(GetWindowLongPtrA(window, Self::WINDOW_PTR_INSTANCE)
+                as *const MTSharedMut<ContextMenuInstance>)
+        }
+    }
+
+    fn new() -> Self {
+        Self {
+            shared_state_root_ref: new_shared_mut(ContextMenuSharedState {
+                mouse_hook_handle: None,
+            }),
+            instances: Vec::new(),
+        }
+    }
+
+    pub fn pop_new(
+        &mut self,
+        content: &[MenuItem],
+        x: f32,
+        y: f32,
+        ref_dpi: f32,
+    ) -> windows::core::Result<MTSharedMut<ContextMenuInstance>> {
+        let new_instance = ContextMenuInstance::new(ref_dpi)?;
+        self.set_shared_state_ref(new_instance.read().w);
+        ContextMenuInstance::setup_contents(&new_instance, content)?;
+        new_instance.write().pop_at(x, y)?;
+
+        // 死んだWeakがたまっていくのでこのタイミングで綺麗にする
+        self.instances.retain(|x| x.strong_count() > 0);
+        self.instances.push(Arc::downgrade(&new_instance));
+        Ok(new_instance)
+    }
+
+    pub fn hide_all(&mut self) -> windows::core::Result<()> {
+        for x in self.instances.drain(..) {
+            if let Some(x) = x.upgrade() {
+                x.write().destroy()?;
+            }
+        }
+
+        Ok(())
+    }
+
     extern "system" fn wndproc(w: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        if m == WM_DESTROY {
+            drop(unsafe {
+                Box::from_raw(GetWindowLongPtrA(w, Self::WINDOW_PTR_INSTANCE)
+                    as *mut SharedMut<ContextMenuInstance>)
+            });
+            drop(unsafe {
+                Box::from_raw(GetWindowLongPtrA(w, Self::WINDOW_PTR_SHARED_STATE)
+                    as *mut SharedMut<ContextMenuSharedState>)
+            });
+        }
         if m == WM_DPICHANGED {
-            let state = unsafe {
-                &mut *(GetWindowLongPtrA(w, GWLP_USERDATA) as *mut ContextMenuWindowState)
-            };
-            state.current_dpi = (wp.0 & 0xffff) as f32;
+            Self::get_window_instance(w).write().current_dpi = (wp.0 & 0xffff) as f32;
         }
         if m == WM_MOUSEACTIVATE {
             return LRESULT(MA_NOACTIVATE as _);
         }
         if m == WM_WINDOWPOSCHANGED {
-            let state = unsafe {
-                &*(GetWindowLongPtrA(w, GWLP_USERDATA) as *const SharedMut<ContextMenuWindowState>)
-            };
+            let shared_state = Self::get_shared_state_ref(w);
 
             // hiding by mouse hook: https://www.codeproject.com/Tips/751520/Custom-Context-Menu
             let windowpos = unsafe { &*(lp.0 as usize as *const WINDOWPOS) };
 
             if windowpos.flags.contains(SWP_SHOWWINDOW) {
-                state.borrow_mut().mouse_hook_handle = Some(unsafe {
+                shared_state.borrow_mut().mouse_hook_handle = Some(unsafe {
                     SetWindowsHookExA(WH_MOUSE, Some(Self::mouse_hook), None, GetCurrentThreadId())
                         .expect("Failed to register mouse hook")
                 });
             } else if windowpos.flags.contains(SWP_HIDEWINDOW) {
-                if let Some(hook_handle) = state.borrow_mut().mouse_hook_handle.take() {
+                if let Some(hook_handle) = shared_state.borrow_mut().mouse_hook_handle.take() {
                     unsafe { UnhookWindowsHookEx(hook_handle).expect("Failed to unhook mouse") };
                 }
             }
         }
         if m == WM_MOUSEMOVE {
-            let state = unsafe {
-                &*(GetWindowLongPtrA(w, GWLP_USERDATA) as *const SharedMut<ContextMenuWindowState>)
-            };
+            let state = Self::get_window_instance(w);
             let dpi = unsafe { GetDpiForWindow(w) as f32 };
 
             let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
             // ドロップシャドウの分あけているのでそのぶんずらす
             let (x, y) = (x as f32 - 32.0, y as f32 - 32.0);
             let actions = state
-                .borrow_mut()
+                .write()
                 .input_state
+                .write()
                 .on_mouse_move((x as f32) * 96.0 / dpi, (y as f32) * 96.0 / dpi);
+            let mut input_context = ContextMenuInputContext {
+                current_dpi: state.read().current_dpi,
+                ht_context: state.read().ht_context.clone(),
+                input_state_ref: state.read().input_state.clone(),
+            };
             for a in actions {
-                a.execute(x as _, y as _, &mut *state.borrow_mut(), w);
+                a.execute(x as _, y as _, &mut input_context, w);
             }
 
             let mut tme = TRACKMOUSEEVENT {
@@ -1075,9 +1339,7 @@ impl ContextMenu {
             return LRESULT(0);
         }
         if m == WM_LBUTTONDOWN {
-            let state = unsafe {
-                &*(GetWindowLongPtrA(w, GWLP_USERDATA) as *const SharedMut<ContextMenuWindowState>)
-            };
+            let state = Self::get_window_instance(w);
             let dpi = unsafe { GetDpiForWindow(w) as f32 };
 
             // ドロップシャドウの分あけているのでそのぶんずらす
@@ -1086,19 +1348,23 @@ impl ContextMenu {
                 ((lp.0 >> 16) & 0xffff) as i16 - 32,
             );
             let actions = state
-                .borrow_mut()
+                .write()
                 .input_state
+                .write()
                 .on_mouse_down((x as f32) * 96.0 / dpi, (y as f32) * 96.0 / dpi);
+            let mut input_context = ContextMenuInputContext {
+                current_dpi: state.read().current_dpi,
+                ht_context: state.read().ht_context.clone(),
+                input_state_ref: state.read().input_state.clone(),
+            };
             for a in actions {
-                a.execute(x as _, y as _, &mut *state.borrow_mut(), w);
+                a.execute(x as _, y as _, &mut input_context, w);
             }
 
             return LRESULT(0);
         }
         if m == WM_LBUTTONUP {
-            let state = unsafe {
-                &*(GetWindowLongPtrA(w, GWLP_USERDATA) as *const SharedMut<ContextMenuWindowState>)
-            };
+            let state = Self::get_window_instance(w);
             let dpi = unsafe { GetDpiForWindow(w) as f32 };
 
             // ドロップシャドウの分あけているのでそのぶんずらす
@@ -1107,23 +1373,37 @@ impl ContextMenu {
                 ((lp.0 >> 16) & 0xffff) as i16 - 32,
             );
             let actions = state
-                .borrow_mut()
+                .write()
                 .input_state
+                .write()
                 .on_mouse_up((x as f32) * 96.0 / dpi, (y as f32) * 96.0 / dpi);
+            let mut input_context = ContextMenuInputContext {
+                current_dpi: state.read().current_dpi,
+                ht_context: state.read().ht_context.clone(),
+                input_state_ref: state.read().input_state.clone(),
+            };
             for a in actions {
-                a.execute(x as _, y as _, &mut *state.borrow_mut(), w);
+                a.execute(x as _, y as _, &mut input_context, w);
             }
 
             return LRESULT(0);
         }
         if m == WM_MOUSELEAVE {
-            let state = unsafe {
-                &*(GetWindowLongPtrA(w, GWLP_USERDATA) as *const SharedMut<ContextMenuWindowState>)
-            };
+            let state = Self::get_window_instance(w);
 
-            let actions = state.borrow_mut().input_state.on_mouse_leave();
+            if state.read().submenu_instance_ref.read().is_some() {
+                // サブメニューが開いている場合はleaveイベントを処理しない
+                return LRESULT(0);
+            }
+
+            let actions = state.write().input_state.write().on_mouse_leave();
+            let mut input_context = ContextMenuInputContext {
+                current_dpi: state.read().current_dpi,
+                ht_context: state.read().ht_context.clone(),
+                input_state_ref: state.read().input_state.clone(),
+            };
             for a in actions {
-                a.execute(0.0, 0.0, &mut *state.borrow_mut(), w);
+                a.execute(0.0, 0.0, &mut input_context, w);
             }
 
             return LRESULT(0);
@@ -1135,21 +1415,56 @@ impl ContextMenu {
     // hiding by mouse hook: https://www.codeproject.com/Tips/751520/Custom-Context-Menu
     extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         if WM_LBUTTONDOWN as usize <= wp.0 && wp.0 <= WM_MBUTTONDBLCLK as usize {
-            let w = unsafe { FindWindowA(PCSTR(Self::window_class() as _), None) };
-            if w.0 != 0 {
-                let mut p = core::mem::MaybeUninit::<POINT>::uninit();
-                let mut rc = core::mem::MaybeUninit::<RECT>::uninit();
-                unsafe {
-                    GetCursorPos(p.as_mut_ptr()).expect("Failed to get cursor pos");
-                    GetWindowRect(w, rc.as_mut_ptr()).expect("Failed to get window rect");
-                }
+            let mut p = core::mem::MaybeUninit::<POINT>::uninit();
+            unsafe {
+                GetCursorPos(p.as_mut_ptr()).expect("Failed to get cursor pos");
+            }
+            let p = unsafe { p.assume_init() };
 
-                if unsafe { !PtInRect(rc.assume_init_ref(), p.assume_init()).as_bool() } {
-                    let _ = unsafe { ShowWindow(w, SW_HIDE) };
-                }
+            let has_any_pointing =
+                WindowByClassIter::new(PCSTR(Self::window_class() as _)).any(|w| {
+                    let mut rc = core::mem::MaybeUninit::<RECT>::uninit();
+                    unsafe {
+                        GetWindowRect(w, rc.as_mut_ptr()).expect("Failed to get window rect");
+                    }
+
+                    unsafe { PtInRect(rc.assume_init_ref(), p).as_bool() }
+                });
+
+            if !has_any_pointing {
+                Self::get_mut()
+                    .hide_all()
+                    .expect("Failed to hide all context menus");
             }
         }
 
         unsafe { CallNextHookEx(None, code, wp, lp) }
+    }
+}
+
+struct WindowByClassIter {
+    class: PCSTR,
+    window_after: HWND,
+}
+impl WindowByClassIter {
+    fn new(class: PCSTR) -> Self {
+        Self {
+            class,
+            window_after: HWND(0),
+        }
+    }
+}
+impl Iterator for WindowByClassIter {
+    type Item = HWND;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let w = unsafe { FindWindowExA(None, self.window_after, self.class, None) };
+
+        if w.0 == 0 {
+            None
+        } else {
+            self.window_after = w;
+            Some(w)
+        }
     }
 }
