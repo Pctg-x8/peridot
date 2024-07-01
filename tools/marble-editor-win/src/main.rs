@@ -1295,6 +1295,10 @@ impl TabGroupPaneView {
         Ok(())
     }
 
+    pub fn current_content(&self) -> &SharedMut<dyn PaneTabContentPresenter> {
+        &self.tabs[self.current_active].1
+    }
+
     pub fn mount(
         &self,
         onto: &VisualCollection,
@@ -1563,6 +1567,24 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             .hide_preview()
             .expect("Failed to show floating preview");
         ctx.release_mouse_capture();
+    }
+
+    fn on_sub_pointer_up(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        let mut p = [POINT {
+            x: x as _,
+            y: y as _,
+        }];
+        unsafe {
+            MapWindowPoints(window, None, &mut p);
+        }
+        this.borrow()
+            .current_content()
+            .borrow_mut()
+            .on_context_menu(p[0].x as _, p[0].y as _, ctx);
     }
 }
 
@@ -2359,6 +2381,15 @@ pub trait PaneTabContentPresenter {
         _resize_ctx: &ResizeContext,
     ) -> windows::core::Result<()> {
         Ok(())
+    }
+
+    #[allow(unused_variables)]
+    fn on_context_menu(
+        &mut self,
+        desktop_x_px: f32,
+        desktop_y_px: f32,
+        input_context: &dyn InputContext,
+    ) {
     }
 }
 pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
@@ -5350,19 +5381,29 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                     MenuItem::SubMenu(
                         "Create child...".into(),
                         vec![
-                            MenuItem::Command("Empty".into(), || println!("Create Empty")),
+                            MenuItem::Command("Empty".into(), || println!("Create Empty"), true),
                             MenuItem::Header("General Meshes".into()),
-                            MenuItem::Command("Cube".into(), || println!("Create Cube")),
-                            MenuItem::Command("Plane".into(), || println!("Create Plane")),
-                            MenuItem::Command("Icosphere".into(), || println!("Create Icosphere")),
+                            MenuItem::Command("Cube".into(), || println!("Create Cube"), true),
+                            MenuItem::Command("Plane".into(), || println!("Create Plane"), true),
+                            MenuItem::Command(
+                                "Icosphere".into(),
+                                || println!("Create Icosphere"),
+                                true,
+                            ),
                             MenuItem::Header("Special".into()),
-                            MenuItem::Command("Terrain".into(), || println!("Create Terrain")),
+                            MenuItem::Command(
+                                "Terrain".into(),
+                                || println!("Create Terrain"),
+                                true,
+                            ),
                         ],
                     ),
-                    MenuItem::Command("Create Empty at Parent".into(), || {
-                        println!("Create Empty at Parent")
-                    }),
-                    MenuItem::Command("Delete".into(), || println!("Delete Object")),
+                    MenuItem::Command(
+                        "Create Empty at Parent".into(),
+                        || println!("Create Empty at Parent"),
+                        true,
+                    ),
+                    MenuItem::Command("Delete".into(), || println!("Delete Object"), true),
                 ],
                 p[0].x as _,
                 p[0].y as _,
@@ -5401,6 +5442,49 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         }
 
         Ok(())
+    }
+
+    fn on_context_menu(
+        &mut self,
+        desktop_x_px: f32,
+        desktop_y_px: f32,
+        input_context: &dyn InputContext,
+    ) {
+        ContextMenu::get_mut()
+            .pop_new(
+                &[
+                    MenuItem::SubMenu(
+                        "Create...".into(),
+                        vec![
+                            MenuItem::Command("Empty".into(), || println!("Create Empty"), true),
+                            MenuItem::Header("General Meshes".into()),
+                            MenuItem::Command("Cube".into(), || println!("Create Cube"), true),
+                            MenuItem::Command("Plane".into(), || println!("Create Plane"), true),
+                            MenuItem::Command(
+                                "Icosphere".into(),
+                                || println!("Create Icosphere"),
+                                true,
+                            ),
+                            MenuItem::Header("Special".into()),
+                            MenuItem::Command(
+                                "Terrain".into(),
+                                || println!("Create Terrain"),
+                                true,
+                            ),
+                        ],
+                    ),
+                    MenuItem::Command(
+                        "Create Empty at Parent".into(),
+                        || println!("Create Empty at Parent"),
+                        false,
+                    ),
+                    MenuItem::Command("Delete".into(), || println!("Delete Object"), false),
+                ],
+                desktop_x_px,
+                desktop_y_px,
+                input_context.current_dpi(),
+            )
+            .expect("Failed to pop context menu");
     }
 }
 impl PaneTabPresenter for ObjectTreeTabPresenter {

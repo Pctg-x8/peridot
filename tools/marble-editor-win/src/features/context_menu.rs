@@ -39,7 +39,7 @@ use windows::{
         },
     },
     UI::{
-        Color,
+        Color, Colors,
         Composition::{
             AnimationDelayBehavior, CompositionAnimationGroup, CompositionEffectSourceParameter,
             CompositionMappingMode, CompositionPath, ContainerVisual, Desktop::DesktopWindowTarget,
@@ -322,6 +322,7 @@ pub struct ContextMenuCommandView {
     hover_animation: ScalarKeyFrameAnimation,
     hover_end_animation: ScalarKeyFrameAnimation,
     ht: HitTestTree,
+    active: bool,
     y: f32,
     height: f32,
     required_width: f32,
@@ -342,6 +343,7 @@ impl ContextMenuCommandView {
         text: impl Into<Cow<'static, str>>,
         submenu_contents: Vec<MenuItem>,
         select_action: Option<fn()>,
+        active: bool,
         enter_animation_delay: TimeSpan,
         y: f32,
         view_ctx: &(impl ViewContext + ?Sized),
@@ -371,16 +373,28 @@ impl ContextMenuCommandView {
                 Z: 0.0,
             })?;
 
+        let label_brush = AppSubsystemInstances::get().compositor.CreateMaskBrush()?;
+        label_brush.SetMask(
+            &AppSubsystemInstances::get()
+                .compositor
+                .CreateSurfaceBrushWithSurface(&text.surface)?,
+        )?;
+        label_brush.SetSource(
+            &AppSubsystemInstances::get()
+                .compositor
+                .CreateColorBrushWithColor(if active {
+                    Colors::White()?
+                } else {
+                    Colors::Gray()?
+                })?,
+        )?;
+
         let label = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
         label
             .set_properties()
-            .brush(
-                &AppSubsystemInstances::get()
-                    .compositor
-                    .CreateSurfaceBrushWithSurface(&text.surface)?,
-            )?
+            .brush(&label_brush)?
             .size(text.visual_size())?;
 
         let submenu_icon = if !submenu_contents.is_empty() {
@@ -671,6 +685,7 @@ impl ContextMenuCommandView {
                 hover_animation,
                 hover_end_animation,
                 ht,
+                active,
                 y,
                 height: text.height + Self::PADDING_Y * 2.0,
                 required_width: text.width + Self::PADDING_X * 2.0,
@@ -734,14 +749,20 @@ impl MountableView for ContextMenuCommandView {
             v.StartAnimationGroup(a)?;
         }
 
-        onto_ht.add_child(&self.ht);
+        // 非アクティブ時はHitTestTreeをmountしないことでイベントを受け取らない
+        if self.active {
+            onto_ht.add_child(&self.ht);
+        }
 
         Ok(())
     }
 
     fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.unmount();
+
+        if self.active {
+            self.ht.unmount();
+        }
 
         Ok(())
     }
@@ -780,7 +801,7 @@ impl InputEventHandler for ContextMenuCommandViewInputEventDelegate {
 
 #[derive(Clone)]
 pub enum MenuItem {
-    Command(String, fn()),
+    Command(String, fn(), bool),
     SubMenu(String, Vec<MenuItem>),
     Separator,
     Header(String),
@@ -958,11 +979,12 @@ impl ContextMenuInstance {
         let mut delay = timespan_ms(0);
         for c in content {
             match c {
-                MenuItem::Command(title, select_action) => {
+                MenuItem::Command(title, select_action, active) => {
                     let e = ContextMenuCommandView::new(
                         title.to_owned(),
                         Vec::new(),
                         Some(select_action.clone()),
+                        *active,
                         delay,
                         yo,
                         &*this.read(),
@@ -978,6 +1000,7 @@ impl ContextMenuInstance {
                         title.to_owned(),
                         contents.clone(),
                         None,
+                        true,
                         delay,
                         yo,
                         &*this.read(),
