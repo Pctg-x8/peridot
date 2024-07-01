@@ -3633,7 +3633,6 @@ pub struct SkyboxRenderer {
     pub renderer_descriptor: br::DescriptorSet,
     pub pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
     pub pipeline: br::PipelineObject<StdVkDevice>,
-    pub vertex_buffer: peridot_memory_manager::Buffer,
     pub primary_directional_light_data_buffer: peridot_memory_manager::Buffer,
 }
 impl SkyboxRenderer {
@@ -3677,31 +3676,14 @@ impl SkyboxRenderer {
                 .create(engine.device().clone())?;
         let vsh = engine.shader("shaders/skybox/vert.vspv")?;
         let fsh = engine.shader("shaders/skybox/frag.fspv")?;
-        let vbinds = [br::VertexInputBindingDescription::per_vertex_typed::<
-            SkyboxVertex,
-        >(0)];
-        let vattrs = [
-            br::vk::VkVertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                offset: core::mem::offset_of!(SkyboxVertex, pos) as _,
-            },
-            br::vk::VkVertexInputAttributeDescription {
-                location: 1,
-                binding: 0,
-                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                offset: core::mem::offset_of!(SkyboxVertex, uv) as _,
-            },
-        ];
         let mut pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
             &pipeline_layout,
             (&render_pass, subpass),
             br::VertexProcessingStages::new(
                 br::VertexShaderStage::new(br::PipelineShader2::new(&vsh, c"main".to_owned()))
                     .with_fragment_shader_stage(br::PipelineShader2::new(&fsh, c"main".to_owned())),
-                &vbinds,
-                &vattrs,
+                &[],
+                &[],
                 br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
             ),
         );
@@ -3717,56 +3699,23 @@ impl SkyboxRenderer {
         engine.writeback_pipeline_cache();
 
         struct BufferInitializationContents {
-            pub vertices: [SkyboxVertex; 4],
             pub primary_directional_light_data: PrimaryDirectionalLightUniformData,
         }
-        let [vertex_buffer, primary_directional_light_data_buffer] = engine
-            .alloc_device_local_buffer_array([
-                br::BufferDesc::new(
-                    core::mem::size_of::<[SkyboxVertex; 4]>(),
-                    br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
-                ),
-                br::BufferDesc::new(
-                    core::mem::size_of::<PrimaryDirectionalLightUniformData>(),
-                    br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
-                ),
-            ])?;
+        let [primary_directional_light_data_buffer] =
+            engine.alloc_device_local_buffer_array([br::BufferDesc::new(
+                core::mem::size_of::<PrimaryDirectionalLightUniformData>(),
+                br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+            )])?;
         let mut stg_buffer = engine.alloc_upload_buffer(br::BufferDesc::new(
             core::mem::size_of::<BufferInitializationContents>(),
             br::BufferUsage::TRANSFER_SRC,
         ))?;
         stg_buffer.write_content(BufferInitializationContents {
-            vertices: [
-                SkyboxVertex {
-                    pos: peridot_math::Vector2(-1.0, -1.0),
-                    uv: peridot_math::Vector2(0.0, 0.0),
-                },
-                SkyboxVertex {
-                    pos: peridot_math::Vector2(1.0, -1.0),
-                    uv: peridot_math::Vector2(1.0, 0.0),
-                },
-                SkyboxVertex {
-                    pos: peridot_math::Vector2(-1.0, 1.0),
-                    uv: peridot_math::Vector2(0.0, 1.0),
-                },
-                SkyboxVertex {
-                    pos: peridot_math::Vector2(1.0, 1.0),
-                    uv: peridot_math::Vector2(1.0, 1.0),
-                },
-            ],
             primary_directional_light_data: init_light_data,
         })?;
 
         engine.submit_transient_commands_and_wait(|rec| {
             rec.copy_buffer(
-                &stg_buffer,
-                &vertex_buffer,
-                &[br::BufferCopy::copy_data::<[SkyboxVertex; 4]>(
-                    core::mem::offset_of!(BufferInitializationContents, vertices) as _,
-                    0,
-                )],
-            )
-            .copy_buffer(
                 &stg_buffer,
                 &primary_directional_light_data_buffer,
                 &[br::BufferCopy::copy_data::<
@@ -3786,9 +3735,8 @@ impl SkyboxRenderer {
                         br::AccessFlags2::TRANSFER.write,
                     )
                     .to(
-                        br::PipelineStageFlags2::VERTEX_INPUT
-                            | br::PipelineStageFlags2::FRAGMENT_SHADER,
-                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::SHADER.read,
+                        br::PipelineStageFlags2::FRAGMENT_SHADER,
+                        br::AccessFlags2::SHADER.read,
                     )],
                 &[],
                 &[],
@@ -3833,7 +3781,6 @@ impl SkyboxRenderer {
             renderer_descriptor: descriptor,
             pipeline_layout,
             pipeline,
-            vertex_buffer,
             primary_directional_light_data_buffer,
         })
     }
@@ -3873,6 +3820,19 @@ impl SkyboxRenderer {
         })?;
 
         Ok(())
+    }
+
+    pub fn record_render_commands<
+        'r,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+        Device: br::Device + ?Sized,
+    >(
+        &self,
+        rec: br::CmdRecord<'r, CB, Device>,
+    ) -> br::CmdRecord<'r, CB, Device> {
+        rec.bind_graphics_pipeline_pair(&self.pipeline, &self.pipeline_layout)
+            .bind_graphics_descriptor_sets(1, &[self.renderer_descriptor.0], &[])
+            .draw(4, 1, 0, 0)
     }
 }
 
@@ -4229,30 +4189,13 @@ impl EditorStageView {
         let hdr_final_pass_vsh = AppSubsystemInstances::get()
             .mini_engine
             .borrow_mut()
-            .shader("shaders/simple2d_notrans_with_uv.vspv")
+            .shader("shaders/full_blit.vspv")
             .expect("Failed to load final pass vertex shader");
         let hdr_final_pass_fsh = AppSubsystemInstances::get()
             .mini_engine
             .borrow_mut()
             .shader("shaders/simple2d_hdr_final_pass.fspv")
             .expect("Failed to load final pass fragment shader");
-        let hdr_final_pass_vbinds = [br::VertexInputBindingDescription::per_vertex_typed::<
-            UVVertex2D,
-        >(0)];
-        let hdr_final_pass_vattrs = [
-            br::vk::VkVertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                offset: core::mem::offset_of!(UVVertex2D, pos) as _,
-            },
-            br::vk::VkVertexInputAttributeDescription {
-                location: 1,
-                binding: 0,
-                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                offset: core::mem::offset_of!(UVVertex2D, uv) as _,
-            },
-        ];
         let hdr_final_pass_pipeline_layout =
             br::PipelineLayoutBuilder::new(vec![&descriptor_set_layout_ia1], vec![])
                 .create(
@@ -4272,8 +4215,8 @@ impl EditorStageView {
                         &hdr_final_pass_fsh,
                         c"main",
                     )),
-                &hdr_final_pass_vbinds,
-                &hdr_final_pass_vattrs,
+                &[],
+                &[],
                 br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
             ),
         );
@@ -4634,30 +4577,13 @@ impl EditorStageView {
                 ],
                 true,
             )
-            .bind_graphics_pipeline_pair(
-                &skybox_renderer.pipeline,
-                &skybox_renderer.pipeline_layout,
-            )
-            .bind_graphics_descriptor_sets(
-                0,
-                &[
-                    camera_descriptor_set.0,
-                    skybox_renderer.renderer_descriptor.0,
-                ],
-                &[],
-            )
-            .bind_vertex_buffers(0, &[(&skybox_renderer.vertex_buffer, 0)])
-            .draw(4, 1, 0, 0)
+            // どうやらパイプライン切り替えると0番目のDescriptorSetが消滅するので再設定する（これ消えないはずだけどな......？）
+            .bind_graphics_pipeline_layout(&skybox_renderer.pipeline_layout)
+            .bind_graphics_descriptor_sets(0, &[camera_descriptor_set.0], &[])
+            .inject(|rec| skybox_renderer.record_render_commands(rec))
             .next_subpass(true)
             .bind_graphics_pipeline_pair(&hdr_final_pass_pipeline, &hdr_final_pass_pipeline_layout)
             .bind_graphics_descriptor_sets(0, &[hdr_final_pass_descriptor_set.0], &[])
-            .bind_vertex_buffers(
-                0,
-                &[(
-                    &utility_verts.buffer,
-                    utility_verts.uv_triangle_strip_fill_plane2d_offset as _,
-                )],
-            )
             .draw(4, 1, 0, 0)
             .bind_graphics_pipeline_pair(&grid_pipeline, &grid_pipeline_layout)
             .bind_graphics_descriptor_sets(0, &[camera_descriptor_set.0], &[])
@@ -4967,35 +4893,16 @@ impl EditorStageView {
                 ],
                 true,
             )
+            // どうやらパイプライン切り替えると0番目のDescriptorSetが消滅するので再設定する（これ消えないはずだけどな......？）
             .bind_graphics_pipeline_layout(&self.skybox_renderer.pipeline_layout)
             .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
-            .bind_graphics_pipeline_pair(
-                &self.skybox_renderer.pipeline,
-                &self.skybox_renderer.pipeline_layout,
-            )
-            .bind_graphics_descriptor_sets(
-                0,
-                &[
-                    self.camera_descriptor_set.0,
-                    self.skybox_renderer.renderer_descriptor.0,
-                ],
-                &[],
-            )
-            .bind_vertex_buffers(0, &[(&self.skybox_renderer.vertex_buffer, 0)])
-            .draw(4, 1, 0, 0)
+            .inject(|rec| self.skybox_renderer.record_render_commands(rec))
             .next_subpass(true)
             .bind_graphics_pipeline_pair(
                 &self.hdr_final_pass_pipeline,
                 &self.hdr_final_pass_pipeline_layout,
             )
             .bind_graphics_descriptor_sets(0, &[self.hdr_final_pass_descriptor_set.0], &[])
-            .bind_vertex_buffers(
-                0,
-                &[(
-                    &self.utility_verts.buffer,
-                    self.utility_verts.uv_triangle_strip_fill_plane2d_offset as _,
-                )],
-            )
             .draw(4, 1, 0, 0)
             .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
             .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
