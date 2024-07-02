@@ -19,14 +19,14 @@ use features::{
     AppTitleBarView, ContextMenu, DockingPanePreview, MenuItem, PaneSplitterView, SplitDirection,
 };
 use miniengine::{
-    ColoredVertex, Mat4, SamplerDesc, StdVkDevice, TempRT, UVVertex2D, UtilityVertices, Vec4,
+    ColoredVertex, GenericVertex, Mat4, SamplerDesc, StdVkDevice, TempRT, UtilityVertices, Vec4,
 };
 use observable::ObservationDisconnector;
 use parking_lot::RwLock;
 use peridot_math::{Camera, One, ProjectionMethod};
 use uikit::{
-    HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState, MountableView,
-    ResizeContext, ViewContext,
+    HitTestTree, InputContext, InputEventHandler, InputState, MountableView, ResizeContext,
+    ViewContext,
 };
 use utils::{
     rect_slice_bottom, rect_slice_left, rect_slice_right, rect_slice_top, EventHandle,
@@ -299,13 +299,10 @@ impl PaneDockLayer {
         rest: impl FnOnce(&WeakMut<Self>, &VC) -> SharedMut<Self>,
         ctx: &VC,
     ) -> windows::core::Result<SharedMut<Self>> {
-        let splitter = PaneSplitterView::new(
-            ctx,
-            match direction {
-                DockDirection::Left | DockDirection::Right => SplitDirection::Vertical,
-                DockDirection::Top | DockDirection::Bottom => SplitDirection::Horizontal,
-            },
-        )?;
+        let splitter = PaneSplitterView::new(match direction {
+            DockDirection::Left | DockDirection::Right => SplitDirection::Vertical,
+            DockDirection::Top | DockDirection::Bottom => SplitDirection::Horizontal,
+        })?;
 
         Ok(new_cyclic_shared_mut(|wthis| {
             splitter.borrow_mut().bind_dock_layer(wthis);
@@ -818,9 +815,8 @@ pub struct PaneGroupDockingManager {
     floating_preview: DockingPanePreview,
 }
 impl PaneGroupDockingManager {
-    fn new(ctx: &impl ViewContext, ht_root: &HitTestTree) -> windows::core::Result<Self> {
-        let ht_placement_root =
-            HitTestTree::new_unsized(Some(()), ctx.hittest_context().new_id(), 0.0, 0.0);
+    fn new(ht_root: &HitTestTree) -> windows::core::Result<Self> {
+        let ht_placement_root = HitTestTree::new_unsized(Some(()), 0.0, 0.0);
         ht_root.add_child(&ht_placement_root);
 
         Ok(Self {
@@ -983,13 +979,11 @@ impl TabGroupPaneView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(wthis.clone()),
-                ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
                 Rect::empty(),
             );
             let ht_content = HitTestTree::new(
                 Some(wthis.clone()),
-                ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, 128.0),
                 Rect::empty(),
             );
@@ -1021,7 +1015,7 @@ impl TabGroupPaneView {
         tab: &SharedMut<PaneTabHeaderView>,
         target: &SharedMut<Self>,
         view_ctx: &(impl ViewContext + ?Sized),
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let index = tab.borrow().index_in_group;
 
@@ -1050,7 +1044,7 @@ impl TabGroupPaneView {
         &mut self,
         tab: &SharedMut<PaneTabHeaderView>,
         view_ctx: &(impl ViewContext + ?Sized),
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<Option<SharedMut<Self>>> {
         let Some(index) = self.tabs.iter().position(|(h, _)| Rc::ptr_eq(h, tab)) else {
             // 対応するタブがない
@@ -1094,7 +1088,7 @@ impl TabGroupPaneView {
     pub fn add_tab<T: PaneTabPresenter + 'static>(
         this: &SharedMut<Self>,
         ctx: &(impl ViewContext + ?Sized),
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<SharedMut<T>> {
         let header_view =
             PaneTabHeaderView::new(T::INIT_TAB_NAME, this.borrow().tabs.is_empty(), ctx)?;
@@ -1248,7 +1242,7 @@ impl TabGroupPaneView {
     fn inactive_current(
         &mut self,
         view_ctx: &(impl ViewContext + ?Sized),
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
         tab_transition_mode: PaneTabTransitionMode,
     ) -> windows::core::Result<()> {
         self.tabs[self.current_active]
@@ -1268,7 +1262,7 @@ impl TabGroupPaneView {
         &mut self,
         new_active: usize,
         view_ctx: &(impl ViewContext + ?Sized),
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let new_active = new_active.min(self.tabs.len());
         if self.current_active == new_active {
@@ -1738,7 +1732,6 @@ impl PaneTabHeaderView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht_self = HitTestTree::new(
                 Some(wthis.clone()),
-                ctx.hittest_context().new_id(),
                 Rect::from_size(view_size.X, view_size.Y),
                 Rect::empty(),
             );
@@ -2367,12 +2360,12 @@ pub trait PaneTabContentPresenter {
         onto: &ContainerVisual,
         onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()>;
     fn on_hide_content_view(
         &mut self,
         view_context: &dyn ViewContext,
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()>;
 
     fn on_resize(
@@ -2397,40 +2390,43 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> Self;
 }
 
 pub struct InspectorTabSelectionChangedEventHandler {
     content_root: ContainerVisual,
     root_ht: HitTestTree,
-    current_mounted_views: RefCell<Vec<SharedMut<dyn MountableView>>>,
-    observation_disconnectors: RefCell<Vec<Box<dyn ObservationDisconnector>>>,
+    current_mounted_views: RwLock<Vec<SharedMut<dyn MountableView>>>,
+    observation_disconnectors: RwLock<Vec<Box<dyn ObservationDisconnector>>>,
 }
+// TODO: これあとでなんとかする
+unsafe impl Sync for InspectorTabSelectionChangedEventHandler {}
+unsafe impl Send for InspectorTabSelectionChangedEventHandler {}
 impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEventHandler {
-    fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &dyn ViewContext) {
+    fn on_changed(&self, app_state: &MTSharedMut<AppState>, view_context: &dyn ViewContext) {
         // TODO: 本当は以前のViewを使いまわすとかしたほうがいいけどいったん見た目優先なのであとでやる
-        for od in self.observation_disconnectors.borrow_mut().drain(..) {
+        for od in self.observation_disconnectors.write().drain(..) {
             od.disconnect();
         }
-        for c in self.current_mounted_views.borrow_mut().drain(..) {
+        for c in self.current_mounted_views.write().drain(..) {
             c.borrow()
                 .unmount(view_context)
                 .expect("Failed to unmount last views");
         }
 
-        match app_state.borrow().current_selection_object_id.clone() {
+        match app_state.read().current_selection_object_id.clone() {
             None => {
                 let label = LabelView::new("None Selected", &view_context).unwrap();
                 self.current_mounted_views
-                    .borrow_mut()
+                    .write()
                     .push(new_shared_mut(label));
             }
             Some(id) => {
-                if let Some(entity_ref) = app_state.borrow().current_scene.objects.get(&id) {
+                if let Some(entity_ref) = app_state.read().current_scene.objects.get(&id) {
                     let id_label = LabelView::new(format!("Object: {id:?}"), view_context).unwrap();
                     self.current_mounted_views
-                        .borrow_mut()
+                        .write()
                         .push(new_shared_mut(id_label));
 
                     let object_name_label =
@@ -2444,7 +2440,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                         })
                         .unwrap();
                     self.current_mounted_views
-                        .borrow_mut()
+                        .write()
                         .push(new_shared_mut(object_name_label));
 
                     match entity_ref.details {
@@ -2463,7 +2459,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 })
                                 .unwrap();
                             self.current_mounted_views
-                                .borrow_mut()
+                                .write()
                                 .push(new_shared_mut(rotation_label));
 
                             // TODO: これのUIレイアウト自動調整をしてくれるやつがほしい（伸縮はComposition APIがやってくれるんだけど、それの係数決めを自動化したい）
@@ -2478,7 +2474,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
                             self.current_mounted_views
-                                .borrow_mut()
+                                .write()
                                 .push(rotation_x_control.clone());
 
                             let rotation_y_control =
@@ -2492,7 +2488,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
                             self.current_mounted_views
-                                .borrow_mut()
+                                .write()
                                 .push(rotation_y_control.clone());
 
                             let rotation_z_control =
@@ -2506,10 +2502,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .set_relative_width(0.5 / 3.0, -2.0)
                                 .unwrap();
                             self.current_mounted_views
-                                .borrow_mut()
+                                .write()
                                 .push(rotation_z_control.clone());
 
-                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                            self.observation_disconnectors.write().push(Box::new(
                                 RollableNumberView::observe_value_changes(
                                     &rotation_x_control,
                                     {
@@ -2527,7 +2523,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                             };
 
                                             app_state
-                                                .borrow_mut()
+                                                .write()
                                                 .current_scene
                                                 .objects
                                                 .get_mut(&bound_object_id)
@@ -2551,7 +2547,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                     false,
                                 ),
                             ));
-                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                            self.observation_disconnectors.write().push(Box::new(
                                 RollableNumberView::observe_value_changes(
                                     &rotation_y_control,
                                     {
@@ -2569,7 +2565,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                             };
 
                                             app_state
-                                                .borrow_mut()
+                                                .write()
                                                 .current_scene
                                                 .objects
                                                 .get_mut(&bound_object_id)
@@ -2593,7 +2589,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                     false,
                                 ),
                             ));
-                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                            self.observation_disconnectors.write().push(Box::new(
                                 RollableNumberView::observe_value_changes(
                                     &rotation_z_control,
                                     {
@@ -2611,7 +2607,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                             };
 
                                             app_state
-                                                .borrow_mut()
+                                                .write()
                                                 .current_scene
                                                 .objects
                                                 .get_mut(&bound_object_id)
@@ -2646,7 +2642,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 })
                                 .unwrap();
                             self.current_mounted_views
-                                .borrow_mut()
+                                .write()
                                 .push(new_shared_mut(intensity_label));
 
                             let intensity_control =
@@ -2655,7 +2651,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .borrow()
                                 .reposition_xrel(0.5, 80.0)
                                 .unwrap();
-                            self.observation_disconnectors.borrow_mut().push(Box::new(
+                            self.observation_disconnectors.write().push(Box::new(
                                 FloatSliderView::observe_value_changes(
                                     &intensity_control,
                                     {
@@ -2664,7 +2660,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
 
                                         move |_view_ctx, new_value| {
                                             if let Some(e) = app_state
-                                                .borrow_mut()
+                                                .write()
                                                 .current_scene
                                                 .objects
                                                 .get_mut(&bound_object_id)
@@ -2677,9 +2673,551 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                     false,
                                 ),
                             ));
+                            self.current_mounted_views.write().push(intensity_control);
+                        }
+                        ObjectDetails::Mesh {
+                            position,
+                            rotation,
+                            scale,
+                            ..
+                        } => {
+                            let label = LabelView::new("Position", view_context).unwrap();
+                            label
+                                .set_position(Vector3 {
+                                    X: 0.0,
+                                    Y: 60.0,
+                                    Z: 0.0,
+                                })
+                                .unwrap();
                             self.current_mounted_views
-                                .borrow_mut()
-                                .push(intensity_control);
+                                .write()
+                                .push(new_shared_mut(label));
+
+                            let position_x_control =
+                                RollableNumberView::new(view_context, position.0).unwrap();
+                            position_x_control
+                                .borrow()
+                                .set_position(0.5, 0.0, 60.0)
+                                .unwrap();
+                            position_x_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(position_x_control.clone());
+
+                            let position_y_control =
+                                RollableNumberView::new(view_context, position.1).unwrap();
+                            position_y_control
+                                .borrow()
+                                .set_position(0.5 + 0.5 / 3.0, 1.0, 60.0)
+                                .unwrap();
+                            position_y_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(position_y_control.clone());
+
+                            let position_z_control =
+                                RollableNumberView::new(view_context, position.2).unwrap();
+                            position_z_control
+                                .borrow()
+                                .set_position(1.0 - 0.5 / 3.0, 2.0, 60.0)
+                                .unwrap();
+                            position_z_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(position_z_control.clone());
+
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &position_x_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let position_y_control = Rc::downgrade(&position_y_control);
+                                        let position_z_control = Rc::downgrade(&position_z_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(yc), Some(zc)) = (
+                                                position_y_control.upgrade(),
+                                                position_z_control.upgrade(),
+                                            ) else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh {
+                                                ref mut position, ..
+                                            } = target_mut.details
+                                            {
+                                                *position = peridot_math::Vector3(
+                                                    new_value,
+                                                    yc.borrow().current_value(),
+                                                    zc.borrow().current_value(),
+                                                );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &position_y_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let position_x_control = Rc::downgrade(&position_x_control);
+                                        let position_z_control = Rc::downgrade(&position_z_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(xc), Some(zc)) = (
+                                                position_x_control.upgrade(),
+                                                position_z_control.upgrade(),
+                                            ) else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh {
+                                                ref mut position, ..
+                                            } = target_mut.details
+                                            {
+                                                *position = peridot_math::Vector3(
+                                                    xc.borrow().current_value(),
+                                                    new_value,
+                                                    zc.borrow().current_value(),
+                                                );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &position_z_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let position_x_control = Rc::downgrade(&position_x_control);
+                                        let position_y_control = Rc::downgrade(&position_y_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(xc), Some(yc)) = (
+                                                position_x_control.upgrade(),
+                                                position_y_control.upgrade(),
+                                            ) else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh {
+                                                ref mut position, ..
+                                            } = target_mut.details
+                                            {
+                                                *position = peridot_math::Vector3(
+                                                    xc.borrow().current_value(),
+                                                    yc.borrow().current_value(),
+                                                    new_value,
+                                                );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+
+                            let re = rotation.euler_angles();
+                            let rotation_label = LabelView::new("Rotation", view_context).unwrap();
+                            rotation_label
+                                .set_position(Vector3 {
+                                    X: 0.0,
+                                    Y: 80.0,
+                                    Z: 0.0,
+                                })
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(new_shared_mut(rotation_label));
+
+                            let rotation_x_control =
+                                RollableNumberView::new(view_context, re.0.to_degrees()).unwrap();
+                            rotation_x_control
+                                .borrow()
+                                .set_position(0.5, 0.0, 80.0)
+                                .unwrap();
+                            rotation_x_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(rotation_x_control.clone());
+
+                            let rotation_y_control =
+                                RollableNumberView::new(view_context, re.1.to_degrees()).unwrap();
+                            rotation_y_control
+                                .borrow()
+                                .set_position(0.5 + 0.5 / 3.0, 1.0, 80.0)
+                                .unwrap();
+                            rotation_y_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(rotation_y_control.clone());
+
+                            let rotation_z_control =
+                                RollableNumberView::new(view_context, re.2.to_degrees()).unwrap();
+                            rotation_z_control
+                                .borrow()
+                                .set_position(1.0 - 0.5 / 3.0, 2.0, 80.0)
+                                .unwrap();
+                            rotation_z_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(rotation_z_control.clone());
+
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &rotation_x_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let rotation_y_control = Rc::downgrade(&rotation_y_control);
+                                        let rotation_z_control = Rc::downgrade(&rotation_z_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(yc), Some(zc)) = (
+                                                rotation_y_control.upgrade(),
+                                                rotation_z_control.upgrade(),
+                                            ) else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh {
+                                                ref mut rotation, ..
+                                            } = target_mut.details
+                                            {
+                                                *rotation =
+                                                    peridot_math::Quaternion::from_euler_angles(
+                                                        peridot_math::Vector3(
+                                                            new_value.to_radians(),
+                                                            yc.borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            zc.borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                        ),
+                                                    );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &rotation_y_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let rotation_x_control = Rc::downgrade(&rotation_x_control);
+                                        let rotation_z_control = Rc::downgrade(&rotation_z_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(xc), Some(zc)) = (
+                                                rotation_x_control.upgrade(),
+                                                rotation_z_control.upgrade(),
+                                            ) else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh {
+                                                ref mut rotation, ..
+                                            } = target_mut.details
+                                            {
+                                                *rotation =
+                                                    peridot_math::Quaternion::from_euler_angles(
+                                                        peridot_math::Vector3(
+                                                            xc.borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            new_value.to_radians(),
+                                                            zc.borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                        ),
+                                                    );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &rotation_z_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let rotation_x_control = Rc::downgrade(&rotation_x_control);
+                                        let rotation_y_control = Rc::downgrade(&rotation_y_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(xc), Some(yc)) = (
+                                                rotation_x_control.upgrade(),
+                                                rotation_y_control.upgrade(),
+                                            ) else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh {
+                                                ref mut rotation, ..
+                                            } = target_mut.details
+                                            {
+                                                *rotation =
+                                                    peridot_math::Quaternion::from_euler_angles(
+                                                        peridot_math::Vector3(
+                                                            xc.borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            yc.borrow()
+                                                                .current_value()
+                                                                .to_radians(),
+                                                            new_value.to_radians(),
+                                                        ),
+                                                    );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+
+                            let label = LabelView::new("Scale", view_context).unwrap();
+                            label
+                                .set_position(Vector3 {
+                                    X: 0.0,
+                                    Y: 100.0,
+                                    Z: 0.0,
+                                })
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(new_shared_mut(label));
+
+                            let x_control = RollableNumberView::new(view_context, scale.0).unwrap();
+                            x_control.borrow().set_position(0.5, 0.0, 100.0).unwrap();
+                            x_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views.write().push(x_control.clone());
+
+                            let y_control = RollableNumberView::new(view_context, scale.1).unwrap();
+                            y_control
+                                .borrow()
+                                .set_position(0.5 + 0.5 / 3.0, 1.0, 100.0)
+                                .unwrap();
+                            y_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views.write().push(y_control.clone());
+
+                            let z_control = RollableNumberView::new(view_context, scale.2).unwrap();
+                            z_control
+                                .borrow()
+                                .set_position(1.0 - 0.5 / 3.0, 2.0, 100.0)
+                                .unwrap();
+                            z_control
+                                .borrow()
+                                .set_relative_width(0.5 / 3.0, -2.0)
+                                .unwrap();
+                            self.current_mounted_views.write().push(z_control.clone());
+
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &x_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let y_control = Rc::downgrade(&y_control);
+                                        let z_control = Rc::downgrade(&z_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(yc), Some(zc)) =
+                                                (y_control.upgrade(), z_control.upgrade())
+                                            else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh { ref mut scale, .. } =
+                                                target_mut.details
+                                            {
+                                                *scale = peridot_math::Vector3(
+                                                    new_value,
+                                                    yc.borrow().current_value(),
+                                                    zc.borrow().current_value(),
+                                                );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &y_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let x_control = Rc::downgrade(&x_control);
+                                        let z_control = Rc::downgrade(&z_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(xc), Some(zc)) =
+                                                (x_control.upgrade(), z_control.upgrade())
+                                            else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh { ref mut scale, .. } =
+                                                target_mut.details
+                                            {
+                                                *scale = peridot_math::Vector3(
+                                                    xc.borrow().current_value(),
+                                                    new_value,
+                                                    zc.borrow().current_value(),
+                                                );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
+                            self.observation_disconnectors.write().push(Box::new(
+                                RollableNumberView::observe_value_changes(
+                                    &z_control,
+                                    {
+                                        let app_state = app_state.clone();
+                                        let x_control = Rc::downgrade(&x_control);
+                                        let y_control = Rc::downgrade(&y_control);
+                                        let bound_object_id = id.clone();
+
+                                        move |_view_ctx, new_value| {
+                                            let (Some(xc), Some(yc)) =
+                                                (x_control.upgrade(), y_control.upgrade())
+                                            else {
+                                                return;
+                                            };
+
+                                            let mut state_mut = app_state.write();
+                                            let target_mut = state_mut
+                                                .current_scene
+                                                .objects
+                                                .get_mut(&bound_object_id)
+                                                .unwrap();
+                                            target_mut.is_dirty = true;
+                                            if let ObjectDetails::Mesh { ref mut scale, .. } =
+                                                target_mut.details
+                                            {
+                                                *scale = peridot_math::Vector3(
+                                                    xc.borrow().current_value(),
+                                                    yc.borrow().current_value(),
+                                                    new_value,
+                                                );
+                                                target_mut.is_dirty = true;
+                                            }
+                                        }
+                                    },
+                                    view_context,
+                                    false,
+                                ),
+                            ));
                         }
                         ObjectDetails::Camera {} => (),
                     }
@@ -2687,14 +3225,14 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                     let id_label =
                         LabelView::new(format!("Object: {id:?} (gone)"), view_context).unwrap();
                     self.current_mounted_views
-                        .borrow_mut()
+                        .write()
                         .push(new_shared_mut(id_label));
                 }
             }
         }
 
         let children = self.content_root.Children().unwrap();
-        for v in self.current_mounted_views.borrow().iter() {
+        for v in self.current_mounted_views.read().iter() {
             v.borrow()
                 .mount(&children, &self.root_ht, view_context)
                 .unwrap();
@@ -2702,7 +3240,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
     }
 }
 pub struct InspectorTabPresenter {
-    selection_changed_event_handler: Rc<InspectorTabSelectionChangedEventHandler>,
+    selection_changed_event_handler: Arc<InspectorTabSelectionChangedEventHandler>,
 }
 impl PaneTabContentPresenter for InspectorTabPresenter {
     fn build_content_view(
@@ -2710,7 +3248,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
         onto: &ContainerVisual,
         onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         AppState::observe_current_selection_changes(
             &app_state,
@@ -2728,7 +3266,7 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &dyn ViewContext,
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.selection_changed_event_handler
             .content_root
@@ -2737,8 +3275,8 @@ impl PaneTabContentPresenter for InspectorTabPresenter {
             .Remove(&self.selection_changed_event_handler.content_root)?;
         self.selection_changed_event_handler.root_ht.unmount();
         app_state
-            .borrow_mut()
-            .unobserve_current_selection_changes(&Rc::downgrade(
+            .write()
+            .unobserve_current_selection_changes(&Arc::downgrade(
                 &self.selection_changed_event_handler,
             ));
 
@@ -2750,8 +3288,8 @@ impl PaneTabPresenter for InspectorTabPresenter {
 
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &SharedMut<AppState>,
+        _view_ctx: &(impl ViewContext + ?Sized),
+        _app_state: &MTSharedMut<AppState>,
     ) -> Self {
         let content_root = AppSubsystemInstances::get()
             .compositor
@@ -2770,16 +3308,15 @@ impl PaneTabPresenter for InspectorTabPresenter {
             .size(Vector2 { X: -16.0, Y: -16.0 })
             .expect("Failed to set content size margin");
 
-        let content_root_ht =
-            HitTestTree::new_fit_to_parent(None::<()>, view_ctx.hittest_context().new_id());
+        let content_root_ht = HitTestTree::new_fit_to_parent(None::<()>);
         content_root_ht.set_rect(8.0, 8.0, -16.0, -16.0);
 
         Self {
-            selection_changed_event_handler: Rc::new(InspectorTabSelectionChangedEventHandler {
+            selection_changed_event_handler: Arc::new(InspectorTabSelectionChangedEventHandler {
                 content_root,
                 root_ht: content_root_ht,
-                current_mounted_views: RefCell::new(Vec::new()),
-                observation_disconnectors: RefCell::new(Vec::new()),
+                current_mounted_views: RwLock::new(Vec::new()),
+                observation_disconnectors: RwLock::new(Vec::new()),
             }),
         }
     }
@@ -2792,7 +3329,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2800,7 +3337,7 @@ impl PaneTabContentPresenter for ProjectSettingsTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2811,7 +3348,7 @@ impl PaneTabPresenter for ProjectSettingsTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> Self {
         Self {}
     }
@@ -2824,7 +3361,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2832,7 +3369,7 @@ impl PaneTabContentPresenter for TimelineTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2843,7 +3380,7 @@ impl PaneTabPresenter for TimelineTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> Self {
         Self {}
     }
@@ -2857,33 +3394,96 @@ pub struct PresentationAvailableEventEntry {
 
 const BACK_BUFFER_COUNT: usize = 3;
 
+pub struct PerObjectUniformData {
+    pub array: ObjectUniformDataArrayBlock,
+    pub index_by_object_id: HashMap<Uuid, usize>,
+}
+impl PerObjectUniformData {
+    pub fn set_trs(&mut self, id: &Uuid, trs: peridot_math::Matrix4F32) -> br::Result<bool> {
+        let (index, allocation_changed) = match self.index_by_object_id.get(id) {
+            Some(x) => (*x, false),
+            None => {
+                let new_index = self.array.allocate();
+                self.index_by_object_id.insert(id.clone(), new_index);
+                (new_index, true)
+            }
+        };
+        let offset = self.array.offset(index);
+
+        // 本当はアップロードバッファまとめて一気に更新したほうがいいんだけどちょっと仕組みづくり面倒なのであとで考える
+        let mut update_buffer = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .alloc_upload_buffer(br::BufferDesc::new_for_type::<peridot_math::Matrix4F32>(
+                br::BufferUsage::TRANSFER_SRC,
+            ))?;
+        unsafe {
+            update_buffer.write_content_unchecked(trs)?;
+        }
+        AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .submit_transient_commands_and_wait(|rec| {
+                rec.copy_buffer(
+                    &update_buffer,
+                    &self.array.buffer,
+                    &[br::BufferCopy::copy_data::<peridot_math::Matrix4F32>(
+                        0, offset,
+                    )],
+                )
+                .pipeline_barrier_2(&br::DependencyInfo::new(
+                    &[br::MemoryBarrier2::new()
+                        .from(
+                            br::PipelineStageFlags2::COPY,
+                            br::AccessFlags2::TRANSFER.write,
+                        )
+                        .to(
+                            br::PipelineStageFlags2::VERTEX_SHADER,
+                            br::AccessFlags2::UNIFORM_READ,
+                        )],
+                    &[],
+                    &[],
+                ))
+            })?;
+
+        Ok(allocation_changed)
+    }
+}
+
 pub struct StageTabContentRenderer {
     presentation_manager: IPresentationManager,
     presentation_surface: IPresentationSurface,
     graphics_queue: Rc<RefCell<br::QueueObject<StdVkDevice>>>,
     d3d11_device_context: ID3D11DeviceContext,
+    main_command_pool: RefCell<br::CommandPoolObject<StdVkDevice>>,
+    buffer_size: br::vk::VkExtent2D,
     back_buffers: Vec<(
         IPresentationBuffer,
-        br::CommandBufferObject<StdVkDevice>,
+        RefCell<br::CommandBufferObject<StdVkDevice>>,
         ID3D11Texture2D,
         ID3D11Texture2D,
         IDXGIKeyedMutex,
+        br::FramebufferObject<'static, StdVkDevice>,
     )>,
-    skybox_renderer: Rc<SkyboxRenderer>,
-    app_state: WeakMut<AppState>,
+    render_resources: SharedMut<EditorStageRenderResources>,
+    app_state: MTWeakMut<AppState>,
 }
 impl SignalEventReceiver for StageTabContentRenderer {
     fn on_signal(&self, arg: usize, _view_ctx: &dyn ViewContext) {
-        let (pb, cb, fin, rt, km) = &self.back_buffers[arg];
-
         unsafe {
-            km.AcquireSync(0, INFINITE)
+            self.back_buffers[arg]
+                .4
+                .AcquireSync(0, INFINITE)
                 .expect("Failed to acquire keyed mutex");
         }
 
+        let mut command_buffer_dirty = false;
         if let Some(st) = self.app_state.upgrade() {
+            command_buffer_dirty =
+                core::mem::replace(&mut st.write().current_scene.is_dirty, false);
+
             for o in st
-                .borrow_mut()
+                .write()
                 .current_scene
                 .objects
                 .values_mut()
@@ -2895,7 +3495,9 @@ impl SignalEventReceiver for StageTabContentRenderer {
                         intensity,
                         rotation,
                     } => {
-                        self.skybox_renderer
+                        self.render_resources
+                            .borrow()
+                            .skybox_renderer
                             .update_primary_directional_light_data(
                                 &mut AppSubsystemInstances::get().mini_engine.borrow_mut(),
                                 PrimaryDirectionalLightUniformData {
@@ -2906,15 +3508,100 @@ impl SignalEventReceiver for StageTabContentRenderer {
                                 },
                             )
                             .expect("Failed to update primary sunlight data");
+
+                        let rr = self.render_resources.borrow();
+                        let mut forward_light_buffer_stg = AppSubsystemInstances::get()
+                            .mini_engine
+                            .borrow_mut()
+                            .alloc_upload_buffer(br::BufferDesc::new_for_type::<
+                                ForwardLightUniformData,
+                            >(
+                                br::BufferUsage::TRANSFER_SRC
+                            ))
+                            .unwrap();
+                        forward_light_buffer_stg
+                            .write_content(ForwardLightUniformData {
+                                light_incident_dir: peridot_math::Matrix3::from(rotation.clone())
+                                    * peridot_math::Vector3::back(),
+                                light_intensity: intensity,
+                            })
+                            .unwrap();
+                        AppSubsystemInstances::get()
+                            .mini_engine
+                            .borrow_mut()
+                            .submit_transient_commands_and_wait(|rec| {
+                                rec.copy_buffer(
+                                    &forward_light_buffer_stg,
+                                    &rr.forward_light_buffer,
+                                    &[br::BufferCopy::mirror_data::<ForwardLightUniformData>(0)],
+                                )
+                                .pipeline_barrier_2(
+                                    &br::DependencyInfo::new(
+                                        &[br::MemoryBarrier2::new()
+                                            .from(
+                                                br::PipelineStageFlags2::COPY,
+                                                br::AccessFlags2::TRANSFER.write,
+                                            )
+                                            .to(
+                                                br::PipelineStageFlags2::FRAGMENT_SHADER,
+                                                br::AccessFlags2::UNIFORM_READ,
+                                            )],
+                                        &[],
+                                        &[],
+                                    ),
+                                )
+                            })
+                            .unwrap();
+                    }
+                    ObjectDetails::Mesh {
+                        position,
+                        rotation,
+                        scale,
+                        ..
+                    } => {
+                        let allocation_changed = self
+                            .render_resources
+                            .borrow_mut()
+                            .per_object_uniform_data
+                            .set_trs(
+                                &o.id,
+                                peridot_math::Matrix4F32::trs(
+                                    position.clone(),
+                                    rotation.clone(),
+                                    scale.clone(),
+                                ),
+                            )
+                            .expect("Failed to update object trs data");
+
+                        command_buffer_dirty = command_buffer_dirty || allocation_changed;
                     }
                     ObjectDetails::Camera { .. } => (),
                 }
             }
         }
+
+        if command_buffer_dirty {
+            self.main_command_pool.borrow_mut().reset(true).unwrap();
+            for (_, cb, _, _, _, fb) in self.back_buffers.iter() {
+                self.render_resources.borrow().populate_commands(
+                    unsafe {
+                        cb.borrow_mut()
+                            .begin(AppSubsystemInstances::get().mini_engine.borrow().device())
+                            .expect("Failed to begin command recording")
+                    },
+                    fb,
+                    self.buffer_size,
+                    &self.app_state.upgrade().unwrap(),
+                );
+            }
+        }
+
+        let (pb, cb, fin, rt, km, _) = &self.back_buffers[arg];
+
         self.graphics_queue
             .borrow_mut()
             .submit(
-                &[br::EmptySubmissionBatch.with_command_buffers(&[cb])],
+                &[br::EmptySubmissionBatch.with_command_buffers(&[cb.borrow()])],
                 None::<&mut br::FenceObject<StdVkDevice>>,
             )
             .expect("Failed to send command");
@@ -2961,7 +3648,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
         onto: &ContainerVisual,
         onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.view
             .borrow()
@@ -2973,7 +3660,7 @@ impl PaneTabContentPresenter for StageTabPresenter {
     fn on_hide_content_view(
         &mut self,
         view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         self.view.borrow().unmount(view_context)?;
 
@@ -2994,7 +3681,7 @@ impl PaneTabPresenter for StageTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         view_ctx: &(impl ViewContext + ?Sized),
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> Self {
         Self {
             view: EditorStageView::new(&view_ctx, app_state)
@@ -3024,9 +3711,7 @@ impl SkyboxPrecomputedTextures {
     const SCATTER_SIZE: peridot::math::Vector3<u32> = peridot::math::Vector3(32, 64 * 2, 32);
     const GATHERED_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(32, 32);
 
-    pub fn new() -> br::Result<Self> {
-        let mut engine = AppSubsystemInstances::get().mini_engine.borrow_mut();
-
+    pub fn new(engine: &mut MiniEngine) -> br::Result<Self> {
         ArrayBuilderOp! {
             [try] engine.alloc_device_local_image_array, {
                 transmittance <- br::ImageDesc::new(Self::TRANSMITTANCE_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
@@ -3637,14 +4322,13 @@ pub struct SkyboxRenderer {
 }
 impl SkyboxRenderer {
     pub fn new(
+        engine: &mut MiniEngine,
         render_camera_descriptor_set_layout: &impl br::DescriptorSetLayout<ConcreteDevice = StdVkDevice>,
         render_pass: &(impl br::RenderPass + ?Sized),
         subpass: u32,
         precomputed: SkyboxPrecomputedTextures,
         init_light_data: PrimaryDirectionalLightUniformData,
     ) -> br::Result<Self> {
-        let mut engine = AppSubsystemInstances::get().mini_engine.borrow_mut();
-
         let linear_sampler = engine.sampler(SamplerDesc {
             address_mode: (
                 br::AddressingMode::ClampToEdge,
@@ -3889,37 +4573,83 @@ impl D3D11ResourceDescriptor for D3D11_TEXTURE2D_DESC {
     }
 }
 
-pub struct EditorStageView {
-    root: SpriteVisual,
-    ht: HitTestTree,
+pub struct ObjectUniformDataArrayBlock {
+    pub buffer: peridot_memory_manager::Buffer,
+    next_free: usize,
+    free_blocks: BTreeSet<usize>,
+    cap: usize,
+}
+impl ObjectUniformDataArrayBlock {
+    pub fn new(e: &mut MiniEngine, init_cap: usize) -> br::Result<Self> {
+        let buffer = e.alloc_device_local_buffer(br::BufferDesc::new(
+            core::mem::size_of::<peridot_math::Matrix4F32>() * init_cap,
+            br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+        ))?;
+
+        Ok(Self {
+            buffer,
+            next_free: 0,
+            free_blocks: BTreeSet::new(),
+            cap: init_cap,
+        })
+    }
+
+    pub fn allocate(&mut self) -> usize {
+        match self.free_blocks.pop_first() {
+            Some(x) => x,
+            None => {
+                let a = self.next_free;
+                self.next_free += 1;
+                a
+            }
+        }
+    }
+
+    pub fn free(&mut self, at: usize) {
+        self.free_blocks.insert(at);
+    }
+
+    pub const fn offset(&self, at: usize) -> br::vk::VkDeviceSize {
+        (at * core::mem::size_of::<peridot_math::Matrix4F32>()) as _
+    }
+
+    pub fn data_range(&self) -> core::ops::Range<br::vk::VkDeviceSize> {
+        0..core::mem::size_of::<peridot_math::Matrix4F32>() as _
+    }
+}
+
+#[repr(C)]
+pub struct ForwardLightUniformData {
+    pub light_incident_dir: peridot_math::Vector3F32,
+    pub light_intensity: f32,
+}
+
+pub struct EditorStageRenderResources {
     utility_verts: UtilityVertices,
-    skybox_renderer: Rc<SkyboxRenderer>,
+    skybox_renderer: SkyboxRenderer,
+    _descriptor_set_layout_ia1: br::DescriptorSetLayoutObject<StdVkDevice>,
+    _descriptor_set_layout_ub1: br::DescriptorSetLayoutObject<StdVkDevice>,
+    _descriptor_pool: br::DescriptorPoolObject<StdVkDevice>,
     hdr_temp_rt: TempRT,
     depth_stencil_temp_rt: TempRT,
     main_render_pass: br::RenderPassObject<StdVkDevice>,
-    main_render_command_pool: br::CommandPoolObject<StdVkDevice>,
     hdr_final_pass_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
     hdr_final_pass_pipeline: br::PipelineObject<StdVkDevice>,
     grid_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
     grid_pipeline: br::PipelineObject<StdVkDevice>,
     grid_buffer: peridot_memory_manager::Buffer,
-    grid_vertex_count: usize,
+    grid_vertex_count: u32,
+    default_material_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    default_material_pipeline: br::PipelineObject<StdVkDevice>,
     camera_buffer: peridot_memory_manager::Buffer,
     camera: Camera,
-    _descriptor_set_layout_ia1: br::DescriptorSetLayoutObject<StdVkDevice>,
-    _descriptor_set_layout_ub1: br::DescriptorSetLayoutObject<StdVkDevice>,
-    _descriptor_pool: br::DescriptorPoolObject<StdVkDevice>,
+    forward_light_buffer: peridot_memory_manager::Buffer,
     camera_descriptor_set: br::DescriptorSet,
     hdr_final_pass_descriptor_set: br::DescriptorSet,
-    back_buffer_resources: Vec<(
-        HANDLE,
-        br::DeviceMemoryObject<StdVkDevice>,
-        br::FramebufferObject<'static, StdVkDevice>,
-    )>,
-    renderer: Rc<StageTabContentRenderer>,
-    pointer_down_point: peridot_math::Vector2F32,
+    per_object_descriptor_set: br::DescriptorSet,
+    per_object_uniform_data: PerObjectUniformData,
 }
-impl EditorStageView {
+impl EditorStageRenderResources {
     fn grid_vertices() -> Vec<ColoredVertex> {
         (-5..=5)
             .flat_map(|x| {
@@ -3976,88 +4706,21 @@ impl EditorStageView {
     }
 
     pub fn new(
-        view_ctx: &impl ViewContext,
-        app_state: &SharedMut<AppState>,
-    ) -> windows::core::Result<SharedMut<Self>> {
-        let init_size = br::vk::VkExtent2D::spread1(128);
-        let rect = init_size.into_rect(br::vk::VkOffset2D::ZERO);
-        let viewport = rect.make_viewport(0.0..1.0);
-
-        let composition_surface_handle = unsafe {
-            DCompositionCreateSurfaceHandle(
-                (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as _,
-                None,
-            )?
-        };
-        let presentation_surface = unsafe {
-            AppSubsystemInstances::get()
-                .presentation_manager
-                .CreatePresentationSurface(composition_surface_handle)?
-        };
-        let surface = unsafe {
-            AppSubsystemInstances::get()
-                .compositor_interop
-                .CreateCompositionSurfaceForHandle(composition_surface_handle)?
-        };
-        unsafe {
-            presentation_surface.SetSourceRect(&RECT {
-                left: 0,
-                top: 0,
-                right: init_size.width as _,
-                bottom: init_size.height as _,
-            })?;
-
-            presentation_surface.SetAlphaMode(DXGI_ALPHA_MODE_IGNORE)?;
-            // TODO: G10(Linear色空間のはず)を使うとなんか挙動が怪しいのでいったんG22(Gamma補正バージョン)を使う
-            // presentation_surface
-            //     .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)?;
-            presentation_surface.SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)?;
-        }
-
-        let root = AppSubsystemInstances::get()
-            .compositor
-            .CreateSpriteVisual()?;
-        root.set_properties()
-            .brush(
-                &AppSubsystemInstances::get()
-                    .compositor
-                    .CreateSurfaceBrushWithSurface(&surface)?,
-            )?
-            .size(Vector2::scalar(128.0))?
-            .offset(Vector3::zero())?;
-
-        let mut initialization_cp = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow()
+        e: &mut MiniEngine,
+        app_state: &MTSharedMut<AppState>,
+        init_size: br::vk::VkExtent2D,
+    ) -> Self {
+        let mut init_cp = e
             .command_pool_builder_for_graphics_work()
             .transient()
-            .create(
-                AppSubsystemInstances::get()
-                    .mini_engine
-                    .borrow()
-                    .device()
-                    .clone(),
-            )
-            .expect("Failed to create initialization command pool");
-        let [mut initialization_cb] = initialization_cp
-            .alloc_array::<1>(true)
-            .expect("Failed to alloc initialization command buffer");
-        let cb_device = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow()
-            .device()
-            .clone();
-        let mut initialization_cmd_rec = unsafe {
-            initialization_cb
-                .begin_once(&cb_device)
-                .expect("Failed to begin initialization command recording")
-        };
+            .create(e.device().clone())
+            .unwrap();
+        let [mut init_cb] = init_cp.alloc_array::<1>(true).unwrap();
+        let cb_device = e.device().clone();
+        let mut initialization_command_rec = unsafe { init_cb.begin_once(&cb_device).unwrap() };
 
-        let utility_verts = UtilityVertices::new(&mut initialization_cmd_rec)
-            .expect("Failed to create utility verts");
-        let skybox_precomputed_textures =
-            SkyboxPrecomputedTextures::new().expect("Failed to precompute skybox textures");
-
+        let utility_verts = UtilityVertices::new(e, &mut initialization_command_rec).unwrap();
+        let skybox_precomputed = SkyboxPrecomputedTextures::new(e).unwrap();
         let main_render_pass = br::RenderPassBuilder2::new(
             &[
                 // color
@@ -4128,18 +4791,13 @@ impl EditorStageView {
                 ),
             ],
         )
-        .create(
-            AppSubsystemInstances::get()
-                .mini_engine
-                .borrow_mut()
-                .device()
-                .clone(),
-        )
+        .create(e.device().clone())
         .expect("Failed to create main render pass");
         let hdr_render_subpass = 0;
         let ldr_gizmos_render_subpass = 1;
 
         let hdr_temp_rt = TempRT::new(
+            e,
             br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
                 .as_color_attachment()
                 .as_input_attachment(),
@@ -4149,6 +4807,7 @@ impl EditorStageView {
         )
         .expect("Failed to create hdr temp rt");
         let depth_stencil_temp_rt = TempRT::new(
+            e,
             br::ImageDesc::new(init_size, br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
                 .as_depth_stencil_attachment(),
             br::AspectMask::DEPTH.stencil(),
@@ -4163,13 +4822,7 @@ impl EditorStageView {
                     .make_binding(1)
                     .only_for_fragment(),
             )
-            .create(
-                AppSubsystemInstances::get()
-                    .mini_engine
-                    .borrow()
-                    .device()
-                    .clone(),
-            )
+            .create(e.device().clone())
             .expect("Failed to create descriptor set layout");
         let descriptor_set_layout_ub1 = br::DescriptorSetLayoutBuilder::new()
             .bind(
@@ -4177,34 +4830,31 @@ impl EditorStageView {
                     .make_binding(1)
                     .for_shader_stage(br::ShaderStage::VERTEX | br::ShaderStage::FRAGMENT),
             )
-            .create(
-                AppSubsystemInstances::get()
-                    .mini_engine
-                    .borrow()
-                    .device()
-                    .clone(),
-            )
+            .create(e.device().clone())
             .expect("Failed to create descriptor set layout");
+        let descriptor_set_layout_default_mat = br::DescriptorSetLayoutBuilder::new()
+            .bind(
+                br::DescriptorType::UniformBufferDynamic
+                    .make_binding(1)
+                    .only_for_vertex(),
+            )
+            .bind(
+                br::DescriptorType::UniformBuffer
+                    .make_binding(1)
+                    .only_for_fragment(),
+            )
+            .create(e.device().clone())
+            .expect("Failed to create descriptor set layout for default mat");
 
-        let hdr_final_pass_vsh = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow_mut()
+        let hdr_final_pass_vsh = e
             .shader("shaders/full_blit.vspv")
             .expect("Failed to load final pass vertex shader");
-        let hdr_final_pass_fsh = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow_mut()
+        let hdr_final_pass_fsh = e
             .shader("shaders/simple2d_hdr_final_pass.fspv")
             .expect("Failed to load final pass fragment shader");
         let hdr_final_pass_pipeline_layout =
             br::PipelineLayoutBuilder::new(vec![&descriptor_set_layout_ia1], vec![])
-                .create(
-                    AppSubsystemInstances::get()
-                        .mini_engine
-                        .borrow()
-                        .device()
-                        .clone(),
-                )
+                .create(e.device().clone())
                 .expect("Failed to create hdr final pass pipeline layout");
         let mut hdr_final_pass_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
             &hdr_final_pass_pipeline_layout,
@@ -4229,14 +4879,10 @@ impl EditorStageView {
             )
             .depth_test_settings(None, false);
 
-        let grid_vsh = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow_mut()
+        let grid_vsh = e
             .shader("shaders/simple_transformed_static_pos.vspv")
             .expect("Failed to load vertex shader");
-        let grid_fsh = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow_mut()
+        let grid_fsh = e
             .shader("shaders/vertex_color.fspv")
             .expect("Failed to load fragment shader");
         let (grid_vbinds, grid_vattrs) = ColoredVertex::single_binding(0, 1);
@@ -4244,13 +4890,7 @@ impl EditorStageView {
             vec![&descriptor_set_layout_ub1],
             vec![(br::ShaderStage::VERTEX, 0..64)],
         )
-        .create(
-            AppSubsystemInstances::get()
-                .mini_engine
-                .borrow()
-                .device()
-                .clone(),
-        )
+        .create(e.device().clone())
         .expect("Failed to create grid pipeline layout");
         let mut grid_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
             &grid_pipeline_layout,
@@ -4264,11 +4904,7 @@ impl EditorStageView {
             ),
         );
         let mut rasterization_state = br::RasterizationState::default();
-        if AppSubsystemInstances::get()
-            .mini_engine
-            .borrow()
-            .has_extra_line_rasterization_enabled()
-        {
+        if e.has_extra_line_rasterization_enabled() {
             rasterization_state.line_state(br::RasterizationLineState::new(
                 br::LineRasterizationMode::RectangularSmooth,
             ));
@@ -4284,14 +4920,79 @@ impl EditorStageView {
             .depth_test_settings(Some(br::CompareOp::LessOrEqual), true)
             .rasterization_state(rasterization_state);
 
+        let default_material_vsh = e.shader("shaders/default_material.vspv").unwrap();
+        let default_material_fsh = e.shader("shaders/default_material.fspv").unwrap();
+        let default_material_vertex_binds =
+            [br::VertexInputBindingDescription::per_vertex_typed::<
+                GenericVertex,
+            >(0)];
+        let default_material_vertex_attrs = [
+            br::vk::VkVertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                offset: core::mem::offset_of!(GenericVertex, pos) as _,
+            },
+            br::vk::VkVertexInputAttributeDescription {
+                location: 1,
+                binding: 0,
+                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                offset: core::mem::offset_of!(GenericVertex, normal) as _,
+            },
+            br::vk::VkVertexInputAttributeDescription {
+                location: 2,
+                binding: 0,
+                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                offset: core::mem::offset_of!(GenericVertex, uv) as _,
+            },
+        ];
+        let default_material_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![
+                &descriptor_set_layout_ub1,
+                &descriptor_set_layout_default_mat,
+            ],
+            vec![],
+        )
+        .create(e.device().clone())
+        .unwrap();
+        let mut default_material_raster_state = br::RasterizationState::default();
+        default_material_raster_state.cull_mode(br::vk::VK_CULL_MODE_BACK_BIT);
+        default_material_raster_state.front_face(br::vk::VK_FRONT_FACE_CLOCKWISE);
+        let mut default_material_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &default_material_pipeline_layout,
+            (&main_render_pass, hdr_render_subpass),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(
+                    &default_material_vsh,
+                    c"main",
+                ))
+                .with_fragment_shader_stage(br::PipelineShader2::new(
+                    &default_material_fsh,
+                    c"main",
+                )),
+                &default_material_vertex_binds,
+                &default_material_vertex_attrs,
+                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            ),
+        );
+        default_material_pipeline
+            .viewport_scissors(
+                br::DynamicArrayState::Dynamic(1),
+                br::DynamicArrayState::Dynamic(1),
+            )
+            .multisample_state(Some(br::MultisampleState::new()))
+            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
+            .depth_test_settings(Some(br::CompareOp::LessOrEqual), true)
+            .rasterization_state(default_material_raster_state);
+
         let hdr_final_pass_pipeline_extras = hdr_final_pass_pipeline.make_extras();
         let grid_pipeline_extras = grid_pipeline.make_extras();
-        let [hdr_final_pass_pipeline, grid_pipeline] = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow()
+        let default_material_pipeline_extras = default_material_pipeline.make_extras();
+        let [hdr_final_pass_pipeline, grid_pipeline, default_material_pipeline] = e
             .create_graphics_pipeline_array(&[
                 hdr_final_pass_pipeline.build(&hdr_final_pass_pipeline_extras),
                 grid_pipeline.build(&grid_pipeline_extras),
+                default_material_pipeline.build(&default_material_pipeline_extras),
             ])
             .expect("Failed to create grid pipeline state");
 
@@ -4304,127 +5005,8 @@ impl EditorStageView {
             rotation: peridot_math::Quaternion::ONE,
             depth_range: 0.1..100.0,
         };
-
-        let [grid_buffer, camera_buffer] = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow_mut()
-            .alloc_device_local_buffer_array([
-                br::BufferDesc::new(
-                    core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
-                    br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
-                ),
-                br::BufferDesc::new_for_type::<RenderCameraUniformData>(
-                    br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
-                ),
-            ])
-            .expect("Failed to allocate device local buffers");
-        let [mut grid_buffer_stg, mut camera_buffer_stg] = AppSubsystemInstances::get()
-            .mini_engine
-            .borrow_mut()
-            .alloc_upload_buffer_array([
-                br::BufferDesc::new(
-                    core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
-                    br::BufferUsage::TRANSFER_SRC,
-                ),
-                br::BufferDesc::new_for_type::<RenderCameraUniformData>(
-                    br::BufferUsage::TRANSFER_SRC,
-                ),
-            ])
-            .expect("Failed to allocate upload buffers");
-        grid_buffer_stg
-            .clone_content_from_slice(&grid_vertices)
-            .expect("Failed to write grid vbuffer content");
-        camera_buffer_stg
-            .write_content(RenderCameraUniformData {
-                camera_view_projection_matrix: default_camera.view_projection_matrix(1.0),
-                camera_inverse_view_matrix: default_camera.inverse_view_matrix(),
-                camera_persp_fov_rad: 60.0f32.to_radians(),
-                camera_aspect_wh: 1.0,
-            })
-            .expect("Failed to write camera matrix");
-
-        // initialize
-        initialization_cmd_rec
-            .copy_buffer(
-                &grid_buffer_stg,
-                &grid_buffer,
-                &[br::BufferCopy::mirror(0, grid_buffer.byte_length() as _)],
-            )
-            .copy_buffer(
-                &camera_buffer_stg,
-                &camera_buffer,
-                &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .from(
-                        br::PipelineStageFlags2::COPY,
-                        br::AccessFlags2::TRANSFER.write,
-                    )
-                    .to(
-                        br::PipelineStageFlags2::VERTEX_INPUT
-                            | br::PipelineStageFlags2::VERTEX_SHADER,
-                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::UNIFORM_READ,
-                    )],
-                &[],
-                &[],
-            ))
-            .end()
-            .expect("Failed to finish init commands");
-        AppSubsystemInstances::get()
-            .mini_engine
-            .borrow()
-            .submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
-                &[],
-                &[br::CommandBufferSubmitInfo::new(&initialization_cb)],
-                &[],
-            )])
-            .expect("Failed to submit init commands");
-        drop(initialization_cp);
-
-        let mut dp = br::DescriptorPoolBuilder::new(2)
-            .with_reservations(vec![
-                br::DescriptorType::UniformBuffer.with_count(1),
-                br::DescriptorType::InputAttachment.with_count(1),
-            ])
-            .create(
-                AppSubsystemInstances::get()
-                    .mini_engine
-                    .borrow()
-                    .device()
-                    .clone(),
-            )
-            .expect("Failed to create descriptor pool");
-        let [camera_descriptor_set, hdr_final_pass_descriptor_set] = dp
-            .alloc_array(&[
-                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ub1),
-                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ia1),
-            ])
-            .expect("Failed to allocate camera descriptor set");
-        AppSubsystemInstances::get()
-            .mini_engine
-            .borrow()
-            .device()
-            .update_descriptor_sets(
-                &[
-                    camera_descriptor_set.binding_at(0).write(
-                        br::DescriptorContents::uniform_buffer(
-                            &camera_buffer,
-                            0..core::mem::size_of::<RenderCameraUniformData>() as u64,
-                        ),
-                    ),
-                    hdr_final_pass_descriptor_set.binding_at(0).write(
-                        br::DescriptorContents::input_attachment(
-                            &hdr_temp_rt.resource,
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        ),
-                    ),
-                ],
-                &[],
-            );
-
         let init_light_data = match app_state
-            .borrow()
+            .read()
             .current_scene
             .objects
             .values()
@@ -4447,14 +5029,356 @@ impl EditorStageView {
                 light_intensity: 20.0,
             },
         };
+
+        let [grid_buffer, camera_buffer, forward_light_buffer] = e
+            .alloc_device_local_buffer_array([
+                br::BufferDesc::new(
+                    core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
+                    br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
+                ),
+                br::BufferDesc::new_for_type::<RenderCameraUniformData>(
+                    br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+                ),
+                br::BufferDesc::new_for_type::<ForwardLightUniformData>(
+                    br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+                ),
+            ])
+            .expect("Failed to allocate device local buffers");
+        let [mut grid_buffer_stg, mut camera_buffer_stg, mut forward_light_buffer_stg] = e
+            .alloc_upload_buffer_array([
+                br::BufferDesc::new(
+                    core::mem::size_of::<ColoredVertex>() * grid_vertices.len(),
+                    br::BufferUsage::TRANSFER_SRC,
+                ),
+                br::BufferDesc::new_for_type::<RenderCameraUniformData>(
+                    br::BufferUsage::TRANSFER_SRC,
+                ),
+                br::BufferDesc::new_for_type::<ForwardLightUniformData>(
+                    br::BufferUsage::TRANSFER_SRC,
+                ),
+            ])
+            .expect("Failed to allocate upload buffers");
+        grid_buffer_stg
+            .clone_content_from_slice(&grid_vertices)
+            .expect("Failed to write grid vbuffer content");
+        camera_buffer_stg
+            .write_content(RenderCameraUniformData {
+                camera_view_projection_matrix: default_camera.view_projection_matrix(1.0),
+                camera_inverse_view_matrix: default_camera.inverse_view_matrix(),
+                camera_persp_fov_rad: 60.0f32.to_radians(),
+                camera_aspect_wh: 1.0,
+            })
+            .expect("Failed to write camera matrix");
+        forward_light_buffer_stg
+            .write_content(ForwardLightUniformData {
+                light_incident_dir: init_light_data.incident_light_dir.clone(),
+                light_intensity: init_light_data.light_intensity,
+            })
+            .unwrap();
+
+        // initialize
+        initialization_command_rec
+            .copy_buffer(
+                &grid_buffer_stg,
+                &grid_buffer,
+                &[br::BufferCopy::mirror(0, grid_buffer.byte_length() as _)],
+            )
+            .copy_buffer(
+                &camera_buffer_stg,
+                &camera_buffer,
+                &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
+            )
+            .copy_buffer(
+                &forward_light_buffer_stg,
+                &forward_light_buffer,
+                &[br::BufferCopy::mirror_data::<ForwardLightUniformData>(0)],
+            )
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .from(
+                        br::PipelineStageFlags2::COPY,
+                        br::AccessFlags2::TRANSFER.write,
+                    )
+                    .to(
+                        br::PipelineStageFlags2::VERTEX_INPUT
+                            | br::PipelineStageFlags2::VERTEX_SHADER
+                            | br::PipelineStageFlags2::FRAGMENT_SHADER,
+                        br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::UNIFORM_READ,
+                    )],
+                &[],
+                &[],
+            ))
+            .end()
+            .expect("Failed to finish init commands");
+        e.submit_graphics_works_and_wait(&[br::SubmitInfo2::new(
+            &[],
+            &[br::CommandBufferSubmitInfo::new(&init_cb)],
+            &[],
+        )])
+        .expect("Failed to submit init commands");
+        drop(init_cp);
+
+        let per_object_uniform_data = PerObjectUniformData {
+            array: ObjectUniformDataArrayBlock::new(e, 128).unwrap(),
+            index_by_object_id: HashMap::new(),
+        };
+
+        let mut dp = br::DescriptorPoolBuilder::new(3)
+            .with_reservations(vec![
+                br::DescriptorType::UniformBuffer.with_count(2),
+                br::DescriptorType::UniformBufferDynamic.with_count(1),
+                br::DescriptorType::InputAttachment.with_count(1),
+            ])
+            .create(e.device().clone())
+            .expect("Failed to create descriptor pool");
+        let [camera_descriptor_set, hdr_final_pass_descriptor_set, per_object_descriptor_set] = dp
+            .alloc_array(&[
+                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ub1),
+                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ia1),
+                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_default_mat),
+            ])
+            .expect("Failed to allocate camera descriptor set");
+        e.device().update_descriptor_sets(
+            &[
+                camera_descriptor_set
+                    .binding_at(0)
+                    .write(br::DescriptorContents::uniform_buffer(
+                        &camera_buffer,
+                        0..core::mem::size_of::<RenderCameraUniformData>() as u64,
+                    )),
+                hdr_final_pass_descriptor_set.binding_at(0).write(
+                    br::DescriptorContents::input_attachment(
+                        &hdr_temp_rt.resource,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    ),
+                ),
+                per_object_descriptor_set.binding_at(0).write(
+                    br::DescriptorContents::uniform_buffer_dynamic(
+                        &per_object_uniform_data.array.buffer,
+                        per_object_uniform_data.array.data_range(),
+                    ),
+                ),
+                per_object_descriptor_set.binding_at(1).write(
+                    br::DescriptorContents::uniform_buffer(
+                        &forward_light_buffer,
+                        0..core::mem::size_of::<ForwardLightUniformData>() as _,
+                    ),
+                ),
+            ],
+            &[],
+        );
+
         let skybox_renderer = SkyboxRenderer::new(
+            e,
             &descriptor_set_layout_ub1,
             &main_render_pass,
             hdr_render_subpass,
-            skybox_precomputed_textures,
+            skybox_precomputed,
             init_light_data,
         )
-        .expect("Failed to initialize skybox renderer");
+        .unwrap();
+
+        Self {
+            utility_verts,
+            skybox_renderer,
+            _descriptor_set_layout_ia1: descriptor_set_layout_ia1,
+            _descriptor_set_layout_ub1: descriptor_set_layout_ub1,
+            _descriptor_pool: dp,
+            hdr_temp_rt,
+            depth_stencil_temp_rt,
+            main_render_pass,
+            hdr_final_pass_pipeline_layout,
+            hdr_final_pass_pipeline,
+            grid_pipeline_layout,
+            grid_pipeline,
+            grid_buffer,
+            grid_vertex_count: grid_vertices.len() as _,
+            default_material_pipeline_layout,
+            default_material_pipeline,
+            camera_buffer,
+            camera: default_camera,
+            forward_light_buffer,
+            camera_descriptor_set,
+            hdr_final_pass_descriptor_set,
+            per_object_descriptor_set,
+            per_object_uniform_data,
+        }
+    }
+
+    pub fn populate_commands(
+        &self,
+        rec: br::CmdRecord<
+            impl br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+            impl br::Device + ?Sized,
+        >,
+        fb: &(impl br::Framebuffer + ?Sized),
+        size: br::vk::VkExtent2D,
+        app_state: &MTSharedMut<AppState>,
+    ) {
+        let rect = size.into_rect(br::vk::VkOffset2D::ZERO);
+        let viewport = rect.make_viewport(0.0..1.0);
+
+        rec.set_viewport(0, &[viewport])
+            .set_scissor(0, &[rect])
+            .begin_render_pass(
+                &self.main_render_pass,
+                fb,
+                rect,
+                &[
+                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                    br::ClearValue::depth_stencil(1.0, 0),
+                ],
+                true,
+            )
+            .bind_graphics_pipeline_pair(
+                &self.default_material_pipeline,
+                &self.default_material_pipeline_layout,
+            )
+            .inject(|rec| {
+                app_state
+                    .read()
+                    .current_scene
+                    .objects
+                    .values()
+                    .fold(rec, |rec, o| match o.details {
+                        ObjectDetails::Mesh {
+                            ref vertex_buffer,
+                            index_buffer: Some(ref index_buffer),
+                            vertex_count,
+                            ..
+                        } => rec
+                            .bind_graphics_descriptor_sets(
+                                0,
+                                &[
+                                    self.camera_descriptor_set.0,
+                                    self.per_object_descriptor_set.0,
+                                ],
+                                &[self
+                                    .per_object_uniform_data
+                                    .array
+                                    .offset(self.per_object_uniform_data.index_by_object_id[&o.id])
+                                    as _],
+                            )
+                            .bind_vertex_buffers(0, &[(&vertex_buffer, 0)])
+                            .bind_index_buffer(&index_buffer, 0, br::IndexType::U16)
+                            .draw_indexed(vertex_count, 1, 0, 0, 0),
+                        ObjectDetails::Mesh {
+                            ref vertex_buffer,
+                            index_buffer: None,
+                            vertex_count,
+                            ..
+                        } => rec
+                            .bind_graphics_descriptor_sets(
+                                0,
+                                &[
+                                    self.camera_descriptor_set.0,
+                                    self.per_object_descriptor_set.0,
+                                ],
+                                &[self
+                                    .per_object_uniform_data
+                                    .array
+                                    .offset(self.per_object_uniform_data.index_by_object_id[&o.id])
+                                    as _],
+                            )
+                            .bind_vertex_buffers(0, &[(&vertex_buffer, 0)])
+                            .draw(vertex_count, 1, 0, 0),
+                        ObjectDetails::Camera { .. } | ObjectDetails::SunLight { .. } => rec,
+                    })
+            })
+            // どうやらパイプライン切り替えると0番目のDescriptorSetが消滅するので再設定する（これ消えないはずだけどな......？）
+            .bind_graphics_pipeline_layout(&self.skybox_renderer.pipeline_layout)
+            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
+            .inject(|rec| self.skybox_renderer.record_render_commands(rec))
+            .next_subpass(true)
+            .bind_graphics_pipeline_pair(
+                &self.hdr_final_pass_pipeline,
+                &self.hdr_final_pass_pipeline_layout,
+            )
+            .bind_graphics_descriptor_sets(0, &[self.hdr_final_pass_descriptor_set.0], &[])
+            .draw(4, 1, 0, 0)
+            .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
+            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
+            .bind_vertex_buffers(0, &[(&self.grid_buffer, 0)])
+            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
+            .draw(self.grid_vertex_count, 1, 0, 0)
+            .end_render_pass()
+            .end()
+            .expect("Failed to record commands");
+    }
+
+    pub fn resize(&mut self, new_size: br::vk::VkExtent2D) {
+        self.hdr_temp_rt.recreate_newsize(new_size).unwrap();
+        self.depth_stencil_temp_rt
+            .recreate_newsize(new_size)
+            .unwrap();
+    }
+}
+
+pub struct EditorStageView {
+    root: SpriteVisual,
+    ht: HitTestTree,
+    size: br::vk::VkExtent2D,
+    render_resources: SharedMut<EditorStageRenderResources>,
+    back_buffer_resources: Vec<(HANDLE, br::DeviceMemoryObject<StdVkDevice>)>,
+    renderer: Rc<StageTabContentRenderer>,
+    pointer_down_point: peridot_math::Vector2F32,
+}
+impl EditorStageView {
+    pub fn new(
+        view_ctx: &impl ViewContext,
+        app_state: &MTSharedMut<AppState>,
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let init_size = br::vk::VkExtent2D::spread1(128);
+
+        let composition_surface_handle = unsafe {
+            DCompositionCreateSurfaceHandle(
+                (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as _,
+                None,
+            )?
+        };
+        let presentation_surface = unsafe {
+            AppSubsystemInstances::get()
+                .presentation_manager
+                .CreatePresentationSurface(composition_surface_handle)?
+        };
+        let surface = unsafe {
+            AppSubsystemInstances::get()
+                .compositor_interop
+                .CreateCompositionSurfaceForHandle(composition_surface_handle)?
+        };
+        unsafe {
+            presentation_surface.SetSourceRect(&RECT {
+                left: 0,
+                top: 0,
+                right: init_size.width as _,
+                bottom: init_size.height as _,
+            })?;
+
+            presentation_surface.SetAlphaMode(DXGI_ALPHA_MODE_IGNORE)?;
+            // TODO: G10(Linear色空間のはず)を使うとなんか挙動が怪しいのでいったんG22(Gamma補正バージョン)を使う
+            // presentation_surface
+            //     .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)?;
+            presentation_surface.SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)?;
+        }
+
+        let root = AppSubsystemInstances::get()
+            .compositor
+            .CreateSpriteVisual()?;
+        root.set_properties()
+            .brush(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateSurfaceBrushWithSurface(&surface)?,
+            )?
+            .size(Vector2::scalar(128.0))?
+            .offset(Vector3::zero())?;
+
+        let render_resources = EditorStageRenderResources::new(
+            &mut AppSubsystemInstances::get().mini_engine.borrow_mut(),
+            app_state,
+            init_size,
+        );
 
         let mut main_render_command_pool = AppSubsystemInstances::get()
             .mini_engine
@@ -4469,7 +5393,7 @@ impl EditorStageView {
             )
             .expect("Failed to create command pool");
         let main_render_commands = main_render_command_pool
-            .alloc(3, true)
+            .alloc(BACK_BUFFER_COUNT as _, true)
             .expect("Failed to allocate command buffers");
 
         let mut back_buffer_resources = Vec::with_capacity(3);
@@ -4546,7 +5470,7 @@ impl EditorStageView {
                 .expect("Failed to bind image to memory");
             let imported_image = Rc::new(imported_image);
 
-            let vk_framebuffer = br::FramebufferBuilder::new(&main_render_pass)
+            let vk_framebuffer = br::FramebufferBuilder::new(&render_resources.main_render_pass)
                 .with_attachment(
                     imported_image
                         .clone()
@@ -4555,55 +5479,37 @@ impl EditorStageView {
                         .create()
                         .expect("Failed to create image view"),
                 )
-                .with_attachment(hdr_temp_rt.resource.clone())
-                .with_attachment(depth_stencil_temp_rt.resource.clone())
+                .with_attachment(render_resources.hdr_temp_rt.resource.clone())
+                .with_attachment(render_resources.depth_stencil_temp_rt.resource.clone())
                 .create()
                 .expect("Failed to create framebuffer");
 
-            unsafe {
-                cb.begin(AppSubsystemInstances::get().mini_engine.borrow().device())
-                    .expect("Failed to begin command recording")
-            }
-            .set_viewport(0, &[viewport.clone()])
-            .set_scissor(0, &[rect])
-            .begin_render_pass(
-                &main_render_pass,
+            render_resources.populate_commands(
+                unsafe {
+                    cb.begin(AppSubsystemInstances::get().mini_engine.borrow().device())
+                        .unwrap()
+                },
                 &vk_framebuffer,
-                init_size.into_rect(br::vk::VkOffset2D::ZERO),
-                &[
-                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                    br::ClearValue::depth_stencil(1.0, 0),
-                ],
-                true,
-            )
-            // どうやらパイプライン切り替えると0番目のDescriptorSetが消滅するので再設定する（これ消えないはずだけどな......？）
-            .bind_graphics_pipeline_layout(&skybox_renderer.pipeline_layout)
-            .bind_graphics_descriptor_sets(0, &[camera_descriptor_set.0], &[])
-            .inject(|rec| skybox_renderer.record_render_commands(rec))
-            .next_subpass(true)
-            .bind_graphics_pipeline_pair(&hdr_final_pass_pipeline, &hdr_final_pass_pipeline_layout)
-            .bind_graphics_descriptor_sets(0, &[hdr_final_pass_descriptor_set.0], &[])
-            .draw(4, 1, 0, 0)
-            .bind_graphics_pipeline_pair(&grid_pipeline, &grid_pipeline_layout)
-            .bind_graphics_descriptor_sets(0, &[camera_descriptor_set.0], &[])
-            .bind_vertex_buffers(0, &[(&grid_buffer, 0)])
-            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
-            .draw(grid_vertices.len() as _, 1, 0, 0)
-            .end_render_pass()
-            .end()
-            .expect("Failed to record commands");
+                init_size,
+                app_state,
+            );
 
             let rt_mutex = rt.cast::<IDXGIKeyedMutex>()?;
-            back_buffer_render_resources.push((presentation_buffer, cb, texture, rt, rt_mutex));
-            back_buffer_resources.push((eh, imported_image_memory, vk_framebuffer));
+            back_buffer_render_resources.push((
+                presentation_buffer,
+                RefCell::new(cb),
+                texture,
+                rt,
+                rt_mutex,
+                vk_framebuffer,
+            ));
+            back_buffer_resources.push((eh, imported_image_memory));
         }
 
-        let skybox_renderer = Rc::new(skybox_renderer);
+        let render_resources = new_shared_mut(render_resources);
         Ok(new_cyclic_shared_mut(move |wthis| {
             let ht = HitTestTree::new(
                 Some(wthis.clone()),
-                view_ctx.hittest_context().new_id(),
                 Rect::from_size(init_size.width as _, init_size.height as _),
                 Rect::empty(),
             );
@@ -4611,27 +5517,13 @@ impl EditorStageView {
             Self {
                 root,
                 ht,
-                utility_verts,
-                skybox_renderer: skybox_renderer.clone(),
-                hdr_temp_rt,
-                depth_stencil_temp_rt,
-                main_render_pass,
-                main_render_command_pool,
-                hdr_final_pass_pipeline_layout,
-                hdr_final_pass_pipeline,
-                grid_pipeline_layout,
-                grid_pipeline,
-                grid_buffer,
-                grid_vertex_count: grid_vertices.len(),
-                camera_buffer,
-                camera: default_camera,
-                _descriptor_set_layout_ia1: descriptor_set_layout_ia1,
-                _descriptor_set_layout_ub1: descriptor_set_layout_ub1,
-                _descriptor_pool: dp,
-                camera_descriptor_set,
-                hdr_final_pass_descriptor_set,
+                size: init_size,
+                render_resources: render_resources.clone(),
                 renderer: Rc::new(StageTabContentRenderer {
+                    main_command_pool: RefCell::new(main_render_command_pool),
+                    render_resources,
                     back_buffers: back_buffer_render_resources,
+                    buffer_size: init_size,
                     presentation_manager: AppSubsystemInstances::get().presentation_manager.clone(),
                     presentation_surface,
                     graphics_queue: AppSubsystemInstances::get()
@@ -4645,8 +5537,7 @@ impl EditorStageView {
                             .GetImmediateContext()
                             .expect("Failed to get d3d imm context")
                     },
-                    skybox_renderer,
-                    app_state: Rc::downgrade(app_state),
+                    app_state: Arc::downgrade(app_state),
                 }),
                 back_buffer_resources,
                 pointer_down_point: peridot_math::Vector2(0.0, 0.0),
@@ -4662,20 +5553,26 @@ impl EditorStageView {
         self.root.SetSize(new_size)?;
         self.ht.set_size(new_size.X, new_size.Y);
 
-        self.main_render_command_pool
-            .reset(true)
-            .expect("Failed to reset old commands");
         for n in 0..BACK_BUFFER_COUNT {
             AppGlobalSignals::get_mut().unregister(&self.renderer, n);
         }
+
+        let renderer_mut = Rc::get_mut(&mut self.renderer).unwrap();
+        renderer_mut
+            .main_command_pool
+            .get_mut()
+            .reset(true)
+            .expect("Failed to reset old commands");
 
         let buffer_real_size = br::vk::VkExtent2D {
             width: (new_size.X * resize_ctx.current_dpi / 96.0) as _,
             height: (new_size.Y * resize_ctx.current_dpi / 96.0) as _,
         };
+        self.size = buffer_real_size;
+        renderer_mut.buffer_size = buffer_real_size;
 
         unsafe {
-            self.renderer.presentation_surface.SetSourceRect(&RECT {
+            renderer_mut.presentation_surface.SetSourceRect(&RECT {
                 left: 0,
                 top: 0,
                 right: buffer_real_size.width as _,
@@ -4683,12 +5580,7 @@ impl EditorStageView {
             })?;
         }
 
-        self.hdr_temp_rt
-            .recreate_newsize(buffer_real_size)
-            .expect("Failed to recreate hdr temp rt");
-        self.depth_stencil_temp_rt
-            .recreate_newsize(buffer_real_size)
-            .expect("Failed to recreate depth stencil temp rt");
+        self.render_resources.borrow_mut().resize(buffer_real_size);
 
         let mut camera_upload_buffer = AppSubsystemInstances::get()
             .mini_engine
@@ -4700,9 +5592,15 @@ impl EditorStageView {
         camera_upload_buffer
             .write_content(RenderCameraUniformData {
                 camera_view_projection_matrix: self
+                    .render_resources
+                    .borrow()
                     .camera
                     .view_projection_matrix(new_size.X / new_size.Y),
-                camera_inverse_view_matrix: self.camera.inverse_view_matrix(),
+                camera_inverse_view_matrix: self
+                    .render_resources
+                    .borrow()
+                    .camera
+                    .inverse_view_matrix(),
                 // TODO: ここの値はself.cameraから取りたい
                 camera_persp_fov_rad: 60.0f32.to_radians(),
                 camera_aspect_wh: new_size.X / new_size.Y,
@@ -4724,7 +5622,7 @@ impl EditorStageView {
         }
         .copy_buffer(
             &camera_upload_buffer,
-            &self.camera_buffer,
+            &self.render_resources.borrow().camera_buffer,
             &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
         )
         .pipeline_barrier_2(&br::DependencyInfo::new(
@@ -4757,19 +5655,20 @@ impl EditorStageView {
             .borrow()
             .device()
             .update_descriptor_sets(
-                &[self.hdr_final_pass_descriptor_set.binding_at(0).write(
-                    br::DescriptorContents::input_attachment(
-                        &self.hdr_temp_rt.resource,
+                &[self
+                    .render_resources
+                    .borrow()
+                    .hdr_final_pass_descriptor_set
+                    .binding_at(0)
+                    .write(br::DescriptorContents::input_attachment(
+                        &self.render_resources.borrow().hdr_temp_rt.resource,
                         br::ImageLayout::ShaderReadOnlyOpt,
-                    ),
-                )],
+                    ))],
                 &[],
             );
 
-        let scissor = buffer_real_size.into_rect(br::vk::VkOffset2D::ZERO);
-        let viewport = scissor.make_viewport(0.0..1.0);
-        for (renderer, bb) in Rc::get_mut(&mut self.renderer)
-            .expect("non unique renderer")
+        let resources = self.render_resources.borrow();
+        for (renderer, bb) in renderer_mut
             .back_buffers
             .iter_mut()
             .zip(self.back_buffer_resources.iter_mut())
@@ -4859,7 +5758,7 @@ impl EditorStageView {
                 .expect("Failed to bind image to memory");
             let vk_image = Rc::new(vk_image);
 
-            let vk_framebuffer = br::FramebufferBuilder::new(&self.main_render_pass)
+            let vk_framebuffer = br::FramebufferBuilder::new(&resources.main_render_pass)
                 .with_attachment(
                     vk_image
                         .clone()
@@ -4868,50 +5767,23 @@ impl EditorStageView {
                         .create()
                         .expect("Failed to create image view"),
                 )
-                .with_attachment(self.hdr_temp_rt.resource.clone())
-                .with_attachment(self.depth_stencil_temp_rt.resource.clone())
+                .with_attachment(resources.hdr_temp_rt.resource.clone())
+                .with_attachment(resources.depth_stencil_temp_rt.resource.clone())
                 .create()
                 .expect("Failed to create framebuffer");
 
-            let mini_engine_ref = AppSubsystemInstances::get().mini_engine.borrow();
-            unsafe {
-                renderer
-                    .1
-                    .begin(mini_engine_ref.device())
-                    .expect("Failed to begin command recording")
-            }
-            .set_viewport(0, &[viewport.clone()])
-            .set_scissor(0, &[scissor])
-            .begin_render_pass(
-                &self.main_render_pass,
+            resources.populate_commands(
+                unsafe {
+                    renderer
+                        .1
+                        .get_mut()
+                        .begin(AppSubsystemInstances::get().mini_engine.borrow().device())
+                        .expect("Failed to begin command recording")
+                },
                 &vk_framebuffer,
-                scissor,
-                &[
-                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                    br::ClearValue::depth_stencil(1.0, 0),
-                ],
-                true,
-            )
-            // どうやらパイプライン切り替えると0番目のDescriptorSetが消滅するので再設定する（これ消えないはずだけどな......？）
-            .bind_graphics_pipeline_layout(&self.skybox_renderer.pipeline_layout)
-            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
-            .inject(|rec| self.skybox_renderer.record_render_commands(rec))
-            .next_subpass(true)
-            .bind_graphics_pipeline_pair(
-                &self.hdr_final_pass_pipeline,
-                &self.hdr_final_pass_pipeline_layout,
-            )
-            .bind_graphics_descriptor_sets(0, &[self.hdr_final_pass_descriptor_set.0], &[])
-            .draw(4, 1, 0, 0)
-            .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
-            .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
-            .bind_vertex_buffers(0, &[(&self.grid_buffer, 0)])
-            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &Mat4::IDENTITY)
-            .draw(self.grid_vertex_count as _, 1, 0, 0)
-            .end_render_pass()
-            .end()
-            .expect("Failed to record commands");
+                buffer_real_size,
+                &renderer_mut.app_state.upgrade().unwrap(),
+            );
 
             renderer.4 = rt
                 .cast::<IDXGIKeyedMutex>()
@@ -4920,12 +5792,12 @@ impl EditorStageView {
             renderer.0 = presentation_buffer;
             renderer.2 = texture;
             renderer.3 = rt;
+            renderer.5 = vk_framebuffer;
             bb.0 = eh;
             bb.1 = vk_image_memory;
-            bb.2 = vk_framebuffer;
         }
 
-        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
+        for (n, (e, _)) in self.back_buffer_resources.iter().enumerate() {
             AppGlobalSignals::get_mut().register(*e, &self.renderer, n);
         }
 
@@ -4942,7 +5814,7 @@ impl MountableView for EditorStageView {
         onto.InsertAtTop(&self.root)?;
         onto_ht.add_child(&self.ht);
 
-        for (n, (e, _, _)) in self.back_buffer_resources.iter().enumerate() {
+        for (n, (e, _)) in self.back_buffer_resources.iter().enumerate() {
             AppGlobalSignals::get_mut().register(*e, &self.renderer, n);
         }
 
@@ -4992,14 +5864,15 @@ impl InputEventHandler for WeakMut<EditorStageView> {
         const DRAG_SENSITIVITY: f32 = 0.05f32;
         let yrot = peridot_math::Quaternion::new(
             d.1 * DRAG_SENSITIVITY.to_radians(),
-            peridot_math::Matrix3F32::from(this.borrow().camera.rotation)
+            peridot_math::Matrix3F32::from(this.borrow().render_resources.borrow().camera.rotation)
                 * peridot_math::Vector3::left(),
         );
-        this.borrow_mut().camera.rotation *= yrot;
-        this.borrow_mut().camera.rotation *= peridot_math::Quaternion::new(
-            d.0 * DRAG_SENSITIVITY.to_radians(),
-            peridot_math::Vector3::down(),
-        );
+        this.borrow().render_resources.borrow_mut().camera.rotation *= yrot;
+        this.borrow().render_resources.borrow_mut().camera.rotation *=
+            peridot_math::Quaternion::new(
+                d.0 * DRAG_SENSITIVITY.to_radians(),
+                peridot_math::Vector3::down(),
+            );
 
         let current_size = this.borrow().ht.rect().clone();
         let mut camera_upload_buffer = AppSubsystemInstances::get()
@@ -5014,9 +5887,16 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             .write_content(RenderCameraUniformData {
                 camera_view_projection_matrix: this
                     .borrow()
+                    .render_resources
+                    .borrow()
                     .camera
                     .view_projection_matrix(current_size.Width / current_size.Height),
-                camera_inverse_view_matrix: this.borrow().camera.inverse_view_matrix(),
+                camera_inverse_view_matrix: this
+                    .borrow()
+                    .render_resources
+                    .borrow()
+                    .camera
+                    .inverse_view_matrix(),
                 // TODO: ここの値はcameraから取りたい
                 camera_persp_fov_rad: 60.0f32.to_radians(),
                 camera_aspect_wh: current_size.Width / current_size.Height,
@@ -5029,7 +5909,7 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             .submit_transient_commands_and_wait(|rec| {
                 rec.copy_buffer(
                     &camera_upload_buffer,
-                    &this.borrow().camera_buffer,
+                    &this.borrow().render_resources.borrow().camera_buffer,
                     &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
                 )
                 .pipeline_barrier_2(&br::DependencyInfo::new(
@@ -5064,7 +5944,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5072,7 +5952,7 @@ impl PaneTabContentPresenter for PreviewTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5083,7 +5963,7 @@ impl PaneTabPresenter for PreviewTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> Self {
         Self {}
     }
@@ -5109,7 +5989,7 @@ impl ObjectTreeElementRowView {
     };
 
     pub fn new(
-        view_ctx: &(impl ViewContext + ?Sized),
+        ref_dpi: f32,
         init_name: impl Into<Cow<'static, str>>,
         bound_object_id: Uuid,
     ) -> windows::core::Result<SharedMut<Self>> {
@@ -5120,7 +6000,7 @@ impl ObjectTreeElementRowView {
         let label_surface = AppSubsystemInstances::get()
             .text_surface_stock
             .borrow_mut()
-            .get(&label_fmt, view_ctx.current_dpi(), init_name)?;
+            .get(&label_fmt, ref_dpi, init_name)?;
 
         let root = AppSubsystemInstances::get()
             .compositor
@@ -5186,7 +6066,6 @@ impl ObjectTreeElementRowView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(wthis.clone()),
-                view_ctx.hittest_context().new_id(),
                 Rect::from_size(core::f32::MAX, label_surface.height + Self::PADDING_Y * 2.0),
                 Rect::empty(),
             );
@@ -5288,29 +6167,45 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                     MenuItem::SubMenu(
                         "Create child...".into(),
                         vec![
-                            MenuItem::Command("Empty".into(), || println!("Create Empty"), true),
+                            MenuItem::Command(
+                                "Empty".into(),
+                                new_shared_mut(|| println!("Create Empty")),
+                                true,
+                            ),
                             MenuItem::Header("General Meshes".into()),
-                            MenuItem::Command("Cube".into(), || println!("Create Cube"), true),
-                            MenuItem::Command("Plane".into(), || println!("Create Plane"), true),
+                            MenuItem::Command(
+                                "Cube".into(),
+                                new_shared_mut(|| println!("Create Cube")),
+                                true,
+                            ),
+                            MenuItem::Command(
+                                "Plane".into(),
+                                new_shared_mut(|| println!("Create Plane")),
+                                true,
+                            ),
                             MenuItem::Command(
                                 "Icosphere".into(),
-                                || println!("Create Icosphere"),
+                                new_shared_mut(|| println!("Create Icosphere")),
                                 true,
                             ),
                             MenuItem::Header("Special".into()),
                             MenuItem::Command(
                                 "Terrain".into(),
-                                || println!("Create Terrain"),
+                                new_shared_mut(|| println!("Create Terrain")),
                                 true,
                             ),
                         ],
                     ),
                     MenuItem::Command(
                         "Create Empty at Parent".into(),
-                        || println!("Create Empty at Parent"),
+                        new_shared_mut(|| println!("Create Empty at Parent")),
                         true,
                     ),
-                    MenuItem::Command("Delete".into(), || println!("Delete Object"), true),
+                    MenuItem::Command(
+                        "Delete".into(),
+                        new_shared_mut(|| println!("Delete Object")),
+                        true,
+                    ),
                 ],
                 p[0].x as _,
                 p[0].y as _,
@@ -5321,7 +6216,10 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
 }
 
 pub struct ObjectTreeTabPresenter {
-    rows: Vec<SharedMut<ObjectTreeElementRowView>>,
+    rows: SharedMut<Vec<SharedMut<ObjectTreeElementRowView>>>,
+    app_state: MTSharedMut<AppState>,
+    mounted_visual_root: Option<ContainerVisual>,
+    mounted_ht: Option<HitTestTree>,
 }
 impl PaneTabContentPresenter for ObjectTreeTabPresenter {
     fn build_content_view(
@@ -5329,12 +6227,15 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         onto: &ContainerVisual,
         onto_ht: &HitTestTree,
         view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let children = onto.Children()?;
-        for r in &self.rows {
+        for r in self.rows.borrow().iter() {
             r.borrow().mount(&children, onto_ht, view_context)?;
         }
+
+        self.mounted_visual_root = Some(onto.clone());
+        self.mounted_ht = Some(onto_ht.clone());
 
         Ok(())
     }
@@ -5342,11 +6243,14 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
     fn on_hide_content_view(
         &mut self,
         view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        for r in &self.rows {
+        for r in self.rows.borrow().iter() {
             r.borrow().unmount(view_context)?;
         }
+
+        self.mounted_visual_root = None;
+        self.mounted_ht = None;
 
         Ok(())
     }
@@ -5363,29 +6267,197 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                     MenuItem::SubMenu(
                         "Create...".into(),
                         vec![
-                            MenuItem::Command("Empty".into(), || println!("Create Empty"), true),
+                            MenuItem::Command(
+                                "Empty".into(),
+                                new_shared_mut(|| println!("Create Empty")),
+                                true,
+                            ),
                             MenuItem::Header("General Meshes".into()),
-                            MenuItem::Command("Cube".into(), || println!("Create Cube"), true),
-                            MenuItem::Command("Plane".into(), || println!("Create Plane"), true),
+                            MenuItem::Command(
+                                "Cube".into(),
+                                {
+                                    let app_state = self.app_state.clone();
+                                    let rows = self.rows.clone();
+                                    let mounted_visual_root =
+                                        self.mounted_visual_root.clone().unwrap();
+                                    let mounted_ht = self.mounted_ht.clone().unwrap();
+                                    let ref_dpi = input_context.current_dpi();
+                                    let view_context = ViewContext1 {
+                                        current_dpi: ref_dpi,
+                                    };
+
+                                    new_shared_mut(move || {
+                                        let [vertex_buffer, index_buffer] =
+                                            AppSubsystemInstances::get()
+                                                .mini_engine
+                                                .borrow_mut()
+                                                .alloc_device_local_buffer_array([
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<GenericVertex>() * 24,
+                                                        br::BufferUsage::VERTEX_BUFFER
+                                                            .transfer_dest(),
+                                                    ),
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<u16>() * 36,
+                                                        br::BufferUsage::INDEX_BUFFER
+                                                            .transfer_dest(),
+                                                    ),
+                                                ])
+                                                .expect("Failed to allocate new cube buffers");
+                                        let [mut vertex_buffer_stg, mut index_buffer_stg] =
+                                            AppSubsystemInstances::get()
+                                                .mini_engine
+                                                .borrow_mut()
+                                                .alloc_upload_buffer_array([
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<GenericVertex>() * 24,
+                                                        br::BufferUsage::TRANSFER_SRC,
+                                                    ),
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<u16>() * 36,
+                                                        br::BufferUsage::TRANSFER_SRC,
+                                                    ),
+                                                ])
+                                                .expect("Failed to allocate new cube stg buffers");
+                                        let (v, i) = GenericVertex::unit_cube();
+                                        vertex_buffer_stg
+                                            .guard_map(
+                                                peridot_memory_manager::BufferMapMode::Write,
+                                                |p| unsafe { p.clone_slice_to(0, &v) },
+                                            )
+                                            .unwrap();
+                                        index_buffer_stg
+                                            .guard_map(
+                                                peridot_memory_manager::BufferMapMode::Write,
+                                                |p| unsafe { p.clone_slice_to(0, &i) },
+                                            )
+                                            .unwrap();
+                                        AppSubsystemInstances::get()
+                                            .mini_engine
+                                            .borrow_mut()
+                                            .submit_transient_commands_and_wait(|rec| {
+                                                rec.copy_buffer(
+                                                    &vertex_buffer_stg,
+                                                    &vertex_buffer,
+                                                    &[br::BufferCopy::mirror(
+                                                        0,
+                                                        (core::mem::size_of::<GenericVertex>() * 24)
+                                                            as _,
+                                                    )],
+                                                )
+                                                .copy_buffer(
+                                                    &index_buffer_stg,
+                                                    &index_buffer,
+                                                    &[br::BufferCopy::mirror(
+                                                        0,
+                                                        (core::mem::size_of::<u16>() * 36) as _,
+                                                    )],
+                                                )
+                                                .pipeline_barrier_2(&br::DependencyInfo::new(
+                                                    &[br::MemoryBarrier2::new()
+                                                        .from(
+                                                            br::PipelineStageFlags2::COPY,
+                                                            br::AccessFlags2::TRANSFER.write,
+                                                        )
+                                                        .to(
+                                                            br::PipelineStageFlags2::VERTEX_INPUT,
+                                                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ
+                                                                | br::AccessFlags2::INDEX_READ,
+                                                        )],
+                                                    &[],
+                                                    &[],
+                                                ))
+                                            })
+                                            .unwrap();
+
+                                        let new_object = ObjectEditState {
+                                            id: Uuid::new_v4(),
+                                            name: "New Cube".into(),
+                                            order: app_state.read().current_scene.next_order(),
+                                            is_dirty: true,
+                                            details: ObjectDetails::Mesh {
+                                                vertex_buffer,
+                                                index_buffer: Some(index_buffer),
+                                                vertex_count: 36,
+                                                position: peridot_math::Vector3(0.0, 0.0, 0.0),
+                                                rotation: peridot_math::Quaternion::ONE,
+                                                scale: peridot_math::Vector3::ONE,
+                                            },
+                                        };
+
+                                        app_state.write().current_scene.add_object(new_object);
+
+                                        // refresh list
+                                        for v in rows.borrow().iter() {
+                                            v.borrow()
+                                                .unmount(&view_context)
+                                                .expect("Failed to unmount old element rows");
+                                        }
+
+                                        let app_state_borrow = app_state.read();
+                                        let mut init_objects = app_state_borrow
+                                            .current_scene
+                                            .objects
+                                            .values()
+                                            .collect::<Vec<_>>();
+                                        init_objects.sort_by_key(|x| x.order);
+
+                                        *rows.borrow_mut() = init_objects
+                                            .into_iter()
+                                            .scan(0.0f32, |y, x| {
+                                                let p = ObjectTreeElementRowView::new(
+                                                    ref_dpi,
+                                                    x.name.to_owned(),
+                                                    x.id.clone(),
+                                                )
+                                                .expect("Failed to create row view");
+                                                p.borrow_mut()
+                                                    .reposition(Vector2 { X: 0.0, Y: *y })
+                                                    .expect("Failed to reposition row view");
+                                                *y += p.borrow().height();
+
+                                                Some(p)
+                                            })
+                                            .collect::<Vec<_>>();
+
+                                        let children = mounted_visual_root.Children().unwrap();
+                                        for v in rows.borrow().iter() {
+                                            v.borrow()
+                                                .mount(&children, &mounted_ht, &view_context)
+                                                .expect("Failed to mount new rows");
+                                        }
+                                    })
+                                },
+                                true,
+                            ),
+                            MenuItem::Command(
+                                "Plane".into(),
+                                new_shared_mut(|| println!("Create Plane")),
+                                true,
+                            ),
                             MenuItem::Command(
                                 "Icosphere".into(),
-                                || println!("Create Icosphere"),
+                                new_shared_mut(|| println!("Create Icosphere")),
                                 true,
                             ),
                             MenuItem::Header("Special".into()),
                             MenuItem::Command(
                                 "Terrain".into(),
-                                || println!("Create Terrain"),
+                                new_shared_mut(|| println!("Create Terrain")),
                                 true,
                             ),
                         ],
                     ),
                     MenuItem::Command(
                         "Create Empty at Parent".into(),
-                        || println!("Create Empty at Parent"),
+                        new_shared_mut(|| println!("Create Empty at Parent")),
                         false,
                     ),
-                    MenuItem::Command("Delete".into(), || println!("Delete Object"), false),
+                    MenuItem::Command(
+                        "Delete".into(),
+                        new_shared_mut(|| println!("Delete Object")),
+                        false,
+                    ),
                 ],
                 desktop_x_px,
                 desktop_y_px,
@@ -5400,9 +6472,9 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         view_ctx: &(impl ViewContext + ?Sized),
-        app_state: &SharedMut<AppState>,
+        app_state: &MTSharedMut<AppState>,
     ) -> Self {
-        let app_state_borrow = app_state.borrow();
+        let app_state_borrow = app_state.read();
         let mut init_objects = app_state_borrow
             .current_scene
             .objects
@@ -5413,8 +6485,12 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
         let rows = init_objects
             .into_iter()
             .scan(0.0f32, |y, x| {
-                let p = ObjectTreeElementRowView::new(view_ctx, x.name.to_owned(), x.id.clone())
-                    .expect("Failed to create row view");
+                let p = ObjectTreeElementRowView::new(
+                    view_ctx.current_dpi(),
+                    x.name.to_owned(),
+                    x.id.clone(),
+                )
+                .expect("Failed to create row view");
                 p.borrow_mut()
                     .reposition(Vector2 { X: 0.0, Y: *y })
                     .expect("Failed to reposition row view");
@@ -5424,7 +6500,12 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
             })
             .collect::<Vec<_>>();
 
-        Self { rows }
+        Self {
+            rows: new_shared_mut(rows),
+            app_state: app_state.clone(),
+            mounted_visual_root: None,
+            mounted_ht: None,
+        }
     }
 }
 
@@ -5435,7 +6516,7 @@ impl PaneTabContentPresenter for AssetExplorerTabPresenter {
         _onto: &ContainerVisual,
         _onto_ht: &HitTestTree,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5443,7 +6524,7 @@ impl PaneTabContentPresenter for AssetExplorerTabPresenter {
     fn on_hide_content_view(
         &mut self,
         _view_context: &dyn ViewContext,
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -5454,22 +6535,22 @@ impl PaneTabPresenter for AssetExplorerTabPresenter {
     fn new(
         _tab_header_view: &SharedMut<PaneTabHeaderView>,
         _view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &SharedMut<AppState>,
+        _app_state: &MTSharedMut<AppState>,
     ) -> Self {
         Self {}
     }
 }
 
 pub trait AppStateCurrentSelectionChangedHandler {
-    fn on_changed(&self, app_state: &SharedMut<AppState>, view_context: &dyn ViewContext);
+    fn on_changed(&self, app_state: &MTSharedMut<AppState>, view_context: &dyn ViewContext);
 }
 #[repr(transparent)]
 pub struct AppStateCurrentSelectionChangedHandlerEntry(
-    pub Weak<dyn AppStateCurrentSelectionChangedHandler>,
+    pub AtomicWeak<dyn AppStateCurrentSelectionChangedHandler + Sync + Send>,
 );
 impl PartialEq for AppStateCurrentSelectionChangedHandlerEntry {
     fn eq(&self, other: &Self) -> bool {
-        Weak::ptr_eq(&self.0, &other.0)
+        AtomicWeak::ptr_eq(&self.0, &other.0)
     }
 }
 impl Eq for AppStateCurrentSelectionChangedHandlerEntry {}
@@ -5494,14 +6575,14 @@ impl AppState {
     }
 
     pub fn set_current_selection(
-        this: &SharedMut<Self>,
+        this: &MTSharedMut<Self>,
         selection: Option<Uuid>,
         view_context: &impl ViewContext,
     ) {
-        this.borrow_mut().current_selection_object_id = selection;
+        this.write().current_selection_object_id = selection;
 
         let callbacks = this
-            .borrow()
+            .read()
             .current_selection_changed_handlers
             .iter()
             .filter_map(|x| x.0.upgrade())
@@ -5512,12 +6593,12 @@ impl AppState {
     }
 
     pub fn observe_current_selection_changes(
-        this: &SharedMut<Self>,
-        handler: &Rc<impl AppStateCurrentSelectionChangedHandler + 'static>,
+        this: &MTSharedMut<Self>,
+        handler: &Arc<impl AppStateCurrentSelectionChangedHandler + 'static + Sync + Send>,
         view_ctx: &dyn ViewContext,
     ) {
-        let wh = Rc::downgrade(handler);
-        this.borrow_mut()
+        let wh = Arc::downgrade(handler);
+        this.write()
             .current_selection_changed_handlers
             .insert(AppStateCurrentSelectionChangedHandlerEntry(wh));
 
@@ -5526,7 +6607,7 @@ impl AppState {
 
     pub fn unobserve_current_selection_changes(
         &mut self,
-        handler: &Weak<impl AppStateCurrentSelectionChangedHandler + 'static>,
+        handler: &AtomicWeak<impl AppStateCurrentSelectionChangedHandler + 'static + Sync + Send>,
     ) {
         self.current_selection_changed_handlers
             .remove(unsafe { core::mem::transmute(handler) });
@@ -5535,12 +6616,25 @@ impl AppState {
 
 pub struct SceneEditState {
     pub objects: HashMap<Uuid, ObjectEditState>,
+    pub is_dirty: bool,
 }
 impl SceneEditState {
     pub fn new() -> Self {
         Self {
             objects: HashMap::new(),
+            is_dirty: false,
         }
+    }
+
+    pub fn add_object(&mut self, mut state: ObjectEditState) {
+        // 次のレンダリングサイクルでデータ載せてほしいのでdirtyフラグを立てておく
+        state.is_dirty = true;
+        self.is_dirty = true;
+        self.objects.insert(state.id.clone(), state);
+    }
+
+    pub fn next_order(&self) -> u32 {
+        self.objects.values().map(|x| x.order).max().unwrap_or(0) + 1
     }
 }
 
@@ -5586,6 +6680,14 @@ pub enum ObjectDetails {
     SunLight {
         rotation: peridot_math::QuaternionF32,
         intensity: f32,
+    },
+    Mesh {
+        vertex_buffer: peridot_memory_manager::Buffer,
+        index_buffer: Option<peridot_memory_manager::Buffer>,
+        vertex_count: u32,
+        position: peridot_math::Vector3F32,
+        rotation: peridot_math::QuaternionF32,
+        scale: peridot_math::Vector3F32,
     },
 }
 
@@ -5873,18 +6975,13 @@ impl ComponentSparseSet {
 
 struct AppWindowState {
     input_state: InputState,
-    hittest_context: HitTestTreeContext,
     pane_group_docking_manager: SharedMut<PaneGroupDockingManager>,
     app_title_bar_view: SharedMut<AppTitleBarView>,
     currently_maximized: bool,
     current_dpi: f32,
-    app_state: SharedMut<AppState>,
+    app_state: MTSharedMut<AppState>,
 }
 impl ViewContext for AppWindowState {
-    fn hittest_context(&self) -> &HitTestTreeContext {
-        &self.hittest_context
-    }
-
     fn current_dpi(&self) -> f32 {
         self.current_dpi
     }
@@ -6142,7 +7239,7 @@ fn app() -> i32 {
         },
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
-    let state = new_shared_mut(state);
+    let state = new_mt_shared_mut(state);
 
     let _dispatcher_queue_controller = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
@@ -6300,16 +7397,14 @@ fn app() -> i32 {
             .expect("Failed to insert overlay layer");
     }
 
-    let hittest_tree_root = HitTestTree::new_unsized(Some(()), 0, 0.0, 0.0);
-    let mut hittest_context = HitTestTreeContext::new();
+    let hittest_tree_root = HitTestTree::new_unsized(Some(()), 0.0, 0.0);
 
     let mut view_context = ViewContext1 {
-        hittest_context: &mut hittest_context,
         current_dpi: window_handle.current_dpi,
     };
 
     let pane_group_docking_manager = new_shared_mut(
-        PaneGroupDockingManager::new(&mut view_context, &hittest_tree_root)
+        PaneGroupDockingManager::new(&hittest_tree_root)
             .expect("Failed to initialize docking manager"),
     );
 
@@ -6482,7 +7577,6 @@ fn app() -> i32 {
 
     let mut ws = AppWindowState {
         input_state: InputState::new(window_handle.handle, &hittest_tree_root),
-        hittest_context,
         pane_group_docking_manager,
         app_title_bar_view: app_title,
         currently_maximized: window_handle

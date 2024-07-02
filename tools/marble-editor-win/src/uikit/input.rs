@@ -360,6 +360,7 @@ pub struct HitTestTreeState {
     relative_adjustments: Rect,
     parent: WeakMut<HitTestTreeState>,
     children: HashMap<usize, HitTestTree>,
+    child_last_id: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -379,30 +380,24 @@ impl HitTestTree {
     #[inline]
     pub fn new(
         eh: Option<impl InputEventHandler + 'static>,
-        id: usize,
         rect: Rect,
         relative_adjustments: Rect,
     ) -> Self {
         Self(new_shared_mut(HitTestTreeState {
             eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| Rc::new(x)),
-            id,
+            id: 0,
             rect,
             relative_adjustments,
             parent: empty_weak_mut(),
             children: HashMap::new(),
+            child_last_id: AtomicUsize::new(0),
         }))
     }
 
     #[inline]
-    pub fn new_unsized(
-        eh: Option<impl InputEventHandler + 'static>,
-        id: usize,
-        left: f32,
-        top: f32,
-    ) -> Self {
+    pub fn new_unsized(eh: Option<impl InputEventHandler + 'static>, left: f32, top: f32) -> Self {
         Self::new(
             eh,
-            id,
             Rect {
                 X: left,
                 Y: top,
@@ -414,14 +409,15 @@ impl HitTestTree {
     }
 
     #[inline]
-    pub fn new_fit_to_parent(eh: Option<impl InputEventHandler + 'static>, id: usize) -> Self {
+    pub fn new_fit_to_parent(eh: Option<impl InputEventHandler + 'static>) -> Self {
         Self(new_shared_mut(HitTestTreeState {
             eh: eh.map::<Rc<dyn InputEventHandler>, _>(|x| Rc::new(x)),
-            id,
+            id: 0,
             rect: Rect::empty(),
             relative_adjustments: Rect::from_size(1.0, 1.0),
             parent: empty_weak_mut(),
             children: HashMap::new(),
+            child_last_id: AtomicUsize::new(0),
         }))
     }
 
@@ -452,9 +448,10 @@ impl HitTestTree {
 
     #[inline]
     pub fn add_child(&self, child: &Self) {
+        let child_id = self.0.borrow().child_last_id.fetch_add(1, Ordering::AcqRel);
+        child.0.borrow_mut().id = child_id;
         child.0.borrow_mut().parent = Rc::downgrade(&self.0);
-        let cid = child.0.borrow().id;
-        self.0.borrow_mut().children.insert(cid, child.clone());
+        self.0.borrow_mut().children.insert(child_id, child.clone());
     }
 
     #[inline]
@@ -602,21 +599,5 @@ impl core::fmt::Debug for HitTestTree {
             .field("height", &thisref.rect.Height)
             .field("children", &thisref.children)
             .finish_non_exhaustive()
-    }
-}
-
-pub struct HitTestTreeContext {
-    current_id: AtomicUsize,
-}
-impl HitTestTreeContext {
-    pub const fn new() -> Self {
-        Self {
-            current_id: AtomicUsize::new(0),
-        }
-    }
-
-    #[inline]
-    pub fn new_id(&self) -> usize {
-        self.current_id.fetch_add(1, Ordering::AcqRel)
     }
 }

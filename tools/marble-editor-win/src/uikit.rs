@@ -32,7 +32,6 @@ pub struct ResizeContext {
 }
 
 pub trait ViewContext {
-    fn hittest_context(&self) -> &HitTestTreeContext;
     fn current_dpi(&self) -> f32;
 }
 pub trait InputContext: ViewContext {
@@ -43,19 +42,11 @@ pub trait InputContext: ViewContext {
 }
 
 impl<T: ViewContext + ?Sized> ViewContext for &'_ T {
-    fn hittest_context(&self) -> &HitTestTreeContext {
-        T::hittest_context(*self)
-    }
-
     fn current_dpi(&self) -> f32 {
         T::current_dpi(*self)
     }
 }
 impl<T: ViewContext + ?Sized> ViewContext for &'_ mut T {
-    fn hittest_context(&self) -> &HitTestTreeContext {
-        T::hittest_context(*self)
-    }
-
     fn current_dpi(&self) -> f32 {
         T::current_dpi(*self)
     }
@@ -74,15 +65,10 @@ impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
     }
 }
 
-pub struct ViewContext1<'r> {
-    pub hittest_context: &'r HitTestTreeContext,
+pub struct ViewContext1 {
     pub current_dpi: f32,
 }
-impl ViewContext for ViewContext1<'_> {
-    fn hittest_context(&self) -> &HitTestTreeContext {
-        self.hittest_context
-    }
-
+impl ViewContext for ViewContext1 {
     fn current_dpi(&self) -> f32 {
         self.current_dpi
     }

@@ -45,10 +45,7 @@ impl PaneSplitterView {
         B: 255,
     };
 
-    pub fn new(
-        ctx: &(impl ViewContext + ?Sized),
-        dir: SplitDirection,
-    ) -> windows::core::Result<SharedMut<Self>> {
+    pub fn new(dir: SplitDirection) -> windows::core::Result<SharedMut<Self>> {
         let visual = AppSubsystemInstances::get()
             .compositor
             .CreateSpriteVisual()?;
@@ -84,7 +81,6 @@ impl PaneSplitterView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(wthis.clone()),
-                ctx.hittest_context().new_id(),
                 Rect::from_size(1.0, 1.0),
                 Rect::empty(),
             );

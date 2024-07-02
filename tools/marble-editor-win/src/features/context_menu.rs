@@ -54,8 +54,8 @@ use crate::{
     bindgen::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     new_cyclic_shared_mut, new_mt_shared_mut, new_shared_mut,
     uikit::{
-        HitTestTree, HitTestTreeContext, InputContext, InputEventHandler, InputState,
-        MountableView, ResizeContext, ViewContext,
+        HitTestTree, InputContext, InputEventHandler, InputState, MountableView, ResizeContext,
+        ViewContext,
     },
     utils::RectExtensions,
     winapi_extras::{
@@ -328,7 +328,7 @@ pub struct ContextMenuCommandView {
     required_width: f32,
     current_dpi: f32,
     submenu_contents: Vec<MenuItem>,
-    select_action: Option<fn()>,
+    select_action: Option<SharedMut<dyn FnMut()>>,
 }
 impl ContextMenuCommandView {
     const ENTER_ANIMATION_DURARION: TimeSpan = timespan_ms(100);
@@ -342,7 +342,7 @@ impl ContextMenuCommandView {
     pub fn new(
         text: impl Into<Cow<'static, str>>,
         submenu_contents: Vec<MenuItem>,
-        select_action: Option<fn()>,
+        select_action: Option<SharedMut<dyn FnMut()>>,
         active: bool,
         enter_animation_delay: TimeSpan,
         y: f32,
@@ -660,7 +660,6 @@ impl ContextMenuCommandView {
                     this_ref: wthis.clone(),
                     menu_ref: Arc::downgrade(menu_instance),
                 }),
-                view_ctx.hittest_context().new_id(),
                 Rect {
                     X: 0.0,
                     Y: y,
@@ -793,34 +792,32 @@ impl InputEventHandler for ContextMenuCommandViewInputEventDelegate {
             .hide_all()
             .expect("Failed to close context menu");
         let thisref = this.borrow();
-        if let Some(a) = thisref.select_action {
-            a();
+        if let Some(ref a) = thisref.select_action {
+            (&mut *a.borrow_mut())();
         }
     }
 }
 
 #[derive(Clone)]
 pub enum MenuItem {
-    Command(String, fn(), bool),
+    Command(String, SharedMut<dyn FnMut()>, bool),
     SubMenu(String, Vec<MenuItem>),
     Separator,
     Header(String),
 }
+// TODO: これあとでなんとかする
+unsafe impl Sync for MenuItem {}
+unsafe impl Send for MenuItem {}
 
 static CONTEXT_MENU_WINDOW_CLASS: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
 pub struct ContextMenuInputContext {
     input_state_ref: MTSharedMut<InputState>,
-    ht_context: Arc<HitTestTreeContext>,
     current_dpi: f32,
 }
 impl ViewContext for ContextMenuInputContext {
     fn current_dpi(&self) -> f32 {
         self.current_dpi
-    }
-
-    fn hittest_context(&self) -> &HitTestTreeContext {
-        &*self.ht_context
     }
 }
 impl InputContext for ContextMenuInputContext {
@@ -845,7 +842,6 @@ pub struct ContextMenuInstance {
     unscaled_base: SpriteVisual,
     content_root: ContainerVisual,
     ht_root: HitTestTree,
-    ht_context: Arc<HitTestTreeContext>,
     entries: Vec<SharedMut<dyn ContextMenuEntryView>>,
     current_dpi: f32,
     input_state: MTSharedMut<InputState>,
@@ -941,7 +937,7 @@ impl ContextMenuInstance {
         children.InsertAtBottom(&blur_visual)?;
         children.InsertAtTop(&content_root)?;
 
-        let ht_root = HitTestTree::new(None::<()>, 0, Rect::from_size(128.0, 160.0), Rect::empty());
+        let ht_root = HitTestTree::new(None::<()>, Rect::from_size(128.0, 160.0), Rect::empty());
         let this = new_mt_shared_mut(Self {
             w,
             _composition_target: composition_target,
@@ -949,7 +945,6 @@ impl ContextMenuInstance {
             content_root,
             input_state: new_mt_shared_mut(InputState::new(w, &ht_root)),
             ht_root,
-            ht_context: Arc::new(HitTestTreeContext::new()),
             entries: Vec::new(),
             current_dpi: ref_dpi,
             content_size: Vector2 { X: 128.0, Y: 160.0 },
@@ -1160,10 +1155,6 @@ impl ViewContext for ContextMenuInstance {
     fn current_dpi(&self) -> f32 {
         self.current_dpi
     }
-
-    fn hittest_context(&self) -> &HitTestTreeContext {
-        &*self.ht_context
-    }
 }
 
 struct ContextMenuSharedState {
@@ -1360,7 +1351,6 @@ impl ContextMenu {
                 .on_mouse_move((x as f32) * 96.0 / dpi, (y as f32) * 96.0 / dpi);
             let mut input_context = ContextMenuInputContext {
                 current_dpi: state.read().current_dpi,
-                ht_context: state.read().ht_context.clone(),
                 input_state_ref: state.read().input_state.clone(),
             };
             for a in actions {
@@ -1395,7 +1385,6 @@ impl ContextMenu {
                 .on_mouse_down((x as f32) * 96.0 / dpi, (y as f32) * 96.0 / dpi);
             let mut input_context = ContextMenuInputContext {
                 current_dpi: state.read().current_dpi,
-                ht_context: state.read().ht_context.clone(),
                 input_state_ref: state.read().input_state.clone(),
             };
             for a in actions {
@@ -1420,7 +1409,6 @@ impl ContextMenu {
                 .on_mouse_up((x as f32) * 96.0 / dpi, (y as f32) * 96.0 / dpi);
             let mut input_context = ContextMenuInputContext {
                 current_dpi: state.read().current_dpi,
-                ht_context: state.read().ht_context.clone(),
                 input_state_ref: state.read().input_state.clone(),
             };
             for a in actions {
@@ -1440,7 +1428,6 @@ impl ContextMenu {
             let actions = state.write().input_state.write().on_mouse_leave();
             let mut input_context = ContextMenuInputContext {
                 current_dpi: state.read().current_dpi,
-                ht_context: state.read().ht_context.clone(),
                 input_state_ref: state.read().input_state.clone(),
             };
             for a in actions {

@@ -58,11 +58,7 @@ struct AppTitleBarControlButtonView {
     ht: HitTestTree,
 }
 impl AppTitleBarControlButtonView {
-    fn new(
-        ctx: &(impl ViewContext + ?Sized),
-        ty: AppTitleBarControlButtonType,
-        nth: usize,
-    ) -> windows::core::Result<SharedMut<Self>> {
+    fn new(ty: AppTitleBarControlButtonType, nth: usize) -> windows::core::Result<SharedMut<Self>> {
         let root = AppSubsystemInstances::get()
             .compositor
             .CreateContainerVisual()?;
@@ -163,7 +159,6 @@ impl AppTitleBarControlButtonView {
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(wthis.clone()),
-                ctx.hittest_context().new_id(),
                 Rect {
                     // Note: アンカーポイントのぶんを余分にずらす
                     X: -((nth + 1) as f32 * AppTitleBarView::BUTTON_WIDTH),
@@ -496,14 +491,11 @@ impl AppTitleBarView {
             .brush(&blur_brush)?;
 
         let close_button =
-            AppTitleBarControlButtonView::new(ctx, AppTitleBarControlButtonType::Close, 0)?;
-        let maxres_button = AppTitleBarControlButtonView::new(
-            ctx,
-            AppTitleBarControlButtonType::MaximizeRestore,
-            1,
-        )?;
+            AppTitleBarControlButtonView::new(AppTitleBarControlButtonType::Close, 0)?;
+        let maxres_button =
+            AppTitleBarControlButtonView::new(AppTitleBarControlButtonType::MaximizeRestore, 1)?;
         let min_button =
-            AppTitleBarControlButtonView::new(ctx, AppTitleBarControlButtonType::Minimize, 2)?;
+            AppTitleBarControlButtonView::new(AppTitleBarControlButtonType::Minimize, 2)?;
 
         let root_children = root.Children()?;
         root_children.InsertAtTop(&title_fx)?;
@@ -512,7 +504,6 @@ impl AppTitleBarView {
         let this = new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
                 Some(wthis.clone()),
-                ctx.hittest_context().new_id(),
                 Rect::from_size(128.0, Self::HEIGHT),
                 Rect::empty(),
             );
