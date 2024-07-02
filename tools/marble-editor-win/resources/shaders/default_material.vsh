@@ -17,9 +17,14 @@ layout(set = 1, binding = 0) uniform PerObjectData
     mat4 objectTransformMatrix;
 };
 
+vec4 normalize3(vec4 x)
+{
+    return vec4(normalize(x.xyz), x.w);
+}
+
 void main()
 {
     gl_Position = pos * objectTransformMatrix * cameraViewProjectionMatrix;
-    normal_v = normalize(normal * objectTransformMatrix);
+    normal_v = normalize3(transpose(objectTransformMatrix) * normal);
     uv_v = uv;
 }

@@ -12,8 +12,7 @@ layout(set = 1, binding = 1) uniform ForwardRenderLightData {
 
 void main()
 {
-    const float diffuse = pow(dot(normal.xyz, -incidentLightDir) * 0.5 + 0.5, 2.0) * lightIntensity;
+    const float diffuse = pow(dot(normal.xyz, -incidentLightDir) * 0.5f + 0.5f, 2.0f) * lightIntensity;
 
-    color = vec4(vec3(1.0, 1.0, 1.0) * diffuse + vec3(0.3, 0.3, 0.3), 1.0);
-    color = vec4(normal.xyz, 1.0f);
+    color = vec4(vec3(1.0f, 1.0f, 1.0f) * diffuse + vec3(0.3f, 0.3f, 0.3f), 1.0f);
 }
