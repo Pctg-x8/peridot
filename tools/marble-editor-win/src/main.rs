@@ -6541,7 +6541,159 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                             ),
                             MenuItem::Command(
                                 "Plane".into(),
-                                new_shared_mut(|| println!("Create Plane")),
+                                {
+                                    let app_state = self.app_state.clone();
+                                    let rows = self.rows.clone();
+                                    let mounted_visual_root =
+                                        self.mounted_visual_root.clone().unwrap();
+                                    let mounted_ht = self.mounted_ht.clone().unwrap();
+                                    let ref_dpi = input_context.current_dpi();
+                                    let view_context = ViewContext1 {
+                                        current_dpi: ref_dpi,
+                                    };
+
+                                    new_shared_mut(move || {
+                                        let [vertex_buffer, index_buffer] =
+                                            AppSubsystemInstances::get()
+                                                .mini_engine
+                                                .borrow_mut()
+                                                .alloc_device_local_buffer_array([
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<GenericVertex>() * 4,
+                                                        br::BufferUsage::VERTEX_BUFFER
+                                                            .transfer_dest(),
+                                                    ),
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<u16>() * 6,
+                                                        br::BufferUsage::INDEX_BUFFER
+                                                            .transfer_dest(),
+                                                    ),
+                                                ])
+                                                .expect("Failed to allocate new cube buffers");
+                                        let [mut vertex_buffer_stg, mut index_buffer_stg] =
+                                            AppSubsystemInstances::get()
+                                                .mini_engine
+                                                .borrow_mut()
+                                                .alloc_upload_buffer_array([
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<GenericVertex>() * 4,
+                                                        br::BufferUsage::TRANSFER_SRC,
+                                                    ),
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<u16>() * 6,
+                                                        br::BufferUsage::TRANSFER_SRC,
+                                                    ),
+                                                ])
+                                                .expect("Failed to allocate new cube stg buffers");
+                                        let (v, i) = GenericVertex::unit_plane();
+                                        vertex_buffer_stg
+                                            .guard_map(
+                                                peridot_memory_manager::BufferMapMode::Write,
+                                                |p| unsafe { p.clone_slice_to(0, &v) },
+                                            )
+                                            .unwrap();
+                                        index_buffer_stg
+                                            .guard_map(
+                                                peridot_memory_manager::BufferMapMode::Write,
+                                                |p| unsafe { p.clone_slice_to(0, &i) },
+                                            )
+                                            .unwrap();
+                                        AppSubsystemInstances::get()
+                                            .mini_engine
+                                            .borrow_mut()
+                                            .submit_transient_commands_and_wait(|rec| {
+                                                rec.copy_buffer(
+                                                    &vertex_buffer_stg,
+                                                    &vertex_buffer,
+                                                    &[br::BufferCopy::mirror(
+                                                        0,
+                                                        (core::mem::size_of::<GenericVertex>() * 4)
+                                                            as _,
+                                                    )],
+                                                )
+                                                .copy_buffer(
+                                                    &index_buffer_stg,
+                                                    &index_buffer,
+                                                    &[br::BufferCopy::mirror(
+                                                        0,
+                                                        (core::mem::size_of::<u16>() * 6) as _,
+                                                    )],
+                                                )
+                                                .pipeline_barrier_2(&br::DependencyInfo::new(
+                                                    &[br::MemoryBarrier2::new()
+                                                        .from(
+                                                            br::PipelineStageFlags2::COPY,
+                                                            br::AccessFlags2::TRANSFER.write,
+                                                        )
+                                                        .to(
+                                                            br::PipelineStageFlags2::VERTEX_INPUT,
+                                                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ
+                                                                | br::AccessFlags2::INDEX_READ,
+                                                        )],
+                                                    &[],
+                                                    &[],
+                                                ))
+                                            })
+                                            .unwrap();
+
+                                        let new_object = ObjectEditState {
+                                            id: Uuid::new_v4(),
+                                            name: "New Plane".into(),
+                                            order: app_state.read().current_scene.next_order(),
+                                            is_dirty: true,
+                                            details: ObjectDetails::Mesh {
+                                                vertex_buffer,
+                                                index_buffer: Some(index_buffer),
+                                                vertex_count: 6,
+                                                position: peridot_math::Vector3(0.0, 0.0, 0.0),
+                                                rotation: peridot_math::Quaternion::ONE,
+                                                scale: peridot_math::Vector3::ONE,
+                                            },
+                                        };
+
+                                        app_state.write().current_scene.add_object(new_object);
+
+                                        // refresh list
+                                        for v in rows.borrow().iter() {
+                                            v.borrow()
+                                                .unmount(&view_context)
+                                                .expect("Failed to unmount old element rows");
+                                        }
+
+                                        let app_state_borrow = app_state.read();
+                                        let mut init_objects = app_state_borrow
+                                            .current_scene
+                                            .objects
+                                            .values()
+                                            .collect::<Vec<_>>();
+                                        init_objects.sort_by_key(|x| x.order);
+
+                                        *rows.borrow_mut() = init_objects
+                                            .into_iter()
+                                            .scan(0.0f32, |y, x| {
+                                                let p = ObjectTreeElementRowView::new(
+                                                    ref_dpi,
+                                                    x.name.to_owned(),
+                                                    x.id.clone(),
+                                                )
+                                                .expect("Failed to create row view");
+                                                p.borrow_mut()
+                                                    .reposition(Vector2 { X: 0.0, Y: *y })
+                                                    .expect("Failed to reposition row view");
+                                                *y += p.borrow().height();
+
+                                                Some(p)
+                                            })
+                                            .collect::<Vec<_>>();
+
+                                        let children = mounted_visual_root.Children().unwrap();
+                                        for v in rows.borrow().iter() {
+                                            v.borrow()
+                                                .mount(&children, &mounted_ht, &view_context)
+                                                .expect("Failed to mount new rows");
+                                        }
+                                    })
+                                },
                                 true,
                             ),
                             MenuItem::Command(

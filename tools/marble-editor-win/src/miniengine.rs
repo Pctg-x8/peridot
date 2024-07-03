@@ -581,127 +581,127 @@ impl GenericVertex {
         let vertices = [
             // +X
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, 1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, -1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, 1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, -1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             // +Y
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, 1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, 1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, 1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, 1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             // +Z
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, 1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, 1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, -1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, -1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             // -X
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, 1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, 1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, -1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, -1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             // -Y
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, -1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, -1.0, 1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, -1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, -1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             // -Z
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, 1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(1.0, -1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, 1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
             GenericVertex {
-                pos: peridot_math::Vector4(-1.0, -1.0, -1.0, 1.0),
+                pos: peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
                 normal: peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
                 uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
             },
@@ -711,6 +711,34 @@ impl GenericVertex {
             0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7, 8, 9, 10, 10, 9, 11, 12, 13, 14, 14, 13, 15, 16,
             17, 18, 18, 17, 19, 20, 21, 22, 22, 21, 23,
         ];
+
+        (vertices, indices)
+    }
+
+    pub fn unit_plane() -> ([GenericVertex; 4], [u16; 6]) {
+        let vertices = [
+            GenericVertex {
+                pos: peridot_math::Vector4(-0.5, 0.0, -0.5, 1.0),
+                normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                uv: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
+            },
+            GenericVertex {
+                pos: peridot_math::Vector4(-0.5, 0.0, 0.5, 1.0),
+                normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                uv: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+            },
+            GenericVertex {
+                pos: peridot_math::Vector4(0.5, 0.0, -0.5, 1.0),
+                normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                uv: peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+            },
+            GenericVertex {
+                pos: peridot_math::Vector4(0.5, 0.0, 0.5, 1.0),
+                normal: peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                uv: peridot_math::Vector4(1.0, 1.0, 0.0, 0.0),
+            },
+        ];
+        let indices = [0, 1, 2, 2, 1, 3];
 
         (vertices, indices)
     }
