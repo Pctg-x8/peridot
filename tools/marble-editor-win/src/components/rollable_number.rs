@@ -1,5 +1,3 @@
-use std::{collections::HashSet, rc::Rc};
-
 use windows::{
     Foundation::{
         Numerics::{Vector2, Vector3},
@@ -18,8 +16,8 @@ use windows::{
 
 use crate::{
     app_subsystem_instances::AppSubsystemInstances,
-    new_cyclic_shared_mut, new_shared_mut,
-    observable::{ObservationDisconnector, ValueChangedEventHandlerHashKey},
+    new_cyclic_shared_mut,
+    observable::EventBus,
     uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext},
     utils::RectExtensions,
     winapi_extras::{VectorScalarConstructor, VisualExtensions},
@@ -36,7 +34,7 @@ pub struct RollableNumberView {
     current_value: f32,
     drag_point: peridot_math::Vector2F32,
     drag_base_value: f32,
-    value_change_event_handlers: HashSet<ValueChangedEventHandlerHashKey<f32>>,
+    value_change_event_bus: EventBus<f32>,
 }
 impl RollableNumberView {
     pub fn new(
@@ -110,7 +108,7 @@ impl RollableNumberView {
                 current_value: init_value,
                 drag_point: peridot_math::Vector2(0.0, 0.0),
                 drag_base_value: 0.0,
-                value_change_event_handlers: HashSet::new(),
+                value_change_event_bus: EventBus::new(),
             }
         }))
     }
@@ -119,33 +117,8 @@ impl RollableNumberView {
         self.current_value
     }
 
-    pub fn observe_value_changes(
-        this: &SharedMut<Self>,
-        handler: impl FnMut(&dyn ViewContext, f32) + 'static,
-        view_context: &dyn ViewContext,
-        requires_current_value: bool,
-    ) -> impl ObservationDisconnector {
-        let key = ValueChangedEventHandlerHashKey(new_shared_mut(handler));
-        this.borrow_mut()
-            .value_change_event_handlers
-            .insert(key.clone());
-        if requires_current_value {
-            let cv = this.borrow().current_value;
-            (key.0.borrow_mut())(view_context, cv);
-        }
-
-        RollableNumberValueChangedObservationDisconnector {
-            view_ref: Rc::downgrade(this),
-            key,
-        }
-    }
-
-    fn notify_value_changes(&self, view_ctx: &impl ViewContext) {
-        let c = self.current_value;
-
-        for e in &self.value_change_event_handlers {
-            (e.0.borrow_mut())(view_ctx, c);
-        }
+    pub fn value_change_event_bus(&self) -> &EventBus<f32> {
+        &self.value_change_event_bus
     }
 
     pub fn set_position(&self, x_rel: f32, x_offs: f32, y: f32) -> windows::core::Result<()> {
@@ -237,7 +210,7 @@ impl InputEventHandler for WeakMut<RollableNumberView> {
         }
     }
 
-    fn on_drag_move(&self, x: f32, y: f32, window: HWND, mut ctx: &mut dyn InputContext) {
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, _ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
             return;
         };
@@ -257,7 +230,7 @@ impl InputEventHandler for WeakMut<RollableNumberView> {
         let new_value = this.borrow().current_value - d.1 * SENSITIVITY;
         this.borrow_mut().current_value = new_value;
         this.borrow().update_label().expect("Failed to update view");
-        this.borrow().notify_value_changes(&mut ctx);
+        this.borrow().value_change_event_bus.notify(new_value);
     }
 
     fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
@@ -265,21 +238,5 @@ impl InputEventHandler for WeakMut<RollableNumberView> {
         unsafe {
             ShowCursor(true);
         }
-    }
-}
-
-pub struct RollableNumberValueChangedObservationDisconnector {
-    view_ref: WeakMut<RollableNumberView>,
-    key: ValueChangedEventHandlerHashKey<f32>,
-}
-impl ObservationDisconnector for RollableNumberValueChangedObservationDisconnector {
-    fn disconnect(&self) {
-        let Some(view) = self.view_ref.upgrade() else {
-            return;
-        };
-
-        view.borrow_mut()
-            .value_change_event_handlers
-            .remove(&self.key);
     }
 }

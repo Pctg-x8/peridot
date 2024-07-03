@@ -1,5 +1,3 @@
-use std::{collections::HashSet, rc::Rc};
-
 use windows::{
     Foundation::{
         Numerics::{Vector2, Vector3},
@@ -17,12 +15,12 @@ use windows::{
 
 use crate::{
     app_subsystem_instances::AppSubsystemInstances,
-    new_cyclic_shared_mut, new_shared_mut,
-    observable::{ObservationDisconnector, ValueChangedEventHandlerHashKey},
+    new_cyclic_shared_mut,
+    observable::EventBus,
     uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext},
     utils::RectExtensions,
     winapi_extras::VisualExtensions,
-    AppWindow, SharedMut, WeakMut,
+    SharedMut, WeakMut,
 };
 
 pub struct FloatSliderView {
@@ -36,7 +34,7 @@ pub struct FloatSliderView {
     current_value: f32,
     max_value: f32,
     drag_base_x: f32,
-    value_change_event_handlers: HashSet<ValueChangedEventHandlerHashKey<f32>>,
+    value_change_event_bus: EventBus<f32>,
 }
 impl FloatSliderView {
     pub const BORDER_RECT_ROUNDING: f32 = 6.0;
@@ -139,7 +137,7 @@ impl FloatSliderView {
                 current_value: init_value,
                 max_value,
                 drag_base_x: 0.0,
-                value_change_event_handlers: HashSet::new(),
+                value_change_event_bus: EventBus::new(),
             }
         }))
     }
@@ -162,30 +160,9 @@ impl FloatSliderView {
         Ok(())
     }
 
-    pub fn observe_value_changes(
-        this: &SharedMut<Self>,
-        handler: impl FnMut(&dyn ViewContext, f32) + 'static,
-        view_context: &dyn ViewContext,
-        request_current_value: bool,
-    ) -> impl ObservationDisconnector {
-        let key = ValueChangedEventHandlerHashKey(new_shared_mut(handler));
-        this.borrow_mut()
-            .value_change_event_handlers
-            .insert(key.clone());
-        if request_current_value {
-            (&mut *key.0.borrow_mut())(view_context, this.borrow().current_value);
-        }
-
-        FloatSliderValueChangedObservationDisconnector {
-            view_ref: Rc::downgrade(this),
-            key,
-        }
-    }
-
-    fn notify_current_value(&self, view_context: &dyn ViewContext) {
-        for e in self.value_change_event_handlers.iter() {
-            (&mut *e.0.borrow_mut())(view_context, self.current_value);
-        }
+    #[inline(always)]
+    pub fn value_change_event_bus(&self) -> &EventBus<f32> {
+        &self.value_change_event_bus
     }
 
     fn update_rate(&self) -> windows::core::Result<()> {
@@ -254,7 +231,7 @@ impl InputEventHandler for WeakMut<FloatSliderView> {
         this.borrow_mut().drag_base_x = component_global_x;
     }
 
-    fn on_drag_move(&self, x: f32, _y: f32, window: HWND, mut ctx: &mut dyn InputContext) {
+    fn on_drag_move(&self, x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
             return;
         };
@@ -262,33 +239,18 @@ impl InputEventHandler for WeakMut<FloatSliderView> {
         let d = x - this.borrow().drag_base_x;
         let max_value = this.borrow().max_value;
         let component_width = this.borrow().ht.rect().Width;
-        this.borrow_mut().current_value = d * max_value / component_width;
+        let new_value = d * max_value / component_width;
+        this.borrow_mut().current_value = new_value;
         this.borrow()
             .update_rate()
             .expect("Failed to update gauge rate");
         this.borrow()
             .update_value_label()
             .expect("Failed to update value label");
-        this.borrow().notify_current_value(&mut ctx);
+        this.borrow().value_change_event_bus.notify(new_value);
     }
 
     fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
         ctx.release_mouse_capture();
-    }
-}
-
-struct FloatSliderValueChangedObservationDisconnector {
-    view_ref: WeakMut<FloatSliderView>,
-    key: ValueChangedEventHandlerHashKey<f32>,
-}
-impl ObservationDisconnector for FloatSliderValueChangedObservationDisconnector {
-    fn disconnect(&self) {
-        let Some(view) = self.view_ref.upgrade() else {
-            return;
-        };
-
-        view.borrow_mut()
-            .value_change_event_handlers
-            .remove(&self.key);
     }
 }

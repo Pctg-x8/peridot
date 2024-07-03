@@ -2507,15 +2507,16 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .push(rotation_z_control.clone());
 
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &rotation_x_control,
-                                    {
+                                rotation_x_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let rotation_y_control = Rc::downgrade(&rotation_y_control);
                                         let rotation_z_control = Rc::downgrade(&rotation_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(ry), Some(rz)) = (
                                                 rotation_y_control.upgrade(),
                                                 rotation_z_control.upgrade(),
@@ -2543,21 +2544,19 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                     ),
                                                 );
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &rotation_y_control,
-                                    {
+                                rotation_y_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let rotation_x_control = Rc::downgrade(&rotation_x_control);
                                         let rotation_z_control = Rc::downgrade(&rotation_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(rx), Some(rz)) = (
                                                 rotation_x_control.upgrade(),
                                                 rotation_z_control.upgrade(),
@@ -2585,21 +2584,19 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                     ),
                                                 );
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &rotation_z_control,
-                                    {
+                                rotation_z_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let rotation_x_control = Rc::downgrade(&rotation_x_control);
                                         let rotation_y_control = Rc::downgrade(&rotation_y_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(rx), Some(ry)) = (
                                                 rotation_x_control.upgrade(),
                                                 rotation_y_control.upgrade(),
@@ -2627,10 +2624,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                     ),
                                                 );
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
 
                             let intensity_label =
@@ -2653,13 +2647,14 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .reposition_xrel(0.5, 80.0)
                                 .unwrap();
                             self.observation_disconnectors.write().push(Box::new(
-                                FloatSliderView::observe_value_changes(
-                                    &intensity_control,
-                                    {
+                                intensity_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             if let Some(e) = app_state
                                                 .write()
                                                 .current_scene
@@ -2669,10 +2664,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 e.update_sunlight_intensity(new_value);
                                             }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
                             self.current_mounted_views.write().push(intensity_control);
                         }
@@ -2737,15 +2729,16 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .push(position_z_control.clone());
 
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &position_x_control,
-                                    {
+                                position_x_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let position_y_control = Rc::downgrade(&position_y_control);
                                         let position_z_control = Rc::downgrade(&position_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(yc), Some(zc)) = (
                                                 position_y_control.upgrade(),
                                                 position_z_control.upgrade(),
@@ -2759,7 +2752,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 .objects
                                                 .get_mut(&bound_object_id)
                                                 .unwrap();
-                                            target_mut.is_dirty = true;
                                             if let ObjectDetails::Mesh {
                                                 ref mut position, ..
                                             } = target_mut.details
@@ -2772,21 +2764,19 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 target_mut.is_dirty = true;
                                             }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &position_y_control,
-                                    {
+                                position_y_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let position_x_control = Rc::downgrade(&position_x_control);
                                         let position_z_control = Rc::downgrade(&position_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(xc), Some(zc)) = (
                                                 position_x_control.upgrade(),
                                                 position_z_control.upgrade(),
@@ -2800,7 +2790,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 .objects
                                                 .get_mut(&bound_object_id)
                                                 .unwrap();
-                                            target_mut.is_dirty = true;
                                             if let ObjectDetails::Mesh {
                                                 ref mut position, ..
                                             } = target_mut.details
@@ -2813,21 +2802,19 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 target_mut.is_dirty = true;
                                             }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &position_z_control,
-                                    {
+                                position_z_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let position_x_control = Rc::downgrade(&position_x_control);
                                         let position_y_control = Rc::downgrade(&position_y_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(xc), Some(yc)) = (
                                                 position_x_control.upgrade(),
                                                 position_y_control.upgrade(),
@@ -2841,7 +2828,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 .objects
                                                 .get_mut(&bound_object_id)
                                                 .unwrap();
-                                            target_mut.is_dirty = true;
                                             if let ObjectDetails::Mesh {
                                                 ref mut position, ..
                                             } = target_mut.details
@@ -2854,10 +2840,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 target_mut.is_dirty = true;
                                             }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
 
                             let re = rotation.euler_angles();
@@ -2916,15 +2899,16 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .push(rotation_z_control.clone());
 
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &rotation_x_control,
-                                    {
+                                rotation_x_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let rotation_y_control = Rc::downgrade(&rotation_y_control);
                                         let rotation_z_control = Rc::downgrade(&rotation_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(yc), Some(zc)) = (
                                                 rotation_y_control.upgrade(),
                                                 rotation_z_control.upgrade(),
@@ -2938,7 +2922,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 .objects
                                                 .get_mut(&bound_object_id)
                                                 .unwrap();
-                                            target_mut.is_dirty = true;
                                             if let ObjectDetails::Mesh {
                                                 ref mut rotation, ..
                                             } = target_mut.details
@@ -2958,21 +2941,19 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 target_mut.is_dirty = true;
                                             }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &rotation_y_control,
-                                    {
+                                rotation_y_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let rotation_x_control = Rc::downgrade(&rotation_x_control);
                                         let rotation_z_control = Rc::downgrade(&rotation_z_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(xc), Some(zc)) = (
                                                 rotation_x_control.upgrade(),
                                                 rotation_z_control.upgrade(),
@@ -2986,7 +2967,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 .objects
                                                 .get_mut(&bound_object_id)
                                                 .unwrap();
-                                            target_mut.is_dirty = true;
                                             if let ObjectDetails::Mesh {
                                                 ref mut rotation, ..
                                             } = target_mut.details
@@ -3006,21 +2986,19 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 target_mut.is_dirty = true;
                                             }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &rotation_z_control,
-                                    {
+                                rotation_z_control
+                                    .borrow()
+                                    .value_change_event_bus()
+                                    .subscribe({
                                         let app_state = app_state.clone();
                                         let rotation_x_control = Rc::downgrade(&rotation_x_control);
                                         let rotation_y_control = Rc::downgrade(&rotation_y_control);
                                         let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
+                                        move |new_value| {
                                             let (Some(xc), Some(yc)) = (
                                                 rotation_x_control.upgrade(),
                                                 rotation_y_control.upgrade(),
@@ -3034,7 +3012,6 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 .objects
                                                 .get_mut(&bound_object_id)
                                                 .unwrap();
-                                            target_mut.is_dirty = true;
                                             if let ObjectDetails::Mesh {
                                                 ref mut rotation, ..
                                             } = target_mut.details
@@ -3054,10 +3031,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 target_mut.is_dirty = true;
                                             }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }),
                             ));
 
                             let label = LabelView::new("Scale", view_context).unwrap();
@@ -3103,121 +3077,103 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                             self.current_mounted_views.write().push(z_control.clone());
 
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &x_control,
-                                    {
-                                        let app_state = app_state.clone();
-                                        let y_control = Rc::downgrade(&y_control);
-                                        let z_control = Rc::downgrade(&z_control);
-                                        let bound_object_id = id.clone();
+                                x_control.borrow().value_change_event_bus().subscribe({
+                                    let app_state = app_state.clone();
+                                    let y_control = Rc::downgrade(&y_control);
+                                    let z_control = Rc::downgrade(&z_control);
+                                    let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
-                                            let (Some(yc), Some(zc)) =
-                                                (y_control.upgrade(), z_control.upgrade())
-                                            else {
-                                                return;
-                                            };
+                                    move |new_value| {
+                                        let (Some(yc), Some(zc)) =
+                                            (y_control.upgrade(), z_control.upgrade())
+                                        else {
+                                            return;
+                                        };
 
-                                            let mut state_mut = app_state.write();
-                                            let target_mut = state_mut
-                                                .current_scene
-                                                .objects
-                                                .get_mut(&bound_object_id)
-                                                .unwrap();
+                                        let mut state_mut = app_state.write();
+                                        let target_mut = state_mut
+                                            .current_scene
+                                            .objects
+                                            .get_mut(&bound_object_id)
+                                            .unwrap();
+                                        if let ObjectDetails::Mesh { ref mut scale, .. } =
+                                            target_mut.details
+                                        {
+                                            *scale = peridot_math::Vector3(
+                                                new_value,
+                                                yc.borrow().current_value(),
+                                                zc.borrow().current_value(),
+                                            );
                                             target_mut.is_dirty = true;
-                                            if let ObjectDetails::Mesh { ref mut scale, .. } =
-                                                target_mut.details
-                                            {
-                                                *scale = peridot_math::Vector3(
-                                                    new_value,
-                                                    yc.borrow().current_value(),
-                                                    zc.borrow().current_value(),
-                                                );
-                                                target_mut.is_dirty = true;
-                                            }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }
+                                }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &y_control,
-                                    {
-                                        let app_state = app_state.clone();
-                                        let x_control = Rc::downgrade(&x_control);
-                                        let z_control = Rc::downgrade(&z_control);
-                                        let bound_object_id = id.clone();
+                                y_control.borrow().value_change_event_bus().subscribe({
+                                    let app_state = app_state.clone();
+                                    let x_control = Rc::downgrade(&x_control);
+                                    let z_control = Rc::downgrade(&z_control);
+                                    let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
-                                            let (Some(xc), Some(zc)) =
-                                                (x_control.upgrade(), z_control.upgrade())
-                                            else {
-                                                return;
-                                            };
+                                    move |new_value| {
+                                        let (Some(xc), Some(zc)) =
+                                            (x_control.upgrade(), z_control.upgrade())
+                                        else {
+                                            return;
+                                        };
 
-                                            let mut state_mut = app_state.write();
-                                            let target_mut = state_mut
-                                                .current_scene
-                                                .objects
-                                                .get_mut(&bound_object_id)
-                                                .unwrap();
+                                        let mut state_mut = app_state.write();
+                                        let target_mut = state_mut
+                                            .current_scene
+                                            .objects
+                                            .get_mut(&bound_object_id)
+                                            .unwrap();
+                                        if let ObjectDetails::Mesh { ref mut scale, .. } =
+                                            target_mut.details
+                                        {
+                                            *scale = peridot_math::Vector3(
+                                                xc.borrow().current_value(),
+                                                new_value,
+                                                zc.borrow().current_value(),
+                                            );
                                             target_mut.is_dirty = true;
-                                            if let ObjectDetails::Mesh { ref mut scale, .. } =
-                                                target_mut.details
-                                            {
-                                                *scale = peridot_math::Vector3(
-                                                    xc.borrow().current_value(),
-                                                    new_value,
-                                                    zc.borrow().current_value(),
-                                                );
-                                                target_mut.is_dirty = true;
-                                            }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }
+                                }),
                             ));
                             self.observation_disconnectors.write().push(Box::new(
-                                RollableNumberView::observe_value_changes(
-                                    &z_control,
-                                    {
-                                        let app_state = app_state.clone();
-                                        let x_control = Rc::downgrade(&x_control);
-                                        let y_control = Rc::downgrade(&y_control);
-                                        let bound_object_id = id.clone();
+                                z_control.borrow().value_change_event_bus().subscribe({
+                                    let app_state = app_state.clone();
+                                    let x_control = Rc::downgrade(&x_control);
+                                    let y_control = Rc::downgrade(&y_control);
+                                    let bound_object_id = id.clone();
 
-                                        move |_view_ctx, new_value| {
-                                            let (Some(xc), Some(yc)) =
-                                                (x_control.upgrade(), y_control.upgrade())
-                                            else {
-                                                return;
-                                            };
+                                    move |new_value| {
+                                        let (Some(xc), Some(yc)) =
+                                            (x_control.upgrade(), y_control.upgrade())
+                                        else {
+                                            return;
+                                        };
 
-                                            let mut state_mut = app_state.write();
-                                            let target_mut = state_mut
-                                                .current_scene
-                                                .objects
-                                                .get_mut(&bound_object_id)
-                                                .unwrap();
+                                        let mut state_mut = app_state.write();
+                                        let target_mut = state_mut
+                                            .current_scene
+                                            .objects
+                                            .get_mut(&bound_object_id)
+                                            .unwrap();
+                                        if let ObjectDetails::Mesh { ref mut scale, .. } =
+                                            target_mut.details
+                                        {
+                                            *scale = peridot_math::Vector3(
+                                                xc.borrow().current_value(),
+                                                yc.borrow().current_value(),
+                                                new_value,
+                                            );
                                             target_mut.is_dirty = true;
-                                            if let ObjectDetails::Mesh { ref mut scale, .. } =
-                                                target_mut.details
-                                            {
-                                                *scale = peridot_math::Vector3(
-                                                    xc.borrow().current_value(),
-                                                    yc.borrow().current_value(),
-                                                    new_value,
-                                                );
-                                                target_mut.is_dirty = true;
-                                            }
                                         }
-                                    },
-                                    view_context,
-                                    false,
-                                ),
+                                    }
+                                }),
                             ));
                         }
                         ObjectDetails::Camera {} => (),
