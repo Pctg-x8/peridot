@@ -244,8 +244,8 @@ impl InputEventHandler for WeakMut<RollableNumberView> {
 
         let app_window = AppWindow::wrap(window);
         let mut points = [POINT {
-            x: this.borrow().drag_point.0 as _,
-            y: this.borrow().drag_point.1 as _,
+            x: app_window.dip_to_pixels(this.borrow().drag_point.0) as _,
+            y: app_window.dip_to_pixels(this.borrow().drag_point.1) as _,
         }];
         app_window.map_points_to_desktop(&mut points);
         unsafe {

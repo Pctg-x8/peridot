@@ -258,9 +258,8 @@ impl InputEventHandler for WeakMut<FloatSliderView> {
         let Some(this) = self.upgrade() else {
             return;
         };
-        let app_window = AppWindow::wrap(window);
 
-        let d = app_window.pixels_to_dip(x) - this.borrow().drag_base_x;
+        let d = x - this.borrow().drag_base_x;
         let max_value = this.borrow().max_value;
         let component_width = this.borrow().ht.rect().Width;
         this.borrow_mut().current_value = d * max_value / component_width;

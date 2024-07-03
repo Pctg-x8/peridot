@@ -19,11 +19,10 @@ use windows::{
 };
 
 use crate::{
-    empty_weak_mut, new_shared_mut,
-    uikit::{CursorStyle, InputContext, InputEventHandler},
-    utils::RectExtensions,
-    SharedMut, WeakMut,
+    empty_weak_mut, new_shared_mut, uikit::CursorStyle, utils::RectExtensions, SharedMut, WeakMut,
 };
+
+use super::{ResizeContext, ViewContext};
 
 pub enum InputAction {
     PointerLeave(Rc<dyn InputEventHandler>),
@@ -31,6 +30,9 @@ pub enum InputAction {
     PointerDown(Rc<dyn InputEventHandler>),
     PointerUp(Rc<dyn InputEventHandler>),
     SubPointerUp(Rc<dyn InputEventHandler>),
+    WheelDown(Rc<dyn InputEventHandler>),
+    WheelUp(Rc<dyn InputEventHandler>),
+    WheelRoll(Rc<dyn InputEventHandler>, f32),
     Click(Rc<dyn InputEventHandler>),
     BeginDrag(Rc<dyn InputEventHandler>),
     DragMove(Rc<dyn InputEventHandler>),
@@ -45,6 +47,9 @@ impl InputAction {
             Self::PointerDown(e) => e.on_pointer_down(x, y, ctx),
             Self::PointerUp(e) => e.on_pointer_up(x, y, ctx),
             Self::SubPointerUp(e) => e.on_sub_pointer_up(x, y, window, ctx),
+            Self::WheelDown(e) => e.on_wheel_down(x, y, ctx),
+            Self::WheelUp(e) => e.on_wheel_up(x, y, ctx),
+            Self::WheelRoll(e, amount) => e.on_wheel_roll(x, y, amount, ctx),
             Self::Click(e) => e.on_click(window, &mut ctx),
             Self::BeginDrag(e) => e.on_begin_drag(x, y, window, ctx),
             Self::DragMove(e) => e.on_drag_move(x, y, window, ctx),
@@ -214,6 +219,27 @@ impl InputState {
         actions
     }
 
+    pub fn on_mouse_wheel_down(&mut self, x: f32, y: f32) -> Vec<InputAction> {
+        let mut actions = Vec::with_capacity(4);
+
+        let active_target = if let Some(e) = self.mouse_capturing_strong_ref() {
+            // キャプチャしている要素があるならこれを優先する
+            Some(e)
+        } else {
+            self.update_mouse_pos(x, y, &mut actions);
+            self.mouse_current_entering_strong_ref()
+        };
+
+        self.mouse_down_point = Some((x, y, self.mouse_current_enter_element.clone()));
+        self.is_mouse_dragging = false;
+        actions.extend(
+            active_target
+                .and_then(|x| x.clone_event_handler())
+                .map(InputAction::WheelDown),
+        );
+        actions
+    }
+
     pub fn on_mouse_up(&mut self, x: f32, y: f32) -> Vec<InputAction> {
         let mut actions = Vec::with_capacity(16);
 
@@ -267,13 +293,65 @@ impl InputState {
         }
 
         self.update_mouse_pos(x, y, &mut actions);
-
         actions.extend(
             self.mouse_current_entering_strong_ref()
                 .and_then(|x| x.clone_event_handler())
                 .map(InputAction::SubPointerUp),
         );
+        actions
+    }
 
+    pub fn on_mouse_wheel_up(&mut self, x: f32, y: f32) -> Vec<InputAction> {
+        let mut actions = Vec::with_capacity(4);
+
+        if let Some(e) = self.mouse_capturing_strong_ref() {
+            actions.extend(e.clone_event_handler().map(InputAction::WheelUp));
+            return actions;
+        }
+
+        self.update_mouse_pos(x, y, &mut actions);
+        actions.extend(
+            self.mouse_current_entering_strong_ref()
+                .and_then(|x| x.clone_event_handler())
+                .map(InputAction::WheelUp),
+        );
+        if !self.is_mouse_dragging {
+            // TODO: ここは将来的にはクリックイベントじゃなくする（ホイールクリックイベントを作る）
+            actions.extend(
+                self.mouse_current_entering_strong_ref()
+                    .and_then(|x| x.clone_event_handler())
+                    .map(InputAction::Click),
+            );
+        } else {
+            // こっち（ドラッグ終了イベント）はマウスダウンした時の対象に送る
+            actions.extend(
+                self.mouse_down_point
+                    .as_ref()
+                    .and_then(|x| x.2.as_ref()?.upgrade()?.clone_event_handler())
+                    .map(InputAction::EndDrag),
+            );
+        }
+        self.mouse_down_point = None;
+
+        actions
+    }
+
+    pub fn on_mouse_wheel_roll(&mut self, x: f32, y: f32, amount: f32) -> Vec<InputAction> {
+        if let Some(e) = self.mouse_capturing_strong_ref() {
+            return e
+                .clone_event_handler()
+                .map(|e| InputAction::WheelRoll(e, amount))
+                .into_iter()
+                .collect();
+        }
+
+        let mut actions = Vec::with_capacity(4);
+        self.update_mouse_pos(x, y, &mut actions);
+        actions.extend(
+            self.mouse_current_entering_strong_ref()
+                .and_then(|e| e.clone_event_handler())
+                .map(|e| InputAction::WheelRoll(e, amount)),
+        );
         actions
     }
 
@@ -599,5 +677,120 @@ impl core::fmt::Debug for HitTestTree {
             .field("height", &thisref.rect.Height)
             .field("children", &thisref.children)
             .finish_non_exhaustive()
+    }
+}
+
+pub trait InputEventHandler {
+    fn hover_cursor(&self) -> CursorStyle {
+        CursorStyle::Arrow
+    }
+
+    fn nc_hittest(&self) -> u32 {
+        HTCLIENT
+    }
+
+    fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {}
+    fn on_pointer_leave(&self, _ctx: &mut dyn InputContext) {}
+    fn on_pointer_down(&self, _x: f32, _y: f32, _ctx: &mut dyn InputContext) {}
+    fn on_pointer_up(&self, _x: f32, _y: f32, _ctx: &mut dyn InputContext) {}
+    fn on_sub_pointer_up(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
+    fn on_wheel_down(&self, _x: f32, _y: f32, _ctx: &mut dyn InputContext) {}
+    fn on_wheel_up(&self, _x: f32, _y: f32, _ctx: &mut dyn InputContext) {}
+    fn on_wheel_roll(&self, _x: f32, _y: f32, _amount: f32, _ctx: &mut dyn InputContext) {}
+    fn on_click(&self, _window: HWND, _ctx: &mut dyn InputContext) {}
+    fn on_begin_drag(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
+    fn on_drag_move(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
+    fn on_end_drag(&self, _x: f32, _y: f32, _window: HWND, _ctx: &mut dyn InputContext) {}
+}
+impl<T: InputEventHandler + ?Sized> InputEventHandler for std::rc::Rc<T> {
+    #[inline(always)]
+    fn hover_cursor(&self) -> CursorStyle {
+        T::hover_cursor(&*self)
+    }
+
+    #[inline(always)]
+    fn nc_hittest(&self) -> u32 {
+        T::nc_hittest(&*self)
+    }
+
+    #[inline(always)]
+    fn on_pointer_enter(&self, ctx: &mut dyn InputContext) {
+        T::on_pointer_enter(&*self, ctx)
+    }
+
+    #[inline(always)]
+    fn on_pointer_leave(&self, ctx: &mut dyn InputContext) {
+        T::on_pointer_leave(&*self, ctx)
+    }
+
+    #[inline(always)]
+    fn on_pointer_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        T::on_pointer_down(&*self, x, y, ctx)
+    }
+
+    #[inline(always)]
+    fn on_pointer_up(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        T::on_pointer_up(&*self, x, y, ctx)
+    }
+
+    #[inline(always)]
+    fn on_sub_pointer_up(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        T::on_sub_pointer_up(&*self, x, y, window, ctx)
+    }
+
+    #[inline(always)]
+    fn on_wheel_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        T::on_wheel_down(&*self, x, y, ctx)
+    }
+
+    #[inline(always)]
+    fn on_wheel_up(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        T::on_wheel_up(&*self, x, y, ctx)
+    }
+
+    #[inline(always)]
+    fn on_wheel_roll(&self, x: f32, y: f32, amount: f32, ctx: &mut dyn InputContext) {
+        T::on_wheel_roll(&*self, x, y, amount, ctx)
+    }
+
+    #[inline(always)]
+    fn on_click(&self, window: HWND, ctx: &mut dyn InputContext) {
+        T::on_click(&*self, window, ctx)
+    }
+
+    #[inline(always)]
+    fn on_begin_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        T::on_begin_drag(&*self, x, y, window, ctx)
+    }
+
+    #[inline(always)]
+    fn on_drag_move(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        T::on_drag_move(&*self, x, y, window, ctx)
+    }
+
+    #[inline(always)]
+    fn on_end_drag(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        T::on_end_drag(&*self, x, y, window, ctx)
+    }
+}
+impl InputEventHandler for () {}
+
+pub trait InputContext: ViewContext {
+    fn make_resize_context(&self) -> ResizeContext;
+
+    fn capture_mouse(&mut self);
+    fn release_mouse_capture(&mut self);
+}
+impl<T: InputContext + ?Sized> InputContext for &'_ mut T {
+    fn make_resize_context(&self) -> ResizeContext {
+        T::make_resize_context(*self)
+    }
+
+    fn capture_mouse(&mut self) {
+        T::capture_mouse(*self)
+    }
+
+    fn release_mouse_capture(&mut self) {
+        T::release_mouse_capture(*self)
     }
 }

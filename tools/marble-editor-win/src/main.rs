@@ -91,11 +91,12 @@ use windows::{
                 PeekMessageA, PostQuitMessage, SetCursorPos, SetWindowLongPtrA, SetWindowPos,
                 ShowCursor, ShowWindow, TranslateMessage, HTCLIENT, HTTOP, IDC_ARROW,
                 IDI_APPLICATION, MSG, NCCALCSIZE_PARAMS, PM_REMOVE, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
-                SWP_FRAMECHANGED, SW_MAXIMIZE, SW_SHOWNORMAL, WINDOWPLACEMENT,
+                SWP_FRAMECHANGED, SW_MAXIMIZE, SW_SHOWNORMAL, WHEEL_DELTA, WINDOWPLACEMENT,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
-                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP,
+                WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSELEAVE,
+                WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+                WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
             },
         },
     },
@@ -5315,6 +5316,11 @@ impl EditorStageRenderResources {
     }
 }
 
+pub enum EditorStageViewInputHoldState {
+    Direction(peridot_math::Vector2F32),
+    Position(peridot_math::Vector2F32),
+}
+
 pub struct EditorStageView {
     root: SpriteVisual,
     ht: HitTestTree,
@@ -5322,11 +5328,11 @@ pub struct EditorStageView {
     render_resources: SharedMut<EditorStageRenderResources>,
     back_buffer_resources: Vec<(HANDLE, br::DeviceMemoryObject<StdVkDevice>)>,
     renderer: Rc<StageTabContentRenderer>,
-    pointer_down_point: peridot_math::Vector2F32,
+    input_hold_state: Option<EditorStageViewInputHoldState>,
 }
 impl EditorStageView {
     pub fn new(
-        view_ctx: &impl ViewContext,
+        _view_ctx: &impl ViewContext,
         app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<SharedMut<Self>> {
         let init_size = br::vk::VkExtent2D::spread1(128);
@@ -5540,7 +5546,7 @@ impl EditorStageView {
                     app_state: Arc::downgrade(app_state),
                 }),
                 back_buffer_resources,
-                pointer_down_point: peridot_math::Vector2(0.0, 0.0),
+                input_hold_state: None,
             }
         }))
     }
@@ -5838,7 +5844,23 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             return;
         };
 
-        this.borrow_mut().pointer_down_point = peridot_math::Vector2(x, y);
+        this.borrow_mut().input_hold_state = Some(EditorStageViewInputHoldState::Direction(
+            peridot_math::Vector2(x, y),
+        ));
+        ctx.capture_mouse();
+        unsafe {
+            ShowCursor(false);
+        }
+    }
+
+    fn on_wheel_down(&self, x: f32, y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        this.borrow_mut().input_hold_state = Some(EditorStageViewInputHoldState::Position(
+            peridot_math::Vector2(x, y),
+        ));
         ctx.capture_mouse();
         unsafe {
             ShowCursor(false);
@@ -5850,29 +5872,60 @@ impl InputEventHandler for WeakMut<EditorStageView> {
             return;
         };
 
-        let app_window = AppWindow::wrap(window);
-        let mut points = [POINT {
-            x: this.borrow().pointer_down_point.0 as _,
-            y: this.borrow().pointer_down_point.1 as _,
-        }];
-        app_window.map_points_to_desktop(&mut points);
-        unsafe {
-            SetCursorPos(points[0].x, points[0].y).expect("Failed to hold cursor");
-        }
+        match this.borrow().input_hold_state {
+            Some(EditorStageViewInputHoldState::Direction(base)) => {
+                let app_window = AppWindow::wrap(window);
+                let mut points = [POINT {
+                    x: app_window.dip_to_pixels(base.0) as _,
+                    y: app_window.dip_to_pixels(base.1) as _,
+                }];
+                app_window.map_points_to_desktop(&mut points);
+                unsafe {
+                    SetCursorPos(points[0].x, points[0].y).expect("Failed to hold cursor");
+                }
 
-        let d = peridot_math::Vector2(x, y) - this.borrow().pointer_down_point;
-        const DRAG_SENSITIVITY: f32 = 0.05f32;
-        let yrot = peridot_math::Quaternion::new(
-            d.1 * DRAG_SENSITIVITY.to_radians(),
-            peridot_math::Matrix3F32::from(this.borrow().render_resources.borrow().camera.rotation)
-                * peridot_math::Vector3::left(),
-        );
-        this.borrow().render_resources.borrow_mut().camera.rotation *= yrot;
-        this.borrow().render_resources.borrow_mut().camera.rotation *=
-            peridot_math::Quaternion::new(
-                d.0 * DRAG_SENSITIVITY.to_radians(),
-                peridot_math::Vector3::down(),
-            );
+                let d = peridot_math::Vector2(x, y) - base;
+                const DRAG_SENSITIVITY: f32 = 0.05f32;
+                let yrot = peridot_math::Quaternion::new(
+                    d.1 * DRAG_SENSITIVITY.to_radians(),
+                    peridot_math::Matrix3F32::from(
+                        this.borrow().render_resources.borrow().camera.rotation,
+                    ) * peridot_math::Vector3::left(),
+                );
+                this.borrow().render_resources.borrow_mut().camera.rotation *= yrot;
+                this.borrow().render_resources.borrow_mut().camera.rotation *=
+                    peridot_math::Quaternion::new(
+                        d.0 * DRAG_SENSITIVITY.to_radians(),
+                        peridot_math::Vector3::down(),
+                    );
+            }
+            Some(EditorStageViewInputHoldState::Position(base)) => {
+                let app_window = AppWindow::wrap(window);
+                let mut points = [POINT {
+                    x: app_window.dip_to_pixels(base.0) as _,
+                    y: app_window.dip_to_pixels(base.1) as _,
+                }];
+                app_window.map_points_to_desktop(&mut points);
+                unsafe {
+                    SetCursorPos(points[0].x, points[0].y).expect("Failed to hold cursor");
+                }
+
+                let mut d = peridot_math::Vector2(x, y) - base;
+                d.0 *= -1.0;
+                let dir = peridot_math::Matrix3::from(
+                    this.borrow()
+                        .render_resources
+                        .borrow_mut()
+                        .camera
+                        .rotation
+                        .clone(),
+                ) * (d * 0.01).with_z(0.0);
+                this.borrow().render_resources.borrow_mut().camera.position += dir;
+            }
+            None => {
+                return;
+            }
+        }
 
         let current_size = this.borrow().ht.rect().clone();
         let mut camera_upload_buffer = AppSubsystemInstances::get()
@@ -5930,10 +5983,110 @@ impl InputEventHandler for WeakMut<EditorStageView> {
     }
 
     fn on_pointer_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        if !matches!(
+            this.borrow().input_hold_state,
+            Some(EditorStageViewInputHoldState::Direction(_)),
+        ) {
+            return;
+        }
+
+        this.borrow_mut().input_hold_state = None;
         unsafe {
             ShowCursor(true);
         }
         ctx.release_mouse_capture();
+    }
+
+    fn on_wheel_up(&self, _x: f32, _y: f32, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        if !matches!(
+            this.borrow().input_hold_state,
+            Some(EditorStageViewInputHoldState::Position(_)),
+        ) {
+            return;
+        }
+
+        this.borrow_mut().input_hold_state = None;
+        unsafe {
+            ShowCursor(true);
+        }
+        ctx.release_mouse_capture();
+    }
+
+    fn on_wheel_roll(&self, _x: f32, _y: f32, amount: f32, _ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+
+        let dir = peridot_math::Matrix3::from(
+            this.borrow()
+                .render_resources
+                .borrow()
+                .camera
+                .rotation
+                .clone(),
+        ) * peridot_math::Vector3(0.0, 0.0, amount * 0.1);
+        this.borrow().render_resources.borrow_mut().camera.position += dir;
+
+        let current_size = this.borrow().ht.rect().clone();
+        let mut camera_upload_buffer = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .alloc_upload_buffer(br::BufferDesc::new_for_type::<RenderCameraUniformData>(
+                br::BufferUsage::TRANSFER_SRC,
+            ))
+            .expect("Failed to create upload buffer");
+        camera_upload_buffer
+            .write_content(RenderCameraUniformData {
+                camera_view_projection_matrix: this
+                    .borrow()
+                    .render_resources
+                    .borrow()
+                    .camera
+                    .view_projection_matrix(current_size.Width / current_size.Height),
+                camera_inverse_view_matrix: this
+                    .borrow()
+                    .render_resources
+                    .borrow()
+                    .camera
+                    .inverse_view_matrix(),
+                // TODO: ここの値はcameraから取りたい
+                camera_persp_fov_rad: 60.0f32.to_radians(),
+                camera_aspect_wh: current_size.Width / current_size.Height,
+            })
+            .expect("Failed to write camera vp matrix");
+
+        AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .submit_transient_commands_and_wait(|rec| {
+                rec.copy_buffer(
+                    &camera_upload_buffer,
+                    &this.borrow().render_resources.borrow().camera_buffer,
+                    &[br::BufferCopy::mirror_data::<RenderCameraUniformData>(0)],
+                )
+                .pipeline_barrier_2(&br::DependencyInfo::new(
+                    &[br::MemoryBarrier2::new()
+                        .of_memory(
+                            br::AccessFlags2::TRANSFER.write,
+                            br::AccessFlags2::UNIFORM_READ,
+                        )
+                        .of_execution(
+                            br::PipelineStageFlags2::COPY,
+                            br::PipelineStageFlags2::VERTEX_SHADER,
+                        )],
+                    &[],
+                    &[],
+                ))
+            })
+            .expect("Failed to submit updating commands");
     }
 }
 
@@ -7736,12 +7889,13 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         } else {
             (x as _, y as _)
         };
-        let actions = state.input_state.on_mouse_move(
+        let (x, y) = (
             app_window.pixels_to_dip(x as _),
             app_window.pixels_to_dip(y as _),
         );
+        let actions = state.input_state.on_mouse_move(x, y);
         for a in actions {
-            a.execute(x as _, y as _, state, hwnd);
+            a.execute(x, y, state, hwnd);
         }
 
         let mut tme = TRACKMOUSEEVENT {
@@ -7768,12 +7922,13 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         };
 
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        let actions = state.input_state.on_mouse_down(
+        let (x, y) = (
             app_window.pixels_to_dip(x as _),
             app_window.pixels_to_dip(y as _),
         );
+        let actions = state.input_state.on_mouse_down(x, y);
         for a in actions {
-            a.execute(x as _, y as _, state, hwnd);
+            a.execute(x, y, state, hwnd);
         }
 
         return LRESULT(0);
@@ -7785,12 +7940,13 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         };
 
         let (x, y) = ((lp.0 & 0xffff) as i16, ((lp.0 >> 16) & 0xffff) as i16);
-        let actions = state.input_state.on_mouse_up(
+        let (x, y) = (
             app_window.pixels_to_dip(x as _),
             app_window.pixels_to_dip(y as _),
         );
+        let actions = state.input_state.on_mouse_up(x, y);
         for a in actions {
-            a.execute(x as _, y as _, state, hwnd);
+            a.execute(x, y, state, hwnd);
         }
 
         return LRESULT(0);
@@ -7876,6 +8032,74 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
 
         return LRESULT(0);
     }
+
+    if msg == WM_MOUSEWHEEL {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
+            // not initialized
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        };
+
+        let mut p = [POINT {
+            x: (lp.0 & 0xffff) as i16 as _,
+            y: ((lp.0 >> 16) & 0xffff) as i16 as _,
+        }];
+        app_window.map_points_from_desktop(&mut p);
+        let (cx, cy) = (
+            app_window.pixels_to_dip(p[0].x as _),
+            app_window.pixels_to_dip(p[0].y as _),
+        );
+
+        let actions = state.input_state.on_mouse_wheel_roll(
+            cx,
+            cy,
+            ((wp.0 >> 16) & 0xffff) as i16 as f32 / WHEEL_DELTA as f32,
+        );
+        for a in actions {
+            a.execute(cx, cy, state, hwnd);
+        }
+
+        return LRESULT(0);
+    }
+    if msg == WM_MBUTTONDOWN {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
+            // not initialized
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        };
+
+        let (cx, cy) = (
+            app_window.pixels_to_dip((lp.0 & 0xffff) as i16 as _),
+            app_window.pixels_to_dip(((lp.0 >> 16) & 0xffff) as i16 as _),
+        );
+
+        let actions = state.input_state.on_mouse_wheel_down(cx, cy);
+        for a in actions {
+            a.execute(cx, cy, state, hwnd);
+        }
+
+        return LRESULT(0);
+    }
+    if msg == WM_MBUTTONUP {
+        let app_window = AppWindow::wrap(hwnd);
+        let Some(state) = app_window.get_state_store() else {
+            // not initialized
+            return unsafe { DefWindowProcA(hwnd, msg, wp, lp) };
+        };
+
+        let (cx, cy) = (
+            app_window.pixels_to_dip((lp.0 & 0xffff) as i16 as _),
+            app_window.pixels_to_dip(((lp.0 >> 16) & 0xffff) as i16 as _),
+        );
+
+        let actions = state.input_state.on_mouse_wheel_up(cx, cy);
+        for a in actions {
+            a.execute(cx, cy, state, hwnd);
+        }
+
+        return LRESULT(0);
+    }
+
     if msg == WM_KILLFOCUS {
         ContextMenu::get_mut()
             .hide_all()
