@@ -201,7 +201,7 @@ impl AppSubsystemInstances {
                     .expect("Failed to get color stops collection")
                     .Append(
                         &compositor
-                            .CreateColorGradientStopWithOffsetAndColor(0.05, TAB_ACTIVE_BASE_COLOR)
+                            .CreateColorGradientStopWithOffsetAndColor(0.1, TAB_ACTIVE_BASE_COLOR)
                             .expect("Failed to create gradient stop"),
                     )
                     .expect("Failed to append color stop");
@@ -211,7 +211,7 @@ impl AppSubsystemInstances {
                     .Append(
                         &compositor
                             .CreateColorGradientStopWithOffsetAndColor(
-                                0.3,
+                                0.4,
                                 Color {
                                     A: 0,
                                     ..TAB_ACTIVE_BASE_COLOR
@@ -221,10 +221,10 @@ impl AppSubsystemInstances {
                     )
                     .expect("Failed to append color stop");
                 brush
-                    .SetStartPoint(Vector2 { X: 0.5, Y: 0.0 })
+                    .SetStartPoint(Vector2 { X: 0.5, Y: 1.0 })
                     .expect("Failed to set gradient start point");
                 brush
-                    .SetEndPoint(Vector2 { X: 0.5, Y: 0.5 })
+                    .SetEndPoint(Vector2 { X: 0.5, Y: 0.0 })
                     .expect("Failed to set gradient end point");
 
                 brush

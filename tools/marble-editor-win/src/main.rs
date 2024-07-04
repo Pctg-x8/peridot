@@ -165,8 +165,8 @@ const fn empty_mt_weak_mut<T>() -> MTWeakMut<T> {
     AtomicWeak::new()
 }
 
-const TAB_MARGIN_X: f32 = 10.0;
-const TAB_MARGIN_Y: f32 = 2.0;
+const TAB_MARGIN_X: f32 = 16.0;
+const TAB_MARGIN_Y: f32 = 6.0;
 const TAB_RADIUS: f32 = 4.0;
 const TAB_ACTIVE_LIT_COLOR: Color = Color {
     A: 255,
@@ -176,8 +176,8 @@ const TAB_ACTIVE_LIT_COLOR: Color = Color {
 };
 const TAB_ACTIVE_BASE_COLOR: Color = Color {
     A: 255,
-    R: 64,
-    G: 160,
+    R: 32,
+    G: 128,
     B: 255,
 };
 
@@ -1597,7 +1597,7 @@ pub struct PaneTabHeaderView {
     label: Cow<'static, str>,
     visual: LayerVisual,
     bg_visual: ShapeVisual,
-    active_overlay_visual: ShapeVisual,
+    active_overlay_visual: SpriteVisual,
     label_content_brush: CompositionSurfaceBrush,
     bg_hover_animation: ScalarKeyFrameAnimation,
     bg_hover_end_animation: ScalarKeyFrameAnimation,
@@ -1627,8 +1627,7 @@ impl PaneTabHeaderView {
         .expect("Failed to set corner radius");
         g.SetSize(Vector2 {
             X: text_width + TAB_MARGIN_X * 2.0,
-            // 高さ2倍にして下半分を見切れさせる（丸角にしない）
-            Y: (text_height + TAB_MARGIN_Y * 2.0) * 2.0,
+            Y: text_height + TAB_MARGIN_Y * 2.0,
         })?;
 
         Ok(g)
@@ -1687,6 +1686,10 @@ impl PaneTabHeaderView {
 
             v
         })?;
+        base.SetSize(Vector2 {
+            X: title_text.width + TAB_MARGIN_X * 2.0,
+            Y: title_text.height + TAB_MARGIN_Y * 2.0,
+        })?;
 
         let geometry = Self::create_geometry(title_text.width, title_text.height)?;
         let bg = {
@@ -1707,30 +1710,26 @@ impl PaneTabHeaderView {
             v
         };
         let active_overlay = {
-            let shape = AppSubsystemInstances::get()
-                .compositor
-                .CreateSpriteShapeWithGeometry(&geometry)?;
-            shape.SetFillBrush(
-                &AppSubsystemInstances::get()
-                    .ui_common_objects
-                    .tab_active_overlay_brush,
-            )?;
-
             let v = AppSubsystemInstances::get()
                 .compositor
-                .CreateShapeVisual()?;
-            v.Shapes()?.Append(&shape)?;
-            v.SetSize(view_size.clone())?;
+                .CreateSpriteVisual()?;
+            v.set_properties()
+                .brush(
+                    &AppSubsystemInstances::get()
+                        .ui_common_objects
+                        .tab_active_overlay_brush,
+                )?
+                .expand_to_parent()?;
+
             v
         };
 
-        let init_opacity = if init_active { 1.0 } else { 0.0 };
-        bg.SetOpacity(init_opacity)?;
-        active_overlay.SetOpacity(init_opacity)?;
+        bg.SetOpacity(0.0)?;
+        active_overlay.SetOpacity(if init_active { 1.0 } else { 0.0 })?;
 
         let children = base.Children()?;
-        children.InsertAtTop(&bg)?;
-        children.InsertAtTop(&active_overlay)?;
+        children.InsertAtBottom(&active_overlay)?;
+        children.InsertAtBottom(&bg)?;
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht_self = HitTestTree::new(
@@ -1800,6 +1799,11 @@ impl PaneTabHeaderView {
             return Ok(());
         }
 
+        if self.is_active {
+            // アクティブ状態のときは背景はアクティブにできない
+            return Ok(());
+        }
+
         match mode {
             PaneTabTransitionMode::Normal => self
                 .bg_visual
@@ -1813,11 +1817,6 @@ impl PaneTabHeaderView {
     fn deactivate_bg(&mut self, mode: PaneTabTransitionMode) -> windows::core::Result<()> {
         if !self.bg_active {
             // すでに非アクティブ
-            return Ok(());
-        }
-
-        if self.is_active {
-            // アクティブ状態のときは背景は非アクティブにできない
             return Ok(());
         }
 
@@ -1841,8 +1840,6 @@ impl PaneTabHeaderView {
         self.is_active = is_active;
 
         if is_active {
-            self.activate_bg(mode)?;
-        } else {
             self.deactivate_bg(mode)?;
         }
 
@@ -7491,7 +7488,10 @@ fn app() -> i32 {
         order: 1,
         is_dirty: false,
         details: ObjectDetails::SunLight {
-            rotation: peridot_math::QuaternionF32::ONE,
+            rotation: peridot_math::QuaternionF32::new(
+                45.0f32.to_radians(),
+                peridot_math::Vector3::right(),
+            ),
             intensity: 20.0,
         },
     };
