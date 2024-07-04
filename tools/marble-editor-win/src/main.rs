@@ -104,8 +104,8 @@ use windows::{
         Color,
         Composition::{
             CompositionRoundedRectangleGeometry, CompositionSurfaceBrush, ContainerVisual,
-            Diagnostics::CompositionDebugSettings, LayerVisual, ScalarKeyFrameAnimation,
-            ShapeVisual, SpriteVisual, VisualCollection,
+            Desktop::DesktopWindowTarget, Diagnostics::CompositionDebugSettings, LayerVisual,
+            ScalarKeyFrameAnimation, ShapeVisual, SpriteVisual, VisualCollection,
         },
     },
 };
@@ -7448,6 +7448,62 @@ fn main() {
     std::process::exit(r);
 }
 
+fn init_bg(root_visual: &ContainerVisual) -> windows::core::Result<()> {
+    let bg = AppSubsystemInstances::get()
+        .compositor
+        .CreateSpriteVisual()?;
+    bg.set_properties()
+        .brush(&{
+            let b = AppSubsystemInstances::get()
+                .compositor
+                .CreateLinearGradientBrush()
+                .expect("Failed to create bg brush");
+            let color_stops = b.ColorStops().expect("Failed to get color stop collection");
+            color_stops
+                .Append(
+                    &AppSubsystemInstances::get()
+                        .compositor
+                        .CreateColorGradientStopWithOffsetAndColor(
+                            0.0,
+                            Color {
+                                A: 16,
+                                R: 128,
+                                G: 32,
+                                B: 24,
+                            },
+                        )
+                        .expect("Failed to create color stop"),
+                )
+                .expect("Failed to append color stop");
+            color_stops
+                .Append(
+                    &AppSubsystemInstances::get()
+                        .compositor
+                        .CreateColorGradientStopWithOffsetAndColor(
+                            1.0,
+                            Color {
+                                A: 72,
+                                R: 24,
+                                G: 64,
+                                B: 128,
+                            },
+                        )
+                        .expect("Failed to create color stop"),
+                )
+                .expect("Failed to append color stop");
+            b.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })
+                .expect("Failed to set start point");
+            b.SetEndPoint(Vector2 { X: 1.0, Y: 1.0 })
+                .expect("Failed to set end point");
+
+            b
+        })?
+        .expand_to_parent()?;
+    root_visual.Children()?.InsertAtBottom(&bg)?;
+
+    Ok(())
+}
+
 fn app() -> i32 {
     let instance_handle = unsafe { GetModuleHandleA(None).expect("Failed to get instance handle") };
     let window_handle = WindowBuilder::new(
@@ -7545,90 +7601,32 @@ fn app() -> i32 {
         .SetRoot(&composition_root)
         .expect("Failed to set root visual");
 
-    if !MicaController::IsSupported().expect("Failed to get mica support") {
-        panic!("Mica is not supported");
+    if !MicaController::IsSupported().unwrap() {
+        panic!("mica is not supported");
     }
+    // enable mica background
 
-    let mica = MicaController::new().expect("Failed to get mica controller");
-    let system_backdrop_configuration =
-        SystemBackdropConfiguration::new().expect("Failed to create system backdrop configuration");
+    // どうやらMicaControllerか何かが生き残っていないとエラーになるっぽい？
+    let mica = MicaController::new().unwrap();
+    let system_backdrop_configuration = SystemBackdropConfiguration::new().unwrap();
     system_backdrop_configuration
         .SetIsInputActive(true)
-        .expect("Failed to set input active");
+        .unwrap();
     system_backdrop_configuration
         .SetTheme(SystemBackdropTheme::Default)
-        .expect("Failed to set theme");
-    mica.SetKind(MicaKind::BaseAlt)
-        .expect("Failed to set mica kind");
+        .unwrap();
+    mica.SetKind(MicaKind::BaseAlt).unwrap();
     mica.SetSystemBackdropConfiguration(&system_backdrop_configuration)
-        .expect("Failed to set backdrop config");
+        .unwrap();
 
     mica.AddSystemBackdropTarget(
         &desktop_window_target
             .cast::<ICompositionSupportsSystemBackdrop>()
-            .expect("Failed to get system backdrop support"),
+            .unwrap(),
     )
-    .expect("Failed to add backdrop target");
+    .unwrap();
 
-    let bg = app_subsystem_instances
-        .compositor
-        .CreateSpriteVisual()
-        .expect("Failed to create bg");
-    bg.SetBrush(&{
-        let b = app_subsystem_instances
-            .compositor
-            .CreateLinearGradientBrush()
-            .expect("Failed to create bg brush");
-        let color_stops = b.ColorStops().expect("Failed to get color stop collection");
-        color_stops
-            .Append(
-                &app_subsystem_instances
-                    .compositor
-                    .CreateColorGradientStopWithOffsetAndColor(
-                        0.0,
-                        Color {
-                            A: 16,
-                            R: 128,
-                            G: 32,
-                            B: 24,
-                        },
-                    )
-                    .expect("Failed to create color stop"),
-            )
-            .expect("Failed to append color stop");
-        color_stops
-            .Append(
-                &app_subsystem_instances
-                    .compositor
-                    .CreateColorGradientStopWithOffsetAndColor(
-                        1.0,
-                        Color {
-                            A: 72,
-                            R: 24,
-                            G: 64,
-                            B: 128,
-                        },
-                    )
-                    .expect("Failed to create color stop"),
-            )
-            .expect("Failed to append color stop");
-        b.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })
-            .expect("Failed to set start point");
-        b.SetEndPoint(Vector2 { X: 1.0, Y: 1.0 })
-            .expect("Failed to set end point");
-
-        b
-    })
-    .expect("Failed to set bg brush");
-    bg.SetRelativeOffsetAdjustment(Vector3::zero())
-        .expect("Failed to set bg offset");
-    bg.SetRelativeSizeAdjustment(Vector2::one())
-        .expect("Failed to set bg size");
-    composition_root
-        .Children()
-        .expect("Failed to get children collection")
-        .InsertAtBottom(&bg)
-        .expect("Failed to insert bg");
+    init_bg(&composition_root).expect("Failed to initialize bg visual");
 
     let composition_debug =
         CompositionDebugSettings::TryGetSettings(&app_subsystem_instances.compositor)
@@ -7656,7 +7654,7 @@ fn app() -> i32 {
 
     let hittest_tree_root = HitTestTree::new_unsized(Some(()), 0.0, 0.0);
 
-    let mut view_context = ViewContext1 {
+    let view_context = ViewContext1 {
         current_dpi: window_handle.current_dpi,
     };
 
@@ -7665,34 +7663,34 @@ fn app() -> i32 {
             .expect("Failed to initialize docking manager"),
     );
 
-    let pane_group1 = TabGroupPaneView::new(&pane_group_docking_manager)
+    let sequences_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context, &state)
+    TabGroupPaneView::add_tab::<TimelineTabPresenter>(&sequences_pane, &view_context, &state)
         .expect("Failed to create SceneViewPaneTabHeader");
-    pane_group1.borrow_mut().rearrange(&ResizeContext {
+    sequences_pane.borrow_mut().rearrange(&ResizeContext {
         current_dpi: window_handle.current_dpi,
     });
 
     let main_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<StageTabPresenter>(&main_pane, &mut view_context, &state)
+    TabGroupPaneView::add_tab::<StageTabPresenter>(&main_pane, &view_context, &state)
         .expect("Failed to create StagePaneTab");
-    TabGroupPaneView::add_tab::<PreviewTabPresenter>(&main_pane, &mut view_context, &state)
+    TabGroupPaneView::add_tab::<PreviewTabPresenter>(&main_pane, &view_context, &state)
         .expect("Failed to create PreviewPaneTab");
-    TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&main_pane, &mut view_context, &state)
+    TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&main_pane, &view_context, &state)
         .expect("Failed to create ProjectSettingsPaneTabHeader");
     main_pane.borrow_mut().rearrange(&ResizeContext {
         current_dpi: window_handle.current_dpi,
     });
 
-    let pane_group3 = TabGroupPaneView::new(&pane_group_docking_manager)
+    let inspection_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context, &state)
+    TabGroupPaneView::add_tab::<InspectorTabPresenter>(&inspection_pane, &view_context, &state)
         .expect("Failed to create InspectorPaneTabHeader");
-    pane_group3.borrow_mut().rearrange(&ResizeContext {
+    inspection_pane.borrow_mut().rearrange(&ResizeContext {
         current_dpi: window_handle.current_dpi,
     });
-    pane_group3
+    inspection_pane
         .borrow_mut()
         .resize(
             256.0,
@@ -7705,12 +7703,8 @@ fn app() -> i32 {
 
     let explorers_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<AssetExplorerTabPresenter>(
-        &explorers_pane,
-        &mut view_context,
-        &state,
-    )
-    .expect("Failed to create AssetExplorerTab");
+    TabGroupPaneView::add_tab::<AssetExplorerTabPresenter>(&explorers_pane, &view_context, &state)
+        .expect("Failed to create AssetExplorerTab");
     explorers_pane.borrow_mut().rearrange(&ResizeContext {
         current_dpi: window_handle.current_dpi,
     });
@@ -7727,12 +7721,8 @@ fn app() -> i32 {
 
     let scene_subinfo_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
-    TabGroupPaneView::add_tab::<ObjectTreeTabPresenter>(
-        &scene_subinfo_pane,
-        &mut view_context,
-        &state,
-    )
-    .expect("Failed to create ObjectTreeTab");
+    TabGroupPaneView::add_tab::<ObjectTreeTabPresenter>(&scene_subinfo_pane, &view_context, &state)
+        .expect("Failed to create ObjectTreeTab");
     scene_subinfo_pane.borrow_mut().rearrange(&ResizeContext {
         current_dpi: window_handle.current_dpi,
     });
@@ -7752,12 +7742,12 @@ fn app() -> i32 {
             PaneDockLayer::new_on(
                 DockDirection::Right,
                 parent,
-                |parent, _| PaneDockLayer::new_filled(&pane_group3, parent),
+                |parent, _| PaneDockLayer::new_filled(&inspection_pane, parent),
                 |parent, ctx| {
                     PaneDockLayer::new_on(
                         DockDirection::Top,
                         parent,
-                        |parent, _| PaneDockLayer::new_filled(&pane_group1, parent),
+                        |parent, _| PaneDockLayer::new_filled(&sequences_pane, parent),
                         |parent, ctx| {
                             PaneDockLayer::new_on(
                                 DockDirection::Bottom,
@@ -7783,7 +7773,7 @@ fn app() -> i32 {
                     )
                     .expect("Failed to create pane dock state")
                 },
-                &mut view_context,
+                &view_context,
             )
             .expect("Failed to create pane dock state"),
         )
