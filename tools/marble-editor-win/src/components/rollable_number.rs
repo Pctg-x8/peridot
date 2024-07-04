@@ -18,7 +18,7 @@ use crate::{
     app_subsystem_instances::AppSubsystemInstances,
     new_cyclic_shared_mut,
     observable::EventBus,
-    uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext},
+    uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView2, ViewContext},
     utils::RectExtensions,
     winapi_extras::{VectorScalarConstructor, VisualExtensions},
     AppWindow, SharedMut, WeakMut,
@@ -171,20 +171,15 @@ impl RollableNumberView {
         Ok(())
     }
 }
-impl MountableView for RollableNumberView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for RollableNumberView {
+    fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
         self.ht.unmount();
 

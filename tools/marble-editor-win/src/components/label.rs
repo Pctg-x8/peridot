@@ -8,7 +8,7 @@ use windows::{
 
 use crate::{
     app_subsystem_instances::AppSubsystemInstances,
-    uikit::{HitTestTree, MountableView, ViewContext},
+    uikit::{HitTestTree, MountableView2, ViewContext},
     winapi_extras::VisualExtensions,
 };
 
@@ -46,19 +46,14 @@ impl LabelView {
         self.root.SetOffset(pos)
     }
 }
-impl MountableView for LabelView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        _onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for LabelView {
+    fn mount(&self, onto: &VisualCollection, _onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
 
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
 
         Ok(())

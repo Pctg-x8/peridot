@@ -54,7 +54,7 @@ use crate::{
     bindgen::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     new_cyclic_shared_mut, new_mt_shared_mut, new_shared_mut,
     uikit::{
-        HitTestTree, InputContext, InputEventHandler, InputState, MountableView, ResizeContext,
+        HitTestTree, InputContext, InputEventHandler, InputState, MountableView2, ResizeContext,
         ViewContext,
     },
     utils::RectExtensions,
@@ -65,10 +65,6 @@ use crate::{
     },
     MTSharedMut, MTWeakMut, SharedMut, WeakMut,
 };
-
-trait ContextMenuEntryView: MountableView {
-    fn set_menu_position(&mut self, x: f32, y: f32);
-}
 
 pub struct ContextMenuHeaderView {
     root: SpriteVisual,
@@ -204,16 +200,8 @@ impl ContextMenuHeaderView {
         self.required_width
     }
 }
-impl ContextMenuEntryView for ContextMenuHeaderView {
-    fn set_menu_position(&mut self, _x: f32, _y: f32) {}
-}
-impl MountableView for ContextMenuHeaderView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        _onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for ContextMenuHeaderView {
+    fn mount(&self, onto: &VisualCollection, _onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         self.root
             .StartAnimation(h!("Opacity"), &self.enter_opacity_animation)?;
@@ -223,7 +211,7 @@ impl MountableView for ContextMenuHeaderView {
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
 
         Ok(())
@@ -287,22 +275,14 @@ impl ContextMenuSeparatorView {
         Self::PADDING_Y * 2.0 + 1.0
     }
 }
-impl ContextMenuEntryView for ContextMenuSeparatorView {
-    fn set_menu_position(&mut self, _x: f32, _y: f32) {}
-}
-impl MountableView for ContextMenuSeparatorView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        _onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for ContextMenuSeparatorView {
+    fn mount(&self, onto: &VisualCollection, _onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
 
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
 
         Ok(())
@@ -732,16 +712,8 @@ impl ContextMenuCommandView {
         )
     }
 }
-impl ContextMenuEntryView for ContextMenuCommandView {
-    fn set_menu_position(&mut self, _x: f32, _y: f32) {}
-}
-impl MountableView for ContextMenuCommandView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for ContextMenuCommandView {
+    fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         self.label.StartAnimationGroup(&self.enter_animation)?;
         if let Some((v, a)) = self.submenu_icon.as_ref() {
@@ -756,7 +728,7 @@ impl MountableView for ContextMenuCommandView {
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
 
         if self.active {
@@ -842,7 +814,7 @@ pub struct ContextMenuInstance {
     unscaled_base: SpriteVisual,
     content_root: ContainerVisual,
     ht_root: HitTestTree,
-    entries: Vec<SharedMut<dyn ContextMenuEntryView>>,
+    entries: Vec<SharedMut<dyn MountableView2>>,
     current_dpi: f32,
     input_state: MTSharedMut<InputState>,
     content_size: Vector2,
@@ -963,7 +935,7 @@ impl ContextMenuInstance {
     ) -> windows::core::Result<()> {
         let thisref = this.read();
         for e in thisref.entries.iter() {
-            e.borrow().unmount(&*thisref)?;
+            e.borrow().unmount()?;
         }
         drop(thisref);
         this.write().entries.clear();
@@ -1029,7 +1001,7 @@ impl ContextMenuInstance {
         let thisref = this.read();
         let children = thisref.content_root.Children()?;
         for e in thisref.entries.iter() {
-            e.borrow().mount(&children, &thisref.ht_root, &*thisref)?;
+            e.borrow().mount(&children, &thisref.ht_root)?;
         }
         drop(thisref);
 
@@ -1067,7 +1039,7 @@ impl ContextMenuInstance {
 
     pub fn destroy(&mut self) -> windows::core::Result<()> {
         for e in self.entries.iter() {
-            e.borrow().unmount(self)?;
+            e.borrow().unmount()?;
         }
         self.entries.clear();
 

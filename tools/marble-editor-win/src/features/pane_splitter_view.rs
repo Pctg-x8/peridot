@@ -11,9 +11,7 @@ use windows::{
 use crate::{
     app_subsystem_instances::AppSubsystemInstances,
     empty_weak_mut, new_cyclic_shared_mut,
-    uikit::{
-        CursorStyle, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext,
-    },
+    uikit::{CursorStyle, HitTestTree, InputContext, InputEventHandler, MountableView2},
     utils::RectExtensions,
     winapi_extras::{
         timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
@@ -79,11 +77,7 @@ impl PaneSplitterView {
             .duration(timespan_ms(100))?;
 
         Ok(new_cyclic_shared_mut(|wthis| {
-            let ht = HitTestTree::new(
-                Some(wthis.clone()),
-                Rect::from_size(1.0, 1.0),
-                Rect::empty(),
-            );
+            let ht = HitTestTree::new(Some(wthis.clone()), Rect::empty(), Rect::empty());
 
             Self {
                 visual,
@@ -118,20 +112,15 @@ impl PaneSplitterView {
         Ok(())
     }
 }
-impl MountableView for PaneSplitterView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for PaneSplitterView {
+    fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.visual)?;
         onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
         self.ht.unmount();
 

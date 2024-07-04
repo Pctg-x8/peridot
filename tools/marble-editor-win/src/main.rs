@@ -25,7 +25,7 @@ use observable::ObservationDisconnector;
 use parking_lot::RwLock;
 use peridot_math::{Camera, One, ProjectionMethod};
 use uikit::{
-    HitTestTree, InputContext, InputEventHandler, InputState, MountableView, ResizeContext,
+    HitTestTree, InputContext, InputEventHandler, InputState, MountableView2, ResizeContext,
     ViewContext,
 };
 use utils::{
@@ -58,7 +58,7 @@ use windows::{
             DirectComposition::{
                 DCompositionCreateSurfaceHandle, COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE,
             },
-            DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+            DirectWrite::{IDWriteTextFormat, DWRITE_FONT_WEIGHT_NORMAL},
             Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::{
                 Common::{
@@ -93,10 +93,10 @@ use windows::{
                 IDI_APPLICATION, MSG, NCCALCSIZE_PARAMS, PM_REMOVE, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
                 SWP_FRAMECHANGED, SW_MAXIMIZE, SW_SHOWNORMAL, WHEEL_DELTA, WINDOWPLACEMENT,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CREATE, WM_DESTROY, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP,
-                WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSELEAVE,
-                WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-                WM_WINDOWPOSCHANGED, WNDCLASSEXA, WNDCLASS_STYLES,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+                WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+                WM_QUIT, WM_RBUTTONUP, WM_SETCURSOR, WM_WINDOWPOSCHANGED, WNDCLASSEXA,
+                WNDCLASS_STYLES,
             },
         },
     },
@@ -524,23 +524,20 @@ impl PaneDockLayer {
         &self,
         onto: &VisualCollection,
         onto_ht: &HitTestTree,
-        view_context: &dyn ViewContext,
     ) -> windows::core::Result<()> {
         match self {
             // no child
             Self::EmptyRoot(None, _) => Ok(()),
-            Self::EmptyRoot(Some(r), _) => r.borrow().mount_recursive(onto, onto_ht, view_context),
+            Self::EmptyRoot(Some(r), _) => r.borrow().mount_recursive(onto, onto_ht),
             Self::Docked {
                 docked,
                 splitter,
                 rest,
                 ..
             } => {
-                docked
-                    .borrow()
-                    .mount_recursive(onto, onto_ht, view_context)?;
-                splitter.borrow().mount(onto, onto_ht, view_context)?;
-                rest.borrow().mount_recursive(onto, onto_ht, view_context)
+                docked.borrow().mount_recursive(onto, onto_ht)?;
+                splitter.borrow().mount(onto, onto_ht)?;
+                rest.borrow().mount_recursive(onto, onto_ht)
             }
             Self::Fill { inner_view, .. } => inner_view.borrow().mount(onto, onto_ht),
         }
@@ -629,7 +626,7 @@ impl PaneDockLayer {
     }
 
     /// returns: relayout root
-    pub fn undock(this: &SharedMut<Self>, view_context: &dyn ViewContext) -> SharedMut<Self> {
+    pub fn undock(this: &SharedMut<Self>) -> SharedMut<Self> {
         let parent = this
             .borrow()
             .parent()
@@ -663,7 +660,7 @@ impl PaneDockLayer {
                     .replace_child(&parent, new_child);
                 splitter
                     .borrow()
-                    .unmount(view_context)
+                    .unmount()
                     .expect("Failed to unmounting splitter");
                 parent1.upgrade().unwrap()
             }
@@ -830,17 +827,13 @@ impl PaneGroupDockingManager {
         })
     }
 
-    fn set_layout(
-        &mut self,
-        layout: SharedMut<PaneDockLayer>,
-        view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+    fn set_layout(&mut self, layout: SharedMut<PaneDockLayer>) -> windows::core::Result<()> {
         let children = self.placement_visual.Children()?;
         children.RemoveAll()?;
         self.ht_placement_root.remove_all_children();
         layout
             .borrow()
-            .mount_recursive(&children, &self.ht_placement_root, view_context)?;
+            .mount_recursive(&children, &self.ht_placement_root)?;
 
         self.docks = layout;
         Ok(())
@@ -874,18 +867,12 @@ impl PaneGroupDockingManager {
 
         Ok(())
     }
-    fn mount_splitter_only(
-        &self,
-        layout: &PaneDockLayer,
-        view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+    fn mount_splitter_only(&self, layout: &PaneDockLayer) -> windows::core::Result<()> {
         match layout {
             PaneDockLayer::EmptyRoot(_, _) | PaneDockLayer::Fill { .. } => Ok(()),
-            PaneDockLayer::Docked { splitter, .. } => splitter.borrow().mount(
-                &self.placement_visual.Children()?,
-                &self.ht_placement_root,
-                view_context,
-            ),
+            PaneDockLayer::Docked { splitter, .. } => splitter
+                .borrow()
+                .mount(&self.placement_visual.Children()?, &self.ht_placement_root),
         }
     }
     fn mount_filled(&self, layout: &PaneDockLayer) -> windows::core::Result<()> {
@@ -949,7 +936,6 @@ impl TabGroupPaneView {
 
     pub fn new(
         docking_manager: &SharedMut<PaneGroupDockingManager>,
-        ctx: &(impl ViewContext + ?Sized),
     ) -> windows::core::Result<SharedMut<Self>> {
         let root = AppSubsystemInstances::get()
             .compositor
@@ -1011,17 +997,67 @@ impl TabGroupPaneView {
         self.bound_dock_layer = layer.clone();
     }
 
-    pub fn move_tab_into(
+    pub fn add_tab<T: PaneTabPresenter + 'static>(
+        this: &SharedMut<Self>,
+        ctx: &(impl ViewContext + ?Sized),
+        app_state: &MTSharedMut<AppState>,
+    ) -> windows::core::Result<SharedMut<T>> {
+        // 最初のタブなら初手active
+        let init_active = this.borrow().tabs.is_empty();
+        let header_view = PaneTabHeaderView::new(T::INIT_TAB_NAME, init_active, ctx)?;
+        let content_presenter = new_shared_mut(T::new(&header_view, ctx, app_state));
+        Self::add_tab_raw(this, header_view, content_presenter.clone())?;
+
+        if init_active {
+            // first tab
+            let thisref = this.borrow();
+            content_presenter.borrow_mut().build_content_view(
+                &thisref.content_area,
+                &thisref.ht_ref_content,
+                &ctx,
+                app_state,
+            )?;
+            content_presenter
+                .borrow_mut()
+                .on_resize(thisref.ht_ref_content.size(), &ctx.resize_context())?;
+        }
+
+        Ok(content_presenter)
+    }
+
+    fn add_tab_raw(
+        this: &SharedMut<Self>,
+        header: SharedMut<PaneTabHeaderView>,
+        content: SharedMut<dyn PaneTabContentPresenter>,
+    ) -> windows::core::Result<usize> {
+        let new_index = this.borrow().tabs.len();
+        header.borrow_mut().bind_group_view(this, new_index);
+        header
+            .borrow()
+            .mount(&this.borrow().root.Children()?, &this.borrow().ht_ref)?;
+
+        this.borrow_mut().tabs.push((header, content));
+        Ok(new_index)
+    }
+
+    fn remove_tab(
         &mut self,
         tab: &SharedMut<PaneTabHeaderView>,
-        target: &SharedMut<Self>,
         view_ctx: &(impl ViewContext + ?Sized),
         app_state: &MTSharedMut<AppState>,
-    ) -> windows::core::Result<()> {
-        let index = tab.borrow().index_in_group;
+    ) -> windows::core::Result<
+        Option<(
+            SharedMut<PaneTabHeaderView>,
+            SharedMut<dyn PaneTabContentPresenter>,
+        )>,
+    > {
+        let Some(index) = self.tabs.iter().position(|(h, _)| Rc::ptr_eq(h, tab)) else {
+            // 対応するタブがない
+            return Ok(None);
+        };
 
         if tab.borrow().is_active {
-            // アクティブを付け替える（0個になる場合はどのみち消されるのでコンテンツのunmountだけしておく）
+            // アクティブを付け替える（0個になる場合はタブの非アクティブ化だけ）
             if self.tabs.len() > 1 {
                 let new_active = if index == 0 { 1 } else { index - 1 };
                 self.switch_active(new_active, view_ctx, app_state)?;
@@ -1029,10 +1065,24 @@ impl TabGroupPaneView {
                 self.inactive_current(view_ctx, app_state, PaneTabTransitionMode::Normal)?;
             }
         }
-        tab.borrow().unmount(&view_ctx)?;
-        let (tab, content) = self.tabs.remove(index);
+        tab.borrow().unmount()?;
 
-        let new_tab_index = Self::add_tab_raw(target, &tab, content.clone(), view_ctx)?;
+        Ok(Some(self.tabs.remove(index)))
+    }
+
+    pub fn move_tab_into(
+        &mut self,
+        tab: &SharedMut<PaneTabHeaderView>,
+        target: &SharedMut<Self>,
+        view_ctx: &(impl ViewContext + ?Sized),
+        app_state: &MTSharedMut<AppState>,
+    ) -> windows::core::Result<()> {
+        let Some((tab, content)) = self.remove_tab(tab, view_ctx, app_state)? else {
+            // 対応するタブがない
+            return Ok(());
+        };
+
+        let new_tab_index = Self::add_tab_raw(target, tab, content)?;
         // activate this tab
         target
             .borrow_mut()
@@ -1047,84 +1097,28 @@ impl TabGroupPaneView {
         view_ctx: &(impl ViewContext + ?Sized),
         app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<Option<SharedMut<Self>>> {
-        let Some(index) = self.tabs.iter().position(|(h, _)| Rc::ptr_eq(h, tab)) else {
+        let Some((tab, content)) = self.remove_tab(tab, view_ctx, app_state)? else {
             // 対応するタブがない
             return Ok(None);
         };
-
-        if tab.borrow().is_active {
-            // アクティブを付け替える（0個になる場合はどのみち消されるのでコンテンツのunmountだけしておく）
-            if self.tabs.len() > 1 {
-                let new_active = if index == 0 { 1 } else { index - 1 };
-                self.switch_active(new_active, view_ctx, app_state)?;
-            } else {
-                self.inactive_current(view_ctx, app_state, PaneTabTransitionMode::Normal)?;
-            }
-        }
-        tab.borrow().unmount(&view_ctx)?;
-        let (tab, content) = self.tabs.remove(index);
 
         let new_group = Self::new(
             &self
                 .docking_manager
                 .upgrade()
                 .expect("Docking Manager has dead"),
-            view_ctx,
         )?;
-        Self::add_tab_raw(&new_group, &tab, content.clone(), view_ctx)?;
+        Self::add_tab_raw(&new_group, tab.clone(), content.clone())?;
 
-        // this is the first tab
-        content.borrow_mut().build_content_view(
-            &new_group.borrow().content_area,
-            &self.ht_ref_content,
+        // activate first
+        new_group.borrow_mut().current_active = 0;
+        new_group.borrow_mut().active_current(
             &view_ctx,
             app_state,
+            PaneTabTransitionMode::Immediate,
         )?;
-        tab.borrow_mut()
-            .set_active(true, PaneTabTransitionMode::Immediate)?;
 
         Ok(Some(new_group))
-    }
-
-    pub fn add_tab<T: PaneTabPresenter + 'static>(
-        this: &SharedMut<Self>,
-        ctx: &(impl ViewContext + ?Sized),
-        app_state: &MTSharedMut<AppState>,
-    ) -> windows::core::Result<SharedMut<T>> {
-        let header_view =
-            PaneTabHeaderView::new(T::INIT_TAB_NAME, this.borrow().tabs.is_empty(), ctx)?;
-        let content_presenter = new_shared_mut(T::new(&header_view, ctx, app_state));
-        Self::add_tab_raw(this, &header_view, content_presenter.clone(), ctx)?;
-
-        let thisref = this.borrow();
-        if thisref.tabs.len() == 1 {
-            // first tab
-            content_presenter.borrow_mut().build_content_view(
-                &thisref.content_area,
-                &thisref.ht_ref_content,
-                &ctx,
-                app_state,
-            )?;
-        }
-
-        Ok(content_presenter)
-    }
-
-    fn add_tab_raw(
-        this: &SharedMut<Self>,
-        header: &SharedMut<PaneTabHeaderView>,
-        content: SharedMut<dyn PaneTabContentPresenter>,
-        view_ctx: &(impl ViewContext + ?Sized),
-    ) -> windows::core::Result<usize> {
-        let new_index = this.borrow().tabs.len();
-        header.borrow_mut().bind_group_view(this, new_index);
-        let mut thisref = this.borrow_mut();
-        thisref.tabs.push((header.clone(), content));
-        header
-            .borrow()
-            .mount(&thisref.root.Children()?, &thisref.ht_ref, &view_ctx)?;
-
-        Ok(new_index)
     }
 
     fn readjust_content_area(&mut self, resize_ctx: &ResizeContext) -> windows::core::Result<()> {
@@ -1146,10 +1140,10 @@ impl TabGroupPaneView {
             content_area.Height,
         );
 
-        self.tabs[self.current_active]
-            .1
+        self.current_content()
             .borrow_mut()
             .on_resize(content_area.size(), resize_ctx)?;
+
         Ok(())
     }
 
@@ -1246,15 +1240,35 @@ impl TabGroupPaneView {
         app_state: &MTSharedMut<AppState>,
         tab_transition_mode: PaneTabTransitionMode,
     ) -> windows::core::Result<()> {
-        self.tabs[self.current_active]
-            .1
+        let (tab, content) = &self.tabs[self.current_active];
+
+        content
             .borrow_mut()
             .on_hide_content_view(&view_ctx, app_state)?;
-        self.tabs[self.current_active]
-            .0
-            .borrow_mut()
-            .set_active(false, tab_transition_mode)?;
+        tab.borrow_mut().set_active(false, tab_transition_mode)?;
         self.content_area.Children()?.RemoveAll()?;
+
+        Ok(())
+    }
+
+    fn active_current(
+        &mut self,
+        view_ctx: &(impl ViewContext + ?Sized),
+        app_state: &MTSharedMut<AppState>,
+        tab_transition_mode: PaneTabTransitionMode,
+    ) -> windows::core::Result<()> {
+        let (tab, content) = &self.tabs[self.current_active];
+
+        content.borrow_mut().build_content_view(
+            &self.content_area,
+            &self.ht_ref_content,
+            &view_ctx,
+            app_state,
+        )?;
+        content
+            .borrow_mut()
+            .on_resize(self.ht_ref_content.size(), &view_ctx.resize_context())?;
+        tab.borrow_mut().set_active(true, tab_transition_mode)?;
 
         Ok(())
     }
@@ -1273,19 +1287,7 @@ impl TabGroupPaneView {
 
         self.inactive_current(view_ctx, app_state, PaneTabTransitionMode::Normal)?;
         self.current_active = new_active;
-        self.tabs[self.current_active]
-            .1
-            .borrow_mut()
-            .build_content_view(
-                &self.content_area,
-                &self.ht_ref_content,
-                &view_ctx,
-                app_state,
-            )?;
-        self.tabs[self.current_active]
-            .0
-            .borrow_mut()
-            .set_active(true, PaneTabTransitionMode::Normal)?;
+        self.active_current(view_ctx, app_state, PaneTabTransitionMode::Normal)?;
 
         Ok(())
     }
@@ -1386,7 +1388,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Left(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -1407,7 +1409,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1423,7 +1425,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Right(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -1447,7 +1449,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .upgrade()
                         .unwrap()
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1463,7 +1465,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Top(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -1487,7 +1489,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .upgrade()
                         .unwrap()
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1503,7 +1505,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             PaneDockingRecommendation::Bottom(d) => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
                 if !Rc::ptr_eq(&bound_dock_layer, &d) {
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                     let dest_parent = d
                         .borrow()
@@ -1527,7 +1529,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
                         .upgrade()
                         .unwrap()
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -1542,7 +1544,7 @@ impl InputEventHandler for WeakMut<TabGroupPaneView> {
             }
             PaneDockingRecommendation::Free => {
                 let bound_dock_layer = this.borrow().bound_dock_layer.upgrade().unwrap();
-                let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                 this.borrow()
                     .unmount()
@@ -1632,16 +1634,9 @@ impl PaneTabHeaderView {
         Ok(g)
     }
 
-    pub fn new(
-        title: impl Into<Cow<'static, str>>,
-        init_active: bool,
-        ctx: &(impl ViewContext + ?Sized),
-    ) -> windows::core::Result<SharedMut<Self>> {
-        let base = AppSubsystemInstances::get()
-            .compositor
-            .CreateLayerVisual()?;
-        let title = title.into();
-        let font = if init_active {
+    #[inline]
+    fn font(active: bool) -> IDWriteTextFormat {
+        if active {
             AppSubsystemInstances::get()
                 .ui_common_objects
                 .tab_active_title_font
@@ -1651,7 +1646,20 @@ impl PaneTabHeaderView {
                 .ui_common_objects
                 .tab_title_font
                 .clone()
-        };
+        }
+    }
+
+    pub fn new(
+        title: impl Into<Cow<'static, str>>,
+        init_active: bool,
+        ctx: &(impl ViewContext + ?Sized),
+    ) -> windows::core::Result<SharedMut<Self>> {
+        let base = AppSubsystemInstances::get()
+            .compositor
+            .CreateLayerVisual()?;
+
+        let title = title.into();
+        let font = Self::font(init_active);
         let title_text = AppSubsystemInstances::get()
             .text_surface_stock
             .borrow_mut()
@@ -1663,24 +1671,22 @@ impl PaneTabHeaderView {
         let label_content_brush = AppSubsystemInstances::get()
             .compositor
             .CreateSurfaceBrushWithSurface(&title_text.surface)?;
-        base.Children()
-            .expect("Failed to get children collection")
-            .InsertAtTop(&{
-                let v = AppSubsystemInstances::get()
-                    .compositor
-                    .CreateSpriteVisual()?;
-                v.SetBrush(&label_content_brush)?;
-                v.SetSize(title_text.visual_size())?;
-                v.SetAnchorPoint(Vector2::scalar(0.5))?;
-                v.SetOffset(Vector3 {
+        base.Children()?.InsertAtTop(&{
+            let v = AppSubsystemInstances::get()
+                .compositor
+                .CreateSpriteVisual()?;
+            v.set_properties()
+                .brush(&label_content_brush)?
+                .size(title_text.visual_size())?
+                .anchor_point(Vector2::scalar(0.5))?
+                .offset(Vector3 {
                     X: title_text.width * 0.5 + TAB_MARGIN_X,
                     Y: title_text.height * 0.5 + TAB_MARGIN_Y,
                     Z: 0.0,
                 })?;
 
-                v
-            })
-            .expect("Failed to insert visual");
+            v
+        })?;
 
         let geometry = Self::create_geometry(title_text.width, title_text.height)?;
         let bg = {
@@ -1718,17 +1724,13 @@ impl PaneTabHeaderView {
             v
         };
 
-        if init_active {
-            bg.SetOpacity(1.0)?;
-            active_overlay.SetOpacity(1.0)?;
-        } else {
-            bg.SetOpacity(0.0)?;
-            active_overlay.SetOpacity(0.0)?;
-        }
+        let init_opacity = if init_active { 1.0 } else { 0.0 };
+        bg.SetOpacity(init_opacity)?;
+        active_overlay.SetOpacity(init_opacity)?;
 
         let children = base.Children()?;
-        children.InsertAtBottom(&active_overlay)?;
-        children.InsertAtBottom(&bg)?;
+        children.InsertAtTop(&bg)?;
+        children.InsertAtTop(&active_overlay)?;
 
         Ok(new_cyclic_shared_mut(|wthis| {
             let ht_self = HitTestTree::new(
@@ -1768,12 +1770,7 @@ impl PaneTabHeaderView {
                 width: view_size.X,
                 height: view_size.Y,
                 drag_base_point: None,
-                preview_rect: Rect {
-                    X: 0.0,
-                    Y: 0.0,
-                    Width: view_size.X,
-                    Height: view_size.Y,
-                },
+                preview_rect: Rect::from_size(view_size.X, view_size.Y),
             }
         }))
     }
@@ -1799,6 +1796,7 @@ impl PaneTabHeaderView {
 
     fn activate_bg(&mut self, mode: PaneTabTransitionMode) -> windows::core::Result<()> {
         if self.bg_active {
+            // すでにアクティブ
             return Ok(());
         }
 
@@ -1814,11 +1812,12 @@ impl PaneTabHeaderView {
     }
     fn deactivate_bg(&mut self, mode: PaneTabTransitionMode) -> windows::core::Result<()> {
         if !self.bg_active {
+            // すでに非アクティブ
             return Ok(());
         }
 
         if self.is_active {
-            // アクティブ状態のときは非アクティブにできない
+            // アクティブ状態のときは背景は非アクティブにできない
             return Ok(());
         }
 
@@ -1841,7 +1840,7 @@ impl PaneTabHeaderView {
         let requires_transition = self.is_active != is_active;
         self.is_active = is_active;
 
-        if self.is_active {
+        if is_active {
             self.activate_bg(mode)?;
         } else {
             self.deactivate_bg(mode)?;
@@ -1862,17 +1861,7 @@ impl PaneTabHeaderView {
                     .SetOpacity(if is_active { 1.0 } else { 0.0 })?,
             }
 
-            let font = if is_active {
-                AppSubsystemInstances::get()
-                    .ui_common_objects
-                    .tab_active_title_font
-                    .clone()
-            } else {
-                AppSubsystemInstances::get()
-                    .ui_common_objects
-                    .tab_title_font
-                    .clone()
-            };
+            let font = Self::font(is_active);
             let new_label_surface = AppSubsystemInstances::get()
                 .text_surface_stock
                 .borrow_mut()
@@ -1884,20 +1873,15 @@ impl PaneTabHeaderView {
         Ok(())
     }
 }
-impl MountableView for PaneTabHeaderView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for PaneTabHeaderView {
+    fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.visual)?;
         onto_ht.add_child(&self.hittest_tree_self);
 
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.visual.Parent()?.Children()?.Remove(&self.visual)?;
         self.hittest_tree_self.unmount();
 
@@ -2043,7 +2027,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2084,7 +2068,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2111,7 +2095,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2152,7 +2136,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2179,7 +2163,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2220,7 +2204,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2247,7 +2231,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                     if group_view.borrow().tabs.is_empty() {
                         // destroy group view
-                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                        let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                         group_view
                             .borrow()
                             .unmount()
@@ -2288,7 +2272,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
                     .expect("Failed to create new dock layer");
                     docking_manager
                         .borrow()
-                        .mount_splitter_only(&new_layer.borrow(), &ctx)
+                        .mount_splitter_only(&new_layer.borrow())
                         .expect("Failed to mount new splitter");
                     dest_parent.borrow_mut().replace_child(&d, &new_layer);
                     dest_parent
@@ -2299,7 +2283,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
             }
             PaneDockingRecommendation::Free => {
                 let bound_dock_layer = group_view.borrow().bound_dock_layer.upgrade().unwrap();
-                let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
 
                 group_view
                     .borrow()
@@ -2330,7 +2314,7 @@ impl InputEventHandler for WeakMut<PaneTabHeaderView> {
 
                 if group_view.borrow().tabs.is_empty() {
                     // destroy group view
-                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer, &ctx);
+                    let relayout_root = PaneDockLayer::undock(&bound_dock_layer);
                     group_view
                         .borrow()
                         .unmount()
@@ -2369,10 +2353,11 @@ pub trait PaneTabContentPresenter {
         app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()>;
 
+    #[allow(unused_variables)]
     fn on_resize(
         &mut self,
-        _new_size: Vector2,
-        _resize_ctx: &ResizeContext,
+        new_size: Vector2,
+        resize_ctx: &ResizeContext,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -2388,17 +2373,18 @@ pub trait PaneTabContentPresenter {
 }
 pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
     const INIT_TAB_NAME: &'static str;
+
     fn new(
-        _tab_header_view: &SharedMut<PaneTabHeaderView>,
-        _view_ctx: &(impl ViewContext + ?Sized),
-        _app_state: &MTSharedMut<AppState>,
+        tab_header_view: &SharedMut<PaneTabHeaderView>,
+        view_ctx: &(impl ViewContext + ?Sized),
+        app_state: &MTSharedMut<AppState>,
     ) -> Self;
 }
 
 pub struct InspectorTabSelectionChangedEventHandler {
     content_root: ContainerVisual,
     root_ht: HitTestTree,
-    current_mounted_views: RwLock<Vec<SharedMut<dyn MountableView>>>,
+    current_mounted_views: RwLock<Vec<SharedMut<dyn MountableView2>>>,
     observation_disconnectors: RwLock<Vec<Box<dyn ObservationDisconnector>>>,
 }
 // TODO: これあとでなんとかする
@@ -2411,9 +2397,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
             od.disconnect();
         }
         for c in self.current_mounted_views.write().drain(..) {
-            c.borrow()
-                .unmount(view_context)
-                .expect("Failed to unmount last views");
+            c.borrow().unmount().expect("Failed to unmount last views");
         }
 
         match app_state.read().current_selection_object_id.clone() {
@@ -3190,9 +3174,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
 
         let children = self.content_root.Children().unwrap();
         for v in self.current_mounted_views.read().iter() {
-            v.borrow()
-                .mount(&children, &self.root_ht, view_context)
-                .unwrap();
+            v.borrow().mount(&children, &self.root_ht).unwrap();
         }
     }
 }
@@ -3360,7 +3342,7 @@ impl PerObjectUniformData {
         let (index, allocation_changed) = match self.index_by_object_id.get(id) {
             Some(x) => (*x, false),
             None => {
-                let new_index = self.array.allocate();
+                let new_index = self.array.allocate().expect("failed to allocate uniform");
                 self.index_by_object_id.insert(id.clone(), new_index);
                 (new_index, true)
             }
@@ -3407,6 +3389,15 @@ impl PerObjectUniformData {
     }
 }
 
+pub struct BackBuffer {
+    pub presentation_buffer: IPresentationBuffer,
+    pub command_buffer: RefCell<br::CommandBufferObject<StdVkDevice>>,
+    pub final_destination: ID3D11Texture2D,
+    pub render_target: ID3D11Texture2D,
+    pub keyed_mutex: IDXGIKeyedMutex,
+    pub framebuffer: br::FramebufferObject<'static, StdVkDevice>,
+}
+
 pub struct StageTabContentRenderer {
     presentation_manager: IPresentationManager,
     presentation_surface: IPresentationSurface,
@@ -3414,22 +3405,16 @@ pub struct StageTabContentRenderer {
     d3d11_device_context: ID3D11DeviceContext,
     main_command_pool: RefCell<br::CommandPoolObject<StdVkDevice>>,
     buffer_size: br::vk::VkExtent2D,
-    back_buffers: Vec<(
-        IPresentationBuffer,
-        RefCell<br::CommandBufferObject<StdVkDevice>>,
-        ID3D11Texture2D,
-        ID3D11Texture2D,
-        IDXGIKeyedMutex,
-        br::FramebufferObject<'static, StdVkDevice>,
-    )>,
+    back_buffers: Vec<BackBuffer>,
     render_resources: SharedMut<EditorStageRenderResources>,
     app_state: MTWeakMut<AppState>,
 }
 impl SignalEventReceiver for StageTabContentRenderer {
     fn on_signal(&self, arg: usize, _view_ctx: &dyn ViewContext) {
+        let bb = &self.back_buffers[arg];
+
         unsafe {
-            self.back_buffers[arg]
-                .4
+            bb.keyed_mutex
                 .AcquireSync(0, INFINITE)
                 .expect("Failed to acquire keyed mutex");
         }
@@ -3539,26 +3524,25 @@ impl SignalEventReceiver for StageTabContentRenderer {
 
         if command_buffer_dirty {
             self.main_command_pool.borrow_mut().reset(true).unwrap();
-            for (_, cb, _, _, _, fb) in self.back_buffers.iter() {
+            for bb in self.back_buffers.iter() {
                 self.render_resources.borrow().populate_commands(
                     unsafe {
-                        cb.borrow_mut()
+                        bb.command_buffer
+                            .borrow_mut()
                             .begin(AppSubsystemInstances::get().mini_engine.borrow().device())
                             .expect("Failed to begin command recording")
                     },
-                    fb,
+                    &bb.framebuffer,
                     self.buffer_size,
                     &self.app_state.upgrade().unwrap(),
                 );
             }
         }
 
-        let (pb, cb, fin, rt, km, _) = &self.back_buffers[arg];
-
         self.graphics_queue
             .borrow_mut()
             .submit(
-                &[br::EmptySubmissionBatch.with_command_buffers(&[cb.borrow()])],
+                &[br::EmptySubmissionBatch.with_command_buffers(&[bb.command_buffer.borrow()])],
                 None::<&mut br::FenceObject<StdVkDevice>>,
             )
             .expect("Failed to send command");
@@ -3568,24 +3552,30 @@ impl SignalEventReceiver for StageTabContentRenderer {
             .expect("Failed to wait work");
 
         unsafe {
-            km.ReleaseSync(1).expect("Failed to release keyed mutex");
+            bb.keyed_mutex
+                .ReleaseSync(1)
+                .expect("Failed to release keyed mutex");
         }
 
         unsafe {
-            km.AcquireSync(1, INFINITE)
+            bb.keyed_mutex
+                .AcquireSync(1, INFINITE)
                 .expect("Failed to acquire keyed mutex");
         }
         unsafe {
             // Note: rtそのままでは表示できないらしい（Composition SwapchainでKeyedMutexいじれたらワンチャンありそうな気がする）
-            self.d3d11_device_context.CopyResource(fin, rt);
+            self.d3d11_device_context
+                .CopyResource(&bb.final_destination, &bb.render_target);
         }
         unsafe {
-            km.ReleaseSync(0).expect("Failed to release keyed mutex");
+            bb.keyed_mutex
+                .ReleaseSync(0)
+                .expect("Failed to release keyed mutex");
         }
 
         unsafe {
             self.presentation_surface
-                .SetBuffer(pb)
+                .SetBuffer(&bb.presentation_buffer)
                 .expect("Failed to set new buffer");
         }
         unsafe {
@@ -3604,22 +3594,20 @@ impl PaneTabContentPresenter for StageTabPresenter {
         &mut self,
         onto: &ContainerVisual,
         onto_ht: &HitTestTree,
-        view_context: &dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        self.view
-            .borrow()
-            .mount(&onto.Children()?, onto_ht, view_context)?;
+        self.view.borrow().mount(&onto.Children()?, onto_ht)?;
 
         Ok(())
     }
 
     fn on_hide_content_view(
         &mut self,
-        view_context: &dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        self.view.borrow().unmount(view_context)?;
+        self.view.borrow().unmount()?;
 
         Ok(())
     }
@@ -4551,13 +4539,17 @@ impl ObjectUniformDataArrayBlock {
         })
     }
 
-    pub fn allocate(&mut self) -> usize {
+    pub fn allocate(&mut self) -> Option<usize> {
         match self.free_blocks.pop_first() {
-            Some(x) => x,
+            Some(x) => Some(x),
             None => {
                 let a = self.next_free;
+                if a >= self.cap {
+                    return None;
+                }
+
                 self.next_free += 1;
-                a
+                Some(a)
             }
         }
     }
@@ -5457,14 +5449,14 @@ impl EditorStageView {
             );
 
             let rt_mutex = rt.cast::<IDXGIKeyedMutex>()?;
-            back_buffer_render_resources.push((
+            back_buffer_render_resources.push(BackBuffer {
                 presentation_buffer,
-                RefCell::new(cb),
-                texture,
-                rt,
-                rt_mutex,
-                vk_framebuffer,
-            ));
+                command_buffer: RefCell::new(cb),
+                final_destination: texture,
+                render_target: rt,
+                keyed_mutex: rt_mutex,
+                framebuffer: vk_framebuffer,
+            });
             back_buffer_resources.push((eh, imported_image_memory));
         }
 
@@ -5737,7 +5729,7 @@ impl EditorStageView {
             resources.populate_commands(
                 unsafe {
                     renderer
-                        .1
+                        .command_buffer
                         .get_mut()
                         .begin(AppSubsystemInstances::get().mini_engine.borrow().device())
                         .expect("Failed to begin command recording")
@@ -5747,14 +5739,14 @@ impl EditorStageView {
                 &renderer_mut.app_state.upgrade().unwrap(),
             );
 
-            renderer.4 = rt
+            renderer.keyed_mutex = rt
                 .cast::<IDXGIKeyedMutex>()
                 .expect("Failed to get keyed mutex");
 
-            renderer.0 = presentation_buffer;
-            renderer.2 = texture;
-            renderer.3 = rt;
-            renderer.5 = vk_framebuffer;
+            renderer.presentation_buffer = presentation_buffer;
+            renderer.final_destination = texture;
+            renderer.render_target = rt;
+            renderer.framebuffer = vk_framebuffer;
             bb.0 = eh;
             bb.1 = vk_image_memory;
         }
@@ -5766,13 +5758,8 @@ impl EditorStageView {
         Ok(())
     }
 }
-impl MountableView for EditorStageView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for EditorStageView {
+    fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         onto_ht.add_child(&self.ht);
 
@@ -5783,7 +5770,7 @@ impl MountableView for EditorStageView {
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
         self.ht.unmount();
 
@@ -6201,20 +6188,15 @@ impl ObjectTreeElementRowView {
         Ok(())
     }
 }
-impl MountableView for ObjectTreeElementRowView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &HitTestTree,
-        _view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()> {
+impl MountableView2 for ObjectTreeElementRowView {
+    fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         onto_ht.add_child(&self.ht);
 
         Ok(())
     }
 
-    fn unmount(&self, _view_context: &dyn ViewContext) -> windows::core::Result<()> {
+    fn unmount(&self) -> windows::core::Result<()> {
         self.root.Parent()?.Children()?.Remove(&self.root)?;
         self.ht.unmount();
 
@@ -6297,6 +6279,16 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                                 new_shared_mut(|| println!("Create Icosphere")),
                                 true,
                             ),
+                            MenuItem::Command(
+                                "Cylinder".into(),
+                                new_shared_mut(|| println!("Create Cylinder")),
+                                true,
+                            ),
+                            MenuItem::Command(
+                                "Capsule".into(),
+                                new_shared_mut(|| println!("Create Capsule")),
+                                true,
+                            ),
                             MenuItem::Header("Special".into()),
                             MenuItem::Command(
                                 "Terrain".into(),
@@ -6335,12 +6327,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         &mut self,
         onto: &ContainerVisual,
         onto_ht: &HitTestTree,
-        view_context: &dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let children = onto.Children()?;
         for r in self.rows.borrow().iter() {
-            r.borrow().mount(&children, onto_ht, view_context)?;
+            r.borrow().mount(&children, onto_ht)?;
         }
 
         self.mounted_visual_root = Some(onto.clone());
@@ -6351,11 +6343,11 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
 
     fn on_hide_content_view(
         &mut self,
-        view_context: &dyn ViewContext,
+        _view_context: &dyn ViewContext,
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         for r in self.rows.borrow().iter() {
-            r.borrow().unmount(view_context)?;
+            r.borrow().unmount()?;
         }
 
         self.mounted_visual_root = None;
@@ -6391,9 +6383,6 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         self.mounted_visual_root.clone().unwrap();
                                     let mounted_ht = self.mounted_ht.clone().unwrap();
                                     let ref_dpi = input_context.current_dpi();
-                                    let view_context = ViewContext1 {
-                                        current_dpi: ref_dpi,
-                                    };
 
                                     new_shared_mut(move || {
                                         let [vertex_buffer, index_buffer] =
@@ -6499,7 +6488,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         // refresh list
                                         for v in rows.borrow().iter() {
                                             v.borrow()
-                                                .unmount(&view_context)
+                                                .unmount()
                                                 .expect("Failed to unmount old element rows");
                                         }
 
@@ -6532,7 +6521,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         let children = mounted_visual_root.Children().unwrap();
                                         for v in rows.borrow().iter() {
                                             v.borrow()
-                                                .mount(&children, &mounted_ht, &view_context)
+                                                .mount(&children, &mounted_ht)
                                                 .expect("Failed to mount new rows");
                                         }
                                     })
@@ -6548,9 +6537,6 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         self.mounted_visual_root.clone().unwrap();
                                     let mounted_ht = self.mounted_ht.clone().unwrap();
                                     let ref_dpi = input_context.current_dpi();
-                                    let view_context = ViewContext1 {
-                                        current_dpi: ref_dpi,
-                                    };
 
                                     new_shared_mut(move || {
                                         let [vertex_buffer, index_buffer] =
@@ -6656,7 +6642,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         // refresh list
                                         for v in rows.borrow().iter() {
                                             v.borrow()
-                                                .unmount(&view_context)
+                                                .unmount()
                                                 .expect("Failed to unmount old element rows");
                                         }
 
@@ -6689,7 +6675,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         let children = mounted_visual_root.Children().unwrap();
                                         for v in rows.borrow().iter() {
                                             v.borrow()
-                                                .mount(&children, &mounted_ht, &view_context)
+                                                .mount(&children, &mounted_ht)
                                                 .expect("Failed to mount new rows");
                                         }
                                     })
@@ -6699,6 +6685,16 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                             MenuItem::Command(
                                 "Icosphere".into(),
                                 new_shared_mut(|| println!("Create Icosphere")),
+                                true,
+                            ),
+                            MenuItem::Command(
+                                "Cylinder".into(),
+                                new_shared_mut(|| println!("Create Cylinder")),
+                                true,
+                            ),
+                            MenuItem::Command(
+                                "Capsule".into(),
+                                new_shared_mut(|| println!("Create Capsule")),
                                 true,
                             ),
                             MenuItem::Header("Special".into()),
@@ -7669,7 +7665,7 @@ fn app() -> i32 {
             .expect("Failed to initialize docking manager"),
     );
 
-    let pane_group1 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+    let pane_group1 = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
     TabGroupPaneView::add_tab::<TimelineTabPresenter>(&pane_group1, &mut view_context, &state)
         .expect("Failed to create SceneViewPaneTabHeader");
@@ -7677,7 +7673,7 @@ fn app() -> i32 {
         current_dpi: window_handle.current_dpi,
     });
 
-    let main_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+    let main_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
     TabGroupPaneView::add_tab::<StageTabPresenter>(&main_pane, &mut view_context, &state)
         .expect("Failed to create StagePaneTab");
@@ -7689,7 +7685,7 @@ fn app() -> i32 {
         current_dpi: window_handle.current_dpi,
     });
 
-    let pane_group3 = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+    let pane_group3 = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
     TabGroupPaneView::add_tab::<InspectorTabPresenter>(&pane_group3, &mut view_context, &state)
         .expect("Failed to create InspectorPaneTabHeader");
@@ -7707,7 +7703,7 @@ fn app() -> i32 {
         )
         .expect("Failed to resize pane");
 
-    let explorers_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+    let explorers_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
     TabGroupPaneView::add_tab::<AssetExplorerTabPresenter>(
         &explorers_pane,
@@ -7729,7 +7725,7 @@ fn app() -> i32 {
         )
         .expect("Failed to resize pane");
 
-    let scene_subinfo_pane = TabGroupPaneView::new(&pane_group_docking_manager, &mut view_context)
+    let scene_subinfo_pane = TabGroupPaneView::new(&pane_group_docking_manager)
         .expect("Failed to create TabGroupPaneView");
     TabGroupPaneView::add_tab::<ObjectTreeTabPresenter>(
         &scene_subinfo_pane,
@@ -7794,7 +7790,7 @@ fn app() -> i32 {
     });
     pane_group_docking_manager
         .borrow_mut()
-        .set_layout(layout, &view_context)
+        .set_layout(layout)
         .expect("Failed to setup initial layout");
 
     composition_root

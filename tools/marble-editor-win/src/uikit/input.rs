@@ -584,6 +584,10 @@ impl HitTestTree {
     pub fn rect(&self) -> Rect {
         self.0.borrow().rect.clone()
     }
+    #[inline]
+    pub fn size(&self) -> windows::Foundation::Numerics::Vector2 {
+        self.0.borrow().rect.size()
+    }
 
     #[inline]
     pub fn set_rect(&self, left: f32, top: f32, width: f32, height: f32) {

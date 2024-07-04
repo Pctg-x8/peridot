@@ -1,8 +1,5 @@
 use windows::{
-    Win32::{
-        Foundation::HWND, Graphics::DirectWrite::IDWriteTextFormat,
-        UI::WindowsAndMessaging::HTCLIENT,
-    },
+    Win32::Graphics::DirectWrite::IDWriteTextFormat,
     UI::Composition::{
         CompositionColorBrush, CompositionEasingFunction, CompositionLinearGradientBrush,
         CompositionNineGridBrush, ScalarKeyFrameAnimation, VisualCollection,
@@ -33,6 +30,13 @@ pub struct ResizeContext {
 
 pub trait ViewContext {
     fn current_dpi(&self) -> f32;
+
+    #[inline(always)]
+    fn resize_context(&self) -> ResizeContext {
+        ResizeContext {
+            current_dpi: self.current_dpi(),
+        }
+    }
 }
 
 impl<T: ViewContext + ?Sized> ViewContext for &'_ T {
@@ -69,4 +73,9 @@ pub trait MountableView {
         view_context: &dyn ViewContext,
     ) -> windows::core::Result<()>;
     fn unmount(&self, view_context: &dyn ViewContext) -> windows::core::Result<()>;
+}
+
+pub trait MountableView2 {
+    fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()>;
+    fn unmount(&self) -> windows::core::Result<()>;
 }
