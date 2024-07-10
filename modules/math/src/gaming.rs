@@ -123,7 +123,7 @@ impl Camera {
 
         let axis = basedir.cross(&eyedir).normalize();
         let angle = basedir.dot(eyedir).acos();
-        self.rotation = Quaternion::new(-angle, axis);
+        self.rotation = Quaternion::<f32>::new(-angle, axis);
     }
 }
 impl Default for Camera {

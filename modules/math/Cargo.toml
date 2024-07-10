@@ -5,9 +5,10 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
 [features]
-default = ["bedrock-interop"]
+default = ["bedrock-interop", "euclid-interop"]
 bedrock-interop = ["dep:bedrock"]
+euclid-interop = ["dep:euclid"]
 
 [dependencies]
 bedrock = { workspace = true, optional = true }
-euclid = "0.19"
+euclid = { version = "0.19", optional = true }
