@@ -11,4 +11,4 @@ euclid-interop = ["dep:euclid"]
 
 [dependencies]
 bedrock = { workspace = true, optional = true }
-euclid = { version = "^0.22", optional = true }
+euclid = { version = "0.19", optional = true }
