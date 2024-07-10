@@ -2742,8 +2742,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                     yc.borrow().current_value(),
                                                     zc.borrow().current_value(),
                                                 );
-                                                target_mut.is_dirty = true;
                                             }
+                                            state_mut
+                                                .current_scene
+                                                .mark_dirty_recursive(bound_object_id);
                                         }
                                     }),
                             ));
@@ -2780,8 +2782,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                     new_value,
                                                     zc.borrow().current_value(),
                                                 );
-                                                target_mut.is_dirty = true;
                                             }
+                                            state_mut
+                                                .current_scene
+                                                .mark_dirty_recursive(bound_object_id);
                                         }
                                     }),
                             ));
@@ -2818,8 +2822,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                     yc.borrow().current_value(),
                                                     new_value,
                                                 );
-                                                target_mut.is_dirty = true;
                                             }
+                                            state_mut
+                                                .current_scene
+                                                .mark_dirty_recursive(bound_object_id);
                                         }
                                     }),
                             ));
@@ -2919,8 +2925,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                                 .to_radians(),
                                                         ),
                                                     );
-                                                target_mut.is_dirty = true;
                                             }
+                                            state_mut
+                                                .current_scene
+                                                .mark_dirty_recursive(bound_object_id);
                                         }
                                     }),
                             ));
@@ -2964,8 +2972,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                                 .to_radians(),
                                                         ),
                                                     );
-                                                target_mut.is_dirty = true;
                                             }
+                                            state_mut
+                                                .current_scene
+                                                .mark_dirty_recursive(bound_object_id);
                                         }
                                     }),
                             ));
@@ -3009,8 +3019,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                             new_value.to_radians(),
                                                         ),
                                                     );
-                                                target_mut.is_dirty = true;
                                             }
+                                            state_mut
+                                                .current_scene
+                                                .mark_dirty_recursive(bound_object_id);
                                         }
                                     }),
                             ));
@@ -3085,8 +3097,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 yc.borrow().current_value(),
                                                 zc.borrow().current_value(),
                                             );
-                                            target_mut.is_dirty = true;
                                         }
+                                        state_mut
+                                            .current_scene
+                                            .mark_dirty_recursive(bound_object_id);
                                     }
                                 }),
                             ));
@@ -3118,8 +3132,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 new_value,
                                                 zc.borrow().current_value(),
                                             );
-                                            target_mut.is_dirty = true;
                                         }
+                                        state_mut
+                                            .current_scene
+                                            .mark_dirty_recursive(bound_object_id);
                                     }
                                 }),
                             ));
@@ -3151,8 +3167,10 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                                 yc.borrow().current_value(),
                                                 new_value,
                                             );
-                                            target_mut.is_dirty = true;
                                         }
+                                        state_mut
+                                            .current_scene
+                                            .mark_dirty_recursive(bound_object_id);
                                     }
                                 }),
                             ));
@@ -3395,6 +3413,23 @@ pub struct BackBuffer {
     pub framebuffer: br::FramebufferObject<'static, StdVkDevice>,
 }
 
+fn compute_world_trs(scene: &SceneEditState, obj: &ObjectEditState) -> peridot_math::Matrix4F32 {
+    let local_mat = match obj.details {
+        ObjectDetails::Mesh {
+            position,
+            rotation,
+            scale,
+            ..
+        } => peridot_math::Matrix4::trs(position, rotation, scale),
+        _ => peridot_math::Matrix4::ONE,
+    };
+
+    match obj.parent_id {
+        Some(pid) => compute_world_trs(scene, &scene.objects[&pid]) * local_mat,
+        None => local_mat,
+    }
+}
+
 pub struct StageTabContentRenderer {
     presentation_manager: IPresentationManager,
     presentation_surface: IPresentationSurface,
@@ -3418,11 +3453,11 @@ impl SignalEventReceiver for StageTabContentRenderer {
 
         let mut command_buffer_dirty = false;
         if let Some(st) = self.app_state.upgrade() {
-            command_buffer_dirty =
-                core::mem::replace(&mut st.write().current_scene.is_dirty, false);
+            let mut stw = st.write();
+            command_buffer_dirty = core::mem::replace(&mut stw.current_scene.is_dirty, false);
 
-            for o in st
-                .write()
+            let mut trs_update_object_ids = Vec::new();
+            for o in stw
                 .current_scene
                 .objects
                 .values_mut()
@@ -3492,30 +3527,25 @@ impl SignalEventReceiver for StageTabContentRenderer {
                             })
                             .unwrap();
                     }
-                    ObjectDetails::Mesh {
-                        position,
-                        rotation,
-                        scale,
-                        ..
-                    } => {
-                        let allocation_changed = self
-                            .render_resources
-                            .borrow_mut()
-                            .per_object_uniform_data
-                            .set_trs(
-                                &o.id,
-                                peridot_math::Matrix4F32::trs(
-                                    position.clone(),
-                                    rotation.clone(),
-                                    scale.clone(),
-                                ),
-                            )
-                            .expect("Failed to update object trs data");
-
-                        command_buffer_dirty = command_buffer_dirty || allocation_changed;
+                    ObjectDetails::Mesh { .. } => {
+                        trs_update_object_ids.push(o.id);
                     }
                     ObjectDetails::Camera { .. } => (),
                 }
+            }
+
+            for id in trs_update_object_ids {
+                let allocation_changed = self
+                    .render_resources
+                    .borrow_mut()
+                    .per_object_uniform_data
+                    .set_trs(
+                        &id,
+                        compute_world_trs(&stw.current_scene, &stw.current_scene.objects[&id]),
+                    )
+                    .expect("Failed to update object trs data");
+
+                command_buffer_dirty = command_buffer_dirty || allocation_changed;
             }
         }
 
@@ -6085,6 +6115,7 @@ impl ObjectTreeElementRowView {
 
     pub fn new(
         ref_dpi: f32,
+        label_offset: f32,
         init_name: impl Into<Cow<'static, str>>,
         bound_object_id: Uuid,
         app_state: &MTSharedMut<AppState>,
@@ -6133,7 +6164,7 @@ impl ObjectTreeElementRowView {
                     .CreateSurfaceBrushWithSurface(&label_surface.surface)?,
             )?
             .rect(&Rect {
-                X: Self::PADDING_X,
+                X: Self::PADDING_X + label_offset,
                 Y: Self::PADDING_Y,
                 Width: label_surface.width,
                 Height: label_surface.height,
@@ -6280,6 +6311,7 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                                     let app_state = this.borrow().app_state.clone();
                                     let ref_dpi = ctx.current_dpi();
                                     let parent_w = this.borrow().parent.clone();
+                                    let bound_object_id = this.borrow().bound_object_id;
 
                                     new_shared_mut(move || {
                                         let Some(parent) = parent_w.upgrade() else {
@@ -6369,9 +6401,9 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                                             })
                                             .unwrap();
 
-                                        // TODO: this is a child
                                         let new_object = ObjectEditState {
                                             id: Uuid::new_v4(),
+                                            parent_id: Some(bound_object_id),
                                             name: "New Cube".into(),
                                             order: app_state.read().current_scene.next_order(),
                                             is_dirty: true,
@@ -6383,10 +6415,11 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                                                 rotation: peridot_math::Quaternion::ONE,
                                                 scale: peridot_math::Vector3::ONE,
                                             },
-                                            children: HashMap::new(),
                                         };
-
-                                        app_state.write().current_scene.add_object(new_object);
+                                        app_state
+                                            .write()
+                                            .current_scene
+                                            .add_object_under(bound_object_id, new_object);
 
                                         // refresh list
                                         for v in parent.0.borrow().rows.borrow().iter() {
@@ -6395,33 +6428,8 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                                                 .expect("Failed to unmount old element rows");
                                         }
 
-                                        let app_state_borrow = app_state.read();
-                                        let mut init_objects = app_state_borrow
-                                            .current_scene
-                                            .objects
-                                            .values()
-                                            .collect::<Vec<_>>();
-                                        init_objects.sort_by_key(|x| x.order);
-
-                                        *parent.0.borrow().rows.borrow_mut() = init_objects
-                                            .into_iter()
-                                            .scan(0.0f32, |y, x| {
-                                                let p = ObjectTreeElementRowView::new(
-                                                    ref_dpi,
-                                                    x.name.to_owned(),
-                                                    x.id.clone(),
-                                                    &app_state,
-                                                    &parent_w,
-                                                )
-                                                .expect("Failed to create row view");
-                                                p.borrow_mut()
-                                                    .reposition(Vector2 { X: 0.0, Y: *y })
-                                                    .expect("Failed to reposition row view");
-                                                *y += p.borrow().height();
-
-                                                Some(p)
-                                            })
-                                            .collect::<Vec<_>>();
+                                        parent.0.borrow().rows.borrow_mut().clear();
+                                        parent.rebuild_views(ref_dpi, &app_state);
 
                                         let children = parent
                                             .0
@@ -6574,6 +6582,10 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                     let ref_dpi = input_context.current_dpi();
 
                                     new_shared_mut(move || {
+                                        let Some(this) = this_wref.upgrade() else {
+                                            return;
+                                        };
+
                                         let [vertex_buffer, index_buffer] =
                                             AppSubsystemInstances::get()
                                                 .mini_engine
@@ -6659,6 +6671,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
 
                                         let new_object = ObjectEditState {
                                             id: Uuid::new_v4(),
+                                            parent_id: None,
                                             name: "New Cube".into(),
                                             order: app_state.read().current_scene.next_order(),
                                             is_dirty: true,
@@ -6670,9 +6683,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                                 rotation: peridot_math::Quaternion::ONE,
                                                 scale: peridot_math::Vector3::ONE,
                                             },
-                                            children: HashMap::new(),
                                         };
-
                                         app_state.write().current_scene.add_object(new_object);
 
                                         // refresh list
@@ -6682,33 +6693,8 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                                 .expect("Failed to unmount old element rows");
                                         }
 
-                                        let app_state_borrow = app_state.read();
-                                        let mut init_objects = app_state_borrow
-                                            .current_scene
-                                            .objects
-                                            .values()
-                                            .collect::<Vec<_>>();
-                                        init_objects.sort_by_key(|x| x.order);
-
-                                        *rows.borrow_mut() = init_objects
-                                            .into_iter()
-                                            .scan(0.0f32, |y, x| {
-                                                let p = ObjectTreeElementRowView::new(
-                                                    ref_dpi,
-                                                    x.name.to_owned(),
-                                                    x.id.clone(),
-                                                    &app_state,
-                                                    &this_wref,
-                                                )
-                                                .expect("Failed to create row view");
-                                                p.borrow_mut()
-                                                    .reposition(Vector2 { X: 0.0, Y: *y })
-                                                    .expect("Failed to reposition row view");
-                                                *y += p.borrow().height();
-
-                                                Some(p)
-                                            })
-                                            .collect::<Vec<_>>();
+                                        rows.borrow_mut().clear();
+                                        this.rebuild_views(ref_dpi, &app_state);
 
                                         let children = mounted_visual_root.Children().unwrap();
                                         for v in rows.borrow().iter() {
@@ -6817,6 +6803,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
 
                                         let new_object = ObjectEditState {
                                             id: Uuid::new_v4(),
+                                            parent_id: None,
                                             name: "New Plane".into(),
                                             order: app_state.read().current_scene.next_order(),
                                             is_dirty: true,
@@ -6828,9 +6815,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                                 rotation: peridot_math::Quaternion::ONE,
                                                 scale: peridot_math::Vector3::ONE,
                                             },
-                                            children: HashMap::new(),
                                         };
-
                                         app_state.write().current_scene.add_object(new_object);
 
                                         // refresh list
@@ -6840,33 +6825,8 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                                 .expect("Failed to unmount old element rows");
                                         }
 
-                                        let app_state_borrow = app_state.read();
-                                        let mut init_objects = app_state_borrow
-                                            .current_scene
-                                            .objects
-                                            .values()
-                                            .collect::<Vec<_>>();
-                                        init_objects.sort_by_key(|x| x.order);
-
-                                        *this.0.borrow().rows.borrow_mut() = init_objects
-                                            .into_iter()
-                                            .scan(0.0f32, |y, x| {
-                                                let p = ObjectTreeElementRowView::new(
-                                                    ref_dpi,
-                                                    x.name.to_owned(),
-                                                    x.id.clone(),
-                                                    &app_state,
-                                                    &this_wref,
-                                                )
-                                                .expect("Failed to create row view");
-                                                p.borrow_mut()
-                                                    .reposition(Vector2 { X: 0.0, Y: *y })
-                                                    .expect("Failed to reposition row view");
-                                                *y += p.borrow().height();
-
-                                                Some(p)
-                                            })
-                                            .collect::<Vec<_>>();
+                                        this.0.borrow().rows.borrow_mut().clear();
+                                        this.rebuild_views(ref_dpi, &app_state);
 
                                         let children = this
                                             .0
@@ -6945,35 +6905,80 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
         });
         let this = Self(state);
 
-        let app_state_borrow = app_state.read();
-        let mut init_objects = app_state_borrow
-            .current_scene
-            .objects
-            .values()
-            .collect::<Vec<_>>();
-        init_objects.sort_by_key(|x| x.order);
+        this.rebuild_views(view_ctx.current_dpi(), app_state);
+        this
+    }
+}
+impl ObjectTreeTabPresenter {
+    pub fn rebuild_views(&self, ref_dpi: f32, app_state: &MTSharedMut<AppState>) {
+        fn recursive(
+            ref_dpi: f32,
+            view_store: &mut Vec<SharedMut<ObjectTreeElementRowView>>,
+            id_list: Vec<Uuid>,
+            objects: &HashMap<Uuid, ObjectEditState>,
+            left_offset: f32,
+            mut base_y: f32,
+            app_state: &MTSharedMut<AppState>,
+            parent_w: &ObjectTreeTabPresenterWeakRef,
+        ) -> f32 {
+            let mut target_objects = id_list.iter().map(|id| &objects[id]).collect::<Vec<_>>();
+            target_objects.sort_by_key(|x| x.order);
 
-        *this.0.borrow_mut().rows.borrow_mut() = init_objects
-            .into_iter()
-            .scan(0.0f32, |y, x| {
+            for x in target_objects {
                 let p = ObjectTreeElementRowView::new(
-                    view_ctx.current_dpi(),
+                    ref_dpi,
+                    left_offset,
                     x.name.to_owned(),
                     x.id.clone(),
-                    &app_state,
-                    &this.make_weak_ref(),
+                    app_state,
+                    parent_w,
                 )
                 .expect("Failed to create row view");
                 p.borrow_mut()
-                    .reposition(Vector2 { X: 0.0, Y: *y })
+                    .reposition(Vector2 { X: 0.0, Y: base_y })
                     .expect("Failed to reposition row view");
-                *y += p.borrow().height();
+                base_y += p.borrow().height();
 
-                Some(p)
-            })
+                view_store.push(p);
+
+                base_y = recursive(
+                    ref_dpi,
+                    view_store,
+                    app_state
+                        .read()
+                        .current_scene
+                        .object_tree
+                        .get(&x.id)
+                        .map_or_else(Vec::new, |x| x.clone()),
+                    objects,
+                    left_offset + 16.0,
+                    base_y,
+                    app_state,
+                    parent_w,
+                );
+            }
+
+            base_y
+        }
+
+        let first_object_id_list = app_state
+            .read()
+            .current_scene
+            .root_objects
+            .iter()
+            .copied()
             .collect::<Vec<_>>();
 
-        this
+        recursive(
+            ref_dpi,
+            &mut *self.0.borrow().rows.borrow_mut(),
+            first_object_id_list,
+            &app_state.read().current_scene.objects,
+            0.0,
+            0.0,
+            app_state,
+            &self.make_weak_ref(),
+        );
     }
 }
 
@@ -7084,12 +7089,16 @@ impl AppState {
 
 pub struct SceneEditState {
     pub objects: HashMap<Uuid, ObjectEditState>,
+    pub root_objects: HashSet<Uuid>,
+    pub object_tree: HashMap<Uuid, Vec<Uuid>>,
     pub is_dirty: bool,
 }
 impl SceneEditState {
     pub fn new() -> Self {
         Self {
             objects: HashMap::new(),
+            root_objects: HashSet::new(),
+            object_tree: HashMap::new(),
             is_dirty: false,
         }
     }
@@ -7098,7 +7107,37 @@ impl SceneEditState {
         // 次のレンダリングサイクルでデータ載せてほしいのでdirtyフラグを立てておく
         state.is_dirty = true;
         self.is_dirty = true;
-        self.objects.insert(state.id.clone(), state);
+        self.object_tree.insert(state.id, Vec::new());
+        self.root_objects.insert(state.id);
+        self.objects.insert(state.id, state);
+    }
+
+    pub fn add_object_under(&mut self, parent_id: Uuid, mut state: ObjectEditState) {
+        // 次のレンダリングサイクルでデータ載せてほしいのでdirtyフラグを立てておく
+        state.is_dirty = true;
+        self.is_dirty = true;
+        self.object_tree
+            .entry(parent_id)
+            .or_insert_with(Vec::new)
+            .push(state.id);
+        self.objects.insert(state.id, state);
+    }
+
+    pub fn mark_dirty_recursive(&mut self, id: Uuid) {
+        if let Some(x) = self.objects.get_mut(&id) {
+            x.is_dirty = true;
+        }
+
+        let child_ids = self
+            .object_tree
+            .get(&id)
+            .map_or(&[][..], |x| &x[..])
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        for cid in child_ids {
+            self.mark_dirty_recursive(cid);
+        }
     }
 
     pub fn next_order(&self) -> u32 {
@@ -7108,11 +7147,11 @@ impl SceneEditState {
 
 pub struct ObjectEditState {
     pub id: Uuid,
+    pub parent_id: Option<Uuid>,
     pub name: String,
     pub order: u32,
     pub is_dirty: bool,
     pub details: ObjectDetails,
-    pub children: HashMap<Uuid, ObjectEditState>,
 }
 impl ObjectEditState {
     pub fn is_sunlight_object(&self) -> bool {
@@ -7747,15 +7786,16 @@ fn app() -> i32 {
     let mut state = AppState::new();
     let obj = ObjectEditState {
         id: Uuid::new_v4(),
+        parent_id: None,
         name: "Camera".into(),
         order: 0,
         is_dirty: false,
         details: ObjectDetails::Camera {},
-        children: HashMap::new(),
     };
-    state.current_scene.objects.insert(obj.id.clone(), obj);
+    state.current_scene.add_object(obj);
     let obj = ObjectEditState {
         id: Uuid::new_v4(),
+        parent_id: None,
         name: "Sun Light".into(),
         order: 1,
         is_dirty: false,
@@ -7766,9 +7806,8 @@ fn app() -> i32 {
             ),
             intensity: 20.0,
         },
-        children: HashMap::new(),
     };
-    state.current_scene.objects.insert(obj.id.clone(), obj);
+    state.current_scene.add_object(obj);
     let state = new_mt_shared_mut(state);
 
     let _dispatcher_queue_controller = unsafe {
