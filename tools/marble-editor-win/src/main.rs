@@ -6069,6 +6069,8 @@ pub struct ObjectTreeElementRowView {
     bg_hover_animation: ScalarKeyFrameAnimation,
     bg_hover_end_animation: ScalarKeyFrameAnimation,
     bound_object_id: Uuid,
+    app_state: MTSharedMut<AppState>,
+    parent: ObjectTreeTabPresenterWeakRef,
 }
 impl ObjectTreeElementRowView {
     const PADDING_Y: f32 = 2.0;
@@ -6085,6 +6087,8 @@ impl ObjectTreeElementRowView {
         ref_dpi: f32,
         init_name: impl Into<Cow<'static, str>>,
         bound_object_id: Uuid,
+        app_state: &MTSharedMut<AppState>,
+        parent: &ObjectTreeTabPresenterWeakRef,
     ) -> windows::core::Result<SharedMut<Self>> {
         let label_fmt = AppSubsystemInstances::get()
             .text_format_stock
@@ -6170,6 +6174,8 @@ impl ObjectTreeElementRowView {
                 bg_hover_animation,
                 bg_hover_end_animation,
                 bound_object_id,
+                app_state: app_state.clone(),
+                parent: parent.clone(),
             }
         }))
     }
@@ -6241,6 +6247,13 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
     }
 
     fn on_sub_pointer_up(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
+        let Some(this) = self.upgrade() else {
+            return;
+        };
+        let Some(parent) = this.borrow().parent.upgrade() else {
+            return;
+        };
+
         let mut p = [POINT {
             x: x as _,
             y: y as _,
@@ -6263,7 +6276,171 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                             MenuItem::Header("General Meshes".into()),
                             MenuItem::Command(
                                 "Cube".into(),
-                                new_shared_mut(|| println!("Create Cube")),
+                                {
+                                    let app_state = this.borrow().app_state.clone();
+                                    let ref_dpi = ctx.current_dpi();
+                                    let parent_w = this.borrow().parent.clone();
+
+                                    new_shared_mut(move || {
+                                        let Some(parent) = parent_w.upgrade() else {
+                                            return;
+                                        };
+
+                                        let [vertex_buffer, index_buffer] =
+                                            AppSubsystemInstances::get()
+                                                .mini_engine
+                                                .borrow_mut()
+                                                .alloc_device_local_buffer_array([
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<GenericVertex>() * 24,
+                                                        br::BufferUsage::VERTEX_BUFFER
+                                                            .transfer_dest(),
+                                                    ),
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<u16>() * 36,
+                                                        br::BufferUsage::INDEX_BUFFER
+                                                            .transfer_dest(),
+                                                    ),
+                                                ])
+                                                .expect("Failed to allocate new cube buffers");
+                                        let [mut vertex_buffer_stg, mut index_buffer_stg] =
+                                            AppSubsystemInstances::get()
+                                                .mini_engine
+                                                .borrow_mut()
+                                                .alloc_upload_buffer_array([
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<GenericVertex>() * 24,
+                                                        br::BufferUsage::TRANSFER_SRC,
+                                                    ),
+                                                    br::BufferDesc::new(
+                                                        core::mem::size_of::<u16>() * 36,
+                                                        br::BufferUsage::TRANSFER_SRC,
+                                                    ),
+                                                ])
+                                                .expect("Failed to allocate new cube stg buffers");
+                                        let (v, i) = GenericVertex::unit_cube();
+                                        vertex_buffer_stg
+                                            .guard_map(
+                                                peridot_memory_manager::BufferMapMode::Write,
+                                                |p| unsafe { p.clone_slice_to(0, &v) },
+                                            )
+                                            .unwrap();
+                                        index_buffer_stg
+                                            .guard_map(
+                                                peridot_memory_manager::BufferMapMode::Write,
+                                                |p| unsafe { p.clone_slice_to(0, &i) },
+                                            )
+                                            .unwrap();
+                                        AppSubsystemInstances::get()
+                                            .mini_engine
+                                            .borrow_mut()
+                                            .submit_transient_commands_and_wait(|rec| {
+                                                rec.copy_buffer(
+                                                    &vertex_buffer_stg,
+                                                    &vertex_buffer,
+                                                    &[br::BufferCopy::mirror(
+                                                        0,
+                                                        (core::mem::size_of::<GenericVertex>() * 24)
+                                                            as _,
+                                                    )],
+                                                )
+                                                .copy_buffer(
+                                                    &index_buffer_stg,
+                                                    &index_buffer,
+                                                    &[br::BufferCopy::mirror(
+                                                        0,
+                                                        (core::mem::size_of::<u16>() * 36) as _,
+                                                    )],
+                                                )
+                                                .pipeline_barrier_2(&br::DependencyInfo::new(
+                                                    &[br::MemoryBarrier2::new()
+                                                        .from(
+                                                            br::PipelineStageFlags2::COPY,
+                                                            br::AccessFlags2::TRANSFER.write,
+                                                        )
+                                                        .to(
+                                                            br::PipelineStageFlags2::VERTEX_INPUT,
+                                                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ
+                                                                | br::AccessFlags2::INDEX_READ,
+                                                        )],
+                                                    &[],
+                                                    &[],
+                                                ))
+                                            })
+                                            .unwrap();
+
+                                        // TODO: this is a child
+                                        let new_object = ObjectEditState {
+                                            id: Uuid::new_v4(),
+                                            name: "New Cube".into(),
+                                            order: app_state.read().current_scene.next_order(),
+                                            is_dirty: true,
+                                            details: ObjectDetails::Mesh {
+                                                vertex_buffer,
+                                                index_buffer: Some(index_buffer),
+                                                vertex_count: 36,
+                                                position: peridot_math::Vector3(0.0, 0.0, 0.0),
+                                                rotation: peridot_math::Quaternion::ONE,
+                                                scale: peridot_math::Vector3::ONE,
+                                            },
+                                            children: HashMap::new(),
+                                        };
+
+                                        app_state.write().current_scene.add_object(new_object);
+
+                                        // refresh list
+                                        for v in parent.0.borrow().rows.borrow().iter() {
+                                            v.borrow()
+                                                .unmount()
+                                                .expect("Failed to unmount old element rows");
+                                        }
+
+                                        let app_state_borrow = app_state.read();
+                                        let mut init_objects = app_state_borrow
+                                            .current_scene
+                                            .objects
+                                            .values()
+                                            .collect::<Vec<_>>();
+                                        init_objects.sort_by_key(|x| x.order);
+
+                                        *parent.0.borrow().rows.borrow_mut() = init_objects
+                                            .into_iter()
+                                            .scan(0.0f32, |y, x| {
+                                                let p = ObjectTreeElementRowView::new(
+                                                    ref_dpi,
+                                                    x.name.to_owned(),
+                                                    x.id.clone(),
+                                                    &app_state,
+                                                    &parent_w,
+                                                )
+                                                .expect("Failed to create row view");
+                                                p.borrow_mut()
+                                                    .reposition(Vector2 { X: 0.0, Y: *y })
+                                                    .expect("Failed to reposition row view");
+                                                *y += p.borrow().height();
+
+                                                Some(p)
+                                            })
+                                            .collect::<Vec<_>>();
+
+                                        let children = parent
+                                            .0
+                                            .borrow()
+                                            .mounted_visual_root
+                                            .as_ref()
+                                            .unwrap()
+                                            .Children()
+                                            .unwrap();
+                                        for v in parent.0.borrow().rows.borrow().iter() {
+                                            v.borrow()
+                                                .mount(
+                                                    &children,
+                                                    parent.0.borrow().mounted_ht.as_ref().unwrap(),
+                                                )
+                                                .expect("Failed to mount new rows");
+                                        }
+                                    })
+                                },
                                 true,
                             ),
                             MenuItem::Command(
@@ -6313,11 +6490,25 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
     }
 }
 
-pub struct ObjectTreeTabPresenter {
+struct ObjectTreeTabState {
     rows: SharedMut<Vec<SharedMut<ObjectTreeElementRowView>>>,
     app_state: MTSharedMut<AppState>,
     mounted_visual_root: Option<ContainerVisual>,
     mounted_ht: Option<HitTestTree>,
+}
+#[derive(Clone)]
+pub struct ObjectTreeTabPresenter(SharedMut<ObjectTreeTabState>);
+#[derive(Clone)]
+pub struct ObjectTreeTabPresenterWeakRef(WeakMut<ObjectTreeTabState>);
+impl ObjectTreeTabPresenter {
+    pub fn make_weak_ref(&self) -> ObjectTreeTabPresenterWeakRef {
+        ObjectTreeTabPresenterWeakRef(Rc::downgrade(&self.0))
+    }
+}
+impl ObjectTreeTabPresenterWeakRef {
+    pub fn upgrade(&self) -> Option<ObjectTreeTabPresenter> {
+        self.0.upgrade().map(ObjectTreeTabPresenter)
+    }
 }
 impl PaneTabContentPresenter for ObjectTreeTabPresenter {
     fn build_content_view(
@@ -6328,12 +6519,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let children = onto.Children()?;
-        for r in self.rows.borrow().iter() {
+        for r in self.0.borrow().rows.borrow().iter() {
             r.borrow().mount(&children, onto_ht)?;
         }
 
-        self.mounted_visual_root = Some(onto.clone());
-        self.mounted_ht = Some(onto_ht.clone());
+        self.0.borrow_mut().mounted_visual_root = Some(onto.clone());
+        self.0.borrow_mut().mounted_ht = Some(onto_ht.clone());
 
         Ok(())
     }
@@ -6343,12 +6534,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         _view_context: &dyn ViewContext,
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        for r in self.rows.borrow().iter() {
+        for r in self.0.borrow().rows.borrow().iter() {
             r.borrow().unmount()?;
         }
 
-        self.mounted_visual_root = None;
-        self.mounted_ht = None;
+        self.0.borrow_mut().mounted_visual_root = None;
+        self.0.borrow_mut().mounted_ht = None;
 
         Ok(())
     }
@@ -6374,11 +6565,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                             MenuItem::Command(
                                 "Cube".into(),
                                 {
-                                    let app_state = self.app_state.clone();
-                                    let rows = self.rows.clone();
+                                    let app_state = self.0.borrow().app_state.clone();
+                                    let this_wref = self.make_weak_ref();
+                                    let rows = self.0.borrow().rows.clone();
                                     let mounted_visual_root =
-                                        self.mounted_visual_root.clone().unwrap();
-                                    let mounted_ht = self.mounted_ht.clone().unwrap();
+                                        self.0.borrow().mounted_visual_root.clone().unwrap();
+                                    let mounted_ht = self.0.borrow().mounted_ht.clone().unwrap();
                                     let ref_dpi = input_context.current_dpi();
 
                                     new_shared_mut(move || {
@@ -6478,6 +6670,7 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                                 rotation: peridot_math::Quaternion::ONE,
                                                 scale: peridot_math::Vector3::ONE,
                                             },
+                                            children: HashMap::new(),
                                         };
 
                                         app_state.write().current_scene.add_object(new_object);
@@ -6504,6 +6697,8 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                                     ref_dpi,
                                                     x.name.to_owned(),
                                                     x.id.clone(),
+                                                    &app_state,
+                                                    &this_wref,
                                                 )
                                                 .expect("Failed to create row view");
                                                 p.borrow_mut()
@@ -6528,14 +6723,15 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                             MenuItem::Command(
                                 "Plane".into(),
                                 {
-                                    let app_state = self.app_state.clone();
-                                    let rows = self.rows.clone();
-                                    let mounted_visual_root =
-                                        self.mounted_visual_root.clone().unwrap();
-                                    let mounted_ht = self.mounted_ht.clone().unwrap();
+                                    let app_state = self.0.borrow().app_state.clone();
+                                    let this_wref = self.make_weak_ref();
                                     let ref_dpi = input_context.current_dpi();
 
                                     new_shared_mut(move || {
+                                        let Some(this) = this_wref.upgrade() else {
+                                            return;
+                                        };
+
                                         let [vertex_buffer, index_buffer] =
                                             AppSubsystemInstances::get()
                                                 .mini_engine
@@ -6632,12 +6828,13 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                                 rotation: peridot_math::Quaternion::ONE,
                                                 scale: peridot_math::Vector3::ONE,
                                             },
+                                            children: HashMap::new(),
                                         };
 
                                         app_state.write().current_scene.add_object(new_object);
 
                                         // refresh list
-                                        for v in rows.borrow().iter() {
+                                        for v in this.0.borrow().rows.borrow().iter() {
                                             v.borrow()
                                                 .unmount()
                                                 .expect("Failed to unmount old element rows");
@@ -6651,13 +6848,15 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                             .collect::<Vec<_>>();
                                         init_objects.sort_by_key(|x| x.order);
 
-                                        *rows.borrow_mut() = init_objects
+                                        *this.0.borrow().rows.borrow_mut() = init_objects
                                             .into_iter()
                                             .scan(0.0f32, |y, x| {
                                                 let p = ObjectTreeElementRowView::new(
                                                     ref_dpi,
                                                     x.name.to_owned(),
                                                     x.id.clone(),
+                                                    &app_state,
+                                                    &this_wref,
                                                 )
                                                 .expect("Failed to create row view");
                                                 p.borrow_mut()
@@ -6669,10 +6868,20 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                             })
                                             .collect::<Vec<_>>();
 
-                                        let children = mounted_visual_root.Children().unwrap();
-                                        for v in rows.borrow().iter() {
+                                        let children = this
+                                            .0
+                                            .borrow()
+                                            .mounted_visual_root
+                                            .as_ref()
+                                            .unwrap()
+                                            .Children()
+                                            .unwrap();
+                                        for v in this.0.borrow().rows.borrow().iter() {
                                             v.borrow()
-                                                .mount(&children, &mounted_ht)
+                                                .mount(
+                                                    &children,
+                                                    this.0.borrow().mounted_ht.as_ref().unwrap(),
+                                                )
                                                 .expect("Failed to mount new rows");
                                         }
                                     })
@@ -6728,6 +6937,14 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
         view_ctx: &(impl ViewContext + ?Sized),
         app_state: &MTSharedMut<AppState>,
     ) -> Self {
+        let state = new_shared_mut(ObjectTreeTabState {
+            rows: new_shared_mut(Vec::new()),
+            app_state: app_state.clone(),
+            mounted_visual_root: None,
+            mounted_ht: None,
+        });
+        let this = Self(state);
+
         let app_state_borrow = app_state.read();
         let mut init_objects = app_state_borrow
             .current_scene
@@ -6736,13 +6953,15 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
             .collect::<Vec<_>>();
         init_objects.sort_by_key(|x| x.order);
 
-        let rows = init_objects
+        *this.0.borrow_mut().rows.borrow_mut() = init_objects
             .into_iter()
             .scan(0.0f32, |y, x| {
                 let p = ObjectTreeElementRowView::new(
                     view_ctx.current_dpi(),
                     x.name.to_owned(),
                     x.id.clone(),
+                    &app_state,
+                    &this.make_weak_ref(),
                 )
                 .expect("Failed to create row view");
                 p.borrow_mut()
@@ -6754,12 +6973,7 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
             })
             .collect::<Vec<_>>();
 
-        Self {
-            rows: new_shared_mut(rows),
-            app_state: app_state.clone(),
-            mounted_visual_root: None,
-            mounted_ht: None,
-        }
+        this
     }
 }
 
@@ -6898,6 +7112,7 @@ pub struct ObjectEditState {
     pub order: u32,
     pub is_dirty: bool,
     pub details: ObjectDetails,
+    pub children: HashMap<Uuid, ObjectEditState>,
 }
 impl ObjectEditState {
     pub fn is_sunlight_object(&self) -> bool {
@@ -7536,6 +7751,7 @@ fn app() -> i32 {
         order: 0,
         is_dirty: false,
         details: ObjectDetails::Camera {},
+        children: HashMap::new(),
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
     let obj = ObjectEditState {
@@ -7550,6 +7766,7 @@ fn app() -> i32 {
             ),
             intensity: 20.0,
         },
+        children: HashMap::new(),
     };
     state.current_scene.objects.insert(obj.id.clone(), obj);
     let state = new_mt_shared_mut(state);

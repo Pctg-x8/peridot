@@ -564,6 +564,10 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self.1
     }
 
+    pub unsafe fn replace_pipeline(&mut self, new_pipeline: Pipeline) -> Pipeline {
+        core::mem::replace(&mut self.0, new_pipeline)
+    }
+
     #[inline(always)]
     pub fn bind<
         'r,

@@ -834,19 +834,23 @@ impl Quaternion<f32> {
 }
 
 // Bedrock Interop //
+#[cfg(feature = "bedrock-interop")]
 use bedrock as br;
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<u32> + Copy> br::ImageSize for Vector2<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_2D;
     fn conv(self) -> br::vk::VkExtent3D {
         br::vk::VkExtent2D::from(self).with_depth(1)
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<u32> + Copy> br::ImageSize for Vector3<T> {
     const DIMENSION: br::vk::VkImageType = br::vk::VK_IMAGE_TYPE_3D;
     fn conv(self) -> br::vk::VkExtent3D {
         br::vk::VkExtent3D::from(self)
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<u32>> From<Vector2<T>> for br::vk::VkExtent2D {
     fn from(v: Vector2<T>) -> Self {
         Self {
@@ -855,6 +859,7 @@ impl<T: Into<u32>> From<Vector2<T>> for br::vk::VkExtent2D {
         }
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::vk::VkExtent2D {
     fn from(v: &Vector2<T>) -> Self {
         Self {
@@ -863,6 +868,7 @@ impl<T: Into<u32> + Copy> From<&'_ Vector2<T>> for br::vk::VkExtent2D {
         }
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<u32>> From<Vector3<T>> for br::vk::VkExtent3D {
     fn from(v: Vector3<T>) -> Self {
         Self {
@@ -872,6 +878,7 @@ impl<T: Into<u32>> From<Vector3<T>> for br::vk::VkExtent3D {
         }
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::vk::VkExtent3D {
     fn from(v: &Vector3<T>) -> Self {
         Self {
@@ -881,6 +888,7 @@ impl<T: Into<u32> + Copy> From<&'_ Vector3<T>> for br::vk::VkExtent3D {
         }
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<i32>> From<Vector2<T>> for br::vk::VkOffset2D {
     fn from(v: Vector2<T>) -> Self {
         Self {
@@ -889,6 +897,7 @@ impl<T: Into<i32>> From<Vector2<T>> for br::vk::VkOffset2D {
         }
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<i32> + Copy> From<&'_ Vector2<T>> for br::vk::VkOffset2D {
     fn from(v: &Vector2<T>) -> Self {
         Self {
@@ -897,6 +906,7 @@ impl<T: Into<i32> + Copy> From<&'_ Vector2<T>> for br::vk::VkOffset2D {
         }
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<i32>> From<Vector3<T>> for br::vk::VkOffset3D {
     fn from(v: Vector3<T>) -> Self {
         Self {
@@ -906,6 +916,7 @@ impl<T: Into<i32>> From<Vector3<T>> for br::vk::VkOffset3D {
         }
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: Into<i32> + Copy> From<&'_ Vector3<T>> for br::vk::VkOffset3D {
     fn from(v: &Vector3<T>) -> Self {
         Self {
@@ -916,21 +927,25 @@ impl<T: Into<i32> + Copy> From<&'_ Vector3<T>> for br::vk::VkOffset3D {
     }
 }
 
+#[cfg(feature = "bedrock-interop")]
 impl<T: From<u32>> From<br::vk::VkExtent2D> for Vector2<T> {
     fn from(value: br::vk::VkExtent2D) -> Self {
         Self(value.width.into(), value.height.into())
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: From<u32>> From<br::vk::VkExtent3D> for Vector3<T> {
     fn from(value: br::vk::VkExtent3D) -> Self {
         Self(value.width.into(), value.height.into(), value.depth.into())
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: From<i32>> From<br::vk::VkOffset2D> for Vector2<T> {
     fn from(value: br::vk::VkOffset2D) -> Self {
         Self(value.x.into(), value.y.into())
     }
 }
+#[cfg(feature = "bedrock-interop")]
 impl<T: From<i32>> From<br::vk::VkOffset3D> for Vector3<T> {
     fn from(value: br::vk::VkOffset3D) -> Self {
         Self(value.x.into(), value.y.into(), value.z.into())

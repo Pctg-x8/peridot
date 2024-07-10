@@ -91,51 +91,51 @@ impl RawInputHandler {
                     kd.VKey
                 );*/
                 let is_press = (kd.Flags as u32 & RI_KEY_BREAK) == 0;
-                let ty = match kd.VKey as i32 {
-                    v if v == VK_BACK.0 as _ => NativeButtonInput::Backspace,
-                    v if v == VK_RETURN.0 as _ => NativeButtonInput::Enter,
-                    v if v == VK_LSHIFT.0 as _ => NativeButtonInput::LeftShift,
-                    v if v == VK_RSHIFT.0 as _ => NativeButtonInput::RightShift,
-                    v if v == VK_LCONTROL.0 as _ => NativeButtonInput::LeftControl,
-                    v if v == VK_RCONTROL.0 as _ => NativeButtonInput::RightControl,
-                    v if v == VK_LWIN.0 as _ => NativeButtonInput::LeftMeta,
-                    v if v == VK_RWIN.0 as _ => NativeButtonInput::RightMeta,
-                    v if v == VK_LMENU.0 as _ => NativeButtonInput::LeftAlt,
-                    v if v == VK_RMENU.0 as _ => NativeButtonInput::RightAlt,
-                    v if v == VK_CAPITAL.0 as _ => NativeButtonInput::CapsLock,
-                    v if v == VK_ESCAPE.0 as _ => NativeButtonInput::Esc,
-                    v if v == VK_SPACE.0 as _ => NativeButtonInput::Character(' '),
-                    v if v == VK_LEFT.0 as _ => NativeButtonInput::LeftArrow,
-                    v if v == VK_RIGHT.0 as _ => NativeButtonInput::RightArrow,
-                    v if v == VK_UP.0 as _ => NativeButtonInput::UpArrow,
-                    v if v == VK_DOWN.0 as _ => NativeButtonInput::DownArrow,
-                    c if ((b'0' as i32)..=(b'9' as i32)).contains(&c) => {
+                let ty = match kd.VKey {
+                    v if v == VK_BACK.0 => NativeButtonInput::Backspace,
+                    v if v == VK_RETURN.0 => NativeButtonInput::Enter,
+                    v if v == VK_LSHIFT.0 => NativeButtonInput::LeftShift,
+                    v if v == VK_RSHIFT.0 => NativeButtonInput::RightShift,
+                    v if v == VK_LCONTROL.0 => NativeButtonInput::LeftControl,
+                    v if v == VK_RCONTROL.0 => NativeButtonInput::RightControl,
+                    v if v == VK_LWIN.0 => NativeButtonInput::LeftMeta,
+                    v if v == VK_RWIN.0 => NativeButtonInput::RightMeta,
+                    v if v == VK_LMENU.0 => NativeButtonInput::LeftAlt,
+                    v if v == VK_RMENU.0 => NativeButtonInput::RightAlt,
+                    v if v == VK_CAPITAL.0 => NativeButtonInput::CapsLock,
+                    v if v == VK_ESCAPE.0 => NativeButtonInput::Esc,
+                    v if v == VK_SPACE.0 => NativeButtonInput::Character(' '),
+                    v if v == VK_LEFT.0 => NativeButtonInput::LeftArrow,
+                    v if v == VK_RIGHT.0 => NativeButtonInput::RightArrow,
+                    v if v == VK_UP.0 => NativeButtonInput::UpArrow,
+                    v if v == VK_DOWN.0 => NativeButtonInput::DownArrow,
+                    c if ((b'0' as u16)..=(b'9' as u16)).contains(&c) => {
                         NativeButtonInput::Character(c as u8 as _)
                     }
-                    c if ((b'A' as i32)..=(b'Z' as i32)).contains(&c) => {
+                    c if ((b'A' as u16)..=(b'Z' as u16)).contains(&c) => {
                         NativeButtonInput::Character(c as u8 as _)
                     }
-                    c if ((b'a' as i32)..=(b'z' as i32)).contains(&c) => {
+                    c if ((b'a' as u16)..=(b'z' as u16)).contains(&c) => {
                         NativeButtonInput::Character((c as u8 as char).to_ascii_uppercase())
                     }
-                    c if (VK_NUMPAD0.0 as _..=VK_NUMPAD9.0 as _).contains(&c) => {
-                        NativeButtonInput::Character((b'0' + (c - VK_NUMPAD0.0 as i32) as u8) as _)
+                    c if (VK_NUMPAD0.0..=VK_NUMPAD9.0).contains(&c) => {
+                        NativeButtonInput::Character((b'0' + (c - VK_NUMPAD0.0 as u16) as u8) as _)
                     }
-                    c if (VK_F1.0 as _..=VK_F24.0 as _).contains(&c) => {
-                        NativeButtonInput::FunctionKey(1 + (c - VK_F1.0 as i32) as u8)
+                    c if (VK_F1.0..=VK_F24.0).contains(&c) => {
+                        NativeButtonInput::FunctionKey(1 + (c - VK_F1.0 as u16) as u8)
                     }
                     // multi emu
-                    v if v == VK_SHIFT.0 as _ => {
+                    v if v == VK_SHIFT.0 => {
                         p.dispatch_button_event(NativeButtonInput::LeftShift, is_press);
                         p.dispatch_button_event(NativeButtonInput::RightShift, is_press);
                         return;
                     }
-                    v if v == VK_CONTROL.0 as _ => {
+                    v if v == VK_CONTROL.0 => {
                         p.dispatch_button_event(NativeButtonInput::LeftControl, is_press);
                         p.dispatch_button_event(NativeButtonInput::RightControl, is_press);
                         return;
                     }
-                    v if v == VK_MENU.0 as _ => {
+                    v if v == VK_MENU.0 => {
                         p.dispatch_button_event(NativeButtonInput::LeftAlt, is_press);
                         p.dispatch_button_event(NativeButtonInput::RightAlt, is_press);
                         return;

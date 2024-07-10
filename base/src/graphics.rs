@@ -1,5 +1,5 @@
 use crate::mthelper::SharedRef;
-use bedrock as br;
+use bedrock::{self as br, VulkanStructure};
 use br::{
     CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Queue,
     SubmissionBatch,
@@ -138,6 +138,7 @@ impl Graphics {
             ib.add_extension("VK_EXT_debug_utils");
             log::debug!("Debug reporting activated");
         }
+        ib.add_extension("VK_KHR_get_physical_device_properties2");
         let instance = SharedRef::new(ib.create()?);
 
         #[cfg(feature = "debug")]
@@ -154,6 +155,10 @@ impl Graphics {
             "VK_KHR_dedicated_allocation",
             "VK_KHR_get_memory_requirements2",
             "VK_KHR_bind_memory2",
+            "VK_KHR_create_renderpass2",
+            "VK_KHR_multiview",
+            "VK_KHR_maintenance2",
+            "VK_KHR_synchronization2",
         ];
 
         let mut auto_device_extensions = Vec::new();
@@ -191,6 +196,11 @@ impl Graphics {
                 db.add_layer("VK_LAYER_KHRONOS_validation");
             }
             *db.mod_features() = features;
+            db.add_extra_features(br::vk::VkPhysicalDeviceSynchronization2FeaturesKHR {
+                sType: br::vk::VkPhysicalDeviceSynchronization2FeaturesKHR::TYPE,
+                pNext: core::ptr::null_mut(),
+                synchronization2: 1,
+            });
             SharedRef::new(db.create()?.clone_parent())
         };
 
