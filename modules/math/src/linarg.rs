@@ -1,6 +1,7 @@
 //! PeridotExtendedMathematics: Vector/Matrix
 
 use crate::numtraits::{One, Zero};
+use crate::Real;
 use std::mem::transmute;
 use std::ops::*;
 
@@ -183,18 +184,6 @@ impl<T: Zero + One> Vector3<T> {
 }
 
 // Extending/Shrinking Vector Types //
-/// Vector2(x, y) -> Vector3(x, y, 1)
-impl<T: One> From<Vector2<T>> for Vector3<T> {
-    fn from(Vector2(x, y): Vector2<T>) -> Self {
-        Vector3(x, y, T::ONE)
-    }
-}
-/// Vector3(x, y, z) -> Vector4(x, y, z, 1)
-impl<T: One> From<Vector3<T>> for Vector4<T> {
-    fn from(Vector3(x, y, z): Vector3<T>) -> Self {
-        Vector4(x, y, z, T::ONE)
-    }
-}
 /// Vector4(x, y, z, w) -> Vector3(x / w, y / w, z / w)
 /// panic occured when w == 0
 impl<T: Div<T> + Copy> From<Vector4<T>> for Vector3<<T as Div>::Output> {
@@ -306,6 +295,7 @@ where
     <T as Mul>::Output: Add<Output = <T as Mul>::Output>,
 {
     type Output = Matrix3<<T as Mul>::Output>;
+
     fn mul(self, other: Matrix3<T>) -> Self::Output {
         let dp = |src: &[T; 3], colindex: usize| {
             src[0] * other.0[colindex] + src[1] * other.1[colindex] + src[2] * other.2[colindex]
@@ -324,6 +314,7 @@ where
     <T as Mul>::Output: Add<Output = <T as Mul>::Output>,
 {
     type Output = Matrix4<<T as Mul>::Output>;
+
     fn mul(self, other: Matrix4<T>) -> Self::Output {
         let dp = |src: &[T; 4], colindex: usize| {
             src[0] * other.0[colindex]
@@ -362,29 +353,42 @@ where
 }
 
 // Scaling, Rotating //
-impl<T: Zero> Matrix2<T> {
-    pub fn scale(Vector2(x, y): Vector2<T>) -> Self {
+impl<T> Matrix2<T> {
+    pub fn scale(Vector2(x, y): Vector2<T>) -> Self
+    where
+        T: Zero,
+    {
         Matrix2([x, T::ZERO], [T::ZERO, y])
     }
-}
-impl Matrix2<f32> {
-    pub fn rotate(rad: f32) -> Self {
+
+    pub fn rotate(rad: T) -> Self
+    where
+        T: Real + Copy + Neg<Output = T>,
+    {
         let (s, c) = rad.sin_cos();
         Matrix2([c, -s], [s, c])
     }
 }
+
 // Scaling/Translating //
-impl<T: Zero> Matrix3<T> {
-    pub fn scale(Vector3(x, y, z): Vector3<T>) -> Self {
+impl<T> Matrix3<T> {
+    #[inline(always)]
+    pub fn scale(Vector3(x, y, z): Vector3<T>) -> Self
+    where
+        T: Zero,
+    {
         Matrix3(
             [x, T::ZERO, T::ZERO],
             [T::ZERO, y, T::ZERO],
             [T::ZERO, T::ZERO, z],
         )
     }
-}
-impl<T: One + Zero> Matrix3<T> {
-    pub fn translation(Vector2(x, y): Vector2<T>) -> Self {
+
+    #[inline(always)]
+    pub fn translation(Vector2(x, y): Vector2<T>) -> Self
+    where
+        T: One + Zero,
+    {
         Matrix3(
             [T::ONE, T::ZERO, x],
             [T::ZERO, T::ONE, y],
@@ -392,8 +396,12 @@ impl<T: One + Zero> Matrix3<T> {
         )
     }
 }
-impl<T: Zero> Matrix4<T> {
-    pub fn scale(Vector4(x, y, z, w): Vector4<T>) -> Self {
+impl<T> Matrix4<T> {
+    #[inline(always)]
+    pub fn scale(Vector4(x, y, z, w): Vector4<T>) -> Self
+    where
+        T: Zero,
+    {
         Matrix4(
             [x, T::ZERO, T::ZERO, T::ZERO],
             [T::ZERO, y, T::ZERO, T::ZERO],
@@ -401,9 +409,12 @@ impl<T: Zero> Matrix4<T> {
             [T::ZERO, T::ZERO, T::ZERO, w],
         )
     }
-}
-impl<T: One + Zero> Matrix4<T> {
-    pub fn translation(Vector3(x, y, z): Vector3<T>) -> Self {
+
+    #[inline(always)]
+    pub fn translation(Vector3(x, y, z): Vector3<T>) -> Self
+    where
+        T: One + Zero,
+    {
         Matrix4(
             [T::ONE, T::ZERO, T::ZERO, x],
             [T::ZERO, T::ONE, T::ZERO, y],
@@ -490,7 +501,7 @@ where
 {
     type Output = Vector2<<T as Mul>::Output>;
     fn mul(self, v: Vector2<T>) -> Self::Output {
-        let v3 = Vector3::from(v);
+        let v3 = v.with_z(T::ONE);
         Vector2(
             dotproduct3(v3.as_ref(), &self.0),
             dotproduct3(v3.as_ref(), &self.1),
@@ -503,7 +514,7 @@ where
 {
     type Output = Vector3<<T as Mul>::Output>;
     fn mul(self, v: Vector3<T>) -> Self::Output {
-        let v4 = Vector4::from(v);
+        let v4 = v.with_w(T::ONE);
         Vector3(
             dotproduct4(v4.as_ref(), &self.0),
             dotproduct4(v4.as_ref(), &self.1),
@@ -518,7 +529,7 @@ where
 {
     type Output = <Matrix3<T> as Mul<Vector3<T>>>::Output;
     fn mul(self, v: Vector2<T>) -> Self::Output {
-        self * Vector3::from(v)
+        self * v.with_z(T::ONE)
     }
 }
 impl<T: Mul + One + Copy> Mul<Vector2<T>> for Matrix4<T>
@@ -527,7 +538,7 @@ where
 {
     type Output = <Matrix4<T> as Mul<Vector4<T>>>::Output;
     fn mul(self, v: Vector2<T>) -> Self::Output {
-        self * Vector3::from(v)
+        self * v.with_z(T::ONE)
     }
 }
 impl<T: Mul + One + Copy> Mul<Vector3<T>> for Matrix4<T>
@@ -536,61 +547,61 @@ where
 {
     type Output = <Matrix4<T> as Mul<Vector4<T>>>::Output;
     fn mul(self, v: Vector3<T>) -> Self::Output {
-        self * Vector4::from(v)
+        self * v.with_w(T::ONE)
     }
 }
 
 // Length Function and Normalization //
-impl Vector2<f32> {
-    pub fn len(&self) -> f32 {
+impl<T> Vector2<T>
+where
+    T: Real + Copy + Mul<T, Output = T> + Add<T, Output = T>,
+{
+    #[inline]
+    pub fn len(&self) -> T {
         self.len2().sqrt()
     }
-    pub fn normalize(&self) -> Self {
+
+    #[inline]
+    pub fn normalize(&self) -> Self
+    where
+        T: Div<T, Output = T>,
+    {
         let l0 = self.len();
         Vector2(self.0 / l0, self.1 / l0)
     }
 }
-impl Vector2<f64> {
-    pub fn len(&self) -> f64 {
+impl<T> Vector3<T>
+where
+    T: Real + Copy + Mul<T, Output = T> + Add<T, Output = T>,
+{
+    #[inline]
+    pub fn len(&self) -> T {
         self.len2().sqrt()
     }
-    pub fn normalize(&self) -> Self {
-        let l0 = self.len();
-        Vector2(self.0 / l0, self.1 / l0)
-    }
-}
-impl Vector3<f32> {
-    pub fn len(&self) -> f32 {
-        self.len2().sqrt()
-    }
-    pub fn normalize(&self) -> Self {
-        let l0 = self.len();
-        Vector3(self.0 / l0, self.1 / l0, self.2 / l0)
-    }
-}
-impl Vector3<f64> {
-    pub fn len(&self) -> f64 {
-        self.len2().sqrt()
-    }
-    pub fn normalize(&self) -> Self {
+
+    #[inline]
+    pub fn normalize(&self) -> Self
+    where
+        T: Div<T, Output = T>,
+    {
         let l0 = self.len();
         Vector3(self.0 / l0, self.1 / l0, self.2 / l0)
     }
 }
-impl Vector4<f32> {
-    pub fn len(&self) -> f32 {
+impl<T> Vector4<T>
+where
+    T: Real + Copy + Mul<T, Output = T> + Add<T, Output = T>,
+{
+    #[inline]
+    pub fn len(&self) -> T {
         self.len2().sqrt()
     }
-    pub fn normalize(&self) -> Self {
-        let l0 = self.len();
-        Vector4(self.0 / l0, self.1 / l0, self.2 / l0, self.3 / l0)
-    }
-}
-impl Vector4<f64> {
-    pub fn len(&self) -> f64 {
-        self.len2().sqrt()
-    }
-    pub fn normalize(&self) -> Self {
+
+    #[inline]
+    pub fn normalize(&self) -> Self
+    where
+        T: Div<T, Output = T>,
+    {
         let l0 = self.len();
         Vector4(self.0 / l0, self.1 / l0, self.2 / l0, self.3 / l0)
     }
@@ -601,46 +612,77 @@ impl<T: One + Zero> One for Quaternion<T> {
     const ONE: Self = Quaternion(T::ZERO, T::ZERO, T::ZERO, T::ONE);
 }
 
-// quaternion shortcuts //
-impl Quaternion<f32> {
+impl<T> Quaternion<T> {
     /// Creates new quaternion from rotation axis and angle in radian.
-    pub fn new(rad: f32, axis: Vector3<f32>) -> Self {
-        let (s, c) = (rad / 2.0).sin_cos();
+    pub fn new(rad: T, axis: Vector3<T>) -> Self
+    where
+        T: Div<T, Output = T> + Real + One + Copy + Add<T, Output = T> + Mul<T, Output = T>,
+    {
+        let (s, c) = (rad / (T::ONE + T::ONE)).sin_cos();
         let axis = axis.normalize();
 
-        Quaternion(axis.0 * s, axis.1 * s, axis.2 * s, c)
+        Self(axis.0 * s, axis.1 * s, axis.2 * s, c)
     }
-    /// Calculates a difference of angle between 2 quaternions.
-    pub fn angle(&self, other: &Self) -> f32 {
-        dotproduct4(self.as_ref(), other.as_ref()).acos()
-    }
+
     /// Calculates the lerp-ed quaternion between 2 quaternions by `t`.
-    pub fn lerp(&self, other: &Self, t: f32) -> Self {
+    pub fn lerp(&self, other: &Self, t: T) -> Self
+    where
+        T: Real
+            + Copy
+            + Mul<T, Output = T>
+            + Add<T, Output = T>
+            + Div<T, Output = T>
+            + Sub<T, Output = T>
+            + One,
+    {
         let omg = self.angle(other);
         let (fa, fb) = (
-            (omg * (1.0 - t)).sin() / omg.sin(),
+            (omg * (T::ONE - t)).sin() / omg.sin(),
             (omg * t).sin() / omg.sin(),
         );
-        return Quaternion(
+
+        Self(
             fa * self.0 + fb * other.0,
             fa * self.1 + fb * other.1,
             fa * self.2 + fb * other.2,
             fa * self.3 + fb * other.3,
-        );
+        )
     }
+
+    /// Calculates a difference of angle between 2 quaternions
+    #[inline(always)]
+    pub fn angle(&self, other: &Self) -> T
+    where
+        T: Real + Copy + Mul<T, Output = T> + Add<T, Output = T>,
+    {
+        dotproduct4(self.as_ref(), other.as_ref()).acos()
+    }
+
     /// Calculates a normalized quaternion
-    pub fn normalize(self) -> Self {
-        let d = (self.0.powf(2.0) + self.1.powf(2.0) + self.2.powf(2.0) + self.3.powf(2.0)).sqrt();
-        Quaternion(self.0 / d, self.1 / d, self.2 / d, self.3 / d)
+    #[inline(always)]
+    pub fn normalize(self) -> Self
+    where
+        T: Copy + Div<T, Output = T> + Mul<T, Output = T> + Add<T, Output = T> + Real,
+    {
+        let d = (self.0 * self.0 + self.1 * self.1 + self.2 * self.2 + self.3 * self.3).sqrt();
+
+        Self(self.0 / d, self.1 / d, self.2 / d, self.3 / d)
     }
 }
-impl<T: Mul<Output = T> + Add<Output = T> + Sub<Output = T> + Copy> Mul for Quaternion<T> {
+
+impl<T> Mul for Quaternion<T>
+where
+    T: Mul<T, Output = T> + Add<T, Output = T> + Sub<T, Output = T> + Copy,
+{
     type Output = Quaternion<T>;
-    fn mul(self, Quaternion(x, y, z, w): Quaternion<T>) -> Self::Output {
-        let x0 = self.3 * x + self.0 * w + self.1 * z - self.2 * y;
-        let y0 = self.3 * y - self.0 * z + self.1 * w + self.2 * x;
-        let z0 = self.3 * z + self.0 * y - self.1 * x + self.2 * w;
-        let w0 = self.3 * w - self.0 * x - self.1 * y - self.2 * z;
+
+    fn mul(self, Quaternion(x2, y2, z2, w2): Quaternion<T>) -> Self::Output {
+        let Quaternion(x1, y1, z1, w1) = self;
+
+        let x0 = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2;
+        let y0 = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2;
+        let z0 = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2;
+        let w0 = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2;
 
         Quaternion(x0, y0, z0, w0)
     }
@@ -654,9 +696,9 @@ impl<T: Neg<Output = T>> Neg for Quaternion<T> {
     }
 }
 
-/// quaternion to matrix conversion
-impl<T: One + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy> From<Quaternion<T>>
-    for Matrix3<T>
+impl<T> From<Quaternion<T>> for Matrix3<T>
+where
+    T: One + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T> + Copy,
 {
     fn from(Quaternion(x, y, z, w): Quaternion<T>) -> Self {
         let two = T::ONE + T::ONE;
@@ -673,9 +715,9 @@ impl<T: One + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy> From<Q
         Matrix3([m11, m12, m13], [m21, m22, m23], [m31, m32, m33])
     }
 }
-/// quaternion to matrix conversion
-impl<T: One + Zero + Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Copy> From<Quaternion<T>>
-    for Matrix4<T>
+impl<T> From<Quaternion<T>> for Matrix4<T>
+where
+    T: One + Zero + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T> + Copy,
 {
     fn from(Quaternion(x, y, z, w): Quaternion<T>) -> Self {
         let two = T::ONE + T::ONE;
@@ -812,9 +854,9 @@ mod tests {
 
     #[test]
     fn vector_dimension_transform() {
-        assert_eq!(Vector3::from(Vector2(2, 3)), Vector3(2, 3, 1));
+        assert_eq!(Vector2(2, 3).with_z(1), Vector3(2, 3, 1));
         assert_eq!(
-            Vector4::from(Vector3(2.5, 3.0, 4.1)),
+            Vector3(2.5, 3.0, 4.1).with_w(1.0),
             Vector4(2.5, 3.0, 4.1, 1.0)
         );
         assert_eq!(Vector3::from(Vector4(4, 6, 8, 2)), Vector3(2, 3, 4));
@@ -878,7 +920,7 @@ mod tests {
     }
     #[test]
     fn inv_quaternion() {
-        let q = Quaternion(0.0, 1.0, 0.0, 3.0).normalize();
+        let q = Quaternion(0.0f32, 1.0, 0.0, 3.0).normalize();
         let Quaternion(a, b, c, d) = q.clone() * -q;
         // approximate
         assert!(a.abs() <= std::f32::EPSILON);
