@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     hash::Hash,
     rc::{Rc, Weak},
-    sync::{Arc, Weak as AtomicWeak},
+    sync::{atomic::AtomicBool, Arc, Weak as AtomicWeak},
 };
 
 use app_global_signals::{AppGlobalSignals, SignalEventReceiver, SignalEventType};
@@ -6092,24 +6092,89 @@ impl PaneTabPresenter for PreviewTabPresenter {
     }
 }
 
-pub struct ObjectTreeElementRowView {
+pub struct CompositionTabPresenter {}
+impl PaneTabContentPresenter for CompositionTabPresenter {
+    fn build_content_view(
+        &mut self,
+        _onto: &ContainerVisual,
+        _onto_ht: &HitTestTree,
+        _view_context: &dyn ViewContext,
+        _app_state: &MTSharedMut<AppState>,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &dyn ViewContext,
+        _app_state: &MTSharedMut<AppState>,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+impl PaneTabPresenter for CompositionTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Composition Graph";
+
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &(impl ViewContext + ?Sized),
+        _app_state: &MTSharedMut<AppState>,
+    ) -> Self {
+        Self {}
+    }
+}
+
+pub struct ObjectTreeElementRowViewSelectViewRefs {
+    bound_object_id: Uuid,
+    select_bg: SpriteVisual,
+    select_animation: ScalarKeyFrameAnimation,
+    unselect_animation: ScalarKeyFrameAnimation,
+    is_selected: AtomicBool,
+}
+
+pub struct ObjectTreeElementRowViewState {
     root: ContainerVisual,
     ht: HitTestTree,
     bg: SpriteVisual,
     bg_hover_animation: ScalarKeyFrameAnimation,
     bg_hover_end_animation: ScalarKeyFrameAnimation,
     bound_object_id: Uuid,
+    rendered_dpi: f32,
     app_state: MTSharedMut<AppState>,
     parent: ObjectTreeTabPresenterWeakRef,
+    selection_changed_handler: Arc<ObjectTreeElementRowViewSelectViewRefs>,
+}
+#[derive(Clone)]
+pub struct ObjectTreeElementRowView(SharedMut<ObjectTreeElementRowViewState>);
+impl ObjectTreeElementRowView {
+    #[inline(always)]
+    pub fn make_weak_ref(&self) -> ObjectTreeElementRowViewWeakRef {
+        ObjectTreeElementRowViewWeakRef(Rc::downgrade(&self.0))
+    }
+}
+#[derive(Clone)]
+pub struct ObjectTreeElementRowViewWeakRef(WeakMut<ObjectTreeElementRowViewState>);
+impl ObjectTreeElementRowViewWeakRef {
+    #[inline(always)]
+    pub fn upgrade(&self) -> Option<ObjectTreeElementRowView> {
+        self.0.upgrade().map(ObjectTreeElementRowView)
+    }
 }
 impl ObjectTreeElementRowView {
     const PADDING_Y: f32 = 2.0;
     const PADDING_X: f32 = 8.0;
     const HOVER_ANIMATION_DURATION: TimeSpan = timespan_ms(50);
+    const SELECT_ANIMATION_DURATION: TimeSpan = timespan_ms(100);
     const HOVER_COLOR: Color = Color {
         A: 16,
         R: 255,
         G: 255,
+        B: 255,
+    };
+    const SELECT_BG_COLOR: Color = Color {
+        A: 255,
+        R: 64,
+        G: 160,
         B: 255,
     };
 
@@ -6118,9 +6183,10 @@ impl ObjectTreeElementRowView {
         label_offset: f32,
         init_name: impl Into<Cow<'static, str>>,
         bound_object_id: Uuid,
+        init_selected: bool,
         app_state: &MTSharedMut<AppState>,
         parent: &ObjectTreeTabPresenterWeakRef,
-    ) -> windows::core::Result<SharedMut<Self>> {
+    ) -> windows::core::Result<Self> {
         let label_fmt = AppSubsystemInstances::get()
             .text_format_stock
             .borrow_mut()
@@ -6139,6 +6205,20 @@ impl ObjectTreeElementRowView {
                 Y: label_surface.height + Self::PADDING_Y * 2.0,
             })?
             .relative_size_adjustment(Vector2 { X: 1.0, Y: 0.0 })?;
+
+        let select_bg = AppSubsystemInstances::get()
+            .compositor
+            .CreateSpriteVisual()?;
+        select_bg
+            .set_properties()
+            .brush(
+                &AppSubsystemInstances::get()
+                    .compositor
+                    .CreateColorBrushWithColor(Self::SELECT_BG_COLOR)?,
+            )?
+            .expand_to_parent()?
+            .opacity(if init_selected { 1.0 } else { 0.0 })?;
+        root.Children()?.InsertAtTop(&select_bg)?;
 
         let bg = AppSubsystemInstances::get()
             .compositor
@@ -6191,61 +6271,108 @@ impl ObjectTreeElementRowView {
             .set_properties()
             .duration(Self::HOVER_ANIMATION_DURATION)?;
 
-        Ok(new_cyclic_shared_mut(|wthis| {
+        let select_animation = AppSubsystemInstances::get()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
+        select_animation
+            .keyframe(0.0, 0.0)?
+            .interpolate(1.0, 1.0, &linear_easing)?
+            .set_properties()
+            .duration(Self::SELECT_ANIMATION_DURATION)?;
+        let unselect_animation = AppSubsystemInstances::get()
+            .compositor
+            .CreateScalarKeyFrameAnimation()?;
+        unselect_animation
+            .keyframe(0.0, 1.0)?
+            .interpolate(1.0, 0.0, &linear_easing)?
+            .set_properties()
+            .duration(Self::SELECT_ANIMATION_DURATION)?;
+
+        Ok(Self(new_cyclic_shared_mut(|wthis| {
             let ht = HitTestTree::new(
-                Some(wthis.clone()),
+                Some(ObjectTreeElementRowViewWeakRef(wthis.clone())),
                 Rect::from_size(core::f32::MAX, label_surface.height + Self::PADDING_Y * 2.0),
                 Rect::empty(),
             );
 
-            Self {
+            ObjectTreeElementRowViewState {
                 root,
                 ht,
                 bg,
                 bg_hover_animation,
                 bg_hover_end_animation,
                 bound_object_id,
+                rendered_dpi: ref_dpi,
                 app_state: app_state.clone(),
                 parent: parent.clone(),
+                selection_changed_handler: Arc::new(ObjectTreeElementRowViewSelectViewRefs {
+                    bound_object_id,
+                    select_bg,
+                    select_animation,
+                    unselect_animation,
+                    is_selected: AtomicBool::new(init_selected),
+                }),
             }
-        }))
+        })))
     }
 
     pub fn height(&self) -> f32 {
-        self.ht.rect().Height
+        self.0.borrow().ht.rect().Height
     }
 
-    pub fn reposition(&mut self, pos: Vector2) -> windows::core::Result<()> {
-        self.root.SetOffset(pos.with_z(0.0))?;
-        self.ht.set_offset(pos.X, pos.Y);
+    pub fn reposition(&self, pos: Vector2) -> windows::core::Result<()> {
+        self.0.borrow().root.SetOffset(pos.with_z(0.0))?;
+        self.0.borrow().ht.set_offset(pos.X, pos.Y);
 
         Ok(())
     }
 }
 impl MountableView2 for ObjectTreeElementRowView {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
-        onto.InsertAtTop(&self.root)?;
-        onto_ht.add_child(&self.ht);
+        onto.InsertAtTop(&self.0.borrow().root)?;
+        onto_ht.add_child(&self.0.borrow().ht);
+
+        AppState::observe_current_selection_changes(
+            &self.0.borrow().app_state,
+            &self.0.borrow().selection_changed_handler,
+            &ViewContext1 {
+                current_dpi: self.0.borrow().rendered_dpi,
+            },
+        );
 
         Ok(())
     }
 
     fn unmount(&self) -> windows::core::Result<()> {
-        self.root.Parent()?.Children()?.Remove(&self.root)?;
-        self.ht.unmount();
+        self.0
+            .borrow()
+            .root
+            .Parent()?
+            .Children()?
+            .Remove(&self.0.borrow().root)?;
+        self.0.borrow().ht.unmount();
+
+        self.0
+            .borrow()
+            .app_state
+            .write()
+            .unobserve_current_selection_changes(&Arc::downgrade(
+                &self.0.borrow().selection_changed_handler,
+            ));
 
         Ok(())
     }
 }
-impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
+impl InputEventHandler for ObjectTreeElementRowViewWeakRef {
     fn on_pointer_enter(&self, _ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
             return;
         };
 
-        this.borrow()
+        this.0
+            .borrow()
             .bg
-            .StartAnimation(h!("Opacity"), &this.borrow().bg_hover_animation)
+            .StartAnimation(h!("Opacity"), &this.0.borrow().bg_hover_animation)
             .expect("Failed to start hover animation");
     }
 
@@ -6254,9 +6381,10 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
             return;
         };
 
-        this.borrow()
+        this.0
+            .borrow()
             .bg
-            .StartAnimation(h!("Opacity"), &this.borrow().bg_hover_end_animation)
+            .StartAnimation(h!("Opacity"), &this.0.borrow().bg_hover_end_animation)
             .expect("Failed to start hover animation");
     }
 
@@ -6272,16 +6400,13 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
 
         AppState::set_current_selection(
             &state.app_state,
-            Some(this.borrow().bound_object_id.clone()),
+            Some(this.0.borrow().bound_object_id.clone()),
             &mut ctx,
         );
     }
 
     fn on_sub_pointer_up(&self, x: f32, y: f32, window: HWND, ctx: &mut dyn InputContext) {
         let Some(this) = self.upgrade() else {
-            return;
-        };
-        let Some(parent) = this.borrow().parent.upgrade() else {
             return;
         };
 
@@ -6308,10 +6433,10 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                             MenuItem::Command(
                                 "Cube".into(),
                                 {
-                                    let app_state = this.borrow().app_state.clone();
+                                    let app_state = this.0.borrow().app_state.clone();
                                     let ref_dpi = ctx.current_dpi();
-                                    let parent_w = this.borrow().parent.clone();
-                                    let bound_object_id = this.borrow().bound_object_id;
+                                    let parent_w = this.0.borrow().parent.clone();
+                                    let bound_object_id = this.0.borrow().bound_object_id;
 
                                     new_shared_mut(move || {
                                         let Some(parent) = parent_w.upgrade() else {
@@ -6422,13 +6547,12 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                                             .add_object_under(bound_object_id, new_object);
 
                                         // refresh list
-                                        for v in parent.0.borrow().rows.borrow().iter() {
-                                            v.borrow()
-                                                .unmount()
+                                        for v in parent.0.borrow().rows.iter() {
+                                            v.unmount()
                                                 .expect("Failed to unmount old element rows");
                                         }
 
-                                        parent.0.borrow().rows.borrow_mut().clear();
+                                        parent.0.borrow_mut().rows.clear();
                                         parent.rebuild_views(ref_dpi, &app_state);
 
                                         let children = parent
@@ -6439,13 +6563,12 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
                                             .unwrap()
                                             .Children()
                                             .unwrap();
-                                        for v in parent.0.borrow().rows.borrow().iter() {
-                                            v.borrow()
-                                                .mount(
-                                                    &children,
-                                                    parent.0.borrow().mounted_ht.as_ref().unwrap(),
-                                                )
-                                                .expect("Failed to mount new rows");
+                                        for v in parent.0.borrow().rows.iter() {
+                                            v.mount(
+                                                &children,
+                                                parent.0.borrow().mounted_ht.as_ref().unwrap(),
+                                            )
+                                            .expect("Failed to mount new rows");
                                         }
                                     })
                                 },
@@ -6497,9 +6620,36 @@ impl InputEventHandler for WeakMut<ObjectTreeElementRowView> {
             .expect("Failed to pop context menu");
     }
 }
+impl AppStateCurrentSelectionChangedHandler for ObjectTreeElementRowViewSelectViewRefs {
+    fn on_changed(&self, app_state: &MTSharedMut<AppState>, _view_context: &dyn ViewContext) {
+        let selected = app_state
+            .read()
+            .current_selection_object_id
+            .is_some_and(|id| id == self.bound_object_id);
+
+        if self
+            .is_selected
+            .swap(selected, std::sync::atomic::Ordering::AcqRel)
+            == selected
+        {
+            // 状態が変わらなかった
+            return;
+        }
+
+        if selected {
+            self.select_bg
+                .StartAnimation(h!("Opacity"), &self.select_animation)
+                .unwrap();
+        } else {
+            self.select_bg
+                .StartAnimation(h!("Opacity"), &self.unselect_animation)
+                .unwrap();
+        }
+    }
+}
 
 struct ObjectTreeTabState {
-    rows: SharedMut<Vec<SharedMut<ObjectTreeElementRowView>>>,
+    rows: Vec<ObjectTreeElementRowView>,
     app_state: MTSharedMut<AppState>,
     mounted_visual_root: Option<ContainerVisual>,
     mounted_ht: Option<HitTestTree>,
@@ -6527,8 +6677,8 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
         let children = onto.Children()?;
-        for r in self.0.borrow().rows.borrow().iter() {
-            r.borrow().mount(&children, onto_ht)?;
+        for r in self.0.borrow().rows.iter() {
+            r.mount(&children, onto_ht)?;
         }
 
         self.0.borrow_mut().mounted_visual_root = Some(onto.clone());
@@ -6542,8 +6692,8 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
         _view_context: &dyn ViewContext,
         _app_state: &MTSharedMut<AppState>,
     ) -> windows::core::Result<()> {
-        for r in self.0.borrow().rows.borrow().iter() {
-            r.borrow().unmount()?;
+        for r in self.0.borrow().rows.iter() {
+            r.unmount()?;
         }
 
         self.0.borrow_mut().mounted_visual_root = None;
@@ -6687,19 +6837,17 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         app_state.write().current_scene.add_object(new_object);
 
                                         // refresh list
-                                        for v in rows.borrow().iter() {
-                                            v.borrow()
-                                                .unmount()
+                                        for v in this.0.borrow().rows.iter() {
+                                            v.unmount()
                                                 .expect("Failed to unmount old element rows");
                                         }
 
-                                        rows.borrow_mut().clear();
+                                        this.0.borrow_mut().rows.clear();
                                         this.rebuild_views(ref_dpi, &app_state);
 
                                         let children = mounted_visual_root.Children().unwrap();
-                                        for v in rows.borrow().iter() {
-                                            v.borrow()
-                                                .mount(&children, &mounted_ht)
+                                        for v in this.0.borrow().rows.iter() {
+                                            v.mount(&children, &mounted_ht)
                                                 .expect("Failed to mount new rows");
                                         }
                                     })
@@ -6819,13 +6967,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                         app_state.write().current_scene.add_object(new_object);
 
                                         // refresh list
-                                        for v in this.0.borrow().rows.borrow().iter() {
-                                            v.borrow()
-                                                .unmount()
+                                        for v in this.0.borrow().rows.iter() {
+                                            v.unmount()
                                                 .expect("Failed to unmount old element rows");
                                         }
 
-                                        this.0.borrow().rows.borrow_mut().clear();
+                                        this.0.borrow_mut().rows.clear();
                                         this.rebuild_views(ref_dpi, &app_state);
 
                                         let children = this
@@ -6836,13 +6983,12 @@ impl PaneTabContentPresenter for ObjectTreeTabPresenter {
                                             .unwrap()
                                             .Children()
                                             .unwrap();
-                                        for v in this.0.borrow().rows.borrow().iter() {
-                                            v.borrow()
-                                                .mount(
-                                                    &children,
-                                                    this.0.borrow().mounted_ht.as_ref().unwrap(),
-                                                )
-                                                .expect("Failed to mount new rows");
+                                        for v in this.0.borrow().rows.iter() {
+                                            v.mount(
+                                                &children,
+                                                this.0.borrow().mounted_ht.as_ref().unwrap(),
+                                            )
+                                            .expect("Failed to mount new rows");
                                         }
                                     })
                                 },
@@ -6897,13 +7043,12 @@ impl PaneTabPresenter for ObjectTreeTabPresenter {
         view_ctx: &(impl ViewContext + ?Sized),
         app_state: &MTSharedMut<AppState>,
     ) -> Self {
-        let state = new_shared_mut(ObjectTreeTabState {
-            rows: new_shared_mut(Vec::new()),
+        let this = Self(new_shared_mut(ObjectTreeTabState {
+            rows: Vec::new(),
             app_state: app_state.clone(),
             mounted_visual_root: None,
             mounted_ht: None,
-        });
-        let this = Self(state);
+        }));
 
         this.rebuild_views(view_ctx.current_dpi(), app_state);
         this
@@ -6913,7 +7058,7 @@ impl ObjectTreeTabPresenter {
     pub fn rebuild_views(&self, ref_dpi: f32, app_state: &MTSharedMut<AppState>) {
         fn recursive(
             ref_dpi: f32,
-            view_store: &mut Vec<SharedMut<ObjectTreeElementRowView>>,
+            view_store: &mut Vec<ObjectTreeElementRowView>,
             id_list: Vec<Uuid>,
             objects: &HashMap<Uuid, ObjectEditState>,
             left_offset: f32,
@@ -6930,14 +7075,17 @@ impl ObjectTreeTabPresenter {
                     left_offset,
                     x.name.to_owned(),
                     x.id.clone(),
+                    app_state
+                        .read()
+                        .current_selection_object_id
+                        .is_some_and(|id| id == x.id),
                     app_state,
                     parent_w,
                 )
                 .expect("Failed to create row view");
-                p.borrow_mut()
-                    .reposition(Vector2 { X: 0.0, Y: base_y })
+                p.reposition(Vector2 { X: 0.0, Y: base_y })
                     .expect("Failed to reposition row view");
-                base_y += p.borrow().height();
+                base_y += p.height();
 
                 view_store.push(p);
 
@@ -6971,7 +7119,7 @@ impl ObjectTreeTabPresenter {
 
         recursive(
             ref_dpi,
-            &mut *self.0.borrow().rows.borrow_mut(),
+            &mut self.0.borrow_mut().rows,
             first_object_id_list,
             &app_state.read().current_scene.objects,
             0.0,
@@ -7934,7 +8082,9 @@ fn app() -> i32 {
     TabGroupPaneView::add_tab::<PreviewTabPresenter>(&main_pane, &view_context, &state)
         .expect("Failed to create PreviewPaneTab");
     TabGroupPaneView::add_tab::<ProjectSettingsTabPresenter>(&main_pane, &view_context, &state)
-        .expect("Failed to create ProjectSettingsPaneTabHeader");
+        .expect("Failed to create ProjectSettingsPaneTab");
+    TabGroupPaneView::add_tab::<CompositionTabPresenter>(&main_pane, &view_context, &state)
+        .expect("Failed to create CompositionPaneTab");
     main_pane.borrow_mut().rearrange(&ResizeContext {
         current_dpi: window_handle.current_dpi,
     });
