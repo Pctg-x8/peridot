@@ -1,8 +1,8 @@
 .SUFFIXES: .vsh .vspv .fsh .fspv .comp .cspv
 
-VERTEX_SHADERS = $(patsubst %.vsh,%.vspv,$(wildcard *.vsh) $(wildcard */*.vsh))
-FRAGMENT_SHADERS = $(patsubst %.fsh,%.fspv,$(wildcard *.fsh) $(wildcard */*.fsh))
-COMPUTE_SHADERS = $(patsubst %.comp,%.cspv,$(wildcard *.comp) $(wildcard */*.comp))
+VERTEX_SHADERS = $(patsubst %.vsh,%.vspv,$(wildcard *.vsh) $(wildcard */*.vsh) $(wildcard */*/*.vsh))
+FRAGMENT_SHADERS = $(patsubst %.fsh,%.fspv,$(wildcard *.fsh) $(wildcard */*.fsh) $(wildcard */*/*.fsh))
+COMPUTE_SHADERS = $(patsubst %.comp,%.cspv,$(wildcard *.comp) $(wildcard */*.comp) $(wildcard */*/*.comp))
 
 .vsh.vspv:
 	@glslc -O -fshader-stage=vert -o $@ $<
