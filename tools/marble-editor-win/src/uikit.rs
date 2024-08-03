@@ -66,16 +66,6 @@ pub enum CursorStyle {
 }
 
 pub trait MountableView {
-    fn mount(
-        &self,
-        onto: &VisualCollection,
-        onto_ht: &HitTestTree,
-        view_context: &dyn ViewContext,
-    ) -> windows::core::Result<()>;
-    fn unmount(&self, view_context: &dyn ViewContext) -> windows::core::Result<()>;
-}
-
-pub trait MountableView2 {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()>;
     fn unmount(&self) -> windows::core::Result<()>;
 }

@@ -17,7 +17,7 @@ use crate::{
     app_subsystem_instances::AppSubsystemInstances,
     new_cyclic_shared_mut,
     observable::EventBus,
-    uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView2, ViewContext},
+    uikit::{self, HitTestTree, InputContext, InputEventHandler, MountableView, ViewContext},
     utils::RectExtensions,
     winapi_extras::VisualExtensions,
     SharedMut, WeakMut,
@@ -197,7 +197,7 @@ impl FloatSliderView {
         Ok(())
     }
 }
-impl MountableView2 for FloatSliderView {
+impl MountableView for FloatSliderView {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         onto_ht.add_child(&self.ht);

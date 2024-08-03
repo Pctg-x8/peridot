@@ -11,7 +11,7 @@ use windows::{
 use crate::{
     app_subsystem_instances::AppSubsystemInstances,
     empty_weak_mut, new_cyclic_shared_mut,
-    uikit::{CursorStyle, HitTestTree, InputContext, InputEventHandler, MountableView2},
+    uikit::{CursorStyle, HitTestTree, InputContext, InputEventHandler, MountableView},
     utils::RectExtensions,
     winapi_extras::{
         timespan_ms, KeyFrameAnimationExtension, KeyFrameAnimationPropertySetterExtension,
@@ -112,7 +112,7 @@ impl PaneSplitterView {
         Ok(())
     }
 }
-impl MountableView2 for PaneSplitterView {
+impl MountableView for PaneSplitterView {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.visual)?;
         onto_ht.add_child(&self.ht);

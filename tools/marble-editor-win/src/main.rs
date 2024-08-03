@@ -27,7 +27,7 @@ use observable::ObservationDisconnector;
 use parking_lot::RwLock;
 use peridot_math::{Camera, One, ProjectionMethod, Zero};
 use uikit::{
-    HitTestTree, InputContext, InputEventHandler, InputState, MountableView2, ResizeContext,
+    HitTestTree, InputContext, InputEventHandler, InputState, MountableView, ResizeContext,
     ViewContext,
 };
 use utils::{
@@ -1873,7 +1873,7 @@ impl PaneTabHeaderView {
         Ok(())
     }
 }
-impl MountableView2 for PaneTabHeaderView {
+impl MountableView for PaneTabHeaderView {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.visual)?;
         onto_ht.add_child(&self.hittest_tree_self);
@@ -2384,7 +2384,7 @@ pub trait PaneTabPresenter: PaneTabContentPresenter + Sized {
 pub struct InspectorTabSelectionChangedEventHandler {
     content_root: ContainerVisual,
     root_ht: HitTestTree,
-    current_mounted_views: RwLock<Vec<SharedMut<dyn MountableView2>>>,
+    current_mounted_views: RwLock<Vec<SharedMut<dyn MountableView>>>,
     observation_disconnectors: RwLock<Vec<Box<dyn ObservationDisconnector>>>,
 }
 // TODO: これあとでなんとかする
@@ -3814,7 +3814,7 @@ impl LuminanceHistogramView {
         })
     }
 }
-impl MountableView2 for LuminanceHistogramView {
+impl MountableView for LuminanceHistogramView {
     fn mount(&self, onto: &VisualCollection, _onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
 
@@ -4122,19 +4122,19 @@ impl SignalEventReceiver for StageTabContentRenderer {
             .wait()
             .expect("Failed to wait work");
 
-        let h = self
-            .render_resources
-            .borrow()
-            .postfx_auto_exposure
-            .readback_histogram();
-        let st = self
-            .render_resources
-            .borrow()
-            .readback_postfx_global_work_buffer();
-        println!(
-            "histogram: {h:?} {} {} {}",
-            st.exposure_base_lum, st.average_ev100, st.histogram_max_value
-        );
+        // let h = self
+        //     .render_resources
+        //     .borrow()
+        //     .postfx_auto_exposure
+        //     .readback_histogram();
+        // let st = self
+        //     .render_resources
+        //     .borrow()
+        //     .readback_postfx_global_work_buffer();
+        // println!(
+        //     "histogram: {h:?} {} {} {}",
+        //     st.exposure_base_lum, st.average_ev100, st.histogram_max_value
+        // );
 
         unsafe {
             bb.keyed_mutex
@@ -6546,7 +6546,7 @@ impl EditorStageView {
         Ok(())
     }
 }
-impl MountableView2 for EditorStageView {
+impl MountableView for EditorStageView {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         onto_ht.add_child(&self.ht);
@@ -7088,7 +7088,7 @@ impl ObjectTreeElementRowView {
         Ok(())
     }
 }
-impl MountableView2 for ObjectTreeElementRowView {
+impl MountableView for ObjectTreeElementRowView {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.0.borrow().root)?;
         onto_ht.add_child(&self.0.borrow().ht);

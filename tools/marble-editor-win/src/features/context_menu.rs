@@ -54,7 +54,7 @@ use crate::{
     bindgen::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     new_cyclic_shared_mut, new_mt_shared_mut, new_shared_mut,
     uikit::{
-        HitTestTree, InputContext, InputEventHandler, InputState, MountableView2, ResizeContext,
+        HitTestTree, InputContext, InputEventHandler, InputState, MountableView, ResizeContext,
         ViewContext,
     },
     utils::RectExtensions,
@@ -200,7 +200,7 @@ impl ContextMenuHeaderView {
         self.required_width
     }
 }
-impl MountableView2 for ContextMenuHeaderView {
+impl MountableView for ContextMenuHeaderView {
     fn mount(&self, onto: &VisualCollection, _onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         self.root
@@ -275,7 +275,7 @@ impl ContextMenuSeparatorView {
         Self::PADDING_Y * 2.0 + 1.0
     }
 }
-impl MountableView2 for ContextMenuSeparatorView {
+impl MountableView for ContextMenuSeparatorView {
     fn mount(&self, onto: &VisualCollection, _onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
 
@@ -712,7 +712,7 @@ impl ContextMenuCommandView {
         )
     }
 }
-impl MountableView2 for ContextMenuCommandView {
+impl MountableView for ContextMenuCommandView {
     fn mount(&self, onto: &VisualCollection, onto_ht: &HitTestTree) -> windows::core::Result<()> {
         onto.InsertAtTop(&self.root)?;
         self.label.StartAnimationGroup(&self.enter_animation)?;
@@ -814,7 +814,7 @@ pub struct ContextMenuInstance {
     unscaled_base: SpriteVisual,
     content_root: ContainerVisual,
     ht_root: HitTestTree,
-    entries: Vec<SharedMut<dyn MountableView2>>,
+    entries: Vec<SharedMut<dyn MountableView>>,
     current_dpi: f32,
     input_state: MTSharedMut<InputState>,
     content_size: Vector2,
