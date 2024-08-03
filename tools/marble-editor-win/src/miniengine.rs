@@ -9,6 +9,9 @@ use std::{
 
 use crate::{app_subsystem_instances::AppSubsystemInstances, utils::SafeF32, SharedMut};
 
+mod skybox;
+pub use self::skybox::*;
+
 pub type StdVkDevice = Rc<br::DeviceObject<Rc<br::InstanceObject>>>;
 
 pub struct MiniEngineGraphicsObjects {
@@ -95,6 +98,23 @@ impl Default for SamplerDesc {
     }
 }
 impl SamplerDesc {
+    pub const LINEAR_CLAMP_TO_EDGE: Self = Self {
+        mag_filter: br::FilterMode::Linear,
+        min_filter: br::FilterMode::Linear,
+        mip_filter: br::MipmapFilterMode::Linear,
+        address_mode: (
+            br::AddressingMode::ClampToEdge,
+            br::AddressingMode::ClampToEdge,
+            br::AddressingMode::ClampToEdge,
+        ),
+        mip_lod_bias: unsafe { SafeF32::new_unchecked(0.0) },
+        max_anisotropy: None,
+        compare_op: None,
+        lod_range: unsafe { SafeF32::new_unchecked(0.0)..SafeF32::new_unchecked(0.0) },
+        border_color: br::BorderColor::TransparentBlackF,
+        unnormalized_coordinates: false,
+    };
+
     pub fn build<Device: br::Device>(
         &self,
         device: Device,
@@ -125,6 +145,9 @@ pub struct MiniEngine {
     pub temp_base: PathBuf,
     pub loaded_shaders: HashMap<String, Rc<br::ShaderModuleObject<StdVkDevice>>>,
     pub sampler_store: HashMap<SamplerDesc, Rc<br::SamplerObject<StdVkDevice>>>,
+    pub descriptor_set_layout_store:
+        HashMap<Vec<DescriptorBinding>, Rc<br::DescriptorSetLayoutObject<StdVkDevice>>>,
+    pub render_pass_store: HashMap<RenderPassDescription, Rc<br::RenderPassObject<StdVkDevice>>>,
     pub pipeline_cache: br::PipelineCacheObject<StdVkDevice>,
     pub transient_command_pool: br::CommandPoolObject<StdVkDevice>,
     pub transient_command_buffer: br::CommandBufferObject<StdVkDevice>,
@@ -292,6 +315,8 @@ impl MiniEngine {
             pipeline_cache,
             loaded_shaders: HashMap::new(),
             sampler_store: HashMap::new(),
+            descriptor_set_layout_store: HashMap::new(),
+            render_pass_store: HashMap::new(),
             transient_command_pool,
             transient_command_buffer,
         })
@@ -335,6 +360,19 @@ impl MiniEngine {
     #[inline(always)]
     pub fn pipeline_cache(&self) -> &br::PipelineCacheObject<StdVkDevice> {
         &self.pipeline_cache
+    }
+
+    pub fn create_graphics_pipeline(
+        &self,
+        mut builder: impl br::GraphicsPipelineBuilder,
+    ) -> br::Result<br::PipelineObject<StdVkDevice>> {
+        let res = builder.create(
+            self.graphics_objects.device.clone(),
+            Some(&self.pipeline_cache),
+        )?;
+        self.writeback_pipeline_cache();
+
+        Ok(res)
     }
 
     pub fn create_graphics_pipeline_array<const N: usize>(
@@ -415,6 +453,80 @@ impl MiniEngine {
             std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let obj = e.key().build(self.graphics_objects.device.clone())?;
+
+                Ok(e.insert(Rc::new(obj)).clone())
+            }
+        }
+    }
+
+    #[inline]
+    pub fn descriptor_set_layout(
+        &mut self,
+        bindings: Vec<DescriptorBinding>,
+    ) -> br::Result<Rc<br::DescriptorSetLayoutObject<StdVkDevice>>> {
+        match self.descriptor_set_layout_store.entry(bindings) {
+            std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let obj = br::DescriptorSetLayoutBuilder::with_bindings(
+                    e.key()
+                        .iter()
+                        .map(|d| match d {
+                            &DescriptorBinding::UniformBuffer(count, stage_mask) => {
+                                br::DescriptorType::UniformBuffer
+                                    .make_binding(count)
+                                    .for_shader_stage(stage_mask)
+                            }
+                            &DescriptorBinding::UniformBufferDynamic(count, stage_mask) => {
+                                br::DescriptorType::UniformBufferDynamic
+                                    .make_binding(count)
+                                    .for_shader_stage(stage_mask)
+                            }
+                            &DescriptorBinding::CombinedImageSampler(
+                                stage_mask,
+                                ref imm_samplers,
+                            ) => br::DescriptorType::CombinedImageSampler
+                                .make_binding(imm_samplers.len() as _)
+                                .for_shader_stage(stage_mask)
+                                .with_immutable_samplers(
+                                    imm_samplers
+                                        .iter()
+                                        .map(|x| unsafe { br::SamplerObjectRef::unbound(*x) })
+                                        .collect(),
+                                ),
+                            &DescriptorBinding::InputAttachment(count, stage_mask) => {
+                                br::DescriptorType::InputAttachment
+                                    .make_binding(count)
+                                    .for_shader_stage(stage_mask)
+                            }
+                            &DescriptorBinding::StorageBuffer(count, stage_mask) => {
+                                br::DescriptorType::StorageBuffer
+                                    .make_binding(count)
+                                    .for_shader_stage(stage_mask)
+                            }
+                            &DescriptorBinding::StorageImage(count, stage_mask) => {
+                                br::DescriptorType::StorageImage
+                                    .make_binding(count)
+                                    .for_shader_stage(stage_mask)
+                            }
+                        })
+                        .collect(),
+                )
+                .create(self.graphics_objects.device.clone())?;
+
+                Ok(e.insert(Rc::new(obj)).clone())
+            }
+        }
+    }
+
+    #[inline]
+    pub fn render_pass(
+        &mut self,
+        desc: RenderPassDescription,
+    ) -> br::Result<Rc<br::RenderPassObject<StdVkDevice>>> {
+        match self.render_pass_store.entry(desc) {
+            std::collections::hash_map::Entry::Occupied(e) => Ok(e.get().clone()),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let obj = e.key().create(self.graphics_objects.device.clone())?;
 
                 Ok(e.insert(Rc::new(obj)).clone())
             }
@@ -893,4 +1005,70 @@ impl TempRT {
 
         Ok(())
     }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum DescriptorBinding {
+    UniformBuffer(u32, br::ShaderStage),
+    UniformBufferDynamic(u32, br::ShaderStage),
+    CombinedImageSampler(br::ShaderStage, Vec<br::vk::VkSampler>),
+    InputAttachment(u32, br::ShaderStage),
+    StorageBuffer(u32, br::ShaderStage),
+    StorageImage(u32, br::ShaderStage),
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub struct RenderPassDescription {
+    pub attachments: Vec<br::AttachmentDescription2>,
+    pub subpasses: Vec<SubpassDescription>,
+    pub dependencies: Vec<br::SubpassDependency2>,
+}
+impl RenderPassDescription {
+    pub fn create(&self, device: StdVkDevice) -> br::Result<br::RenderPassObject<StdVkDevice>> {
+        br::RenderPassBuilder2::new(
+            &self.attachments,
+            &self
+                .subpasses
+                .iter()
+                .map(|p| {
+                    let mut r = br::SubpassDescription2::new()
+                        .inputs(&p.inputs)
+                        .colors(&p.color_outputs)
+                        .color_resolves(&p.color_resolves)
+                        .preserves(&p.preserves);
+                    if let Some(ref x) = p.depth_stencil {
+                        r = r.depth_stencil(x);
+                    }
+
+                    r
+                })
+                .collect::<Vec<_>>(),
+            &self.dependencies,
+        )
+        .create(device)
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub struct SubpassDescription {
+    pub inputs: Vec<br::AttachmentReference2>,
+    pub color_outputs: Vec<br::AttachmentReference2>,
+    pub color_resolves: Vec<br::AttachmentReference2>,
+    pub depth_stencil: Option<br::AttachmentReference2>,
+    pub preserves: Vec<u32>,
+}
+impl SubpassDescription {
+    pub const EMPTY: Self = Self {
+        inputs: Vec::new(),
+        color_outputs: Vec::new(),
+        color_resolves: Vec::new(),
+        depth_stencil: None,
+        preserves: Vec::new(),
+    };
+}
+
+#[repr(C)]
+pub struct PrimaryDirectionalLightUniformData {
+    pub incident_light_dir: peridot_math::Vector3F32,
+    pub light_intensity: f32,
 }

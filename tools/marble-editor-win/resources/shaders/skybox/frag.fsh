@@ -72,5 +72,5 @@ void main() {
 
     const vec4 scatterLight = getScatterLight(camHeight, cv, cs);
     const vec3 mieRgb = phaseMie(vs_cos) * estimateMieRgb(scatterLight);
-    target = mix(vec4(0.1, 0.1, 0.13, 1.0), vec4(ph_rayleigh * scatterLight.xyz * lightIntensity + mieRgb * lightIntensity, 1.0), fade);
+    target = mix(vec4(vec3(0.1, 0.1, 0.13) * lightIntensity * 0.015625, 1.0), vec4((ph_rayleigh * scatterLight.xyz + mieRgb) * lightIntensity, 1.0), fade);
 }

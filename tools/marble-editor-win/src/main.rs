@@ -9,7 +9,7 @@ use std::{
 
 use app_global_signals::{AppGlobalSignals, SignalEventReceiver, SignalEventType};
 use app_subsystem_instances::AppSubsystemInstances;
-use bedrock::{self as br, Image, ImageChild, RenderPass, VkObject};
+use bedrock::{self as br, Image, ImageChild, RenderPass, VkHandle, VkObject};
 use br::{
     CommandBuffer, CommandPool, DescriptorPool, Device, GraphicsPipelineBuilder,
     ImageSubresourceSlice, MemoryBound, PipelineShaderStageProvider, Queue, SubmissionBatch,
@@ -19,7 +19,9 @@ use features::{
     AppTitleBarView, ContextMenu, DockingPanePreview, MenuItem, PaneSplitterView, SplitDirection,
 };
 use miniengine::{
-    ColoredVertex, GenericVertex, Mat4, SamplerDesc, StdVkDevice, TempRT, UtilityVertices, Vec4,
+    ColoredVertex, DescriptorBinding, GenericVertex, Mat4, PrimaryDirectionalLightUniformData,
+    RenderPassDescription, SamplerDesc, SkyboxPrecomputedTextures, SkyboxRenderer, StdVkDevice,
+    SubpassDescription, TempRT, UtilityVertices, Vec4,
 };
 use observable::ObservationDisconnector;
 use parking_lot::RwLock;
@@ -62,8 +64,9 @@ use windows::{
             Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
             Dxgi::{
                 Common::{
-                    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
-                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+                    DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED,
+                    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_FORMAT_R8G8B8A8_UNORM,
+                    DXGI_SAMPLE_DESC,
                 },
                 IDXGIKeyedMutex, IDXGIResource1, DXGI_SHARED_RESOURCE_READ,
                 DXGI_SHARED_RESOURCE_WRITE,
@@ -2622,7 +2625,7 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 .push(new_shared_mut(intensity_label));
 
                             let intensity_control =
-                                FloatSliderView::new(view_context, intensity, 100.0).unwrap();
+                                FloatSliderView::new(view_context, intensity, 200000.0).unwrap();
                             intensity_control
                                 .borrow()
                                 .reposition_xrel(0.5, 80.0)
@@ -3175,7 +3178,31 @@ impl AppStateCurrentSelectionChangedHandler for InspectorTabSelectionChangedEven
                                 }),
                             ));
                         }
-                        ObjectDetails::Camera {} => (),
+                        ObjectDetails::Camera {} => {
+                            let label =
+                                LabelView::new("Luminance Histogram:", view_context).unwrap();
+                            label
+                                .set_position(Vector3 {
+                                    X: 0.0,
+                                    Y: 60.0,
+                                    Z: 0.0,
+                                })
+                                .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(new_shared_mut(label));
+
+                            let luminance_histogram_view = LuminanceHistogramView::new(Rect {
+                                X: 12.0,
+                                Y: 80.0,
+                                Width: 256.0,
+                                Height: 64.0,
+                            })
+                            .unwrap();
+                            self.current_mounted_views
+                                .write()
+                                .push(new_shared_mut(luminance_histogram_view));
+                        }
                     }
                 } else {
                     let id_label =
@@ -3337,6 +3364,523 @@ impl PaneTabPresenter for TimelineTabPresenter {
         _app_state: &MTSharedMut<AppState>,
     ) -> Self {
         Self {}
+    }
+}
+
+pub struct LuminanceHistogramViewFrame {
+    ready_event: HANDLE,
+    presentation_buffer: IPresentationBuffer,
+    presentation_tex: ID3D11Texture2D,
+    staging_tex_mutex: IDXGIKeyedMutex,
+    staging_tex: ID3D11Texture2D,
+    _vk_imported_memory: br::DeviceMemoryObject<StdVkDevice>,
+    framebuffer: br::FramebufferObject<'static, StdVkDevice>,
+    command_buffer: br::CommandBufferObject<StdVkDevice>,
+}
+
+pub struct LuminanceHistogramViewRenderer {
+    presentation_manager: IPresentationManager,
+    presentation_surface: IPresentationSurface,
+    main_command_pool: RefCell<br::CommandPoolObject<StdVkDevice>>,
+    graphics_queue: SharedMut<br::QueueObject<StdVkDevice>>,
+    d3d11_device_context: ID3D11DeviceContext,
+    frames: Vec<LuminanceHistogramViewFrame>,
+}
+impl SignalEventReceiver for LuminanceHistogramViewRenderer {
+    fn on_signal(&self, arg: usize, _view_ctx: &dyn ViewContext) {
+        let f = &self.frames[arg];
+
+        unsafe {
+            f.staging_tex_mutex
+                .AcquireSync(0, INFINITE)
+                .expect("Failed to acquire keyed mutex");
+        }
+
+        self.graphics_queue
+            .borrow_mut()
+            .submit(
+                &[br::EmptySubmissionBatch.with_command_buffers(&[f.command_buffer])],
+                None::<&mut br::FenceObject<StdVkDevice>>,
+            )
+            .expect("Failed to send command");
+        self.graphics_queue
+            .borrow_mut()
+            .wait()
+            .expect("Failed to wait work");
+
+        unsafe {
+            f.staging_tex_mutex
+                .ReleaseSync(1)
+                .expect("Failed to release keyed mutex");
+        }
+
+        unsafe {
+            f.staging_tex_mutex
+                .AcquireSync(1, INFINITE)
+                .expect("Failed to acquire keyed mutex");
+        }
+        unsafe {
+            // Note: rtそのままでは表示できないらしい（Composition SwapchainでKeyedMutexいじれたらワンチャンありそうな気がする）
+            self.d3d11_device_context
+                .CopyResource(&f.presentation_tex, &f.staging_tex);
+        }
+        unsafe {
+            f.staging_tex_mutex
+                .ReleaseSync(0)
+                .expect("Failed to release keyed mutex");
+        }
+
+        unsafe {
+            self.presentation_surface
+                .SetBuffer(&f.presentation_buffer)
+                .expect("Failed to set new buffer");
+        }
+        unsafe {
+            self.presentation_manager
+                .Present()
+                .expect("Failed to queue present");
+        }
+    }
+}
+
+pub struct LuminanceHistogramViewRenderResources {
+    main_render_pass: Rc<br::RenderPassObject<StdVkDevice>>,
+    main_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    main_pipeline: br::PipelineObject<StdVkDevice>,
+    _dp: br::DescriptorPoolObject<StdVkDevice>,
+    main_descriptor_set: br::DescriptorSet,
+}
+impl LuminanceHistogramViewRenderResources {
+    pub fn new(
+        e: &mut MiniEngine,
+        histogram_buffer: &peridot_memory_manager::Buffer,
+        postfx_global_work_buffer: &peridot_memory_manager::Buffer,
+    ) -> br::Result<Self> {
+        let main_render_pass = e.render_pass(RenderPassDescription {
+            attachments: vec![
+                br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                    .with_layout_to(br::ImageLayout::General.from_undefined())
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
+            ],
+            subpasses: vec![SubpassDescription {
+                color_outputs: vec![br::AttachmentReference2::color_attachment_opt(0)],
+                ..SubpassDescription::EMPTY
+            }],
+            dependencies: vec![br::SubpassDependency2::new(
+                br::SubpassIndex::Internal(0),
+                br::SubpassIndex::External,
+            )
+            .of_memory(
+                br::AccessFlags::COLOR_ATTACHMENT.write,
+                br::AccessFlags::MEMORY.read,
+            )
+            .of_execution(
+                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                br::PipelineStageFlags(0),
+            )],
+        })?;
+
+        let main_vsh = e.shader("shaders/full_blit_pixel_snap.vspv")?;
+        let main_fsh = e.shader("shaders/posteffects/autoexposure/histogram_graph.fspv")?;
+        let main_dsl = e.descriptor_set_layout(vec![
+            DescriptorBinding::UniformBuffer(1, br::ShaderStage::FRAGMENT),
+            DescriptorBinding::StorageBuffer(1, br::ShaderStage::FRAGMENT),
+        ])?;
+        let main_pipeline_layout =
+            br::PipelineLayoutBuilder::new(vec![&main_dsl], vec![(br::ShaderStage::VERTEX, 0..8)])
+                .create(e.device().clone())?;
+        let mut main_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &main_pipeline_layout,
+            main_render_pass.subpass(0),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(&main_vsh, c"main"))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(&main_fsh, c"main")),
+                &[],
+                &[],
+                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            ),
+        );
+        main_pipeline
+            .multisample_state(Some(br::MultisampleState::new()))
+            .dynamic_viewport_scissors(1)
+            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied());
+        let main_pipeline = e.create_graphics_pipeline(main_pipeline)?;
+
+        let mut dp = br::DescriptorPoolBuilder::new(1)
+            .with_reservations(vec![
+                br::DescriptorType::UniformBuffer.with_count(1),
+                br::DescriptorType::StorageBuffer.with_count(1),
+            ])
+            .create(e.device().clone())?;
+        let [main_descriptor_set] =
+            dp.alloc_array(&[br::DescriptorSetLayoutObjectRef::new(&main_dsl)])?;
+
+        e.device().update_descriptor_sets(
+            &[
+                main_descriptor_set
+                    .binding_at(0)
+                    .write(br::DescriptorContents::uniform_buffer(
+                        postfx_global_work_buffer,
+                        0..core::mem::size_of::<PostEffectGlobalWorkBuffer>() as u64,
+                    )),
+                main_descriptor_set
+                    .binding_at(1)
+                    .write(br::DescriptorContents::storage_buffer(
+                        histogram_buffer,
+                        0..core::mem::size_of::<[u32; 256]>() as u64,
+                    )),
+            ],
+            &[],
+        );
+
+        Ok(Self {
+            main_render_pass,
+            main_pipeline_layout,
+            main_pipeline,
+            _dp: dp,
+            main_descriptor_set,
+        })
+    }
+
+    pub fn populate_commands<
+        'r,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+        Device: br::Device + ?Sized,
+    >(
+        &self,
+        rec: br::CmdRecord<'r, CB, Device>,
+        fb: &(impl br::Framebuffer + ?Sized),
+        fb_region: br::vk::VkRect2D,
+    ) -> br::CmdRecord<'r, CB, Device> {
+        rec.begin_render_pass(
+            &self.main_render_pass,
+            fb,
+            fb_region.clone(),
+            &[br::ClearValue::color_f32([0.0; 4])],
+            true,
+        )
+        .set_viewport(0, &[fb_region.make_viewport(0.0..1.0)])
+        .set_scissor(0, &[fb_region])
+        .bind_graphics_pipeline_pair(&self.main_pipeline, &self.main_pipeline_layout)
+        .bind_graphics_descriptor_sets(0, &[self.main_descriptor_set.0], &[])
+        .push_graphics_constant(
+            br::ShaderStage::VERTEX,
+            0,
+            &[
+                1.0 / fb_region.extent.width as f32,
+                1.0 / fb_region.extent.height as f32,
+            ],
+        )
+        .draw(4, 1, 0, 0)
+        .end_render_pass()
+    }
+}
+
+pub struct LuminanceHistogramView {
+    root: SpriteVisual,
+    _buffer_refs: Option<(
+        Rc<peridot_memory_manager::Buffer>,
+        Rc<peridot_memory_manager::Buffer>,
+    )>,
+    render_resources: Option<LuminanceHistogramViewRenderResources>,
+    renderer: Option<Rc<LuminanceHistogramViewRenderer>>,
+}
+impl LuminanceHistogramView {
+    pub fn new(init_rect: Rect) -> windows::core::Result<Self> {
+        let root = AppSubsystemInstances::get()
+            .compositor
+            .CreateSpriteVisual()?;
+        root.set_properties().rect(&init_rect)?;
+
+        let composition_surface_handle = unsafe {
+            DCompositionCreateSurfaceHandle(
+                (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as _,
+                None,
+            )?
+        };
+        let presentation_surface = unsafe {
+            AppSubsystemInstances::get()
+                .presentation_manager
+                .CreatePresentationSurface(composition_surface_handle)?
+        };
+        let surface = unsafe {
+            AppSubsystemInstances::get()
+                .compositor_interop
+                .CreateCompositionSurfaceForHandle(composition_surface_handle)?
+        };
+        unsafe {
+            presentation_surface.SetSourceRect(&RECT {
+                left: 0,
+                top: 0,
+                right: init_rect.Width as _,
+                bottom: init_rect.Height as _,
+            })?;
+
+            presentation_surface.SetAlphaMode(DXGI_ALPHA_MODE_PREMULTIPLIED)?;
+            // TODO: G10(Linear色空間のはず)を使うとなんか挙動が怪しいのでいったんG22(Gamma補正バージョン)を使う
+            // presentation_surface
+            //     .SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)?;
+            presentation_surface.SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)?;
+        }
+
+        root.SetBrush(
+            &AppSubsystemInstances::get()
+                .compositor
+                .CreateSurfaceBrushWithSurface(&surface)?,
+        )?;
+
+        let (render_resources, renderer, buffer_refs);
+        if let (Some(postfx_global_work_buffer), Some(histogram_buffer)) = (
+            AppGlobalSharedInstances::get()
+                .editor_window_postfx_global_work_buffer
+                .as_ref()
+                .and_then(|x| x.upgrade()),
+            AppGlobalSharedInstances::get()
+                .editor_window_histogram_buffer
+                .as_ref()
+                .and_then(|x| x.upgrade()),
+        ) {
+            let res = LuminanceHistogramViewRenderResources::new(
+                &mut AppSubsystemInstances::get().mini_engine.borrow_mut(),
+                &histogram_buffer,
+                &postfx_global_work_buffer,
+            )
+            .unwrap();
+
+            let mut main_command_pool = AppSubsystemInstances::get()
+                .mini_engine
+                .borrow()
+                .command_pool_builder_for_graphics_work()
+                .create(
+                    AppSubsystemInstances::get()
+                        .mini_engine
+                        .borrow()
+                        .device()
+                        .clone(),
+                )
+                .unwrap();
+            let mut command_buffers = main_command_pool
+                .alloc(BACK_BUFFER_COUNT as _, true)
+                .unwrap();
+            let mut frames = Vec::with_capacity(BACK_BUFFER_COUNT);
+            for n in 0..BACK_BUFFER_COUNT {
+                let texture_desc =
+                    d3d11_presentation_texture_desc(init_rect.Width as _, init_rect.Height as _);
+                let texture = texture_desc.create(&AppSubsystemInstances::get().d3d11_device)?;
+                let presentation_buffer = unsafe {
+                    AppSubsystemInstances::get()
+                        .presentation_manager
+                        .AddBufferFromResource(&texture)?
+                };
+                let eh = unsafe { presentation_buffer.GetAvailableEvent()? };
+
+                let rt_desc = D3D11_TEXTURE2D_DESC {
+                    BindFlags: D3D11_BIND_RENDER_TARGET.0 as _,
+                    MiscFlags: (D3D11_RESOURCE_MISC_SHARED_NTHANDLE
+                        | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                        .0 as _,
+                    ..texture_desc
+                };
+                let rt = rt_desc.create(&AppSubsystemInstances::get().d3d11_device)?;
+
+                let tex_handle = unsafe {
+                    rt.cast::<IDXGIResource1>()?.CreateSharedHandle(
+                        None,
+                        GENERIC_ALL.0 | DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                        None,
+                    )?
+                };
+                let external_handle = br::ExternalMemoryHandleTypeWin32::D3D11Texture
+                    .with_handle(unsafe { core::mem::transmute(tex_handle.0) });
+                let external_handle_image_memory_req = unsafe {
+                    external_handle
+                        .properties(
+                            AppSubsystemInstances::get().mini_engine.borrow().device(),
+                            br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
+                        )
+                        .expect("Failed to query external handle memory properties")
+                };
+                let mut imported_image = br::ImageDesc::new(
+                    br::vk::VkExtent2D {
+                        width: init_rect.Width as _,
+                        height: init_rect.Height as _,
+                    },
+                    br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+                )
+                .as_color_attachment()
+                .exportable_as(br::ExternalMemoryHandleTypes::D3D11_TEXTURE)
+                .create(
+                    AppSubsystemInstances::get()
+                        .mini_engine
+                        .borrow()
+                        .device()
+                        .clone(),
+                )
+                .expect("Failed to create external backbuffer image");
+                let imported_image_memory_req = imported_image.requirements();
+                let imported_memory_index = AppSubsystemInstances::get()
+                    .mini_engine
+                    .borrow()
+                    .find_device_local_memory_index(
+                        imported_image_memory_req.memoryTypeBits
+                            & external_handle_image_memory_req.memoryTypeBits,
+                    )
+                    .expect("no suitable memory");
+                let imported_image_memory = external_handle
+                    .into_import_request(imported_memory_index, None)
+                    .execute(
+                        AppSubsystemInstances::get()
+                            .mini_engine
+                            .borrow()
+                            .device()
+                            .clone(),
+                    )
+                    .expect("Failed to import d3d11 memory");
+                imported_image
+                    .bind(&imported_image_memory, 0)
+                    .expect("Failed to bind image to memory");
+                let imported_image = Rc::new(imported_image);
+
+                let vk_framebuffer = br::FramebufferBuilder::new(&res.main_render_pass)
+                    .with_attachment(
+                        imported_image
+                            .clone()
+                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                            .view_builder()
+                            .create()
+                            .expect("Failed to create image view"),
+                    )
+                    .create()
+                    .expect("Failed to create framebuffer");
+
+                res.populate_commands(
+                    unsafe {
+                        command_buffers[n]
+                            .begin(AppSubsystemInstances::get().mini_engine.borrow().device())
+                            .unwrap()
+                    },
+                    &vk_framebuffer,
+                    br::vk::VkExtent2D {
+                        width: init_rect.Width as _,
+                        height: init_rect.Height as _,
+                    }
+                    .into_rect(br::vk::VkOffset2D::ZERO),
+                )
+                .end()
+                .unwrap();
+
+                let rt_mutex = rt.cast::<IDXGIKeyedMutex>()?;
+                frames.push(LuminanceHistogramViewFrame {
+                    ready_event: eh,
+                    presentation_buffer,
+                    presentation_tex: texture,
+                    staging_tex_mutex: rt_mutex,
+                    staging_tex: rt,
+                    _vk_imported_memory: imported_image_memory,
+                    framebuffer: vk_framebuffer,
+                    command_buffer: command_buffers[n],
+                });
+            }
+
+            buffer_refs = Some((postfx_global_work_buffer, histogram_buffer));
+            render_resources = Some(res);
+            renderer = Some(Rc::new(LuminanceHistogramViewRenderer {
+                presentation_manager: AppSubsystemInstances::get().presentation_manager.clone(),
+                presentation_surface,
+                main_command_pool: RefCell::new(main_command_pool),
+                graphics_queue: AppSubsystemInstances::get()
+                    .mini_engine
+                    .borrow()
+                    .graphics_queue()
+                    .clone(),
+                d3d11_device_context: unsafe {
+                    AppSubsystemInstances::get()
+                        .d3d11_device
+                        .GetImmediateContext()?
+                },
+                frames,
+            }));
+        } else {
+            buffer_refs = None;
+            render_resources = None;
+            renderer = None;
+        }
+
+        Ok(Self {
+            root,
+            _buffer_refs: buffer_refs,
+            render_resources,
+            renderer,
+        })
+    }
+}
+impl MountableView2 for LuminanceHistogramView {
+    fn mount(&self, onto: &VisualCollection, _onto_ht: &HitTestTree) -> windows::core::Result<()> {
+        onto.InsertAtTop(&self.root)?;
+
+        if let Some(ref r) = self.renderer {
+            for (n, f) in r.frames.iter().enumerate() {
+                AppGlobalSignals::get_mut().register(f.ready_event, r, n);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn unmount(&self) -> windows::core::Result<()> {
+        self.root.Parent()?.Children()?.Remove(&self.root)?;
+
+        if let Some(ref r) = self.renderer {
+            for n in 0..r.frames.len() {
+                AppGlobalSignals::get_mut().unregister(r, n);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct MonitorTabPresenter {
+    mounting_histogram_view: Option<LuminanceHistogramView>,
+}
+impl PaneTabContentPresenter for MonitorTabPresenter {
+    fn build_content_view(
+        &mut self,
+        onto: &ContainerVisual,
+        onto_ht: &HitTestTree,
+        _view_context: &dyn ViewContext,
+        _app_state: &MTSharedMut<AppState>,
+    ) -> windows::core::Result<()> {
+        let mounting_histogram_view = LuminanceHistogramView::new(onto_ht.rect())?;
+        mounting_histogram_view.mount(&onto.Children()?, onto_ht)?;
+        self.mounting_histogram_view = Some(mounting_histogram_view);
+
+        Ok(())
+    }
+
+    fn on_hide_content_view(
+        &mut self,
+        _view_context: &dyn ViewContext,
+        _app_state: &MTSharedMut<AppState>,
+    ) -> windows::core::Result<()> {
+        if let Some(v) = self.mounting_histogram_view.take() {
+            v.unmount()?;
+        }
+
+        Ok(())
+    }
+}
+impl PaneTabPresenter for MonitorTabPresenter {
+    const INIT_TAB_NAME: &'static str = "Monitor";
+
+    fn new(
+        _tab_header_view: &SharedMut<PaneTabHeaderView>,
+        _view_ctx: &(impl ViewContext + ?Sized),
+        _app_state: &MTSharedMut<AppState>,
+    ) -> Self {
+        Self {
+            mounting_histogram_view: None,
+        }
     }
 }
 
@@ -3578,6 +4122,20 @@ impl SignalEventReceiver for StageTabContentRenderer {
             .wait()
             .expect("Failed to wait work");
 
+        let h = self
+            .render_resources
+            .borrow()
+            .postfx_auto_exposure
+            .readback_histogram();
+        let st = self
+            .render_resources
+            .borrow()
+            .readback_postfx_global_work_buffer();
+        println!(
+            "histogram: {h:?} {} {} {}",
+            st.exposure_base_lum, st.average_ev100, st.histogram_max_value
+        );
+
         unsafe {
             bb.keyed_mutex
                 .ReleaseSync(1)
@@ -3662,6 +4220,7 @@ impl PaneTabPresenter for StageTabPresenter {
     }
 }
 
+#[macro_export]
 macro_rules! ArrayBuilderOp {
     ([try] $($base: tt).+, { $($vname: ident <- $arg: expr),* $(,)? }) => {
         let [$($vname),*] = $($base).+([$($arg),*])?;
@@ -3671,838 +4230,12 @@ macro_rules! ArrayBuilderOp {
     }
 }
 
-pub struct SkyboxPrecomputedTextures {
-    pub transmittance: br::ImageViewObject<peridot_memory_manager::Image>,
-    pub scatter: br::ImageViewObject<peridot_memory_manager::Image>,
-    pub gathered: br::ImageViewObject<peridot_memory_manager::Image>,
-    pub k_scatter: br::ImageViewObject<peridot_memory_manager::Image>,
-    pub k_gathered: br::ImageViewObject<peridot_memory_manager::Image>,
-}
-impl SkyboxPrecomputedTextures {
-    const TRANSMITTANCE_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(128, 32);
-    const SCATTER_SIZE: peridot::math::Vector3<u32> = peridot::math::Vector3(32, 64 * 2, 32);
-    const GATHERED_SIZE: peridot::math::Vector2<u32> = peridot::math::Vector2(32, 32);
-
-    pub fn new(engine: &mut MiniEngine) -> br::Result<Self> {
-        ArrayBuilderOp! {
-            [try] engine.alloc_device_local_image_array, {
-                transmittance <- br::ImageDesc::new(Self::TRANSMITTANCE_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .sampled()
-                    .use_as_storage(),
-                scatter <- br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .sampled()
-                    .use_as_storage(),
-                gathered <- br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .sampled()
-                    .use_as_storage(),
-                k_scatter <- br::ImageDesc::new(Self::SCATTER_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .sampled()
-                    .use_as_storage(),
-                k_gathered <- br::ImageDesc::new(Self::GATHERED_SIZE, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
-                    .sampled()
-                    .use_as_storage(),
-            }
-        }
-        let transmittance = transmittance
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()?;
-        let scatter = scatter
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()?;
-        let gathered = gathered
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()?;
-        let k_scatter = k_scatter
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()?;
-        let k_gathered = k_gathered
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()?;
-
-        transmittance
-            .image()
-            .set_name(Some(c"PeridotSkyBox:Precompute:Transmittance"))?;
-        scatter
-            .image()
-            .set_name(Some(c"PeridotSkyBox:Precompute:Scatter"))?;
-        gathered
-            .image()
-            .set_name(Some(c"PeridotSkyBox:Precompute:Gathered"))?;
-        k_scatter
-            .image()
-            .set_name(Some(c"PeridotSkyBox:Precompute:K-Scatter"))?;
-        k_gathered
-            .image()
-            .set_name(Some(c"PeridotSkyBox:Precompute:K-Gathered"))?;
-
-        let sampler = engine.sampler(SamplerDesc {
-            address_mode: (
-                br::AddressingMode::ClampToEdge,
-                br::AddressingMode::ClampToEdge,
-                br::AddressingMode::ClampToEdge,
-            ),
-            min_filter: br::FilterMode::Linear,
-            mag_filter: br::FilterMode::Linear,
-            mip_filter: br::MipmapFilterMode::Linear,
-            ..Default::default()
-        })?;
-        let dsl_compute_si1 =
-            br::DescriptorSetLayoutBuilder::with_bindings(vec![br::DescriptorType::StorageImage
-                .make_binding(1)
-                .only_for_compute()])
-            .create(engine.device().clone())?;
-        let dsl_compute_si1_si1 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
-            br::DescriptorType::StorageImage
-                .make_binding(1)
-                .only_for_compute(),
-            br::DescriptorType::StorageImage
-                .make_binding(1)
-                .only_for_compute(),
-        ])
-        .create(engine.device().clone())?;
-        let dsl_compute_cis1_si1 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .only_for_compute()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&sampler)]),
-            br::DescriptorType::StorageImage
-                .make_binding(1)
-                .only_for_compute(),
-        ])
-        .create(engine.device().clone())?;
-        let dsl_compute_cis1_cis1_si1 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .only_for_compute()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&sampler)]),
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .only_for_compute()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&sampler)]),
-            br::DescriptorType::StorageImage
-                .make_binding(1)
-                .only_for_compute(),
-        ])
-        .create(engine.device().clone())?;
-
-        let input_only_layout = br::PipelineLayoutBuilder::new(vec![&dsl_compute_si1], vec![])
-            .create(engine.device().clone())?;
-        let tex_io_layout = br::PipelineLayoutBuilder::new(vec![&dsl_compute_cis1_si1], vec![])
-            .create(engine.device().clone())?;
-        let tex_i2o_layout =
-            br::PipelineLayoutBuilder::new(vec![&dsl_compute_cis1_cis1_si1], vec![])
-                .create(engine.device().clone())?;
-        let tex_io_pure_layout = br::PipelineLayoutBuilder::new(vec![&dsl_compute_si1_si1], vec![])
-            .create(engine.device().clone())?;
-        let transmittance_compute =
-            engine.shader("shaders/skybox/transmittance_precompute.cspv")?;
-        let single_scatter_compute =
-            engine.shader("shaders/skybox/single_scatter_precompute.cspv")?;
-        let gather_compute = engine.shader("shaders/skybox/gather_precompute.cspv")?;
-        let multiple_scatter_compute =
-            engine.shader("shaders/skybox/multiple_scatter_precompute.cspv")?;
-        let accum2_compute = engine.shader("shaders/skybox/accum2.cspv")?;
-        let accum3_compute = engine.shader("shaders/skybox/accum3.cspv")?;
-        ArrayBuilderOp! {
-            [ref, try] engine.create_compute_pipeline_array, {
-                transmittance_compute_pipeline <- br::ComputePipelineBuilder::new(
-                    &input_only_layout,
-                    br::PipelineShader2::new(&transmittance_compute, c"main".to_owned()),
-                ),
-                single_scatter_compute_pipeline <- br::ComputePipelineBuilder::new(
-                    &tex_io_layout,
-                    br::PipelineShader2::new(&single_scatter_compute, c"main".to_owned()),
-                ),
-                gather_compute_pipeline <- br::ComputePipelineBuilder::new(
-                    &tex_io_layout,
-                    br::PipelineShader2::new(&gather_compute, c"main".to_owned()),
-                ),
-                multiple_scatter_compute_pipeline <- br::ComputePipelineBuilder::new(
-                    &tex_i2o_layout,
-                    br::PipelineShader2::new(&multiple_scatter_compute, c"main".to_owned()),
-                ),
-                accum2_pipeline <- br::ComputePipelineBuilder::new(
-                    &tex_io_pure_layout,
-                    br::PipelineShader2::new(&accum2_compute, c"main".to_owned()),
-                ),
-                accum3_pipeline <- br::ComputePipelineBuilder::new(
-                    &tex_io_pure_layout,
-                    br::PipelineShader2::new(&accum3_compute, c"main".to_owned()),
-                ),
-            }
-        }
-
-        let mut descriptor_pool = br::DescriptorPoolBuilder::new(8)
-            .reserve_all([
-                br::DescriptorType::StorageImage.with_count(10),
-                br::DescriptorType::CombinedImageSampler.with_count(7),
-            ])
-            .create(engine.device().clone())?;
-        ArrayBuilderOp! {
-            [ref, try] descriptor_pool.alloc_array, {
-                transmittance_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1),
-                transmittance_to_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
-                scatter_to_gathered_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
-                transmittance_gathered_to_k_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_cis1_si1),
-                k_scatter_to_k_gathered_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_si1),
-                k_scatter_to_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1_si1),
-                k_gathered_to_k_gathered_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_si1_si1),
-                transmittance_k_gathered_to_k_scatter_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_compute_cis1_cis1_si1),
-            }
-        };
-        engine.device().update_descriptor_sets(
-            &[
-                transmittance_set
-                    .binding_at(0)
-                    .write(br::DescriptorContents::storage_image(
-                        &transmittance,
-                        br::ImageLayout::General,
-                    )),
-                transmittance_to_scatter_set.binding_at(0).write(
-                    br::DescriptorContents::combined_image_sampler(
-                        &transmittance,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    ),
-                ),
-                transmittance_to_scatter_set.binding_at(1).write(
-                    br::DescriptorContents::storage_image(&scatter, br::ImageLayout::General),
-                ),
-                scatter_to_gathered_set.binding_at(0).write(
-                    br::DescriptorContents::combined_image_sampler(
-                        &scatter,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    ),
-                ),
-                scatter_to_gathered_set
-                    .binding_at(1)
-                    .write(br::DescriptorContents::storage_image(
-                        &gathered,
-                        br::ImageLayout::General,
-                    )),
-                transmittance_gathered_to_k_scatter_set.binding_at(0).write(
-                    br::DescriptorContents::combined_image_sampler(
-                        &transmittance,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    ),
-                ),
-                transmittance_gathered_to_k_scatter_set.binding_at(1).write(
-                    br::DescriptorContents::combined_image_sampler(
-                        &gathered,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    ),
-                ),
-                transmittance_gathered_to_k_scatter_set.binding_at(2).write(
-                    br::DescriptorContents::storage_image(&k_scatter, br::ImageLayout::General),
-                ),
-                k_scatter_to_k_gathered_set.binding_at(0).write(
-                    br::DescriptorContents::combined_image_sampler(
-                        &k_scatter,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    ),
-                ),
-                k_scatter_to_k_gathered_set.binding_at(1).write(
-                    br::DescriptorContents::storage_image(&k_gathered, br::ImageLayout::General),
-                ),
-                k_scatter_to_scatter_set.binding_at(0).write(
-                    br::DescriptorContents::storage_image(&k_scatter, br::ImageLayout::General),
-                ),
-                k_scatter_to_scatter_set.binding_at(1).write(
-                    br::DescriptorContents::storage_image(&scatter, br::ImageLayout::General),
-                ),
-                k_gathered_to_k_gathered_set.binding_at(0).write(
-                    br::DescriptorContents::storage_image(&k_gathered, br::ImageLayout::General),
-                ),
-                k_gathered_to_k_gathered_set.binding_at(1).write(
-                    br::DescriptorContents::storage_image(&k_gathered, br::ImageLayout::General),
-                ),
-                transmittance_k_gathered_to_k_scatter_set
-                    .binding_at(0)
-                    .write(br::DescriptorContents::combined_image_sampler(
-                        &transmittance,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )),
-                transmittance_k_gathered_to_k_scatter_set
-                    .binding_at(1)
-                    .write(br::DescriptorContents::combined_image_sampler(
-                        &k_gathered,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )),
-                transmittance_k_gathered_to_k_scatter_set
-                    .binding_at(2)
-                    .write(br::DescriptorContents::storage_image(
-                        &k_scatter,
-                        br::ImageLayout::General,
-                    )),
-            ],
-            &[],
-        );
-
-        engine.submit_transient_commands_and_wait(|rec| {
-            let mut rec = rec
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[],
-                    &[],
-                    &[transmittance
-                        .image()
-                        .by_ref()
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .memory_barrier2()
-                        .transit_to(br::ImageLayout::General.from_undefined())],
-                ))
-                .bind_compute_pipeline_pair(&transmittance_compute_pipeline, &input_only_layout)
-                .bind_compute_descriptor_sets(0, &[transmittance_set.into()], &[])
-                .dispatch(
-                    Self::TRANSMITTANCE_SIZE.0 / 32,
-                    Self::TRANSMITTANCE_SIZE.1 / 32,
-                    1,
-                )
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[],
-                    &[],
-                    &[
-                        transmittance
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                            )
-                            .from(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.read,
-                            ),
-                        scatter
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_to(br::ImageLayout::General.from_undefined()),
-                    ],
-                ))
-                .bind_compute_pipeline_pair(&single_scatter_compute_pipeline, &tex_io_layout)
-                .bind_compute_descriptor_sets(0, &[transmittance_to_scatter_set.into()], &[])
-                .dispatch(
-                    Self::SCATTER_SIZE.0 / 8,
-                    Self::SCATTER_SIZE.1 / 8,
-                    Self::SCATTER_SIZE.2 / 8,
-                )
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[],
-                    &[],
-                    &[
-                        scatter
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                            )
-                            .from(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.read,
-                            ),
-                        gathered
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_to(br::ImageLayout::General.from_undefined()),
-                    ],
-                ))
-                .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
-                .bind_compute_descriptor_sets(0, &[scatter_to_gathered_set.into()], &[])
-                .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[],
-                    &[],
-                    &[
-                        gathered
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                            )
-                            .from(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.read,
-                            ),
-                        k_scatter
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_to(br::ImageLayout::General.from_undefined()),
-                    ],
-                ))
-                .bind_compute_pipeline_pair(&multiple_scatter_compute_pipeline, &tex_i2o_layout)
-                .bind_compute_descriptor_sets(
-                    0,
-                    &[transmittance_gathered_to_k_scatter_set.into()],
-                    &[],
-                )
-                .dispatch(
-                    Self::SCATTER_SIZE.0 / 8,
-                    Self::SCATTER_SIZE.1 / 8,
-                    Self::SCATTER_SIZE.2 / 8,
-                )
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[],
-                    &[],
-                    &[
-                        k_scatter
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                            )
-                            .from(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.read,
-                            ),
-                        k_gathered
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_to(br::ImageLayout::General.from_undefined()),
-                    ],
-                ))
-                .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
-                .bind_compute_descriptor_sets(0, &[k_scatter_to_k_gathered_set.into()], &[])
-                .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[br::MemoryBarrier2::new()
-                        .from(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.write,
-                        )
-                        .to(
-                            br::PipelineStageFlags2::COMPUTE_SHADER,
-                            br::AccessFlags2::SHADER.read,
-                        )],
-                    &[],
-                    &[],
-                ))
-                .bind_compute_pipeline_pair(&accum2_pipeline, &tex_io_pure_layout)
-                .bind_compute_descriptor_sets(0, &[k_gathered_to_k_gathered_set.into()], &[])
-                .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[],
-                    &[],
-                    &[
-                        scatter
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                            ),
-                        k_scatter
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                            ),
-                    ],
-                ))
-                .bind_compute_pipeline_pair(&accum3_pipeline, &tex_io_pure_layout)
-                .bind_compute_descriptor_sets(0, &[k_scatter_to_scatter_set.into()], &[])
-                .dispatch(
-                    Self::SCATTER_SIZE.0 / 8,
-                    Self::SCATTER_SIZE.1 / 8,
-                    Self::SCATTER_SIZE.2 / 8,
-                );
-
-            // multiple scatters after 2nd
-            for _ in 0..2 {
-                rec = rec
-                    .pipeline_barrier_2(&br::DependencyInfo::new(
-                        &[],
-                        &[],
-                        &[k_gathered
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                            )
-                            .from(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.read,
-                            )],
-                    ))
-                    .bind_compute_pipeline_pair(&multiple_scatter_compute_pipeline, &tex_i2o_layout)
-                    .bind_compute_descriptor_sets(
-                        0,
-                        &[transmittance_k_gathered_to_k_scatter_set.into()],
-                        &[],
-                    )
-                    .dispatch(
-                        Self::SCATTER_SIZE.0 / 8,
-                        Self::SCATTER_SIZE.1 / 8,
-                        Self::SCATTER_SIZE.2 / 8,
-                    )
-                    .pipeline_barrier_2(&br::DependencyInfo::new(
-                        &[],
-                        &[],
-                        &[
-                            k_scatter
-                                .image()
-                                .by_ref()
-                                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                                .memory_barrier2()
-                                .transit_from(
-                                    br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt),
-                                )
-                                .from(
-                                    br::PipelineStageFlags2::COMPUTE_SHADER,
-                                    br::AccessFlags2::SHADER.write,
-                                )
-                                .to(
-                                    br::PipelineStageFlags2::COMPUTE_SHADER,
-                                    br::AccessFlags2::SHADER.read,
-                                ),
-                            k_gathered
-                                .image()
-                                .by_ref()
-                                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                                .memory_barrier2()
-                                .transit_from(
-                                    br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                                ),
-                        ],
-                    ))
-                    .bind_compute_pipeline_pair(&gather_compute_pipeline, &tex_io_layout)
-                    .bind_compute_descriptor_sets(0, &[k_scatter_to_k_gathered_set.into()], &[])
-                    .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-                    .pipeline_barrier_2(&br::DependencyInfo::new(
-                        &[br::MemoryBarrier2::new()
-                            .from(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::COMPUTE_SHADER,
-                                br::AccessFlags2::SHADER.read,
-                            )],
-                        &[],
-                        &[],
-                    ))
-                    .bind_compute_pipeline_pair(&accum2_pipeline, &tex_io_pure_layout)
-                    .bind_compute_descriptor_sets(0, &[k_gathered_to_k_gathered_set.into()], &[])
-                    .dispatch(Self::GATHERED_SIZE.0 / 32, Self::GATHERED_SIZE.1 / 32, 1)
-                    .pipeline_barrier_2(&br::DependencyInfo::new(
-                        &[],
-                        &[],
-                        &[k_scatter
-                            .image()
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier2()
-                            .transit_from(
-                                br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::General),
-                            )],
-                    ))
-                    .bind_compute_pipeline_pair(&accum3_pipeline, &tex_io_pure_layout)
-                    .bind_compute_descriptor_sets(0, &[k_scatter_to_scatter_set.into()], &[])
-                    .dispatch(
-                        Self::SCATTER_SIZE.0 / 8,
-                        Self::SCATTER_SIZE.1 / 8,
-                        Self::SCATTER_SIZE.2 / 8,
-                    );
-            }
-
-            rec.pipeline_barrier_2(&br::DependencyInfo::new(
-                &[],
-                &[],
-                &[scatter
-                    .image()
-                    .by_ref()
-                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                    .memory_barrier2()
-                    .transit_from(br::ImageLayout::General.to(br::ImageLayout::ShaderReadOnlyOpt))
-                    .from(
-                        br::PipelineStageFlags2::COMPUTE_SHADER,
-                        br::AccessFlags2::SHADER.write,
-                    )
-                    .to(
-                        br::PipelineStageFlags2::FRAGMENT_SHADER,
-                        br::AccessFlags2::SHADER.read,
-                    )],
-            ))
-        })?;
-
-        Ok(Self {
-            transmittance,
-            scatter,
-            gathered,
-            k_scatter,
-            k_gathered,
-        })
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct SkyboxVertex {
-    pos: peridot_math::Vector2F32,
-    uv: peridot_math::Vector2F32,
-}
-
-pub struct SkyboxRenderer {
-    pub precomputed: SkyboxPrecomputedTextures,
-    pub _descriptor_pool: br::DescriptorPoolObject<StdVkDevice>,
-    pub renderer_descriptor: br::DescriptorSet,
-    pub pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
-    pub pipeline: br::PipelineObject<StdVkDevice>,
-    pub primary_directional_light_data_buffer: peridot_memory_manager::Buffer,
-}
-impl SkyboxRenderer {
-    pub fn new(
-        engine: &mut MiniEngine,
-        render_camera_descriptor_set_layout: &impl br::DescriptorSetLayout<ConcreteDevice = StdVkDevice>,
-        render_subpass: br::SubpassRef<impl br::RenderPass + ?Sized>,
-        precomputed: SkyboxPrecomputedTextures,
-        init_light_data: PrimaryDirectionalLightUniformData,
-    ) -> br::Result<Self> {
-        let linear_sampler = engine.sampler(SamplerDesc {
-            address_mode: (
-                br::AddressingMode::ClampToEdge,
-                br::AddressingMode::ClampToEdge,
-                br::AddressingMode::ClampToEdge,
-            ),
-            min_filter: br::FilterMode::Linear,
-            mag_filter: br::FilterMode::Linear,
-            mip_filter: br::MipmapFilterMode::Linear,
-            ..Default::default()
-        })?;
-        let dsl = br::DescriptorSetLayoutBuilder::with_bindings(vec![
-            br::DescriptorType::UniformBuffer
-                .make_binding(1)
-                .only_for_fragment(),
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .only_for_fragment()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&linear_sampler)]),
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .only_for_fragment()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&linear_sampler)]),
-        ])
-        .create(engine.device().clone())?;
-
-        let pipeline_layout =
-            br::PipelineLayoutBuilder::new(vec![render_camera_descriptor_set_layout, &dsl], vec![])
-                .create(engine.device().clone())?;
-        let vsh = engine.shader("shaders/skybox/vert.vspv")?;
-        let fsh = engine.shader("shaders/skybox/frag.fspv")?;
-        let mut pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
-            &pipeline_layout,
-            render_subpass,
-            br::VertexProcessingStages::new(
-                br::VertexShaderStage::new(br::PipelineShader2::new(&vsh, c"main".to_owned()))
-                    .with_fragment_shader_stage(br::PipelineShader2::new(&fsh, c"main".to_owned())),
-                &[],
-                &[],
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            ),
-        );
-        pipeline
-            .multisample_state(Some(br::MultisampleState::new()))
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-            .viewport_scissors(
-                br::DynamicArrayState::Dynamic(1),
-                br::DynamicArrayState::Dynamic(1),
-            )
-            .depth_test_settings(Some(br::CompareOp::LessOrEqual), false);
-        let pipeline = pipeline.create(engine.device().clone(), Some(engine.pipeline_cache()))?;
-        engine.writeback_pipeline_cache();
-
-        struct BufferInitializationContents {
-            pub primary_directional_light_data: PrimaryDirectionalLightUniformData,
-        }
-        let [primary_directional_light_data_buffer] =
-            engine.alloc_device_local_buffer_array([br::BufferDesc::new(
-                core::mem::size_of::<PrimaryDirectionalLightUniformData>(),
-                br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
-            )])?;
-        let mut stg_buffer = engine.alloc_upload_buffer(br::BufferDesc::new(
-            core::mem::size_of::<BufferInitializationContents>(),
-            br::BufferUsage::TRANSFER_SRC,
-        ))?;
-        stg_buffer.write_content(BufferInitializationContents {
-            primary_directional_light_data: init_light_data,
-        })?;
-
-        engine.submit_transient_commands_and_wait(|rec| {
-            rec.copy_buffer(
-                &stg_buffer,
-                &primary_directional_light_data_buffer,
-                &[br::BufferCopy::copy_data::<
-                    PrimaryDirectionalLightUniformData,
-                >(
-                    core::mem::offset_of!(
-                        BufferInitializationContents,
-                        primary_directional_light_data
-                    ) as _,
-                    0,
-                )],
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .from(
-                        br::PipelineStageFlags2::COPY,
-                        br::AccessFlags2::TRANSFER.write,
-                    )
-                    .to(
-                        br::PipelineStageFlags2::FRAGMENT_SHADER,
-                        br::AccessFlags2::SHADER.read,
-                    )],
-                &[],
-                &[],
-            ))
-        })?;
-
-        let mut dp = br::DescriptorPoolBuilder::new(1)
-            .with_reservations(vec![
-                br::DescriptorType::UniformBuffer.with_count(1),
-                br::DescriptorType::CombinedImageSampler.with_count(2),
-            ])
-            .create(engine.device().clone())?;
-        let [descriptor] = dp.alloc_array(&[br::DescriptorSetLayoutObjectRef::new(&dsl)])?;
-        engine.device().update_descriptor_sets(
-            &[
-                descriptor
-                    .binding_at(0)
-                    .write(br::DescriptorContents::uniform_buffer(
-                        &primary_directional_light_data_buffer,
-                        0..core::mem::size_of::<PrimaryDirectionalLightUniformData>()
-                            as br::vk::VkDeviceSize,
-                    )),
-                descriptor
-                    .binding_at(1)
-                    .write(br::DescriptorContents::combined_image_sampler(
-                        &precomputed.scatter,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )),
-                descriptor
-                    .binding_at(2)
-                    .write(br::DescriptorContents::combined_image_sampler(
-                        &precomputed.transmittance,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )),
-            ],
-            &[],
-        );
-
-        Ok(Self {
-            precomputed,
-            _descriptor_pool: dp,
-            renderer_descriptor: descriptor,
-            pipeline_layout,
-            pipeline,
-            primary_directional_light_data_buffer,
-        })
-    }
-
-    pub fn update_primary_directional_light_data(
-        &self,
-        e: &mut MiniEngine,
-        new_data: PrimaryDirectionalLightUniformData,
-    ) -> br::Result<()> {
-        let mut upload_buffer = e.alloc_upload_buffer(br::BufferDesc::new(
-            core::mem::size_of::<PrimaryDirectionalLightUniformData>(),
-            br::BufferUsage::TRANSFER_SRC,
-        ))?;
-        upload_buffer.write_content(new_data)?;
-
-        e.submit_transient_commands_and_wait(|rec| {
-            rec.copy_buffer(
-                &upload_buffer,
-                &self.primary_directional_light_data_buffer,
-                &[br::BufferCopy::mirror_data::<
-                    PrimaryDirectionalLightUniformData,
-                >(0)],
-            )
-            .pipeline_barrier_2(&br::DependencyInfo::new(
-                &[br::MemoryBarrier2::new()
-                    .from(
-                        br::PipelineStageFlags2::COPY,
-                        br::AccessFlags2::TRANSFER.write,
-                    )
-                    .to(
-                        br::PipelineStageFlags2::FRAGMENT_SHADER,
-                        br::AccessFlags2::UNIFORM_READ,
-                    )],
-                &[],
-                &[],
-            ))
-        })?;
-
-        Ok(())
-    }
-
-    pub fn record_render_commands<
-        'r,
-        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
-        Device: br::Device + ?Sized,
-    >(
-        &self,
-        rec: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
-        rec.bind_graphics_pipeline_pair(&self.pipeline, &self.pipeline_layout)
-            .bind_graphics_descriptor_sets(1, &[self.renderer_descriptor.0], &[])
-            .draw(4, 1, 0, 0)
-    }
-}
-
 #[repr(C)]
 pub struct RenderCameraUniformData {
     pub camera_view_projection_matrix: peridot_math::Matrix4F32,
     pub camera_inverse_view_matrix: peridot_math::Matrix4F32,
     pub camera_persp_fov_rad: f32,
     pub camera_aspect_wh: f32,
-}
-
-#[repr(C)]
-pub struct PrimaryDirectionalLightUniformData {
-    pub incident_light_dir: peridot_math::Vector3F32,
-    pub light_intensity: f32,
 }
 
 fn d3d11_presentation_texture_desc(width: u32, height: u32) -> D3D11_TEXTURE2D_DESC {
@@ -4599,32 +4332,918 @@ pub struct ForwardLightUniformData {
     pub light_intensity: f32,
 }
 
+#[repr(C)]
+#[derive(Clone)]
+pub struct PostEffectGlobalWorkBuffer {
+    pub exposure_base_lum: f32,
+    pub histogram_max_value: u32,
+    pub average_ev100: f32,
+}
+
+const HDR_COLOR_FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT;
+
+pub struct HDRBloomPostEffect {
+    hdr_color_only_pass: Rc<br::RenderPassObject<StdVkDevice>>,
+    hdr_color_overwrite_pass: Rc<br::RenderPassObject<StdVkDevice>>,
+    downsample_rts: Vec<TempRT>,
+    upsample_rts: Vec<TempRT>,
+    extract_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    extract_pipeline: br::PipelineObject<StdVkDevice>,
+    downsample_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    downsample_pipeline: br::PipelineObject<StdVkDevice>,
+    upsample_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    upsample_pipeline: br::PipelineObject<StdVkDevice>,
+    merge_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    merge_pipeline: br::PipelineObject<StdVkDevice>,
+    _dp: br::DescriptorPoolObject<StdVkDevice>,
+    extract_input_descriptor_set: br::DescriptorSet,
+    downsample_input_descriptor_sets: Vec<br::DescriptorSet>,
+    upsample_input_descriptor_sets: Vec<br::DescriptorSet>,
+    merge_input_descriptor_set: br::DescriptorSet,
+    downsample_framebuffers: Vec<br::FramebufferObject<'static, StdVkDevice>>,
+    upsample_framebuffers: Vec<br::FramebufferObject<'static, StdVkDevice>>,
+}
+impl HDRBloomPostEffect {
+    pub fn new(
+        e: &mut MiniEngine,
+        init_tex_size: br::vk::VkExtent2D,
+        iteration_count: usize,
+    ) -> br::Result<Self> {
+        let hdr_color_only_pass = e.render_pass(RenderPassDescription {
+            attachments: vec![br::AttachmentDescription2::new(HDR_COLOR_FORMAT)
+                .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined())
+                .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store)],
+            subpasses: vec![SubpassDescription {
+                color_outputs: vec![br::AttachmentReference2::color_attachment_opt(0)],
+                ..SubpassDescription::EMPTY
+            }],
+            dependencies: vec![br::SubpassDependency2::new(
+                br::SubpassIndex::Internal(0),
+                br::SubpassIndex::External,
+            )
+            .of_memory(
+                br::AccessFlags::COLOR_ATTACHMENT.write,
+                br::AccessFlags::SHADER.read,
+            )
+            .of_execution(
+                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                br::PipelineStageFlags::FRAGMENT_SHADER,
+            )],
+        })?;
+        let hdr_color_overwrite_pass = e.render_pass(RenderPassDescription {
+            attachments: vec![br::AttachmentDescription2::new(HDR_COLOR_FORMAT)
+                .layout(br::ImageLayout::ShaderReadOnlyOpt)
+                .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)],
+            subpasses: vec![SubpassDescription {
+                color_outputs: vec![br::AttachmentReference2::color_attachment_opt(0)],
+                ..SubpassDescription::EMPTY
+            }],
+            dependencies: vec![br::SubpassDependency2::new(
+                br::SubpassIndex::Internal(0),
+                br::SubpassIndex::External,
+            )
+            .by_region()
+            .of_memory(
+                br::AccessFlags::COLOR_ATTACHMENT.write,
+                br::AccessFlags::SHADER.read,
+            )
+            .of_execution(
+                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                br::PipelineStageFlags::FRAGMENT_SHADER,
+            )],
+        })?;
+
+        let tex_sampler = e.sampler(SamplerDesc::LINEAR_CLAMP_TO_EDGE)?;
+        let dsl_src_input =
+            e.descriptor_set_layout(vec![DescriptorBinding::CombinedImageSampler(
+                br::ShaderStage::FRAGMENT,
+                vec![tex_sampler.native_ptr()],
+            )])?;
+        let dsl_extract_input = e.descriptor_set_layout(vec![
+            DescriptorBinding::CombinedImageSampler(
+                br::ShaderStage::FRAGMENT,
+                vec![tex_sampler.native_ptr()],
+            ),
+            DescriptorBinding::UniformBuffer(1, br::ShaderStage::FRAGMENT),
+        ])?;
+
+        let extract_vsh = e.shader("shaders/full_blit.vspv")?;
+        let extract_fsh = e.shader("shaders/posteffects/bloom/extract.fspv")?;
+        let extract_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&dsl_extract_input],
+            vec![(br::ShaderStage::FRAGMENT, 0..16)],
+        )
+        .create(e.device().clone())?;
+        let mut extract_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &extract_pipeline_layout,
+            hdr_color_only_pass.subpass(0),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(&extract_vsh, c"main"))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(&extract_fsh, c"main")),
+                &[],
+                &[],
+                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            ),
+        );
+        extract_pipeline
+            .multisample_state(Some(br::MultisampleState::new()))
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+            .dynamic_viewport_scissors(1);
+
+        let filter_sh = e.shader("shaders/posteffects/bloom/filter.spv")?;
+        let downsample_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&dsl_src_input],
+            vec![(br::ShaderStage::FRAGMENT, 0..8)],
+        )
+        .create(e.device().clone())?;
+        let mut downsample_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &downsample_pipeline_layout,
+            hdr_color_only_pass.subpass(0),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(&filter_sh, c"vertMain"))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(
+                        &filter_sh,
+                        c"fragDownSample",
+                    )),
+                &[],
+                &[],
+                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            ),
+        );
+        downsample_pipeline
+            .multisample_state(Some(br::MultisampleState::new()))
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+            .dynamic_viewport_scissors(1);
+
+        let upsample_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&dsl_src_input, &dsl_src_input],
+            vec![(br::ShaderStage::FRAGMENT, 0..8)],
+        )
+        .create(e.device().clone())?;
+        let mut upsample_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &upsample_pipeline_layout,
+            hdr_color_only_pass.subpass(0),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(&filter_sh, c"vertMain"))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(
+                        &filter_sh,
+                        c"fragUpSample",
+                    )),
+                &[],
+                &[],
+                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            ),
+        );
+        upsample_pipeline
+            .multisample_state(Some(br::MultisampleState::new()))
+            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
+            .dynamic_viewport_scissors(1);
+
+        let mut additive_blending = br::AttachmentColorBlendState::noblend();
+        additive_blending
+            .enable()
+            .color_blend(br::BlendFactor::One, br::BlendOp::Add, br::BlendFactor::One)
+            .alpha_blend(br::BlendFactor::One, br::BlendOp::Add, br::BlendFactor::One);
+        let merge_vsh = e.shader("shaders/full_blit_uvst.vspv")?;
+        let merge_fsh = e.shader("shaders/posteffects/bloom/merge.fspv")?;
+        let merge_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&dsl_src_input],
+            vec![
+                (br::ShaderStage::VERTEX, 0..16),
+                (br::ShaderStage::FRAGMENT, 16..20),
+            ],
+        )
+        .create(e.device().clone())?;
+        let mut merge_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+            &merge_pipeline_layout,
+            hdr_color_overwrite_pass.subpass(0),
+            br::VertexProcessingStages::new(
+                br::VertexShaderStage::new(br::PipelineShader2::new(&merge_vsh, c"main"))
+                    .with_fragment_shader_stage(br::PipelineShader2::new(&merge_fsh, c"main")),
+                &[],
+                &[],
+                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            ),
+        );
+        merge_pipeline
+            .multisample_state(Some(br::MultisampleState::new()))
+            .add_attachment_blend(additive_blending)
+            .dynamic_viewport_scissors(1);
+
+        let extract_pipeline_extras = extract_pipeline.make_extras();
+        let downsample_pipeline_extras = downsample_pipeline.make_extras();
+        let upsample_pipeline_extras = upsample_pipeline.make_extras();
+        let merge_pipeline_extras = merge_pipeline.make_extras();
+        ArrayBuilderOp!([ref, try] e.create_graphics_pipeline_array, {
+            extract_pipeline <- extract_pipeline.build(&extract_pipeline_extras),
+            downsample_pipeline <- downsample_pipeline.build(&downsample_pipeline_extras),
+            upsample_pipeline <- upsample_pipeline.build(&upsample_pipeline_extras),
+            merge_pipeline <- merge_pipeline.build(&merge_pipeline_extras)
+        });
+
+        let downsample_rts = (0..=iteration_count)
+            .scan(1.0f32, |scale, _| {
+                let rt = TempRT::new(
+                    e,
+                    br::ImageDesc::new(
+                        br::vk::VkExtent2D {
+                            width: (init_tex_size.width as f32 * *scale) as _,
+                            height: (init_tex_size.height as f32 * *scale) as _,
+                        },
+                        HDR_COLOR_FORMAT,
+                    )
+                    .as_color_attachment()
+                    .sampled(),
+                    br::AspectMask::COLOR,
+                    0..1,
+                    0..1,
+                )
+                .unwrap();
+                *scale *= 0.5;
+                Some(rt)
+            })
+            .collect::<Vec<_>>();
+        let upsample_rts = (0..iteration_count)
+            .scan(1.0f32, |scale, _| {
+                let rt = TempRT::new(
+                    e,
+                    br::ImageDesc::new(
+                        br::vk::VkExtent2D {
+                            width: (init_tex_size.width as f32 * *scale) as _,
+                            height: (init_tex_size.height as f32 * *scale) as _,
+                        },
+                        HDR_COLOR_FORMAT,
+                    )
+                    .as_color_attachment()
+                    .sampled(),
+                    br::AspectMask::COLOR,
+                    0..1,
+                    0..1,
+                )
+                .unwrap();
+                *scale *= 0.5;
+                Some(rt)
+            })
+            .collect::<Vec<_>>();
+
+        let mut dp =
+            br::DescriptorPoolBuilder::new((2 + iteration_count + 1 + iteration_count) as _)
+                .with_reservations(vec![
+                    br::DescriptorType::CombinedImageSampler
+                        .with_count((2 + iteration_count + 1 + iteration_count) as _),
+                    br::DescriptorType::UniformBuffer.with_count(1),
+                ])
+                .create(e.device().clone())?;
+        ArrayBuilderOp!([ref, try] dp.alloc_array, {
+            extract_input_descriptor_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_extract_input),
+            merge_input_descriptor_set <- br::DescriptorSetLayoutObjectRef::new(&dsl_src_input)
+        });
+        let downsample_input_descriptor_sets = dp.alloc(
+            &core::iter::repeat(&dsl_src_input)
+                .take(iteration_count + 1)
+                .collect::<Vec<_>>(),
+        )?;
+        let upsample_input_descriptor_sets = dp.alloc(
+            &core::iter::repeat(&dsl_src_input)
+                .take(iteration_count)
+                .collect::<Vec<_>>(),
+        )?;
+
+        let downsample_framebuffers = downsample_rts
+            .iter()
+            .map(|rt| {
+                br::FramebufferBuilder::new_with_attachment(
+                    &hdr_color_only_pass,
+                    rt.resource.clone(),
+                )
+                .create()
+            })
+            .collect::<br::Result<Vec<_>>>()?;
+        let upsample_framebuffers = upsample_rts
+            .iter()
+            .map(|rt| {
+                br::FramebufferBuilder::new_with_attachment(
+                    &hdr_color_only_pass,
+                    rt.resource.clone(),
+                )
+                .create()
+            })
+            .collect::<br::Result<Vec<_>>>()?;
+
+        Ok(Self {
+            hdr_color_only_pass,
+            hdr_color_overwrite_pass,
+            downsample_rts,
+            upsample_rts,
+            extract_pipeline_layout,
+            extract_pipeline,
+            downsample_pipeline_layout,
+            downsample_pipeline,
+            upsample_pipeline_layout,
+            upsample_pipeline,
+            merge_pipeline_layout,
+            merge_pipeline,
+            _dp: dp,
+            extract_input_descriptor_set,
+            downsample_input_descriptor_sets,
+            upsample_input_descriptor_sets,
+            merge_input_descriptor_set,
+            downsample_framebuffers,
+            upsample_framebuffers,
+        })
+    }
+
+    pub fn update_descriptor_sets<'s>(
+        &'s self,
+        writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+        extract_source: &'s (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        postfx_global_work_buffer: &'s (impl br::VkHandle<Handle = br::vk::VkBuffer> + ?Sized),
+    ) {
+        let postfx_global_work_exposure_base_lum_offset =
+            core::mem::offset_of!(PostEffectGlobalWorkBuffer, exposure_base_lum)
+                as br::vk::VkDeviceSize;
+
+        writes.extend([
+            self.extract_input_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::combined_image_sampler(
+                    extract_source,
+                    br::ImageLayout::ShaderReadOnlyOpt,
+                ),
+            ),
+            self.extract_input_descriptor_set.binding_at(1).write(
+                br::DescriptorContents::uniform_buffer(
+                    postfx_global_work_buffer,
+                    postfx_global_work_exposure_base_lum_offset
+                        ..postfx_global_work_exposure_base_lum_offset
+                            + core::mem::size_of::<f32>() as u64,
+                ),
+            ),
+            self.merge_input_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::combined_image_sampler(
+                    &self.upsample_rts[0].resource,
+                    br::ImageLayout::ShaderReadOnlyOpt,
+                ),
+            ),
+        ]);
+        writes.extend(
+            self.downsample_input_descriptor_sets
+                .iter()
+                .zip(self.downsample_rts.iter())
+                .map(|(s, r)| {
+                    s.binding_at(0)
+                        .write(br::DescriptorContents::combined_image_sampler(
+                            &r.resource,
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        ))
+                }),
+        );
+        writes.extend(
+            self.upsample_input_descriptor_sets
+                .iter()
+                .zip(self.upsample_rts.iter())
+                .map(|(s, r)| {
+                    s.binding_at(0)
+                        .write(br::DescriptorContents::combined_image_sampler(
+                            &r.resource,
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        ))
+                }),
+        );
+    }
+
+    pub fn resize(&mut self, new_size: br::vk::VkExtent2D) -> br::Result<()> {
+        let mut scale = 1.0f32;
+        for x in self.downsample_rts.iter_mut() {
+            x.recreate_newsize(br::vk::VkExtent2D {
+                width: (new_size.width as f32 * scale) as _,
+                height: (new_size.height as f32 * scale) as _,
+            })?;
+
+            scale *= 0.5;
+        }
+        scale = 1.0f32;
+        for x in self.upsample_rts.iter_mut() {
+            x.recreate_newsize(br::vk::VkExtent2D {
+                width: (new_size.width as f32 * scale) as _,
+                height: (new_size.height as f32 * scale) as _,
+            })?;
+
+            scale *= 0.5;
+        }
+
+        self.downsample_framebuffers = self
+            .downsample_rts
+            .iter()
+            .map(|rt| {
+                br::FramebufferBuilder::new_with_attachment(
+                    &self.hdr_color_only_pass,
+                    rt.resource.clone(),
+                )
+                .create()
+            })
+            .collect::<br::Result<Vec<_>>>()?;
+        self.upsample_framebuffers = self
+            .upsample_rts
+            .iter()
+            .map(|rt| {
+                br::FramebufferBuilder::new_with_attachment(
+                    &self.hdr_color_only_pass,
+                    rt.resource.clone(),
+                )
+                .create()
+            })
+            .collect::<br::Result<Vec<_>>>()?;
+
+        Ok(())
+    }
+
+    pub fn populate_commands<
+        'r,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+        Device: br::Device + ?Sized,
+    >(
+        &self,
+        rec: br::CmdRecord<'r, CB, Device>,
+        merge_framebuffer: &(impl br::Framebuffer + ?Sized),
+        merge_framebuffer_region: br::vk::VkRect2D,
+    ) -> br::CmdRecord<'r, CB, Device> {
+        let base_tex_size = *self.downsample_rts[0].resource.size().as_2d_ref();
+
+        rec.begin_render_pass(
+            &self.hdr_color_only_pass,
+            &self.downsample_framebuffers[0],
+            base_tex_size.into_rect(br::vk::VkOffset2D::ZERO),
+            &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 0.0])],
+            true,
+        )
+        .set_viewport(
+            0,
+            &[base_tex_size
+                .into_rect(br::vk::VkOffset2D::ZERO)
+                .make_viewport(0.0..1.0)],
+        )
+        .set_scissor(0, &[base_tex_size.into_rect(br::vk::VkOffset2D::ZERO)])
+        .bind_graphics_pipeline_pair(&self.extract_pipeline, &self.extract_pipeline_layout)
+        .bind_graphics_descriptor_sets(0, &[self.extract_input_descriptor_set.0], &[])
+        .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &[0.0f32, 100.0, 12.5, 0.65])
+        .draw(4, 1, 0, 0)
+        .end_render_pass()
+        .inject(|r| {
+            self.downsample_framebuffers
+                .iter()
+                .skip(1)
+                .zip(self.downsample_input_descriptor_sets.iter())
+                .fold((r, 0.5f32), |(r, scale), (target, src)| {
+                    let rect = br::vk::VkExtent2D {
+                        width: (base_tex_size.width as f32 * scale) as _,
+                        height: (base_tex_size.height as f32 * scale) as _,
+                    }
+                    .into_rect(br::vk::VkOffset2D::ZERO);
+                    let viewport = rect.make_viewport(0.0..1.0);
+                    let upper_texel_size = [
+                        2.0 / (base_tex_size.width as f32 * 2.0 * scale).trunc(),
+                        2.0 / (base_tex_size.height as f32 * 2.0 * scale).trunc(),
+                    ];
+
+                    let r = r
+                        .begin_render_pass(
+                            &self.hdr_color_only_pass,
+                            &target,
+                            rect.clone(),
+                            &[br::ClearValue::color_f32([0.0; 4])],
+                            true,
+                        )
+                        .set_viewport(0, &[viewport])
+                        .set_scissor(0, &[rect])
+                        .bind_graphics_pipeline_pair(
+                            &self.downsample_pipeline,
+                            &self.downsample_pipeline_layout,
+                        )
+                        .bind_graphics_descriptor_sets(0, &[src.0], &[])
+                        .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &upper_texel_size)
+                        .draw(4, 1, 0, 0)
+                        .end_render_pass();
+                    (r, scale * 0.5)
+                })
+                .0
+        })
+        .inject(|r| {
+            let rect = self.upsample_rts[self.upsample_rts.len() - 1]
+                .resource
+                .size()
+                .as_2d_ref()
+                .clone()
+                .into_rect(br::vk::VkOffset2D::ZERO);
+            let viewport = rect.make_viewport(0.0..1.0);
+            let lower_texel_size = [
+                2.0 / rect.extent.width as f32,
+                2.0 / rect.extent.height as f32,
+            ];
+
+            r.begin_render_pass(
+                &self.hdr_color_only_pass,
+                &self.upsample_framebuffers[self.upsample_framebuffers.len() - 1],
+                rect.clone(),
+                &[br::ClearValue::color_f32([0.0; 4])],
+                true,
+            )
+            .set_viewport(0, &[viewport])
+            .set_scissor(0, &[rect])
+            .bind_graphics_pipeline_pair(&self.upsample_pipeline, &self.upsample_pipeline_layout)
+            .bind_graphics_descriptor_sets(
+                0,
+                &[
+                    self.downsample_input_descriptor_sets
+                        [self.downsample_input_descriptor_sets.len() - 1]
+                        .0,
+                    self.downsample_input_descriptor_sets
+                        [self.downsample_input_descriptor_sets.len() - 2]
+                        .0,
+                ],
+                &[],
+            )
+            .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &lower_texel_size)
+            .draw(4, 1, 0, 0)
+            .end_render_pass()
+        })
+        .inject(|r| {
+            let parameters = self
+                .upsample_framebuffers
+                .iter()
+                .zip(
+                    self.upsample_input_descriptor_sets
+                        .iter()
+                        .skip(1)
+                        .zip(self.downsample_input_descriptor_sets.iter()),
+                )
+                .scan(1.0f32, |scale, (target, (src1, src2))| {
+                    let rect = br::vk::VkExtent2D {
+                        width: (base_tex_size.width as f32 * *scale) as _,
+                        height: (base_tex_size.height as f32 * *scale) as _,
+                    }
+                    .into_rect(br::vk::VkOffset2D::ZERO);
+                    let viewport = rect.make_viewport(0.0..1.0);
+                    let lower_texel_size = [
+                        2.0 / (base_tex_size.width as f32 * *scale * 0.5).trunc(),
+                        2.0 / (base_tex_size.height as f32 * *scale * 0.5).trunc(),
+                    ];
+
+                    *scale *= 0.5;
+                    Some((rect, viewport, lower_texel_size, target, src1, src2))
+                })
+                .collect::<Vec<_>>();
+
+            parameters.into_iter().rev().fold(
+                r,
+                |r, (rect, viewport, lower_texel_size, target, src1, src2)| {
+                    r.begin_render_pass(
+                        &self.hdr_color_only_pass,
+                        target,
+                        rect.clone(),
+                        &[br::ClearValue::color_f32([0.0; 4])],
+                        true,
+                    )
+                    .set_viewport(0, &[viewport])
+                    .set_scissor(0, &[rect])
+                    .bind_graphics_pipeline_pair(
+                        &self.upsample_pipeline,
+                        &self.upsample_pipeline_layout,
+                    )
+                    .bind_graphics_descriptor_sets(0, &[src1.0, src2.0], &[])
+                    .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &lower_texel_size)
+                    .draw(4, 1, 0, 0)
+                    .end_render_pass()
+                },
+            )
+        })
+        .begin_render_pass(
+            &self.hdr_color_overwrite_pass,
+            merge_framebuffer,
+            merge_framebuffer_region,
+            &[],
+            true,
+        )
+        .set_viewport(0, &[merge_framebuffer_region.make_viewport(0.0..1.0)])
+        .set_scissor(0, &[merge_framebuffer_region])
+        .bind_graphics_pipeline_pair(&self.merge_pipeline, &self.merge_pipeline_layout)
+        .bind_graphics_descriptor_sets(0, &[self.merge_input_descriptor_set.0], &[])
+        .push_graphics_constant(br::ShaderStage::VERTEX, 0, &[0.0f32, 0.0, 1.0, 1.0])
+        .push_graphics_constant(br::ShaderStage::FRAGMENT, 16, &(1.0f32 / 6.0))
+        .draw(4, 1, 0, 0)
+        .end_render_pass()
+    }
+}
+
+pub struct AutoExposureEffect {
+    histogram_buffer: Rc<peridot_memory_manager::Buffer>,
+    clear_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    clear_pipeline: br::PipelineObject<StdVkDevice>,
+    histogram_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    histogram_pipeline: br::PipelineObject<StdVkDevice>,
+    aggregate_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
+    aggregate_pipeline: br::PipelineObject<StdVkDevice>,
+    _dp: br::DescriptorPoolObject<StdVkDevice>,
+    clear_input_descriptor_set: br::DescriptorSet,
+    histogram_input_descriptor_set: br::DescriptorSet,
+    aggregate_input_descriptor_set: br::DescriptorSet,
+    input_size: br::vk::VkExtent2D,
+}
+impl AutoExposureEffect {
+    pub fn new(e: &mut MiniEngine, init_input_size: br::vk::VkExtent2D) -> br::Result<Self> {
+        let histogram_buffer = match AppGlobalSharedInstances::get()
+            .editor_window_histogram_buffer
+            .as_ref()
+            .and_then(|x| x.upgrade())
+        {
+            Some(x) => x,
+            None => {
+                let b = Rc::new(
+                    e.alloc_device_local_buffer(br::BufferDesc::new_for_type::<[u32; 256]>(
+                        br::BufferUsage::STORAGE_BUFFER
+                            .uniform_buffer()
+                            .transfer_src(),
+                    ))?,
+                );
+                AppGlobalSharedInstances::get_mut().editor_window_histogram_buffer =
+                    Some(Rc::downgrade(&b));
+                b
+            }
+        };
+
+        let clear_input_set = e.descriptor_set_layout(vec![DescriptorBinding::StorageBuffer(
+            1,
+            br::ShaderStage::COMPUTE,
+        )])?;
+        let histogram_input_set = e.descriptor_set_layout(vec![
+            DescriptorBinding::StorageBuffer(1, br::ShaderStage::COMPUTE),
+            DescriptorBinding::StorageImage(1, br::ShaderStage::COMPUTE),
+        ])?;
+        let aggregate_input_set = e.descriptor_set_layout(vec![
+            DescriptorBinding::StorageBuffer(1, br::ShaderStage::COMPUTE),
+            DescriptorBinding::StorageBuffer(1, br::ShaderStage::COMPUTE),
+        ])?;
+
+        let clear_sh = e.shader("shaders/posteffects/autoexposure/lum_clear.cspv")?;
+        let clear_pipeline_layout = br::PipelineLayoutBuilder::new(vec![&clear_input_set], vec![])
+            .create(e.device().clone())?;
+        let clear_pipeline = br::ComputePipelineBuilder::new(
+            &clear_pipeline_layout,
+            br::PipelineShader2::new(&clear_sh, c"main"),
+        );
+
+        let histogram_sh = e.shader("shaders/posteffects/autoexposure/lum_histogram.cspv")?;
+        let histogram_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&histogram_input_set],
+            vec![(br::ShaderStage::COMPUTE, 0..16)],
+        )
+        .create(e.device().clone())?;
+        let histogram_pipeline = br::ComputePipelineBuilder::new(
+            &histogram_pipeline_layout,
+            br::PipelineShader2::new(&histogram_sh, c"main"),
+        );
+
+        let aggregate_sh = e.shader("shaders/posteffects/autoexposure/lum_avg.cspv")?;
+        let aggregate_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&aggregate_input_set],
+            vec![(br::ShaderStage::COMPUTE, 0..32)],
+        )
+        .create(e.device().clone())?;
+        let aggregate_pipeline = br::ComputePipelineBuilder::new(
+            &aggregate_pipeline_layout,
+            br::PipelineShader2::new(&aggregate_sh, c"main"),
+        );
+
+        let [clear_pipeline, histogram_pipeline, aggregate_pipeline] = e
+            .create_compute_pipeline_array(&[
+                clear_pipeline,
+                histogram_pipeline,
+                aggregate_pipeline,
+            ])?;
+
+        let mut dp = br::DescriptorPoolBuilder::new(3)
+            .with_reservations(vec![
+                br::DescriptorType::StorageBuffer.with_count(4),
+                br::DescriptorType::StorageImage.with_count(1),
+            ])
+            .create(e.device().clone())?;
+        let [clear_input_descriptor_set, histogram_input_descriptor_set, aggregate_input_descriptor_set] =
+            dp.alloc_array(&[
+                br::DescriptorSetLayoutObjectRef::new(&clear_input_set),
+                br::DescriptorSetLayoutObjectRef::new(&histogram_input_set),
+                br::DescriptorSetLayoutObjectRef::new(&aggregate_input_set),
+            ])?;
+
+        Ok(Self {
+            histogram_buffer,
+            clear_pipeline_layout,
+            clear_pipeline,
+            histogram_pipeline_layout,
+            histogram_pipeline,
+            aggregate_pipeline_layout,
+            aggregate_pipeline,
+            _dp: dp,
+            clear_input_descriptor_set,
+            histogram_input_descriptor_set,
+            aggregate_input_descriptor_set,
+            input_size: init_input_size,
+        })
+    }
+
+    pub fn update_descriptor_sets<'s>(
+        &'s self,
+        writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+        input: &'s (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        postfx_global_work_buffer: &'s (impl br::VkHandle<Handle = br::vk::VkBuffer> + ?Sized),
+    ) {
+        writes.extend([
+            self.clear_input_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::storage_buffer(
+                    &self.histogram_buffer,
+                    0..core::mem::size_of::<[u32; 256]>() as u64,
+                ),
+            ),
+            self.histogram_input_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::storage_buffer(
+                    &self.histogram_buffer,
+                    0..core::mem::size_of::<[u32; 256]>() as u64,
+                ),
+            ),
+            self.histogram_input_descriptor_set.binding_at(1).write(
+                br::DescriptorContents::storage_image(input, br::ImageLayout::General),
+            ),
+            self.aggregate_input_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::storage_buffer(
+                    &self.histogram_buffer,
+                    0..core::mem::size_of::<[u32; 256]>() as u64,
+                ),
+            ),
+            self.aggregate_input_descriptor_set.binding_at(1).write(
+                br::DescriptorContents::storage_buffer(
+                    postfx_global_work_buffer,
+                    0..core::mem::size_of::<PostEffectGlobalWorkBuffer>() as u64,
+                ),
+            ),
+        ]);
+    }
+
+    pub fn set_input<'s>(
+        &mut self,
+        writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+        input: &'s (impl br::ImageView + br::ImageChild + ?Sized),
+    ) {
+        self.input_size = *input.image().size().as_2d_ref();
+        writes.push(self.histogram_input_descriptor_set.binding_at(1).write(
+            br::DescriptorContents::storage_image(input, br::ImageLayout::General),
+        ));
+    }
+
+    pub fn populate_commands<
+        'r,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+        Device: br::Device + ?Sized,
+    >(
+        &'r self,
+        rec: br::CmdRecord<'r, CB, Device>,
+        input: &'r impl br::Image,
+    ) -> br::CmdRecord<CB, Device> {
+        let min_ev100 = 6.0f32;
+        let ev100_range = 20.0f32 - min_ev100;
+        let inverse_ev100_range = ev100_range.recip();
+        let total_pixel_count = self.input_size.width * self.input_size.height;
+        let filter_percentile_low = 0.5f32;
+        let filter_percentile_high = 0.9f32;
+        let exposure_min_ev = 12.0f32;
+        let exposure_max_ev = 13.5f32;
+
+        rec.bind_compute_pipeline_pair(&self.clear_pipeline, &self.clear_pipeline_layout)
+            .bind_compute_descriptor_sets(0, &[self.clear_input_descriptor_set.0], &[])
+            .dispatch(1, 1, 1)
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .from(
+                        br::PipelineStageFlags2::COMPUTE_SHADER,
+                        br::AccessFlags2::SHADER.write,
+                    )
+                    .to(
+                        br::PipelineStageFlags2::COMPUTE_SHADER,
+                        br::AccessFlags2::SHADER.read | br::AccessFlags2::SHADER.write,
+                    )],
+                &[],
+                &[],
+            ))
+            .bind_compute_pipeline_pair(&self.histogram_pipeline, &self.histogram_pipeline_layout)
+            .bind_compute_descriptor_sets(0, &[self.histogram_input_descriptor_set.0], &[])
+            .push_compute_constant(
+                br::ShaderStage::COMPUTE,
+                0,
+                &[min_ev100, inverse_ev100_range],
+            )
+            .push_compute_constant(
+                br::ShaderStage::COMPUTE,
+                8,
+                &[self.input_size.width, self.input_size.height],
+            )
+            .dispatch(
+                (self.input_size.width + 15) / 16,
+                (self.input_size.height + 15) / 16,
+                1,
+            )
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .from(
+                        br::PipelineStageFlags2::COMPUTE_SHADER,
+                        br::AccessFlags2::SHADER.write,
+                    )
+                    .to(
+                        br::PipelineStageFlags2::COMPUTE_SHADER
+                            | br::PipelineStageFlags2::FRAGMENT_SHADER,
+                        br::AccessFlags2::SHADER.read,
+                    )],
+                &[],
+                &[input
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .memory_barrier2()
+                    .transferring_layout(
+                        br::ImageLayout::General,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    )],
+            ))
+            .bind_compute_pipeline_pair(&self.aggregate_pipeline, &self.aggregate_pipeline_layout)
+            .bind_compute_descriptor_sets(0, &[self.aggregate_input_descriptor_set.0], &[])
+            .push_compute_constant(br::ShaderStage::COMPUTE, 0, &total_pixel_count)
+            .push_compute_constant(
+                br::ShaderStage::COMPUTE,
+                4,
+                &[
+                    min_ev100,
+                    ev100_range,
+                    0.1,
+                    filter_percentile_low,
+                    filter_percentile_high,
+                    exposure_min_ev,
+                    exposure_max_ev,
+                ],
+            )
+            .dispatch(1, 1, 1)
+            .pipeline_barrier_2(&br::DependencyInfo::new(
+                &[br::MemoryBarrier2::new()
+                    .of_memory(
+                        br::AccessFlags2::SHADER.write,
+                        br::AccessFlags2::UNIFORM_READ,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags2::COMPUTE_SHADER,
+                        br::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )],
+                &[],
+                &[],
+            ))
+    }
+
+    pub fn readback_histogram(&self) -> [u32; 256] {
+        let mut b = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .alloc_upload_buffer(br::BufferDesc::new_for_type::<[u32; 256]>(
+                br::BufferUsage::TRANSFER_DEST,
+            ))
+            .unwrap();
+
+        AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .submit_transient_commands_and_wait(|r| {
+                r.copy_buffer(
+                    &self.histogram_buffer,
+                    &b,
+                    &[br::BufferCopy::mirror_data::<[u32; 256]>(0)],
+                )
+            })
+            .unwrap();
+
+        let mut sink = [0u32; 256];
+        b.guard_map(peridot_memory_manager::BufferMapMode::Read, |ptr| {
+            sink.copy_from_slice(unsafe { ptr.slice(0, 256) });
+        })
+        .unwrap();
+
+        sink
+    }
+}
+
 pub struct EditorStageRenderResources {
     utility_verts: UtilityVertices,
     skybox_renderer: SkyboxRenderer,
-    _descriptor_set_layout_ia1: br::DescriptorSetLayoutObject<StdVkDevice>,
-    _descriptor_set_layout_ub1: br::DescriptorSetLayoutObject<StdVkDevice>,
-    _descriptor_set_layout_cis1: br::DescriptorSetLayoutObject<StdVkDevice>,
     _descriptor_pool: br::DescriptorPoolObject<StdVkDevice>,
-    bloom_tex_base_size: br::vk::VkExtent2D,
     hdr_temp_rt: TempRT,
-    hdr_bloom_downsample_rts: Vec<TempRT>,
-    hdr_bloom_upsample_rts: Vec<TempRT>,
     depth_stencil_temp_rt: TempRT,
-    hdr_main_render_pass: br::RenderPassObject<StdVkDevice>,
-    hdr_color_only_pass: br::RenderPassObject<StdVkDevice>,
-    hdr_color_overwrite_pass: br::RenderPassObject<StdVkDevice>,
-    hdr_to_ldr_render_pass: br::RenderPassObject<StdVkDevice>,
+    hdr_main_render_pass: Rc<br::RenderPassObject<StdVkDevice>>,
+    hdr_to_ldr_render_pass: Rc<br::RenderPassObject<StdVkDevice>>,
     hdr_final_pass_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
     hdr_final_pass_pipeline: br::PipelineObject<StdVkDevice>,
-    postfx_bloom_extract_lum_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
-    postfx_bloom_extract_lum_pipeline: br::PipelineObject<StdVkDevice>,
-    postfx_bloom_filter_downsample_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
-    postfx_bloom_filter_downsample_pipeline: br::PipelineObject<StdVkDevice>,
-    postfx_bloom_filter_upsample_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
-    postfx_bloom_filter_upsample_pipeline: br::PipelineObject<StdVkDevice>,
-    postfx_bloom_merge_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
-    postfx_bloom_merge_pipeline: br::PipelineObject<StdVkDevice>,
+    postfx_global_work_buffer: Rc<peridot_memory_manager::Buffer>,
+    postfx_auto_exposure: AutoExposureEffect,
+    postfx_bloom: HDRBloomPostEffect,
     grid_pipeline_layout: br::PipelineLayoutObject<StdVkDevice>,
     grid_pipeline: br::PipelineObject<StdVkDevice>,
     grid_buffer: peridot_memory_manager::Buffer,
@@ -4637,14 +5256,7 @@ pub struct EditorStageRenderResources {
     camera_descriptor_set: br::DescriptorSet,
     hdr_final_pass_descriptor_set: br::DescriptorSet,
     per_object_descriptor_set: br::DescriptorSet,
-    bloom_extract_lum_input_descriptor_set: br::DescriptorSet,
-    bloom_filter_input_downsampled_descriptor_sets: Vec<br::DescriptorSet>,
-    bloom_filter_input_upsampled_descriptor_sets: Vec<br::DescriptorSet>,
-    bloom_merge_input_descriptor_set: br::DescriptorSet,
     hdr_main_framebuffer: br::FramebufferObject<'static, StdVkDevice>,
-    hdr_bloom_extract_lum_framebuffer: br::FramebufferObject<'static, StdVkDevice>,
-    hdr_bloom_filter_downsample_framebuffers: Vec<br::FramebufferObject<'static, StdVkDevice>>,
-    hdr_bloom_filter_upsample_framebuffers: Vec<br::FramebufferObject<'static, StdVkDevice>>,
     hdr_bloom_merge_framebuffer: br::FramebufferObject<'static, StdVkDevice>,
     per_object_uniform_data: PerObjectUniformData,
 }
@@ -4704,7 +5316,6 @@ impl EditorStageRenderResources {
             .collect::<Vec<_>>()
     }
 
-    const HDR_COLOR_FORMAT: br::vk::VkFormat = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT;
     const BLOOM_FILTER_ITERATION_COUNT: usize = 6;
 
     pub fn new(
@@ -4723,135 +5334,79 @@ impl EditorStageRenderResources {
 
         let utility_verts = UtilityVertices::new(e, &mut initialization_command_rec).unwrap();
         let skybox_precomputed = SkyboxPrecomputedTextures::new(e).unwrap();
-        let hdr_main_render_pass = br::RenderPassBuilder2::new(
-            &[
-                // hdr color
-                br::AttachmentDescription2::new(Self::HDR_COLOR_FORMAT)
-                    .with_layout_from(
-                        br::ImageLayout::Undefined.to(br::ImageLayout::ShaderReadOnlyOpt),
-                    )
-                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
-                // depth
-                br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
-                    .with_layout_from(
-                        br::ImageLayout::Undefined.to(br::ImageLayout::DepthStencilAttachmentOpt),
-                    )
-                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
-            ],
-            &[br::SubpassDescription2::new()
-                .colors(&[br::AttachmentReference2::color_attachment_opt(0)])
-                .depth_stencil(&br::AttachmentReference2::depth_stencil_attachment_opt(1))],
-            &[br::SubpassDependency2::new(
-                br::SubpassIndex::Internal(0),
-                br::SubpassIndex::External,
-            )
-            .of_memory(
-                br::AccessFlags::COLOR_ATTACHMENT.write,
-                br::AccessFlags::SHADER.read,
-            )
-            .of_execution(
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                br::PipelineStageFlags::FRAGMENT_SHADER,
-            )],
-        )
-        .create(e.device().clone())
-        .expect("Failed to create main render pass");
-        let hdr_color_only_pass = br::RenderPassBuilder2::new(
-            &[br::AttachmentDescription2::new(Self::HDR_COLOR_FORMAT)
-                .with_layout_from(br::ImageLayout::Undefined.to(br::ImageLayout::ShaderReadOnlyOpt))
-                .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store)],
-            &[br::SubpassDescription2::new()
-                .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
-            &[br::SubpassDependency2::new(
-                br::SubpassIndex::Internal(0),
-                br::SubpassIndex::External,
-            )
-            .by_region()
-            .of_memory(
-                br::AccessFlags::COLOR_ATTACHMENT.write,
-                br::AccessFlags::SHADER.read,
-            )
-            .of_execution(
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                br::PipelineStageFlags::FRAGMENT_SHADER,
-            )],
-        )
-        .create(e.device().clone())
-        .unwrap();
-        let hdr_color_overwrite_pass = br::RenderPassBuilder2::new(
-            &[br::AttachmentDescription2::new(Self::HDR_COLOR_FORMAT)
-                .with_layout_from(
-                    br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::ShaderReadOnlyOpt),
+        let hdr_main_render_pass = e
+            .render_pass(RenderPassDescription {
+                attachments: vec![
+                    br::AttachmentDescription2::new(HDR_COLOR_FORMAT)
+                        .with_layout_to(br::ImageLayout::General.from_undefined())
+                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
+                    br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
+                        .with_layout_to(br::ImageLayout::DepthStencilAttachmentOpt.from_undefined())
+                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
+                ],
+                subpasses: vec![SubpassDescription {
+                    color_outputs: vec![br::AttachmentReference2::color_attachment_opt(0)],
+                    depth_stencil: Some(br::AttachmentReference2::depth_stencil_attachment_opt(1)),
+                    ..SubpassDescription::EMPTY
+                }],
+                dependencies: vec![br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
                 )
-                .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)],
-            &[br::SubpassDescription2::new()
-                .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
-            &[br::SubpassDependency2::new(
-                br::SubpassIndex::Internal(0),
-                br::SubpassIndex::External,
-            )
-            .by_region()
-            .of_memory(
-                br::AccessFlags::COLOR_ATTACHMENT.write,
-                br::AccessFlags::SHADER.read,
-            )
-            .of_execution(
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                br::PipelineStageFlags::FRAGMENT_SHADER,
-            )],
-        )
-        .create(e.device().clone())
-        .unwrap();
-        let hdr_to_ldr_render_pass = br::RenderPassBuilder2::new(
-            &[
-                // ldr color
-                br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
-                    .with_layout_from(br::ImageLayout::Undefined.to(br::ImageLayout::General))
-                    .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
-                // hdr color
-                br::AttachmentDescription2::new(Self::HDR_COLOR_FORMAT)
-                    .with_layout_from(
-                        br::ImageLayout::ShaderReadOnlyOpt.to(br::ImageLayout::ShaderReadOnlyOpt),
-                    )
-                    .color_memory_op(br::LoadOp::Load, br::StoreOp::DontCare),
-                // depth
-                br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
-                    .with_layout_from(
-                        br::ImageLayout::DepthStencilAttachmentOpt
-                            .to(br::ImageLayout::DepthStencilAttachmentOpt),
-                    )
-                    .color_memory_op(br::LoadOp::Load, br::StoreOp::DontCare),
-            ],
-            &[br::SubpassDescription2::new()
-                .inputs(&[br::AttachmentReference2::shader_color_readonly_opt(1)])
-                .colors(&[br::AttachmentReference2::color_attachment_opt(0)])
-                .depth_stencil(&br::AttachmentReference2::depth_stencil_attachment_opt(2))],
-            &[br::SubpassDependency2::new(
-                br::SubpassIndex::Internal(0),
-                br::SubpassIndex::External,
-            )
-            .of_memory(
-                br::AccessFlags::COLOR_ATTACHMENT.write,
-                br::AccessFlags::MEMORY.read,
-            )
-            .of_execution(
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                br::PipelineStageFlags(0),
-            )],
-        )
-        .create(e.device().clone())
-        .expect("Failed to create main render pass");
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::SHADER.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::COMPUTE_SHADER,
+                )],
+            })
+            .unwrap();
+        let hdr_to_ldr_render_pass = e
+            .render_pass(RenderPassDescription {
+                attachments: vec![
+                    // ldr color
+                    br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                        .with_layout_to(br::ImageLayout::General.from_undefined())
+                        .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
+                    // hdr color
+                    br::AttachmentDescription2::new(HDR_COLOR_FORMAT)
+                        .layout(br::ImageLayout::ShaderReadOnlyOpt)
+                        .color_memory_op(br::LoadOp::Load, br::StoreOp::DontCare),
+                    // depth
+                    br::AttachmentDescription2::new(br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
+                        .layout(br::ImageLayout::DepthStencilAttachmentOpt)
+                        .color_memory_op(br::LoadOp::Load, br::StoreOp::DontCare),
+                ],
+                subpasses: vec![SubpassDescription {
+                    inputs: vec![br::AttachmentReference2::shader_color_readonly_opt(1)],
+                    color_outputs: vec![br::AttachmentReference2::color_attachment_opt(0)],
+                    depth_stencil: Some(br::AttachmentReference2::depth_stencil_attachment_opt(2)),
+                    ..SubpassDescription::EMPTY
+                }],
+                dependencies: vec![br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::MEMORY.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags(0),
+                )],
+            })
+            .unwrap();
 
-        let bloom_tex_base_size = br::vk::VkExtent2D {
-            width: init_size.width,
-            height: init_size.height,
-        };
         let hdr_temp_rt = TempRT::new(
             e,
-            br::ImageDesc::new(init_size, br::vk::VK_FORMAT_R16G16B16A16_SFLOAT)
+            br::ImageDesc::new(init_size, HDR_COLOR_FORMAT)
                 .as_color_attachment()
                 .sampled()
-                .as_input_attachment(),
+                .as_input_attachment()
+                .use_as_storage(),
             br::AspectMask::COLOR,
             0..1,
             0..1,
@@ -4866,101 +5421,13 @@ impl EditorStageRenderResources {
             0..1,
         )
         .expect("Failed to create depth stencil temp rt");
-        let hdr_bloom_downsample_rts = (0..=Self::BLOOM_FILTER_ITERATION_COUNT)
-            .scan(0.5f32, |scale, _| {
-                let rt = TempRT::new(
-                    e,
-                    br::ImageDesc::new(
-                        br::vk::VkExtent2D {
-                            width: (bloom_tex_base_size.width as f32 * *scale) as _,
-                            height: (bloom_tex_base_size.height as f32 * *scale) as _,
-                        },
-                        Self::HDR_COLOR_FORMAT,
-                    )
-                    .as_color_attachment()
-                    .sampled(),
-                    br::AspectMask::COLOR,
-                    0..1,
-                    0..1,
-                )
-                .unwrap();
-                *scale *= 0.5;
-                Some(rt)
-            })
-            .collect::<Vec<_>>();
-        let hdr_bloom_upsample_rts = (0..Self::BLOOM_FILTER_ITERATION_COUNT)
-            .scan(0.5f32, |scale, _| {
-                let rt = TempRT::new(
-                    e,
-                    br::ImageDesc::new(
-                        br::vk::VkExtent2D {
-                            width: (bloom_tex_base_size.width as f32 * *scale) as _,
-                            height: (bloom_tex_base_size.height as f32 * *scale) as _,
-                        },
-                        Self::HDR_COLOR_FORMAT,
-                    )
-                    .as_color_attachment()
-                    .sampled(),
-                    br::AspectMask::COLOR,
-                    0..1,
-                    0..1,
-                )
-                .unwrap();
-                *scale *= 0.5;
-                Some(rt)
-            })
-            .collect::<Vec<_>>();
 
-        let linear_sampler = e
-            .sampler(SamplerDesc {
-                address_mode: (
-                    br::AddressingMode::ClampToEdge,
-                    br::AddressingMode::ClampToEdge,
-                    br::AddressingMode::ClampToEdge,
-                ),
-                min_filter: br::FilterMode::Linear,
-                mag_filter: br::FilterMode::Linear,
-                mip_filter: br::MipmapFilterMode::Linear,
-                ..Default::default()
-            })
+        let descriptor_set_layout_camera_data = e
+            .descriptor_set_layout(vec![DescriptorBinding::UniformBuffer(
+                1,
+                br::ShaderStage::VERTEX | br::ShaderStage::FRAGMENT,
+            )])
             .unwrap();
-        let descriptor_set_layout_ia1 = br::DescriptorSetLayoutBuilder::new()
-            .bind(
-                br::DescriptorType::InputAttachment
-                    .make_binding(1)
-                    .only_for_fragment(),
-            )
-            .create(e.device().clone())
-            .expect("Failed to create descriptor set layout");
-        let descriptor_set_layout_ub1 = br::DescriptorSetLayoutBuilder::new()
-            .bind(
-                br::DescriptorType::UniformBuffer
-                    .make_binding(1)
-                    .for_shader_stage(br::ShaderStage::VERTEX | br::ShaderStage::FRAGMENT),
-            )
-            .create(e.device().clone())
-            .expect("Failed to create descriptor set layout");
-        let descriptor_set_layout_cis1 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .for_shader_stage(br::ShaderStage::FRAGMENT)
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&linear_sampler)]),
-        ])
-        .create(e.device().clone())
-        .unwrap();
-        let descriptor_set_layout_default_mat = br::DescriptorSetLayoutBuilder::new()
-            .bind(
-                br::DescriptorType::UniformBufferDynamic
-                    .make_binding(1)
-                    .only_for_vertex(),
-            )
-            .bind(
-                br::DescriptorType::UniformBuffer
-                    .make_binding(1)
-                    .only_for_fragment(),
-            )
-            .create(e.device().clone())
-            .expect("Failed to create descriptor set layout for default mat");
 
         let full_blit_vsh = e
             .shader("shaders/full_blit.vspv")
@@ -4968,10 +5435,18 @@ impl EditorStageRenderResources {
         let hdr_final_pass_fsh = e
             .shader("shaders/simple2d_hdr_final_pass.fspv")
             .expect("Failed to load final pass fragment shader");
-        let hdr_final_pass_pipeline_layout =
-            br::PipelineLayoutBuilder::new(vec![&descriptor_set_layout_ia1], vec![])
-                .create(e.device().clone())
-                .expect("Failed to create hdr final pass pipeline layout");
+        let descriptor_set_layout_hdr_final_pass_input = e
+            .descriptor_set_layout(vec![
+                DescriptorBinding::InputAttachment(1, br::ShaderStage::FRAGMENT),
+                DescriptorBinding::UniformBuffer(1, br::ShaderStage::FRAGMENT),
+            ])
+            .unwrap();
+        let hdr_final_pass_pipeline_layout = br::PipelineLayoutBuilder::new(
+            vec![&descriptor_set_layout_hdr_final_pass_input],
+            vec![(br::ShaderStage::FRAGMENT, 0..12)],
+        )
+        .create(e.device().clone())
+        .expect("Failed to create hdr final pass pipeline layout");
         let mut hdr_final_pass_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
             &hdr_final_pass_pipeline_layout,
             hdr_to_ldr_render_pass.subpass(0),
@@ -4995,127 +5470,16 @@ impl EditorStageRenderResources {
             )
             .depth_test_settings(None, false);
 
-        let postfx_bloom_extract_lum_fsh =
-            e.shader("shaders/posteffects/bloom/extract.fspv").unwrap();
-        let postfx_bloom_extract_lum_pipeline_layout = br::PipelineLayoutBuilder::new(
-            vec![&descriptor_set_layout_cis1],
-            vec![(br::ShaderStage::FRAGMENT, 0..4)],
+        let postfx_auto_exposure = AutoExposureEffect::new(e, init_size).unwrap();
+        let postfx_bloom = HDRBloomPostEffect::new(
+            e,
+            br::vk::VkExtent2D {
+                width: init_size.width / 2,
+                height: init_size.height / 2,
+            },
+            Self::BLOOM_FILTER_ITERATION_COUNT,
         )
-        .create(e.device().clone())
         .unwrap();
-        let mut postfx_bloom_extract_lum_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
-            &postfx_bloom_extract_lum_pipeline_layout,
-            hdr_color_only_pass.subpass(0),
-            br::VertexProcessingStages::new(
-                br::VertexShaderStage::new(br::PipelineShader2::new(&full_blit_vsh, c"main"))
-                    .with_fragment_shader_stage(br::PipelineShader2::new(
-                        &postfx_bloom_extract_lum_fsh,
-                        c"main",
-                    )),
-                &[],
-                &[],
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            ),
-        );
-        postfx_bloom_extract_lum_pipeline
-            .multisample_state(Some(br::MultisampleState::new()))
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-            .dynamic_viewport_scissors(1);
-
-        let postfx_bloom_filter_sh = e.shader("shaders/posteffects/bloom/filter.spv").unwrap();
-        let postfx_bloom_filter_downsample_pipeline_layout = br::PipelineLayoutBuilder::new(
-            vec![&descriptor_set_layout_cis1],
-            vec![(br::ShaderStage::FRAGMENT, 0..8)],
-        )
-        .create(e.device().clone())
-        .unwrap();
-        let mut postfx_bloom_filter_downsample_pipeline =
-            br::NonDerivedGraphicsPipelineBuilder::new(
-                &postfx_bloom_filter_downsample_pipeline_layout,
-                hdr_color_only_pass.subpass(0),
-                br::VertexProcessingStages::new(
-                    br::VertexShaderStage::new(br::PipelineShader2::new(
-                        &postfx_bloom_filter_sh,
-                        c"vertMain",
-                    ))
-                    .with_fragment_shader_stage(br::PipelineShader2::new(
-                        &postfx_bloom_filter_sh,
-                        c"fragDownSample",
-                    )),
-                    &[],
-                    &[],
-                    br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-                ),
-            );
-        postfx_bloom_filter_downsample_pipeline
-            .multisample_state(Some(br::MultisampleState::new()))
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-            .dynamic_viewport_scissors(1);
-        let postfx_bloom_filter_upsample_pipeline_layout = br::PipelineLayoutBuilder::new(
-            vec![&descriptor_set_layout_cis1, &descriptor_set_layout_cis1],
-            vec![(br::ShaderStage::FRAGMENT, 0..8)],
-        )
-        .create(e.device().clone())
-        .unwrap();
-        let mut postfx_bloom_filter_upsample_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
-            &postfx_bloom_filter_upsample_pipeline_layout,
-            hdr_color_only_pass.subpass(0),
-            br::VertexProcessingStages::new(
-                br::VertexShaderStage::new(br::PipelineShader2::new(
-                    &postfx_bloom_filter_sh,
-                    c"vertMain",
-                ))
-                .with_fragment_shader_stage(br::PipelineShader2::new(
-                    &postfx_bloom_filter_sh,
-                    c"fragUpSample",
-                )),
-                &[],
-                &[],
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            ),
-        );
-        postfx_bloom_filter_upsample_pipeline
-            .multisample_state(Some(br::MultisampleState::new()))
-            .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-            .dynamic_viewport_scissors(1);
-
-        let mut additive_blending = br::AttachmentColorBlendState::noblend();
-        additive_blending
-            .enable()
-            .color_blend(br::BlendFactor::One, br::BlendOp::Add, br::BlendFactor::One)
-            .alpha_blend(br::BlendFactor::One, br::BlendOp::Add, br::BlendFactor::One);
-        let postfx_bloom_merge_vsh = e.shader("shaders/full_blit_uvst.vspv").unwrap();
-        let postfx_bloom_merge_fsh = e.shader("shaders/posteffects/bloom/merge.fspv").unwrap();
-        let postfx_bloom_merge_pipeline_layout = br::PipelineLayoutBuilder::new(
-            vec![&descriptor_set_layout_cis1],
-            vec![
-                (br::ShaderStage::VERTEX, 0..16),
-                (br::ShaderStage::FRAGMENT, 16..20),
-            ],
-        )
-        .create(e.device().clone())
-        .unwrap();
-        let mut postfx_bloom_merge_pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
-            &postfx_bloom_merge_pipeline_layout,
-            hdr_color_overwrite_pass.subpass(0),
-            br::VertexProcessingStages::new(
-                br::VertexShaderStage::new(br::PipelineShader2::new(
-                    &postfx_bloom_merge_vsh,
-                    c"main",
-                ))
-                .with_fragment_shader_stage(br::PipelineShader2::new(
-                    &postfx_bloom_merge_fsh,
-                    c"main",
-                )),
-                &[],
-                &[],
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            ),
-        );
-        postfx_bloom_merge_pipeline
-            .multisample_state(Some(br::MultisampleState::new()))
-            .add_attachment_blend(additive_blending)
-            .dynamic_viewport_scissors(1);
 
         let grid_vsh = e
             .shader("shaders/simple_transformed_static_pos.vspv")
@@ -5125,7 +5489,7 @@ impl EditorStageRenderResources {
             .expect("Failed to load fragment shader");
         let (grid_vbinds, grid_vattrs) = ColoredVertex::single_binding(0, 1);
         let grid_pipeline_layout = br::PipelineLayoutBuilder::new(
-            vec![&descriptor_set_layout_ub1],
+            vec![&descriptor_set_layout_camera_data],
             vec![(br::ShaderStage::VERTEX, 0..64)],
         )
         .create(e.device().clone())
@@ -5183,9 +5547,15 @@ impl EditorStageRenderResources {
                 offset: core::mem::offset_of!(GenericVertex, uv) as _,
             },
         ];
+        let descriptor_set_layout_default_mat = e
+            .descriptor_set_layout(vec![
+                DescriptorBinding::UniformBufferDynamic(1, br::ShaderStage::VERTEX),
+                DescriptorBinding::UniformBuffer(1, br::ShaderStage::FRAGMENT),
+            ])
+            .unwrap();
         let default_material_pipeline_layout = br::PipelineLayoutBuilder::new(
             vec![
-                &descriptor_set_layout_ub1,
+                &descriptor_set_layout_camera_data,
                 &descriptor_set_layout_default_mat,
             ],
             vec![],
@@ -5223,28 +5593,15 @@ impl EditorStageRenderResources {
             .rasterization_state(default_material_raster_state);
 
         let hdr_final_pass_pipeline_extras = hdr_final_pass_pipeline.make_extras();
-        let postfx_bloom_extract_lum_pipeline_extras =
-            postfx_bloom_extract_lum_pipeline.make_extras();
-        let postfx_bloom_filter_downsample_pipeline_extras =
-            postfx_bloom_filter_downsample_pipeline.make_extras();
-        let postfx_bloom_filter_upsample_pipeline_extras =
-            postfx_bloom_filter_upsample_pipeline.make_extras();
-        let postfx_bloom_merge_pipeline_extras = postfx_bloom_merge_pipeline.make_extras();
         let grid_pipeline_extras = grid_pipeline.make_extras();
         let default_material_pipeline_extras = default_material_pipeline.make_extras();
-        let [hdr_final_pass_pipeline, postfx_bloom_extract_lum_pipeline, postfx_bloom_filter_downsample_pipeline, postfx_bloom_filter_upsample_pipeline, postfx_bloom_merge_pipeline, grid_pipeline, default_material_pipeline] =
-            e.create_graphics_pipeline_array(&[
+        let [hdr_final_pass_pipeline, grid_pipeline, default_material_pipeline] = e
+            .create_graphics_pipeline_array(&[
                 hdr_final_pass_pipeline.build(&hdr_final_pass_pipeline_extras),
-                postfx_bloom_extract_lum_pipeline.build(&postfx_bloom_extract_lum_pipeline_extras),
-                postfx_bloom_filter_downsample_pipeline
-                    .build(&postfx_bloom_filter_downsample_pipeline_extras),
-                postfx_bloom_filter_upsample_pipeline
-                    .build(&postfx_bloom_filter_upsample_pipeline_extras),
-                postfx_bloom_merge_pipeline.build(&postfx_bloom_merge_pipeline_extras),
                 grid_pipeline.build(&grid_pipeline_extras),
                 default_material_pipeline.build(&default_material_pipeline_extras),
             ])
-            .expect("Failed to create grid pipeline state");
+            .expect("Failed to create pipeline states");
 
         let grid_vertices = Self::grid_vertices();
         let default_camera = Camera {
@@ -5280,6 +5637,26 @@ impl EditorStageRenderResources {
             },
         };
 
+        let postfx_global_work_buffer = match AppGlobalSharedInstances::get()
+            .editor_window_postfx_global_work_buffer
+            .as_ref()
+            .and_then(|x| x.upgrade())
+        {
+            Some(x) => x,
+            None => {
+                let b = Rc::new(
+                    e.alloc_device_local_buffer(br::BufferDesc::new_for_type::<
+                        PostEffectGlobalWorkBuffer,
+                    >(
+                        br::BufferUsage::STORAGE_BUFFER.uniform_buffer()
+                    ))
+                    .unwrap(),
+                );
+                AppGlobalSharedInstances::get_mut().editor_window_postfx_global_work_buffer =
+                    Some(Rc::downgrade(&b));
+                b
+            }
+        };
         let [grid_buffer, camera_buffer, forward_light_buffer] = e
             .alloc_device_local_buffer_array([
                 br::BufferDesc::new(
@@ -5373,43 +5750,21 @@ impl EditorStageRenderResources {
             index_by_object_id: HashMap::new(),
         };
 
-        let mut dp = br::DescriptorPoolBuilder::new(
-            (5 + Self::BLOOM_FILTER_ITERATION_COUNT + Self::BLOOM_FILTER_ITERATION_COUNT + 1) as _,
-        )
-        .with_reservations(vec![
-            br::DescriptorType::UniformBuffer.with_count(2),
-            br::DescriptorType::UniformBufferDynamic.with_count(1),
-            br::DescriptorType::InputAttachment.with_count(1),
-            br::DescriptorType::CombinedImageSampler.with_count(
-                (2 + Self::BLOOM_FILTER_ITERATION_COUNT + Self::BLOOM_FILTER_ITERATION_COUNT + 1)
-                    as _,
-            ),
-        ])
-        .create(e.device().clone())
-        .expect("Failed to create descriptor pool");
-        let [camera_descriptor_set, hdr_final_pass_descriptor_set, per_object_descriptor_set, bloom_extract_lum_input_descriptor_set, bloom_merge_input_descriptor_set] =
-            dp.alloc_array(&[
-                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ub1),
-                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_ia1),
+        let mut dp = br::DescriptorPoolBuilder::new(3)
+            .with_reservations(vec![
+                br::DescriptorType::UniformBuffer.with_count(3),
+                br::DescriptorType::UniformBufferDynamic.with_count(1),
+                br::DescriptorType::InputAttachment.with_count(1),
+            ])
+            .create(e.device().clone())
+            .expect("Failed to create descriptor pool");
+        let [camera_descriptor_set, hdr_final_pass_descriptor_set, per_object_descriptor_set] = dp
+            .alloc_array(&[
+                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_camera_data),
+                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_hdr_final_pass_input),
                 br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_default_mat),
-                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_cis1),
-                br::DescriptorSetLayoutObjectRef::new(&descriptor_set_layout_cis1),
             ])
             .expect("Failed to allocate camera descriptor set");
-        let bloom_filter_input_downsampled_descriptor_sets = dp
-            .alloc(
-                &std::iter::repeat(&descriptor_set_layout_cis1)
-                    .take(Self::BLOOM_FILTER_ITERATION_COUNT + 1)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
-        let bloom_filter_input_upsampled_descriptor_sets = dp
-            .alloc(
-                &std::iter::repeat(&descriptor_set_layout_cis1)
-                    .take(Self::BLOOM_FILTER_ITERATION_COUNT)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
         let mut descriptor_init_writes = vec![
             camera_descriptor_set
                 .binding_at(0)
@@ -5421,6 +5776,12 @@ impl EditorStageRenderResources {
                 br::DescriptorContents::input_attachment(
                     &hdr_temp_rt.resource,
                     br::ImageLayout::ShaderReadOnlyOpt,
+                ),
+            ),
+            hdr_final_pass_descriptor_set.binding_at(1).write(
+                br::DescriptorContents::uniform_buffer(
+                    &postfx_global_work_buffer,
+                    0..core::mem::size_of::<PostEffectGlobalWorkBuffer>() as _,
                 ),
             ),
             per_object_descriptor_set.binding_at(0).write(
@@ -5435,35 +5796,17 @@ impl EditorStageRenderResources {
                     &forward_light_buffer,
                     0..core::mem::size_of::<ForwardLightUniformData>() as _,
                 )),
-            bloom_extract_lum_input_descriptor_set.binding_at(0).write(
-                br::DescriptorContents::combined_image_sampler(
-                    &hdr_temp_rt.resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                ),
-            ),
-            bloom_merge_input_descriptor_set.binding_at(0).write(
-                br::DescriptorContents::combined_image_sampler(
-                    &hdr_bloom_upsample_rts[0].resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                ),
-            ),
         ];
-        descriptor_init_writes.extend((0..=Self::BLOOM_FILTER_ITERATION_COUNT).map(|n| {
-            bloom_filter_input_downsampled_descriptor_sets[n]
-                .binding_at(0)
-                .write(br::DescriptorContents::combined_image_sampler(
-                    &hdr_bloom_downsample_rts[n].resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                ))
-        }));
-        descriptor_init_writes.extend((0..Self::BLOOM_FILTER_ITERATION_COUNT).map(|n| {
-            bloom_filter_input_upsampled_descriptor_sets[n]
-                .binding_at(0)
-                .write(br::DescriptorContents::combined_image_sampler(
-                    &hdr_bloom_upsample_rts[n].resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                ))
-        }));
+        postfx_auto_exposure.update_descriptor_sets(
+            &mut descriptor_init_writes,
+            &hdr_temp_rt.resource,
+            &postfx_global_work_buffer,
+        );
+        postfx_bloom.update_descriptor_sets(
+            &mut descriptor_init_writes,
+            &hdr_temp_rt.resource,
+            &postfx_global_work_buffer,
+        );
         e.device()
             .update_descriptor_sets(&descriptor_init_writes, &[]);
 
@@ -5476,37 +5819,8 @@ impl EditorStageRenderResources {
         )
         .create()
         .unwrap();
-        let hdr_bloom_extract_lum_framebuffer = br::FramebufferBuilder::new_with_attachments(
-            &hdr_color_only_pass,
-            vec![hdr_bloom_downsample_rts[0].resource.clone()],
-        )
-        .create()
-        .unwrap();
-        let hdr_bloom_filter_downsample_framebuffers = hdr_bloom_downsample_rts
-            .iter()
-            .skip(1)
-            .map(|rt| {
-                br::FramebufferBuilder::new_with_attachments(
-                    &hdr_color_only_pass,
-                    vec![rt.resource.clone()],
-                )
-                .create()
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
-        let hdr_bloom_filter_upsample_framebuffers = hdr_bloom_upsample_rts
-            .iter()
-            .map(|rt| {
-                br::FramebufferBuilder::new_with_attachments(
-                    &hdr_color_only_pass,
-                    vec![rt.resource.clone()],
-                )
-                .create()
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
         let hdr_bloom_merge_framebuffer = br::FramebufferBuilder::new_with_attachments(
-            &hdr_color_overwrite_pass,
+            &postfx_bloom.hdr_color_overwrite_pass,
             vec![hdr_temp_rt.resource.clone()],
         )
         .create()
@@ -5514,7 +5828,7 @@ impl EditorStageRenderResources {
 
         let skybox_renderer = SkyboxRenderer::new(
             e,
-            &descriptor_set_layout_ub1,
+            &descriptor_set_layout_camera_data,
             hdr_main_render_pass.subpass(0),
             skybox_precomputed,
             init_light_data,
@@ -5524,29 +5838,16 @@ impl EditorStageRenderResources {
         Self {
             utility_verts,
             skybox_renderer,
-            _descriptor_set_layout_ia1: descriptor_set_layout_ia1,
-            _descriptor_set_layout_ub1: descriptor_set_layout_ub1,
-            _descriptor_set_layout_cis1: descriptor_set_layout_cis1,
             _descriptor_pool: dp,
-            bloom_tex_base_size,
             hdr_temp_rt,
-            hdr_bloom_downsample_rts,
-            hdr_bloom_upsample_rts,
             depth_stencil_temp_rt,
             hdr_main_render_pass,
-            hdr_color_only_pass,
-            hdr_color_overwrite_pass,
             hdr_to_ldr_render_pass,
             hdr_final_pass_pipeline_layout,
             hdr_final_pass_pipeline,
-            postfx_bloom_extract_lum_pipeline_layout,
-            postfx_bloom_extract_lum_pipeline,
-            postfx_bloom_filter_downsample_pipeline_layout,
-            postfx_bloom_filter_downsample_pipeline,
-            postfx_bloom_filter_upsample_pipeline_layout,
-            postfx_bloom_filter_upsample_pipeline,
-            postfx_bloom_merge_pipeline_layout,
-            postfx_bloom_merge_pipeline,
+            postfx_global_work_buffer,
+            postfx_auto_exposure,
+            postfx_bloom,
             grid_pipeline_layout,
             grid_pipeline,
             grid_buffer,
@@ -5559,14 +5860,7 @@ impl EditorStageRenderResources {
             camera_descriptor_set,
             hdr_final_pass_descriptor_set,
             per_object_descriptor_set,
-            bloom_extract_lum_input_descriptor_set,
-            bloom_filter_input_downsampled_descriptor_sets,
-            bloom_filter_input_upsampled_descriptor_sets,
-            bloom_merge_input_descriptor_set,
             hdr_main_framebuffer,
-            hdr_bloom_extract_lum_framebuffer,
-            hdr_bloom_filter_downsample_framebuffers,
-            hdr_bloom_filter_upsample_framebuffers,
             hdr_bloom_merge_framebuffer,
             per_object_uniform_data,
         }
@@ -5657,212 +5951,21 @@ impl EditorStageRenderResources {
             .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
             .inject(|rec| self.skybox_renderer.record_render_commands(rec))
             .end_render_pass()
-            .begin_render_pass(
-                &self.hdr_color_only_pass,
-                &self.hdr_bloom_extract_lum_framebuffer,
-                br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: br::vk::VkExtent2D {
-                        width: self.bloom_tex_base_size.width / 2,
-                        height: self.bloom_tex_base_size.height / 2,
-                    },
-                },
-                &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 0.0])],
-                true,
-            )
-            .set_viewport(
-                0,
-                &[br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: br::vk::VkExtent2D {
-                        width: self.bloom_tex_base_size.width / 2,
-                        height: self.bloom_tex_base_size.height / 2,
-                    },
-                }
-                .make_viewport(0.0..1.0)],
-            )
-            .set_scissor(
-                0,
-                &[br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: br::vk::VkExtent2D {
-                        width: self.bloom_tex_base_size.width / 2,
-                        height: self.bloom_tex_base_size.height / 2,
-                    },
-                }],
-            )
-            .bind_graphics_pipeline_pair(
-                &self.postfx_bloom_extract_lum_pipeline,
-                &self.postfx_bloom_extract_lum_pipeline_layout,
-            )
-            .bind_graphics_descriptor_sets(0, &[self.bloom_extract_lum_input_descriptor_set.0], &[])
-            .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &15.0f32)
-            .draw(4, 1, 0, 0)
-            .end_render_pass()
             .inject(|r| {
-                (1..=Self::BLOOM_FILTER_ITERATION_COUNT)
-                    .fold((r, 0.25f32), |(r, scale), n| {
-                        let rect = br::vk::VkRect2D {
-                            offset: br::vk::VkOffset2D::ZERO,
-                            extent: br::vk::VkExtent2D {
-                                width: (self.bloom_tex_base_size.width as f32 * scale) as _,
-                                height: (self.bloom_tex_base_size.height as f32 * scale) as _,
-                            },
-                        };
-                        let viewport = rect.make_viewport(0.0..1.0);
-                        let upper_texel_size = [
-                            2.0 / (self.bloom_tex_base_size.width as f32 * scale * 2.0).trunc(),
-                            2.0 / (self.bloom_tex_base_size.height as f32 * scale * 2.0).trunc(),
-                        ];
-
-                        let r = r
-                            .begin_render_pass(
-                                &self.hdr_color_only_pass,
-                                &self.hdr_bloom_filter_downsample_framebuffers[n - 1],
-                                rect.clone(),
-                                &[br::ClearValue::color_f32([0.0; 4])],
-                                true,
-                            )
-                            .set_viewport(0, &[viewport])
-                            .set_scissor(0, &[rect])
-                            .bind_graphics_pipeline_pair(
-                                &self.postfx_bloom_filter_downsample_pipeline,
-                                &self.postfx_bloom_filter_downsample_pipeline_layout,
-                            )
-                            .bind_graphics_descriptor_sets(
-                                0,
-                                &[self.bloom_filter_input_downsampled_descriptor_sets[n - 1].0],
-                                &[],
-                            )
-                            .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &upper_texel_size)
-                            .draw(4, 1, 0, 0)
-                            .end_render_pass();
-                        (r, scale * 0.5)
-                    })
-                    .0
+                self.postfx_auto_exposure
+                    .populate_commands(r, self.hdr_temp_rt.resource.image())
             })
             .inject(|r| {
-                let rect = br::vk::VkRect2D {
-                    offset: br::vk::VkOffset2D::ZERO,
-                    extent: self.hdr_bloom_upsample_rts[Self::BLOOM_FILTER_ITERATION_COUNT - 1]
-                        .resource
-                        .size()
-                        .as_2d_ref()
-                        .clone(),
-                };
-                let viewport = rect.make_viewport(0.0..1.0);
-                let lower_texel_size = {
-                    let s = self.hdr_bloom_upsample_rts[Self::BLOOM_FILTER_ITERATION_COUNT - 1]
-                        .resource
-                        .size();
-
-                    [2.0 / s.width as f32, 2.0 / s.height as f32]
-                };
-
-                r.begin_render_pass(
-                    &self.hdr_color_only_pass,
-                    &self.hdr_bloom_filter_upsample_framebuffers
-                        [Self::BLOOM_FILTER_ITERATION_COUNT - 1],
-                    rect.clone(),
-                    &[br::ClearValue::color_f32([0.0; 4])],
-                    true,
-                )
-                .set_viewport(0, &[viewport])
-                .set_scissor(0, &[rect])
-                .bind_graphics_pipeline_pair(
-                    &self.postfx_bloom_filter_upsample_pipeline,
-                    &self.postfx_bloom_filter_upsample_pipeline_layout,
-                )
-                .bind_graphics_descriptor_sets(
-                    0,
-                    &[
-                        self.bloom_filter_input_downsampled_descriptor_sets
-                            [Self::BLOOM_FILTER_ITERATION_COUNT]
-                            .0,
-                        self.bloom_filter_input_downsampled_descriptor_sets
-                            [Self::BLOOM_FILTER_ITERATION_COUNT - 1]
-                            .0,
-                    ],
-                    &[],
-                )
-                .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &lower_texel_size)
-                .draw(4, 1, 0, 0)
-                .end_render_pass()
+                self.postfx_bloom
+                    .populate_commands(r, &self.hdr_bloom_merge_framebuffer, rect)
             })
-            .inject(|r| {
-                let parameters = (0..Self::BLOOM_FILTER_ITERATION_COUNT - 1)
-                    .scan(0.5f32, |scale, n| {
-                        let rect = br::vk::VkRect2D {
-                            offset: br::vk::VkOffset2D::ZERO,
-                            extent: br::vk::VkExtent2D {
-                                width: (self.bloom_tex_base_size.width as f32 * *scale) as _,
-                                height: (self.bloom_tex_base_size.height as f32 * *scale) as _,
-                            },
-                        };
-                        let viewport = rect.make_viewport(0.0..1.0);
-                        let lower_texel_size = [
-                            2.0 / (self.bloom_tex_base_size.width as f32 * *scale * 0.5).trunc(),
-                            2.0 / (self.bloom_tex_base_size.height as f32 * *scale * 0.5).trunc(),
-                        ];
-                        *scale *= 0.5;
-                        Some((rect, viewport, lower_texel_size, n))
-                    })
-                    .collect::<Vec<_>>();
-
-                parameters
-                    .into_iter()
-                    .rev()
-                    .fold(r, |r, (rect, viewport, lower_texel_size, n)| {
-                        r.begin_render_pass(
-                            &self.hdr_color_only_pass,
-                            &self.hdr_bloom_filter_upsample_framebuffers[n],
-                            rect.clone(),
-                            &[br::ClearValue::color_f32([0.0; 4])],
-                            true,
-                        )
-                        .set_viewport(0, &[viewport])
-                        .set_scissor(0, &[rect])
-                        .bind_graphics_pipeline_pair(
-                            &self.postfx_bloom_filter_upsample_pipeline,
-                            &self.postfx_bloom_filter_upsample_pipeline_layout,
-                        )
-                        .bind_graphics_descriptor_sets(
-                            0,
-                            &[
-                                self.bloom_filter_input_upsampled_descriptor_sets[n + 1].0,
-                                self.bloom_filter_input_downsampled_descriptor_sets[n].0,
-                            ],
-                            &[],
-                        )
-                        .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &lower_texel_size)
-                        .draw(4, 1, 0, 0)
-                        .end_render_pass()
-                    })
-            })
-            .begin_render_pass(
-                &self.hdr_color_overwrite_pass,
-                &self.hdr_bloom_merge_framebuffer,
-                rect,
-                &[],
-                true,
-            )
-            .set_viewport(0, &[viewport.clone()])
-            .set_scissor(0, &[rect])
-            .bind_graphics_pipeline_pair(
-                &self.postfx_bloom_merge_pipeline,
-                &self.postfx_bloom_merge_pipeline_layout,
-            )
-            .bind_graphics_descriptor_sets(0, &[self.bloom_merge_input_descriptor_set.0], &[])
-            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &[0.0f32, 0.0, 1.0, 1.0])
-            .push_graphics_constant(br::ShaderStage::FRAGMENT, 16, &0.3f32)
-            .draw(4, 1, 0, 0)
-            .end_render_pass()
             .begin_render_pass(&self.hdr_to_ldr_render_pass, fb, rect, &[], true)
             .bind_graphics_pipeline_pair(
                 &self.hdr_final_pass_pipeline,
                 &self.hdr_final_pass_pipeline_layout,
             )
             .bind_graphics_descriptor_sets(0, &[self.hdr_final_pass_descriptor_set.0], &[])
+            .push_graphics_constant(br::ShaderStage::FRAGMENT, 0, &[100.0f32, 12.5, 0.65])
             .draw(4, 1, 0, 0)
             .bind_graphics_pipeline_pair(&self.grid_pipeline, &self.grid_pipeline_layout)
             .bind_graphics_descriptor_sets(0, &[self.camera_descriptor_set.0], &[])
@@ -5875,65 +5978,25 @@ impl EditorStageRenderResources {
     }
 
     pub fn resize(&mut self, new_size: br::vk::VkExtent2D) {
-        self.bloom_tex_base_size = br::vk::VkExtent2D {
-            width: new_size.width,
-            height: new_size.height,
-        };
         self.hdr_temp_rt.recreate_newsize(new_size).unwrap();
         self.depth_stencil_temp_rt
             .recreate_newsize(new_size)
             .unwrap();
-        let mut scale = 0.5f32;
-        for n in 0..=Self::BLOOM_FILTER_ITERATION_COUNT {
-            self.hdr_bloom_downsample_rts[n]
-                .recreate_newsize(br::vk::VkExtent2D {
-                    width: (self.bloom_tex_base_size.width as f32 * scale) as _,
-                    height: (self.bloom_tex_base_size.height as f32 * scale) as _,
-                })
-                .unwrap();
-            scale *= 0.5;
-        }
-        let mut scale = 0.5f32;
-        for n in 0..Self::BLOOM_FILTER_ITERATION_COUNT {
-            self.hdr_bloom_upsample_rts[n]
-                .recreate_newsize(br::vk::VkExtent2D {
-                    width: (self.bloom_tex_base_size.width as f32 * scale) as _,
-                    height: (self.bloom_tex_base_size.height as f32 * scale) as _,
-                })
-                .unwrap();
-            scale *= 0.5;
-        }
+        self.postfx_bloom
+            .resize(br::vk::VkExtent2D {
+                width: new_size.width / 2,
+                height: new_size.height / 2,
+            })
+            .unwrap();
 
-        let mut descriptor_update_writes = vec![
-            self.bloom_extract_lum_input_descriptor_set
-                .binding_at(0)
-                .write(br::DescriptorContents::combined_image_sampler(
-                    &self.hdr_temp_rt.resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                )),
-            self.bloom_merge_input_descriptor_set.binding_at(0).write(
-                br::DescriptorContents::combined_image_sampler(
-                    &self.hdr_bloom_upsample_rts[0].resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                ),
-            ),
-        ];
-        descriptor_update_writes.extend((0..=Self::BLOOM_FILTER_ITERATION_COUNT).map(|n| {
-            self.bloom_filter_input_downsampled_descriptor_sets[n]
-                .binding_at(0)
-                .write(br::DescriptorContents::combined_image_sampler(
-                    &self.hdr_bloom_downsample_rts[n].resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                ))
-        }));
-        descriptor_update_writes.extend((0..Self::BLOOM_FILTER_ITERATION_COUNT).map(|n| {
-            self.bloom_filter_input_upsampled_descriptor_sets[n]
-                .binding_at(0)
-                .write(br::DescriptorContents::combined_image_sampler(
-                    &self.hdr_bloom_upsample_rts[n].resource,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                ))
-        }));
+        let mut descriptor_update_writes = Vec::new();
+        self.postfx_auto_exposure
+            .set_input(&mut descriptor_update_writes, &self.hdr_temp_rt.resource);
+        self.postfx_bloom.update_descriptor_sets(
+            &mut descriptor_update_writes,
+            &self.hdr_temp_rt.resource,
+            &self.postfx_global_work_buffer,
+        );
         AppSubsystemInstances::get()
             .mini_engine
             .borrow()
@@ -5949,43 +6012,42 @@ impl EditorStageRenderResources {
         )
         .create()
         .unwrap();
-        self.hdr_bloom_extract_lum_framebuffer = br::FramebufferBuilder::new_with_attachments(
-            &self.hdr_color_only_pass,
-            vec![self.hdr_bloom_downsample_rts[0].resource.clone()],
-        )
-        .create()
-        .unwrap();
-        self.hdr_bloom_filter_downsample_framebuffers = self
-            .hdr_bloom_downsample_rts
-            .iter()
-            .skip(1)
-            .map(|rt| {
-                br::FramebufferBuilder::new_with_attachments(
-                    &self.hdr_color_only_pass,
-                    vec![rt.resource.clone()],
-                )
-                .create()
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
-        self.hdr_bloom_filter_upsample_framebuffers = self
-            .hdr_bloom_upsample_rts
-            .iter()
-            .map(|rt| {
-                br::FramebufferBuilder::new_with_attachments(
-                    &self.hdr_color_only_pass,
-                    vec![rt.resource.clone()],
-                )
-                .create()
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
         self.hdr_bloom_merge_framebuffer = br::FramebufferBuilder::new_with_attachments(
-            &self.hdr_color_overwrite_pass,
+            &self.postfx_bloom.hdr_color_overwrite_pass,
             vec![self.hdr_temp_rt.resource.clone()],
         )
         .create()
         .unwrap();
+    }
+
+    pub fn readback_postfx_global_work_buffer(&self) -> PostEffectGlobalWorkBuffer {
+        let mut b = AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .alloc_upload_buffer(br::BufferDesc::new_for_type::<PostEffectGlobalWorkBuffer>(
+                br::BufferUsage::TRANSFER_DEST,
+            ))
+            .unwrap();
+
+        AppSubsystemInstances::get()
+            .mini_engine
+            .borrow_mut()
+            .submit_transient_commands_and_wait(|r| {
+                r.copy_buffer(
+                    &self.postfx_global_work_buffer,
+                    &b,
+                    &[br::BufferCopy::mirror_data::<PostEffectGlobalWorkBuffer>(0)],
+                )
+            })
+            .unwrap();
+
+        let mut sink = core::mem::MaybeUninit::<PostEffectGlobalWorkBuffer>::uninit();
+        b.guard_map(peridot_memory_manager::BufferMapMode::Read, |ptr| unsafe {
+            sink.write(ptr.get_at::<PostEffectGlobalWorkBuffer>(0).clone())
+        })
+        .unwrap();
+
+        unsafe { sink.assume_init() }
     }
 }
 
@@ -8499,6 +8561,47 @@ impl AppWindow {
     }
 }
 
+static mut APP_GLOBAL_SHARED_INSTANCES: *mut AppGlobalSharedInstances = core::ptr::null_mut();
+pub struct AppGlobalSharedInstances {
+    pub editor_window_postfx_global_work_buffer: Option<Weak<peridot_memory_manager::Buffer>>,
+    pub editor_window_histogram_buffer: Option<Weak<peridot_memory_manager::Buffer>>,
+}
+impl AppGlobalSharedInstances {
+    #[inline(always)]
+    pub fn get<'a>() -> &'a Self {
+        unsafe { &*APP_GLOBAL_SHARED_INSTANCES }
+    }
+
+    #[inline(always)]
+    pub fn get_mut<'a>() -> &'a mut Self {
+        unsafe { &mut *APP_GLOBAL_SHARED_INSTANCES }
+    }
+
+    #[inline]
+    pub fn initialize() -> AppGlobalSharedInstancesFinalizer {
+        unsafe {
+            APP_GLOBAL_SHARED_INSTANCES = Box::into_raw(Box::new(Self {
+                editor_window_postfx_global_work_buffer: None,
+                editor_window_histogram_buffer: None,
+            }));
+        }
+
+        AppGlobalSharedInstancesFinalizer
+    }
+}
+pub struct AppGlobalSharedInstancesFinalizer;
+impl Drop for AppGlobalSharedInstancesFinalizer {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(core::mem::replace(
+                &mut *core::ptr::addr_of_mut!(APP_GLOBAL_SHARED_INSTANCES),
+                core::ptr::null_mut(),
+            )));
+        }
+    }
+}
+
 // windows app sdk bootstrapping
 type FPMddBootstrapInitialize2 = extern "system" fn(
     majorMinorVersion: u32,
@@ -8650,7 +8753,7 @@ fn app() -> i32 {
                 45.0f32.to_radians(),
                 peridot_math::Vector3::right(),
             ),
-            intensity: 20.0,
+            intensity: 120000.0,
         },
     };
     state.current_scene.add_object(obj);
@@ -8668,6 +8771,7 @@ fn app() -> i32 {
     let app_subsystem_instances_finalizer = AppSubsystemInstances::initialize();
     let app_global_signals_finalizer = AppGlobalSignals::initialize();
     let app_subsystem_instances = AppSubsystemInstances::get();
+    let app_global_shared_instances_finalizer = AppGlobalSharedInstances::initialize();
     let cm_finalizer = ContextMenu::initialize();
 
     let desktop_interop = app_subsystem_instances
@@ -8809,6 +8913,8 @@ fn app() -> i32 {
         .expect("Failed to create TabGroupPaneView");
     TabGroupPaneView::add_tab::<AssetExplorerTabPresenter>(&explorers_pane, &view_context, &state)
         .expect("Failed to create AssetExplorerTab");
+    TabGroupPaneView::add_tab::<MonitorTabPresenter>(&explorers_pane, &view_context, &state)
+        .unwrap();
     explorers_pane.borrow_mut().rearrange(&ResizeContext {
         current_dpi: window_handle.current_dpi,
     });
@@ -8968,6 +9074,7 @@ fn app() -> i32 {
 
     window_handle.clear_state_store();
     drop(cm_finalizer);
+    drop(app_global_shared_instances_finalizer);
     drop(app_global_signals_finalizer);
     drop(app_subsystem_instances_finalizer);
 

@@ -1,0 +1,83 @@
+// average lum collector from histogram: https://bruop.github.io/exposure/
+
+#version 450
+
+shared uint localWeightedValue[16 * 16];
+shared uint localMaxValue[16 * 16];
+layout(set = 0, binding = 0) buffer SharedStorage {
+    uint histogram[16 * 16];
+};
+layout(set = 0, binding = 1) buffer DestinationStorage {
+    float exposureBaseLum;
+    uint histogramMaxValue;
+    float avgEv100;
+};
+
+layout(push_constant) uniform PushConstants {
+    uint totalPixelCount;
+    float minEv, evRange, smoothCoeff;
+    float filterPercentLow, filterPercentHigh;
+    float exposureMinEv, exposureMaxEv;
+};
+
+float binToEv100(uint binIndex) {
+    return (binIndex / 254.0) * evRange + minEv;
+}
+
+float ev100ToLum(float ev100) {
+    return exp2(ev100) * 12.5f / 100.0f;
+}
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+void main() {
+    uint thisBinPixels = histogram[gl_LocalInvocationIndex];
+    localWeightedValue[gl_LocalInvocationIndex] = thisBinPixels * gl_LocalInvocationIndex;
+    localMaxValue[gl_LocalInvocationIndex] = thisBinPixels;
+    barrier();
+
+    for (uint cutoff = (16 * 16) >> 1; cutoff > 0; cutoff >>= 1) {
+        if (uint(gl_LocalInvocationIndex) < cutoff) {
+            localWeightedValue[gl_LocalInvocationIndex] += localWeightedValue[gl_LocalInvocationIndex + cutoff];
+            localMaxValue[gl_LocalInvocationIndex] = max(localMaxValue[gl_LocalInvocationIndex], localMaxValue[gl_LocalInvocationIndex + cutoff]);
+        }
+
+        barrier();
+    }
+
+    if (gl_LocalInvocationIndex == 0) {
+        // final computation is only in single thread
+
+        uvec2 percentileFilterRange = uvec2(
+            uint((totalPixelCount - thisBinPixels) * filterPercentLow),
+            uint((totalPixelCount - thisBinPixels) * filterPercentHigh)
+        );
+        vec2 accumulator = vec2(0.0, 0.0);
+        for (uint i = 1; i < 256; i++) {
+            uint lumPixels = histogram[i];
+
+            uint lowerTrim = min(lumPixels, percentileFilterRange.x);
+            lumPixels -= lowerTrim;
+            percentileFilterRange -= lowerTrim.xx;
+
+            lumPixels = min(lumPixels, percentileFilterRange.y);
+            percentileFilterRange.y -= lumPixels;
+
+            accumulator += vec2(lumPixels * binToEv100(i - 1), lumPixels);
+
+            // if (percentileFilterRange.x <= 0 && percentileFilterRange.y >= 0) {
+            //     accumulator += vec2(binValue + binToLum(i - 1), binValue);
+            // }
+            // percentileFilterRange.x -= binValue;
+            // percentileFilterRange.y -= binValue;
+        }
+
+        // float weightedAvg = (float(localWeightedValue[0]) / float(max(totalPixelCount - thisBinPixels, 1))) - 1.0f;
+        // float weightedAvgLum = exp2((weightedAvg / 254.0) * logLumRange + minLogLum);
+        float weightedAvgEv100 = clamp(accumulator.x / accumulator.y, exposureMinEv, exposureMaxEv);
+        float exposure = 1.0f / (exp2(weightedAvgEv100) * 1.2f);
+
+        exposureBaseLum += (exposure - exposureBaseLum) * smoothCoeff;
+        histogramMaxValue = localMaxValue[0];
+        avgEv100 += (weightedAvgEv100 - avgEv100) * smoothCoeff;
+    }
+}

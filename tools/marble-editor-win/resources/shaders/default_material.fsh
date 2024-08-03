@@ -14,5 +14,5 @@ void main()
 {
     const float diffuse = pow(dot(normal.xyz, -incidentLightDir) * 0.5f + 0.5f, 2.0f) * lightIntensity;
 
-    color = vec4(vec3(1.0f, 1.0f, 1.0f) * diffuse + vec3(0.3f, 0.3f, 0.3f), 1.0f);
+    color = vec4(vec3(0.8f, 0.8f, 0.8f) * diffuse + vec3(0.3f, 0.3f, 0.3f), 1.0f);
 }

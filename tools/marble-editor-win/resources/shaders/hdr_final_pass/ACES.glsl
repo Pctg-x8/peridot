@@ -37,12 +37,12 @@ vec3 RRTAndODTFit(vec3 v)
 
 vec3 ACESFitted(vec3 color)
 {
-    color = transpose(ACESInputMat) * color;
+    color = color * ACESInputMat;
 
     // Apply RRT and ODT
     color = RRTAndODTFit(color);
 
-    color = transpose(ACESOutputMat) * color;
+    color = color * ACESOutputMat;
 
     // Clamp to [0, 1]
     color = clamp(color, vec3(0.0f), vec3(1.0f));

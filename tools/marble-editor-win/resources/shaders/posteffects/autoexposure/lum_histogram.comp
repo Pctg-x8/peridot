@@ -1,0 +1,52 @@
+// exposure histogram gathering: https://bruop.github.io/exposure/
+
+#version 450
+
+shared uint localHistogramBuffer[16 * 16];
+layout(set = 0, binding = 0) buffer SharedStorage {
+    uint histogram[16 * 16];
+};
+layout(set = 0, binding = 1, rgba16f) uniform image2D src;
+layout(push_constant) uniform PushConstants {
+    float minEv, inverseEvRange;
+    uint srcWidth, srcHeight;
+};
+
+vec4 linearToSrgb(vec4 col) {
+    return vec4(pow(col.rgb, vec3(2.2)), col.a);
+}
+
+float lum(vec4 col) {
+    return dot(vec3(0.2125, 0.7154, 0.0721), col.rgb);
+}
+
+// https://google.github.io/filament/Filament.md.html#mjx-eqn-ev100L
+float ev100(float lum) {
+    return log2(lum * 100.0f / 12.5f);
+}
+
+uint lumToBin(float lum) {
+    if (lum < 0.005) {
+        // avoid to log(0)
+        return 0;
+    }
+
+    float evRel = clamp((ev100(lum) - minEv) * inverseEvRange, 0.0, 1.0);
+    return uint(evRel * 254.0 + 1.0);
+}
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+void main() {
+    // initialize
+    localHistogramBuffer[gl_LocalInvocationIndex] = 0;
+    barrier();
+
+    if (gl_GlobalInvocationID.x < srcWidth && gl_GlobalInvocationID.y < srcHeight) {
+        uint binIndex = lumToBin(lum(imageLoad(src, ivec2(gl_GlobalInvocationID.xy))));
+
+        atomicAdd(localHistogramBuffer[binIndex], 1);
+    }
+    barrier();
+
+    atomicAdd(histogram[gl_LocalInvocationIndex], localHistogramBuffer[gl_LocalInvocationIndex]);
+}

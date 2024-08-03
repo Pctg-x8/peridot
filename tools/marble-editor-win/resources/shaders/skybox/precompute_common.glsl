@@ -1,11 +1,11 @@
 
 const float H_ATM = 80000;
 const float R_EARTH = 6371000;
-const vec3 RayleighCoeffs = vec3(6.55e-6, 1.73e-5, 2.30e-5);
+const vec3 RayleighCoeffs = vec3(6.55e-6, 1.53e-5, 2.30e-5);
 const vec3 RayleighExtinctionCoeffs = RayleighCoeffs;
 const vec3 MieCoeffs = vec3(2.0e-6, 2.0e-6, 2.0e-6);
 const vec3 MieExtinctionCoeffs = MieCoeffs / 0.9;
-const vec3 OzoneExtinctionCoeffs = vec3(4.0e-21, 1.1e-21, 5.3e-22) / 1e4;
+const vec3 OzoneExtinctionCoeffs = vec3(4.0e-21, 2.1e-21, 5.3e-22) / 1e4;
 
 vec3 calcTransmittanceFromDensities(float mieDensity, float rayleighDensity)
 {
