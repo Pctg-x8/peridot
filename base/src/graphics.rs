@@ -1,12 +1,13 @@
 use crate::mthelper::SharedRef;
-use bedrock as br;
-use br::{
-    CommandBuffer, CommandPool, Device, Instance, InstanceChild, PhysicalDevice, Queue,
-    SubmissionBatch,
-};
+use bedrock::{self as br, CommandBufferMut, CommandPoolMut, QueueMut};
+use br::{Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch};
 use cfg_if::cfg_if;
 use log::{info, warn};
-use std::{collections::HashSet, ops::Deref};
+use std::{
+    collections::HashSet,
+    ffi::{CStr, CString},
+    ops::Deref,
+};
 
 pub type InstanceObject = SharedRef<br::InstanceObject>;
 pub type DeviceObject = SharedRef<br::DeviceObject<InstanceObject>>;
@@ -84,7 +85,7 @@ pub struct Graphics {
     pub(crate) graphics_queue: QueueSet<DeviceObject>,
     cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
     pub memory_type_manager: MemoryTypeManager,
-    enabled_vk_extensions: HashSet<String>,
+    enabled_vk_extensions: HashSet<CString>,
     adapter_properties: CachedAdapterProperties,
     #[cfg(feature = "mt")]
     fence_reactor: FenceReactorThread<DeviceObject>,
@@ -94,9 +95,9 @@ pub struct Graphics {
 impl Graphics {
     pub(crate) fn new(
         app_name: &str,
-        app_version: (u32, u32, u32),
-        instance_extensions: Vec<&str>,
-        device_extensions: Vec<&str>,
+        app_version: (u16, u16, u16),
+        instance_extensions: Vec<&CStr>,
+        device_extensions: Vec<&CStr>,
         features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Result<Self, GraphicsInitializationError> {
         info!("Supported Layers: ");
@@ -125,17 +126,18 @@ impl Graphics {
             warn!("Validation Layer is not found!");
         }
 
-        let mut ib =
-            br::InstanceBuilder::new(app_name, app_version, "Interlude2:Peridot", (0, 1, 0));
+        let app_name = CString::new(app_name).expect("invalid app name");
+        let app =
+            br::ApplicationInfo::new(&app_name, app_version, c"Interlude2:Peridot", (0, 1, 0));
+        let mut ib = br::InstanceBuilder::new(&app);
         ib.add_extensions(instance_extensions.iter().copied());
-        #[cfg(debug_assertions)]
-        ib.add_extension("VK_EXT_debug_report");
-        if validation_layer_available {
-            ib.add_layer("VK_LAYER_KHRONOS_validation");
-        }
         #[cfg(feature = "debug")]
         {
-            ib.add_extension("VK_EXT_debug_utils");
+            ib.add_extension(c"VK_EXT_debug_report");
+            ib.add_extension(c"VK_EXT_debug_utils");
+            if validation_layer_available {
+                ib.add_layer(c"VK_LAYER_KHRONOS_validation");
+            }
             log::debug!("Debug reporting activated");
         }
         let instance = SharedRef::new(ib.create()?);
@@ -162,16 +164,12 @@ impl Graphics {
             .enumerate_extension_properties(None)
             .map_err(GraphicsInitializationError::ExtensionEnumerationFailed)?
         {
-            let name = d
-                .extensionName
-                .as_cstr()
-                .expect("Failed to decode")
-                .to_str()
-                .expect("invalid sequence");
+            let name_cstr = d.extensionName.as_cstr().expect("Failed to decode");
+            let name = name_cstr.to_str().expect("invalid sequence");
             info!("* {name}: {}", d.specVersion);
 
             if optional_device_features.contains(&name) {
-                auto_device_extensions.push(name.to_owned());
+                auto_device_extensions.push(name_cstr.to_owned());
             }
         }
 
@@ -186,9 +184,9 @@ impl Graphics {
             let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extensions(device_extensions.iter().copied())
                 .add_extensions(auto_device_extensions.iter().map(|x| x as _))
-                .add_queue(br::DeviceQueueCreateInfo::new(gqf_index).add(0.0));
+                .add_queue(br::DeviceQueueCreateInfo::new(gqf_index, &[0.0]));
             if validation_layer_available {
-                db.add_layer("VK_LAYER_KHRONOS_validation");
+                db.add_layer(c"VK_LAYER_KHRONOS_validation");
             }
             *db.mod_features() = features;
             SharedRef::new(db.create()?.clone_parent())
@@ -237,26 +235,29 @@ impl Graphics {
         generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
         self.graphics_queue.q.get_mut().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
-            None::<&mut br::FenceObject<DeviceObject>>,
+            None,
         )?;
         self.graphics_queue.q.get_mut().wait()
     }
     pub fn submit_buffered_commands(
         &mut self,
         batches: &[impl br::SubmissionBatch],
-        fence: &mut (impl br::Fence + br::VkHandleMut),
-    ) -> br::Result<()> {
-        self.graphics_queue.q.get_mut().submit(batches, Some(fence))
-    }
-    pub fn submit_buffered_commands_raw(
-        &mut self,
-        batches: &[br::vk::VkSubmitInfo],
-        fence: &mut (impl br::Fence + br::VkHandleMut),
+        fence: &mut impl br::FenceMut,
     ) -> br::Result<()> {
         self.graphics_queue
             .q
             .get_mut()
-            .submit_raw(batches, Some(fence))
+            .submit(batches, Some(fence.as_transparent_mut_ref()))
+    }
+    pub fn submit_buffered_commands_raw(
+        &mut self,
+        batches: &[br::vk::VkSubmitInfo],
+        fence: &mut impl br::FenceMut,
+    ) -> br::Result<()> {
+        self.graphics_queue
+            .q
+            .get_mut()
+            .submit_raw(batches, Some(fence.as_transparent_mut_ref()))
     }
 
     /// Submits any commands as transient commands.
@@ -270,6 +271,8 @@ impl Graphics {
         )
             -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
+        use bedrock::FenceMut;
+
         let mut fence = std::sync::Arc::new(br::FenceBuilder::new().create(self.device.clone())?);
 
         let mut pool = br::CommandPoolBuilder::new(self.graphics_queue_family_index())
@@ -279,7 +282,11 @@ impl Graphics {
         generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
         self.graphics_queue.q.lock().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
-            Some(unsafe { std::sync::Arc::get_mut(&mut fence).unwrap_unchecked() }),
+            Some(unsafe {
+                std::sync::Arc::get_mut(&mut fence)
+                    .unwrap_unchecked()
+                    .as_transparent_mut_ref()
+            }),
         )?;
 
         Ok(async move {
@@ -297,7 +304,7 @@ impl Graphics {
     pub const fn await_fence<'s>(
         &'s self,
         fence: std::sync::Arc<
-            impl br::Fence<ConcreteDevice = DeviceObject> + Send + Sync + 'static,
+            impl br::Fence + br::DeviceChild<ConcreteDevice = DeviceObject> + Send + Sync + 'static,
         >,
     ) -> impl std::future::Future<Output = br::Result<()>> + 's {
         FenceWaitFuture {
@@ -323,20 +330,20 @@ impl Graphics {
         self.graphics_queue.family
     }
 
-    pub fn vk_extension_is_available(&self, name: &str) -> bool {
+    pub fn vk_extension_is_available(&self, name: &CStr) -> bool {
         self.enabled_vk_extensions.contains(name)
     }
 
     pub fn dedicated_allocation_available(&self) -> bool {
-        self.vk_extension_is_available("VK_KHR_dedicated_allocation")
+        self.vk_extension_is_available(c"VK_KHR_dedicated_allocation")
     }
 
     pub fn can_request_extended_memory_requirements(&self) -> bool {
-        self.vk_extension_is_available("VK_KHR_get_memory_requirements2")
+        self.vk_extension_is_available(c"VK_KHR_get_memory_requirements2")
     }
 
     pub fn extended_memory_binding_available(&self) -> bool {
-        self.vk_extension_is_available("VK_KHR_bind_memory2")
+        self.vk_extension_is_available(c"VK_KHR_bind_memory2")
     }
 }
 /// Adapter Property exports
@@ -448,6 +455,7 @@ impl MemoryTypeManager {
         let (mut device_memory_types, mut host_memory_types) = (Vec::new(), Vec::new());
         for mt in mem
             .types()
+            .iter()
             .enumerate()
             .map(|(n, mt)| MemoryType(n as _, mt.clone()))
         {
@@ -495,7 +503,7 @@ impl MemoryTypeManager {
 
     fn diagnose_heaps(p: &impl br::PhysicalDevice) {
         info!("Memory Heaps: ");
-        for (n, h) in p.memory_properties().heaps().enumerate() {
+        for (n, h) in p.memory_properties().heaps().iter().enumerate() {
             let (mut nb, mut unit) = (h.size as f32, "bytes");
             if nb >= 10000.0 {
                 nb /= 1024.0;

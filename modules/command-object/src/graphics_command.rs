@@ -351,8 +351,8 @@ impl<S: br::Buffer, D: br::Image> CopyBufferToImage<S, D> {
     }
 }
 impl<
-        S: br::Buffer<ConcreteDevice = Device>,
-        D: br::Image<ConcreteDevice = Device>,
+        S: br::Buffer + br::DeviceChild<ConcreteDevice = Device>,
+        D: br::Image + br::DeviceChild<ConcreteDevice = Device>,
         Device: br::Device + ?Sized,
     > GraphicsCommand<Device> for CopyBufferToImage<S, D>
 {
@@ -404,7 +404,7 @@ impl<R: br::RenderPass, F: br::Framebuffer> BeginRenderPass<R, F> {
 }
 impl<'f, R, D> BeginRenderPass<R, &'f br::FramebufferObject<'f, D>>
 where
-    R: br::RenderPass<ConcreteDevice = D>,
+    R: br::RenderPass + br::DeviceChild<ConcreteDevice = D>,
     D: br::Device,
 {
     pub fn for_entire_framebuffer(
@@ -422,8 +422,8 @@ where
     }
 }
 impl<
-        R: br::RenderPass<ConcreteDevice = Device>,
-        F: br::Framebuffer<ConcreteDevice = Device>,
+        R: br::RenderPass + br::DeviceChild<ConcreteDevice = Device>,
+        F: br::Framebuffer + br::DeviceChild<ConcreteDevice = Device>,
         Device: br::Device + ?Sized,
     > GraphicsCommand<Device> for BeginRenderPass<R, F>
 {
@@ -466,55 +466,83 @@ impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for EndRenderPass {
 }
 
 #[repr(transparent)]
-pub struct DescriptorSets(pub Vec<br::vk::VkDescriptorSet>);
-impl DescriptorSets {
-    pub fn bind_graphics(
+pub struct BindGraphicsPipeline<'p, P: br::Pipeline + 'p>(pub &'p P);
+impl<'p, P, Device> GraphicsCommand<Device> for BindGraphicsPipeline<'p, P>
+where
+    P: br::Pipeline + br::DeviceChild<ConcreteDevice = Device> + 'p,
+    Device: br::Device + ?Sized,
+{
+    #[inline]
+    fn execute<'r>(
         &self,
-    ) -> BindGraphicsDescriptorSets<&[br::vk::VkDescriptorSet], &'static [u32]> {
-        BindGraphicsDescriptorSets::new(&self.0[..])
+        cb: bedrock::CmdRecord<'r, dyn bedrock::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> bedrock::CmdRecord<'r, dyn bedrock::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        cb.bind_graphics_pipeline(self.0)
+    }
+}
+
+#[repr(transparent)]
+pub struct DescriptorSets(pub Vec<br::DescriptorSet>);
+impl DescriptorSets {
+    pub fn bind_graphics<'p, PipelineLayout: br::PipelineLayout + 'p>(
+        &self,
+        layout: &'p PipelineLayout,
+    ) -> BindGraphicsDescriptorSets<'p, PipelineLayout, &[br::DescriptorSet], &'static [u32]> {
+        BindGraphicsDescriptorSets::new(layout, &self.0[..])
     }
 
-    pub fn into_bind_graphics(
+    pub fn into_bind_graphics<'p, PipelineLayout: br::PipelineLayout + 'p>(
         self,
-    ) -> BindGraphicsDescriptorSets<Vec<br::vk::VkDescriptorSet>, &'static [u32]> {
-        BindGraphicsDescriptorSets::new(self.0)
+        layout: &'p PipelineLayout,
+    ) -> BindGraphicsDescriptorSets<'p, PipelineLayout, Vec<br::DescriptorSet>, &'static [u32]>
+    {
+        BindGraphicsDescriptorSets::new(layout, self.0)
     }
 }
 
 pub struct BindGraphicsDescriptorSets<
-    Sets = &'static [br::vk::VkDescriptorSet],
+    'p,
+    PipelineLayout,
+    Sets = &'static [br::DescriptorSet],
     DynamicOffsets = &'static [u32],
 > where
-    Sets: AsRef<[br::vk::VkDescriptorSet]>,
+    PipelineLayout: br::PipelineLayout + 'p,
+    Sets: AsRef<[br::DescriptorSet]>,
     DynamicOffsets: AsRef<[u32]>,
 {
+    layout: &'p PipelineLayout,
     from: u32,
     sets: Sets,
     dynamic_offsets: DynamicOffsets,
 }
-impl<Sets> BindGraphicsDescriptorSets<Sets, &'static [u32]>
+impl<'p, PipelineLayout, Sets> BindGraphicsDescriptorSets<'p, PipelineLayout, Sets, &'static [u32]>
 where
-    Sets: AsRef<[br::vk::VkDescriptorSet]>,
+    PipelineLayout: br::PipelineLayout + 'p,
+    Sets: AsRef<[br::DescriptorSet]>,
 {
-    pub const fn new(sets: Sets) -> Self {
+    pub const fn new(layout: &'p PipelineLayout, sets: Sets) -> Self {
         Self {
+            layout,
             from: 0,
             sets,
             dynamic_offsets: &[],
         }
     }
 
-    pub const fn with_first(first: u32, sets: Sets) -> Self {
+    pub const fn with_first(layout: &'p PipelineLayout, first: u32, sets: Sets) -> Self {
         Self {
+            layout,
             from: first,
             sets,
             dynamic_offsets: &[],
         }
     }
 }
-impl<Sets, DynamicOffsets> BindGraphicsDescriptorSets<Sets, DynamicOffsets>
+impl<'p, PipelineLayout, Sets, DynamicOffsets>
+    BindGraphicsDescriptorSets<'p, PipelineLayout, Sets, DynamicOffsets>
 where
-    Sets: AsRef<[br::vk::VkDescriptorSet]>,
+    PipelineLayout: br::PipelineLayout + 'p,
+    Sets: AsRef<[br::DescriptorSet]>,
     DynamicOffsets: AsRef<[u32]>,
 {
     pub fn from(self, first: u32) -> Self {
@@ -524,10 +552,11 @@ where
         }
     }
 }
-impl<Sets, DynamicOffsets, Device: br::Device + ?Sized> GraphicsCommand<Device>
-    for BindGraphicsDescriptorSets<Sets, DynamicOffsets>
+impl<'p, PipelineLayout, Sets, DynamicOffsets, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for BindGraphicsDescriptorSets<'p, PipelineLayout, Sets, DynamicOffsets>
 where
-    Sets: AsRef<[br::vk::VkDescriptorSet]>,
+    PipelineLayout: br::PipelineLayout + br::DeviceChild<ConcreteDevice = Device> + 'p,
+    Sets: AsRef<[br::DescriptorSet]>,
     DynamicOffsets: AsRef<[u32]>,
 {
     fn execute<'r>(
@@ -535,6 +564,7 @@ where
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         cb.bind_graphics_descriptor_sets(
+            self.layout,
             self.from,
             self.sets.as_ref(),
             self.dynamic_offsets.as_ref(),
@@ -542,39 +572,48 @@ where
     }
 }
 
-pub struct PushConstant<T> {
+pub struct PushConstant<'p, PipelineLayout, T>
+where
+    PipelineLayout: br::PipelineLayout + 'p,
+{
+    pub layout: &'p PipelineLayout,
     pub shader_stage: br::ShaderStage,
     pub offset: u32,
     pub value: T,
 }
-impl<T> PushConstant<T> {
-    pub const fn for_fragment(offset: u32, value: T) -> Self {
+impl<'p, PipelineLayout, T> PushConstant<'p, PipelineLayout, T>
+where
+    PipelineLayout: br::PipelineLayout + 'p,
+{
+    pub const fn for_fragment(layout: &'p PipelineLayout, offset: u32, value: T) -> Self {
         Self {
+            layout,
             shader_stage: br::ShaderStage::FRAGMENT,
             offset,
             value,
         }
     }
 
-    pub const fn for_vertex(offset: u32, value: T) -> Self {
+    pub const fn for_vertex(layout: &'p PipelineLayout, offset: u32, value: T) -> Self {
         Self {
+            layout,
             shader_stage: br::ShaderStage::VERTEX,
             offset,
             value,
         }
     }
 }
-impl<T, Device: br::Device + ?Sized> GraphicsCommand<Device> for PushConstant<T> {
+impl<'p, PipelineLayout, T, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for PushConstant<'p, PipelineLayout, T>
+where
+    PipelineLayout: br::PipelineLayout + br::DeviceChild<ConcreteDevice = Device> + 'p,
+{
+    #[inline(always)]
     fn execute<'r>(
         &self,
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
-        if (self.shader_stage.0 & br::vk::VK_SHADER_STAGE_COMPUTE_BIT) != 0 {
-            // assumes compute pipeline
-            cb.push_compute_constant(self.shader_stage, self.offset, &self.value)
-        } else {
-            cb.push_graphics_constant(self.shader_stage, self.offset, &self.value)
-        }
+        cb.push_constant(self.layout, self.shader_stage, self.offset, &self.value)
     }
 }
 
@@ -665,14 +704,19 @@ impl<M: Mesh, Device: br::Device + ?Sized> GraphicsCommand<Device> for PreConfig
         &self,
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
-        let vertex_buffers = self
+        let (buffers, offsets): (Vec<_>, Vec<_>) = self
             .0
             .vertex_buffers()
             .iter()
-            .map(|rb| (&rb.0, rb.1.start as usize))
-            .collect::<Vec<_>>();
+            .map(|rb| {
+                (
+                    br::BufferObjectRef::new(&rb.0),
+                    rb.1.start as br::vk::VkDeviceSize,
+                )
+            })
+            .unzip();
 
-        cb.bind_vertex_buffers(0, &vertex_buffers)
+        cb.bind_vertex_buffers(0, &buffers, &offsets)
     }
 }
 
@@ -684,14 +728,19 @@ impl<M: IndexedMesh, Device: br::Device + ?Sized> GraphicsCommand<Device>
         &self,
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
-        let vertex_buffers = self
+        let (buffers, offsets): (Vec<_>, Vec<_>) = self
             .0
             .vertex_buffers()
             .iter()
-            .map(|rb| (&rb.0, rb.1.start as usize))
-            .collect::<Vec<_>>();
+            .map(|rb| {
+                (
+                    br::BufferObjectRef::new(&rb.0),
+                    rb.1.start as br::vk::VkDeviceSize,
+                )
+            })
+            .unzip();
 
-        cb.bind_vertex_buffers(0, &vertex_buffers)
+        cb.bind_vertex_buffers(0, &buffers, &offsets)
             .bind_index_buffer(
                 &self.0.index_buffer().inner_ref(),
                 self.0.index_buffer().offset() as _,

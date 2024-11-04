@@ -1,6 +1,7 @@
 use log::*;
 use parking_lot::RwLock;
 use peridot::{NativeAnalogInput, NativeButtonInput};
+use std::sync::Arc;
 use windows::Win32::Foundation::{ERROR_DEVICE_NOT_CONNECTED, HWND, LPARAM, POINT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyA, MAPVK_VK_TO_CHAR, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F1,
@@ -22,8 +23,6 @@ use windows::Win32::UI::Input::{
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, RI_KEY_BREAK};
 
 use crate::ThreadsafeWindowOps;
-
-use peridot::mthelper::SharedRef;
 
 pub struct RawInputHandler {}
 impl RawInputHandler {
@@ -190,11 +189,11 @@ impl RawInputHandler {
 }
 
 pub struct NativeInputHandler {
-    target_hw: SharedRef<ThreadsafeWindowOps>,
+    target_hw: Arc<RwLock<ThreadsafeWindowOps>>,
     xi_handler: RwLock<XInputHandler>,
 }
 impl NativeInputHandler {
-    pub fn new(hw: SharedRef<ThreadsafeWindowOps>) -> Self {
+    pub fn new(hw: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
         Self {
             target_hw: hw,
             xi_handler: RwLock::new(XInputHandler::new()),
@@ -210,7 +209,7 @@ impl peridot::NativeInput for NativeInputHandler {
         let mut p0 = [POINT { x: 0, y: 0 }];
         unsafe {
             GetCursorPos(&mut p0[0]).expect("Failed to get cursor pos");
-            self.target_hw.map_points_from_desktop(&mut p0);
+            self.target_hw.read().map_points_from_desktop(&mut p0);
         }
         Some((p0[0].x as _, p0[0].y as _))
     }

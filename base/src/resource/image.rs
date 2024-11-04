@@ -56,7 +56,17 @@ impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> br::VkHandle
         self.0.native_ptr()
     }
 }
-impl<Backend: br::Image, Memory: br::DeviceMemory> br::DeviceChild for Image<Backend, Memory> {
+impl<Backend: br::Image + br::DeviceChildHandle, Memory: br::DeviceMemory> br::DeviceChildHandle
+    for Image<Backend, Memory>
+{
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.0.device_handle()
+    }
+}
+impl<Backend: br::Image + br::DeviceChild, Memory: br::DeviceMemory> br::DeviceChild
+    for Image<Backend, Memory>
+{
     type ConcreteDevice = Backend::ConcreteDevice;
 
     fn device(&self) -> &Self::ConcreteDevice {

@@ -1,3 +1,5 @@
+use async_std::stream::StreamExt;
+use futures_util::FutureExt;
 use log::*;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
@@ -6,6 +8,7 @@ use bedrock as br;
 use br::Device;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
+use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant as InstantTimer};
@@ -50,8 +53,8 @@ pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
     type Presenter: PlatformPresenter;
 
-    fn instance_extensions(&self) -> Vec<&str>;
-    fn device_extensions(&self) -> Vec<&str>;
+    fn instance_extensions(&self) -> Vec<&CStr>;
+    fn device_extensions(&self) -> Vec<&CStr>;
 
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn new_presenter(&self, g: &Graphics) -> Self::Presenter;
@@ -182,6 +185,46 @@ pub trait FeatureRequests {
     }
 }
 
+pub enum EngineEvent {
+    Shutdown,
+    Resize(math::Vector2<u32>),
+}
+
+pub struct FrameData {
+    pub delta_time: Duration,
+    pub backbuffer_index: u32,
+}
+
+pub enum Event {
+    NextFrame,
+    Shutdown,
+    Resize(math::Vector2<u32>),
+}
+
+pub enum PrepareFrameError {
+    FramebufferOutOfDate,
+}
+
+pub struct EngineEventReceiver {
+    frame_timing_receiver: async_std::channel::Receiver<()>,
+    other_events_receiver: async_std::channel::Receiver<EngineEvent>,
+}
+impl EngineEventReceiver {
+    pub async fn wait_for_event(&mut self) -> Option<Event> {
+        futures_util::select! {
+            e = self.frame_timing_receiver.next().fuse() => match e {
+                Some(()) => Some(Event::NextFrame),
+                None => None,
+            },
+            e = self.other_events_receiver.next().fuse() => match e {
+                Some(EngineEvent::Shutdown) => Some(Event::Shutdown),
+                Some(EngineEvent::Resize(ns)) => Some(Event::Resize(ns)),
+                None => None,
+            }
+        }
+    }
+}
+
 pub struct Engine<NL: NativeLinker> {
     native_link: NL,
     presenter: NL::Presenter,
@@ -191,13 +234,20 @@ pub struct Engine<NL: NativeLinker> {
     last_rendering_completion: StateFence<br::FenceObject<DeviceObject>>,
     audio_mixer: Arc<RwLock<audio::Mixer>>,
     request_resize: bool,
+    engine_events_sender: async_std::channel::Sender<EngineEvent>,
+    receivers: core::cell::UnsafeCell<EngineEventReceiver>,
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
         name: &str,
-        version: (u32, u32, u32),
+        version: (u16, u16, u16),
         native_link: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
+        engine_events_bus: (
+            async_std::channel::Sender<EngineEvent>,
+            async_std::channel::Receiver<EngineEvent>,
+        ),
+        frame_timing_receiver: async_std::channel::Receiver<()>,
     ) -> Self {
         let mut g = Graphics::new(
             name,
@@ -221,6 +271,11 @@ impl<PL: NativeLinker> Engine<PL> {
             g,
             presenter,
             request_resize: false,
+            engine_events_sender: engine_events_bus.0,
+            receivers: core::cell::UnsafeCell::new(EngineEventReceiver {
+                frame_timing_receiver,
+                other_events_receiver: engine_events_bus.1,
+            }),
         }
     }
 
@@ -229,6 +284,16 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 }
 impl<NL: NativeLinker> Engine<NL> {
+    pub fn event_receivers(&self) -> &mut EngineEventReceiver {
+        unsafe { &mut *self.receivers.get() }
+    }
+
+    pub async fn quit(&self) {
+        if let Err(e) = self.engine_events_sender.send(EngineEvent::Shutdown).await {
+            warn!("Engine has already shutting down: {e:?}");
+        }
+    }
+
     pub const fn graphics(&self) -> &Graphics {
         &self.g
     }
@@ -294,7 +359,7 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn submit_buffered_commands(
         &mut self,
         batches: &[impl br::SubmissionBatch],
-        fence: &mut (impl br::Fence + br::VkHandleMut),
+        fence: &mut impl br::FenceMut,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
@@ -336,29 +401,49 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 }
 impl<PL: NativeLinker> Engine<PL> {
-    pub fn do_update(&mut self, callback: &mut (impl EngineEvents<PL> + ?Sized)) {
+    pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
         let dt = self.game_timer.delta_time();
-
-        let bb_index = match self.presenter.next_back_buffer_index() {
+        let backbuffer_index = match self.presenter.next_back_buffer_index() {
             Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
-                // Fire resize and do nothing
-                self.do_resize_back_buffer(self.presenter.current_geometry_extent(), callback);
-                return;
+                return Err(PrepareFrameError::FramebufferOutOfDate);
             }
-            e => e.expect("Acquiring available back-buffer index"),
+            e => e.expect("Acquiring available back-buffer index failed"),
         };
+
         StateFence::wait(&mut self.last_rendering_completion)
-            .expect("Waiting Last command completion");
+            .expect("Waiting last command completion");
 
         self.ip.prepare_for_frame(dt);
 
-        callback.update(self, bb_index, dt);
-
-        if self.request_resize {
-            self.request_resize = false;
-            self.do_resize_back_buffer(self.presenter.current_geometry_extent(), callback);
-        }
+        Ok(FrameData {
+            delta_time: dt,
+            backbuffer_index,
+        })
     }
+
+    // pub fn do_update(&mut self, callback: &mut (impl EngineEvents<PL> + ?Sized)) {
+    //     let dt = self.game_timer.delta_time();
+
+    //     let bb_index = match self.presenter.next_back_buffer_index() {
+    //         Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+    //             // Fire resize and do nothing
+    //             self.do_resize_back_buffer(self.presenter.current_geometry_extent(), callback);
+    //             return;
+    //         }
+    //         e => e.expect("Acquiring available back-buffer index"),
+    //     };
+    //     StateFence::wait(&mut self.last_rendering_completion)
+    //         .expect("Waiting Last command completion");
+
+    //     self.ip.prepare_for_frame(dt);
+
+    //     callback.update(self, bb_index, dt);
+
+    //     if self.request_resize {
+    //         self.request_resize = false;
+    //         self.do_resize_back_buffer(self.presenter.current_geometry_extent(), callback);
+    //     }
+    // }
 
     pub fn do_render(
         &mut self,
@@ -388,15 +473,15 @@ impl<PL: NativeLinker> Engine<PL> {
         }
     }
 
-    pub fn do_resize_back_buffer(
-        &mut self,
-        new_size: math::Vector2<usize>,
-        callback: &mut (impl EngineEvents<PL> + ?Sized),
-    ) {
+    pub fn wait_for_last_rendering_completion(&mut self) {
         StateFence::wait(&mut self.last_rendering_completion)
             .expect("Waiting Last command completion");
-        callback.discard_back_buffer_resources();
-        let needs_re_init_back_buffers = self.presenter.resize(&self.g, new_size.clone());
+    }
+
+    pub fn resize_presenter_backbuffers(&mut self, new_size: math::Vector2<u32>) {
+        let needs_re_init_back_buffers = self
+            .presenter
+            .resize(&self.g, math::Vector2(new_size.0 as _, new_size.1 as _));
         if needs_re_init_back_buffers {
             let pres = &self.presenter;
 
@@ -404,8 +489,26 @@ impl<PL: NativeLinker> Engine<PL> {
                 .submit_commands(|r| pres.emit_initialize_back_buffer_commands(r))
                 .expect("Initializing Back Buffers");
         }
-        callback.on_resize(self, new_size);
     }
+
+    // pub fn do_resize_back_buffer(
+    //     &mut self,
+    //     new_size: math::Vector2<usize>,
+    //     callback: &mut (impl EngineEvents<PL> + ?Sized),
+    // ) {
+    //     StateFence::wait(&mut self.last_rendering_completion)
+    //         .expect("Waiting Last command completion");
+    //     callback.discard_back_buffer_resources();
+    //     let needs_re_init_back_buffers = self.presenter.resize(&self.g, new_size.clone());
+    //     if needs_re_init_back_buffers {
+    //         let pres = &self.presenter;
+
+    //         self.g
+    //             .submit_commands(|r| pres.emit_initialize_back_buffer_commands(r))
+    //             .expect("Initializing Back Buffers");
+    //     }
+    //     callback.on_resize(self, new_size);
+    // }
 
     pub fn sound_backend_callback(&self, output_buffer: &mut [f32]) {
         for (n, r) in output_buffer.iter_mut().enumerate() {
@@ -480,7 +583,7 @@ impl<T> From<T> for Discardable<T> {
     }
 }
 
-struct GameTimer(Option<InstantTimer>);
+pub struct GameTimer(Option<InstantTimer>);
 impl GameTimer {
     pub fn new() -> Self {
         GameTimer(None)
@@ -519,33 +622,6 @@ impl SubpassDependencyTemplates {
     }
 }
 
-pub enum RenderPassTemplates {}
-impl RenderPassTemplates {
-    pub fn single_render(
-        format: br::vk::VkFormat,
-        outer_requesting_layout: br::ImageLayout,
-    ) -> br::RenderPassBuilder {
-        let attachment_desc = br::AttachmentDescription::new(
-            format,
-            outer_requesting_layout,
-            outer_requesting_layout,
-        )
-        .load_op(br::LoadOp::Clear)
-        .store_op(br::StoreOp::Store);
-
-        br::RenderPassBuilder::new()
-            .add_attachment(attachment_desc)
-            .add_subpass(br::SubpassDescription::new().add_color_output(
-                0,
-                br::ImageLayout::ColorAttachmentOpt,
-                None,
-            ))
-            .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
-                None, 0, true,
-            ))
-    }
-}
-
 pub trait SpecConstantStorage {
     fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, Cow<[u8]>);
 }
@@ -573,6 +649,6 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self,
         rec: br::CmdRecord<'r, CB, Device>,
     ) -> br::CmdRecord<'r, CB, Device> {
-        rec.bind_graphics_pipeline_pair(&self.0, &self.1)
+        rec.bind_graphics_pipeline(&self.0)
     }
 }

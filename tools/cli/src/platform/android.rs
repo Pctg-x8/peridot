@@ -38,7 +38,7 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
         project_name,
         project_name,
         &project_version,
-        options.entry_ty_name,
+        options.entry_fn_name,
     );
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
