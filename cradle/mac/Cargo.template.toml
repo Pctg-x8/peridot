@@ -2,7 +2,7 @@
 name = "peridot-cradle-mac"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2021"
 build = "build.rs"
 
 [lib]
@@ -29,3 +29,4 @@ appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 libc = "0.2"
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-subscriber = { version = "0.3.17", features = ["fmt", "env-filter"] }
+async-std = "1.13.0"

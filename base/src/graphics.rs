@@ -102,9 +102,7 @@ impl Graphics {
     ) -> Result<Self, GraphicsInitializationError> {
         info!("Supported Layers: ");
         let mut validation_layer_available = false;
-        for l in br::enumerate_layer_properties()
-            .map_err(GraphicsInitializationError::LayerEnumerationFailed)?
-        {
+        for l in br::enumerate_layer_properties().expect("Failed to enumerate instance layers") {
             let name_str = l
                 .layerName
                 .as_cstr()

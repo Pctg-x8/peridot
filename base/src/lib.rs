@@ -404,7 +404,7 @@ impl<PL: NativeLinker> Engine<PL> {
     pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
         let dt = self.game_timer.delta_time();
         let backbuffer_index = match self.presenter.next_back_buffer_index() {
-            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
                 return Err(PrepareFrameError::FramebufferOutOfDate);
             }
             e => e.expect("Acquiring available back-buffer index failed"),
@@ -463,7 +463,7 @@ impl<PL: NativeLinker> Engine<PL> {
         }
 
         match pr {
-            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
                 // Fire resize
                 self.request_resize = true;
 
