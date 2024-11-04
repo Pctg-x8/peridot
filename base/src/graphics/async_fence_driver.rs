@@ -5,7 +5,7 @@ pub struct FenceReactorThread<Device: br::Device> {
         parking_lot::Mutex<
             Vec<(
                 std::task::Waker,
-                std::sync::Weak<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
+                std::sync::Weak<dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync>,
             )>,
         >,
     >,
@@ -27,7 +27,9 @@ impl<Device: br::Device + 'static> FenceReactorThread<Device> {
             .spawn(move || {
                 let mut managed_fences = Vec::<(
                     std::task::Waker,
-                    std::sync::Weak<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
+                    std::sync::Weak<
+                        dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync,
+                    >,
                 )>::new();
                 let mut signaled_indexes = Vec::new();
 
@@ -78,7 +80,7 @@ impl<Device: br::Device + 'static> FenceReactorThread<Device> {
 
     pub fn register(
         &self,
-        fence: &std::sync::Arc<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
+        fence: &std::sync::Arc<dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync>,
         waker: std::task::Waker,
     ) {
         self.pending_fences
@@ -100,7 +102,8 @@ impl<Device: br::Device> Drop for FenceReactorThread<Device> {
 
 pub(crate) struct FenceWaitFuture<'d, Device: br::Device> {
     pub(crate) reactor: &'d FenceReactorThread<Device>,
-    pub(crate) object: std::sync::Arc<dyn br::Fence<ConcreteDevice = Device> + Send + Sync>,
+    pub(crate) object:
+        std::sync::Arc<dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync>,
     pub(crate) registered: bool,
 }
 impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, Device> {

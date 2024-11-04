@@ -158,7 +158,7 @@ impl<B: br::Buffer> PipelineBarrierEntry for BufferUsageTransitionBarrier<B> {
         barrier.buffer_barriers.reserve(count);
     }
 }
-impl<const N: usize, B: br::Buffer + Clone> GraphicsCommand<B::ConcreteDevice>
+impl<const N: usize, B: br::Buffer + br::DeviceChild + Clone> GraphicsCommand<B::ConcreteDevice>
     for [BufferUsageTransitionBarrier<B>; N]
 {
     fn execute<'r>(

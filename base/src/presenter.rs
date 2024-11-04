@@ -1,6 +1,6 @@
 //! Platform Presenter(Swapchain Abstraction)
 
-use bedrock as br;
+use bedrock::{self as br, SemaphoreMut};
 #[cfg(feature = "debug")]
 use br::VkObject;
 use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
@@ -17,7 +17,7 @@ pub trait PlatformPresenter {
     fn back_buffer_count(&self) -> usize;
     fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>>;
 
-    fn emit_initialize_back_buffer_commands<'r, CB: br::CommandBuffer + br::VkHandleMut + ?Sized>(
+    fn emit_initialize_back_buffer_commands<'r, CB: br::CommandBufferMut + ?Sized>(
         &self,
         recorder: br::CmdRecord<'r, CB, DeviceObject>,
     ) -> br::CmdRecord<'r, CB, DeviceObject>;
@@ -26,7 +26,7 @@ pub trait PlatformPresenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut crate::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         back_buffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -254,7 +254,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.swapchain.get_mut_lw().swapchain.acquire_next(
             None,
-            br::CompletionHandler::<br::FenceObject<DeviceObject>, _>::Queue(&self.rendering_order),
+            br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_mut_ref()),
         )
     }
 
@@ -269,7 +269,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn render_and_present<'s>(
         &'s mut self,
         g: &mut crate::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         bb_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,

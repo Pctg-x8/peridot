@@ -101,7 +101,9 @@ impl<Hdl: Hash> Hash for ResourceKey<Hdl> {
 
 #[repr(transparent)]
 #[derive(Clone)]
-pub struct ImageKey<Device: br::Device>(SharedRef<dyn br::Image<ConcreteDevice = Device>>);
+pub struct ImageKey<Device: br::Device>(
+    SharedRef<dyn br::DeviceChildImage<ConcreteDevice = Device>>,
+);
 impl<Device: br::Device> PartialEq for ImageKey<Device> {
     fn eq(&self, other: &Self) -> bool {
         self.0.native_ptr().eq(&other.0.native_ptr())
@@ -490,7 +492,7 @@ impl<Device: br::Device> TransferBatch<Device> {
     /// Add image content initializing operation, from the buffer.
     pub fn init_image_from(
         &mut self,
-        dest: SharedRef<dyn br::Image<ConcreteDevice = Device>>,
+        dest: SharedRef<dyn br::DeviceChildImage<ConcreteDevice = Device>>,
         src: crate::DeviceBufferView<SharedRef<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
     ) {
         let extent = dest.size();

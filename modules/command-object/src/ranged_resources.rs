@@ -97,8 +97,11 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// both buffer length must be equal
     pub fn copy_to(
         self,
-        dest: RangedBuffer<impl br::Buffer<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> {
+        dest: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
+    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    where
+        B: br::DeviceChild,
+    {
         assert_eq!(self.byte_length(), dest.byte_length());
 
         let (s, d, len) = (self.offset(), dest.offset(), self.byte_length());
@@ -110,8 +113,11 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// both buffer length must be equal
     pub fn copy_from(
         self,
-        src: RangedBuffer<impl br::Buffer<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> {
+        src: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
+    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    where
+        B: br::DeviceChild,
+    {
         src.copy_to(self)
     }
 
@@ -120,8 +126,11 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// both buffer length must be equal.
     pub fn mirror_to(
         self,
-        dest: RangedBuffer<impl br::Buffer<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> {
+        dest: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
+    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    where
+        B: br::DeviceChild,
+    {
         assert_eq!(self.byte_length(), dest.byte_length());
 
         let len = self.byte_length();
@@ -133,8 +142,11 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// both buffer length must be equal.
     pub fn mirror_from(
         self,
-        src: RangedBuffer<impl br::Buffer<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> {
+        src: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
+    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    where
+        B: br::DeviceChild,
+    {
         src.mirror_to(self)
     }
 
@@ -143,8 +155,13 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// both buffer length must be equal.
     pub fn byref_mirror_to<'s>(
         &'s self,
-        dest: &'s RangedBuffer<impl br::Buffer<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's {
+        dest: &'s RangedBuffer<
+            impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>,
+        >,
+    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's
+    where
+        B: br::DeviceChild,
+    {
         assert_eq!(self.byte_length(), dest.byte_length());
 
         CopyBuffer::new(&self.0, &dest.0).with_mirroring(0, self.byte_length() as _)
@@ -155,8 +172,13 @@ impl<B: br::Buffer> RangedBuffer<B> {
     /// both buffer length must be equal.
     pub fn byref_mirror_from<'s>(
         &'s self,
-        src: &'s RangedBuffer<impl br::Buffer<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's {
+        src: &'s RangedBuffer<
+            impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>,
+        >,
+    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's
+    where
+        B: br::DeviceChild,
+    {
         src.byref_mirror_to(self)
     }
 }

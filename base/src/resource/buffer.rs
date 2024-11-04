@@ -68,9 +68,20 @@ impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::VkHandle for Buffer<Back
         self.0.native_ptr()
     }
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::DeviceChild for Buffer<Backend, Memory> {
+impl<Backend: br::Buffer + br::DeviceChildHandle, Memory: br::DeviceMemory> br::DeviceChildHandle
+    for Buffer<Backend, Memory>
+{
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.0.device_handle()
+    }
+}
+impl<Backend: br::Buffer + br::DeviceChild, Memory: br::DeviceMemory> br::DeviceChild
+    for Buffer<Backend, Memory>
+{
     type ConcreteDevice = Backend::ConcreteDevice;
 
+    #[inline(always)]
     fn device(&self) -> &Self::ConcreteDevice {
         self.0.device()
     }

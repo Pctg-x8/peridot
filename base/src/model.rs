@@ -26,7 +26,7 @@ pub trait DefaultRenderCommands<'e, Device: br::Device> {
         &self,
         e: &Engine<NL>,
         cmd: br::CmdRecord<'r, CB, Device>,
-        buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
+        buffer: &(impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
     ) -> br::CmdRecord<'r, CB, Device>;
 }
