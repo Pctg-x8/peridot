@@ -1,4 +1,4 @@
-use std::os::fd::BorrowedFd;
+use std::{ffi::CStr, os::fd::BorrowedFd};
 
 pub mod wayland;
 pub mod xcb;
@@ -22,7 +22,7 @@ pub trait EventProcessor {
 
 pub trait PresenterProvider {
     type Presenter: peridot::PlatformPresenter;
-    const SURFACE_EXT_NAME: &'static str;
+    const SURFACE_EXT_NAME: &'static CStr;
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter;
 }

@@ -7,6 +7,7 @@ use bedrock as br;
 use br::PhysicalDevice;
 use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
+use std::ffi::CStr;
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::sync::{Arc, RwLock};
@@ -252,7 +253,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         back_buffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -291,11 +292,11 @@ impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = Presenter;
 
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", "VK_MVK_macos_surface"]
+    fn instance_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_surface", c"VK_MVK_macos_surface"]
     }
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn device_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_swapchain"]
     }
 
     fn asset_loader(&self) -> &PlatformAssetLoader {

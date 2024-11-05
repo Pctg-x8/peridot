@@ -8,6 +8,7 @@ mod userlib;
 use bedrock as br;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use peridot::{EngineEvents, FeatureRequests};
+use std::ffi::CStr;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
@@ -121,7 +122,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -188,11 +189,11 @@ struct NativeLink {
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = Presenter;
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", "VK_KHR_android_surface"]
+    fn instance_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_surface", c"VK_KHR_android_surface"]
     }
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn device_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_swapchain"]
     }
 
     fn asset_loader(&self) -> &PlatformAssetLoader {
