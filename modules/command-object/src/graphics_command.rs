@@ -466,10 +466,10 @@ impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for EndRenderPass {
 }
 
 #[repr(transparent)]
-pub struct BindGraphicsPipeline<'p, Pipeline: br::Pipeline + 'p>(pub &'p Pipeline);
-impl<'p, Pipeline, Device> GraphicsCommand<Device> for BindGraphicsPipeline<'p, Pipeline>
+pub struct BindGraphicsPipeline<Pipeline: br::Pipeline>(pub Pipeline);
+impl<Pipeline, Device> GraphicsCommand<Device> for BindGraphicsPipeline<Pipeline>
 where
-    Pipeline: br::Pipeline + br::DeviceChild<ConcreteDevice = Device> + 'p,
+    Pipeline: br::Pipeline + br::DeviceChild<ConcreteDevice = Device>,
     Device: br::Device,
 {
     #[inline]
@@ -477,49 +477,47 @@ where
         &self,
         cb: bedrock::CmdRecord<'r, dyn bedrock::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> bedrock::CmdRecord<'r, dyn bedrock::VkHandleMut<Handle = VkCommandBuffer>, Device> {
-        cb.bind_graphics_pipeline(self.0)
+        cb.bind_graphics_pipeline(&self.0)
     }
 }
 
 #[repr(transparent)]
 pub struct DescriptorSets(pub Vec<br::DescriptorSet>);
 impl DescriptorSets {
-    pub fn bind_graphics<'p, PipelineLayout: br::PipelineLayout + 'p>(
+    pub fn bind_graphics<PipelineLayout: br::PipelineLayout>(
         &self,
-        layout: &'p PipelineLayout,
-    ) -> BindGraphicsDescriptorSets<'p, PipelineLayout, &[br::DescriptorSet], &'static [u32]> {
+        layout: PipelineLayout,
+    ) -> BindGraphicsDescriptorSets<PipelineLayout, &[br::DescriptorSet], &'static [u32]> {
         BindGraphicsDescriptorSets::new(layout, &self.0[..])
     }
 
     pub fn into_bind_graphics<'p, PipelineLayout: br::PipelineLayout + 'p>(
         self,
-        layout: &'p PipelineLayout,
-    ) -> BindGraphicsDescriptorSets<'p, PipelineLayout, Vec<br::DescriptorSet>, &'static [u32]>
-    {
+        layout: PipelineLayout,
+    ) -> BindGraphicsDescriptorSets<PipelineLayout, Vec<br::DescriptorSet>, &'static [u32]> {
         BindGraphicsDescriptorSets::new(layout, self.0)
     }
 }
 
 pub struct BindGraphicsDescriptorSets<
-    'p,
-    PipelineLayout: br::PipelineLayout + 'p,
+    PipelineLayout: br::PipelineLayout,
     Sets = &'static [br::DescriptorSet],
     DynamicOffsets = &'static [u32],
 > where
     Sets: AsRef<[br::DescriptorSet]>,
     DynamicOffsets: AsRef<[u32]>,
 {
-    layout: &'p PipelineLayout,
+    layout: PipelineLayout,
     from: u32,
     sets: Sets,
     dynamic_offsets: DynamicOffsets,
 }
-impl<'p, PipelineLayout, Sets> BindGraphicsDescriptorSets<'p, PipelineLayout, Sets, &'static [u32]>
+impl<PipelineLayout, Sets> BindGraphicsDescriptorSets<PipelineLayout, Sets, &'static [u32]>
 where
-    PipelineLayout: br::PipelineLayout + 'p,
+    PipelineLayout: br::PipelineLayout,
     Sets: AsRef<[br::DescriptorSet]>,
 {
-    pub const fn new(layout: &'p PipelineLayout, sets: Sets) -> Self {
+    pub const fn new(layout: PipelineLayout, sets: Sets) -> Self {
         Self {
             layout,
             from: 0,
@@ -528,7 +526,7 @@ where
         }
     }
 
-    pub const fn with_first(layout: &'p PipelineLayout, first: u32, sets: Sets) -> Self {
+    pub const fn with_first(layout: PipelineLayout, first: u32, sets: Sets) -> Self {
         Self {
             layout,
             from: first,
@@ -537,14 +535,14 @@ where
         }
     }
 }
-impl<'p, PipelineLayout, Sets, DynamicOffsets>
-    BindGraphicsDescriptorSets<'p, PipelineLayout, Sets, DynamicOffsets>
+impl<PipelineLayout, Sets, DynamicOffsets>
+    BindGraphicsDescriptorSets<PipelineLayout, Sets, DynamicOffsets>
 where
-    PipelineLayout: br::PipelineLayout + 'p,
+    PipelineLayout: br::PipelineLayout,
     Sets: AsRef<[br::DescriptorSet]>,
     DynamicOffsets: AsRef<[u32]>,
 {
-    pub fn from(self, layout: &'p PipelineLayout, first: u32) -> Self {
+    pub fn from(self, layout: PipelineLayout, first: u32) -> Self {
         Self {
             layout,
             from: first,
@@ -552,10 +550,10 @@ where
         }
     }
 }
-impl<'p, PipelineLayout, Sets, DynamicOffsets, Device: br::Device + ?Sized> GraphicsCommand<Device>
-    for BindGraphicsDescriptorSets<'p, PipelineLayout, Sets, DynamicOffsets>
+impl<PipelineLayout, Sets, DynamicOffsets, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for BindGraphicsDescriptorSets<PipelineLayout, Sets, DynamicOffsets>
 where
-    PipelineLayout: br::PipelineLayout + br::DeviceChild<ConcreteDevice = Device> + 'p,
+    PipelineLayout: br::PipelineLayout + br::DeviceChild<ConcreteDevice = Device>,
     Sets: AsRef<[br::DescriptorSet]>,
     DynamicOffsets: AsRef<[u32]>,
 {
@@ -564,7 +562,7 @@ where
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         cb.bind_graphics_descriptor_sets(
-            self.layout,
+            &self.layout,
             self.from,
             self.sets.as_ref(),
             self.dynamic_offsets.as_ref(),
@@ -572,20 +570,20 @@ where
     }
 }
 
-pub struct PushConstant<'p, PipelineLayout, T>
+pub struct PushConstant<PipelineLayout, T>
 where
-    PipelineLayout: br::PipelineLayout + 'p,
+    PipelineLayout: br::PipelineLayout,
 {
-    pub layout: &'p PipelineLayout,
+    pub layout: PipelineLayout,
     pub shader_stage: br::ShaderStage,
     pub offset: u32,
     pub value: T,
 }
-impl<'p, PipelineLayout, T> PushConstant<'p, PipelineLayout, T>
+impl<PipelineLayout, T> PushConstant<PipelineLayout, T>
 where
-    PipelineLayout: br::PipelineLayout + 'p,
+    PipelineLayout: br::PipelineLayout,
 {
-    pub const fn for_fragment(layout: &'p PipelineLayout, offset: u32, value: T) -> Self {
+    pub const fn for_fragment(layout: PipelineLayout, offset: u32, value: T) -> Self {
         Self {
             layout,
             shader_stage: br::ShaderStage::FRAGMENT,
@@ -594,7 +592,7 @@ where
         }
     }
 
-    pub const fn for_vertex(layout: &'p PipelineLayout, offset: u32, value: T) -> Self {
+    pub const fn for_vertex(layout: PipelineLayout, offset: u32, value: T) -> Self {
         Self {
             layout,
             shader_stage: br::ShaderStage::VERTEX,
@@ -603,17 +601,17 @@ where
         }
     }
 }
-impl<'p, PipelineLayout, T, Device: br::Device + ?Sized> GraphicsCommand<Device>
-    for PushConstant<'p, PipelineLayout, T>
+impl<PipelineLayout, T, Device: br::Device + ?Sized> GraphicsCommand<Device>
+    for PushConstant<PipelineLayout, T>
 where
-    PipelineLayout: br::PipelineLayout + br::DeviceChild<ConcreteDevice = Device> + 'p,
+    PipelineLayout: br::PipelineLayout + br::DeviceChild<ConcreteDevice = Device>,
 {
     #[inline]
     fn execute<'r>(
         &self,
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
-        cb.push_constant(self.layout, self.shader_stage, self.offset, &self.value)
+        cb.push_constant(&self.layout, self.shader_stage, self.offset, &self.value)
     }
 }
 

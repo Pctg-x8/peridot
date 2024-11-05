@@ -1,8 +1,5 @@
-use bedrock as br;
-use br::{
-    CommandBuffer, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice,
-    SubmissionBatch,
-};
+use bedrock::{self as br, CommandBufferMut, RenderPass};
+use br::{GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot::{Engine, EngineEvents, FeatureRequests};
@@ -180,12 +177,17 @@ impl TwoPassStencilSDFRenderer {
             )
             .stencil_load_op(br::LoadOp::Clear),
         ];
+        let depth_stencil_attachment_ref =
+            br::AttachmentReference::new(1, br::ImageLayout::DepthStencilAttachmentOpt);
+        let color_attachments = [br::AttachmentReference::new(
+            0,
+            br::ImageLayout::ColorAttachmentOpt,
+        )];
         let subpasses = [
+            br::SubpassDescription::new().depth_stencil_attachment(&depth_stencil_attachment_ref),
             br::SubpassDescription::new()
-                .depth_stencil(1, br::ImageLayout::DepthStencilAttachmentOpt),
-            br::SubpassDescription::new()
-                .add_color_output(0, br::ImageLayout::ColorAttachmentOpt, None)
-                .depth_stencil(1, br::ImageLayout::DepthStencilReadOnlyOpt),
+                .color_attachments(&color_attachments, &[])
+                .depth_stencil_attachment(&depth_stencil_attachment_ref),
         ];
         let spdep_color = br::vk::VkSubpassDependency {
             srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
@@ -209,12 +211,10 @@ impl TwoPassStencilSDFRenderer {
             dstAccessMask: br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.read,
             dependencyFlags: br::vk::VK_DEPENDENCY_BY_REGION_BIT,
         };
-        let render_pass = br::RenderPassBuilder::new()
-            .add_attachments(attachments)
-            .add_subpasses(subpasses)
-            .add_dependencies([spdep_color, spdep_stencil])
-            .create(e.graphics().device().clone())
-            .expect("Failed to create RenderPass");
+        let render_pass =
+            br::RenderPassBuilder::new(&attachments, &subpasses, &[spdep_color, spdep_stencil])
+                .create(e.graphics().device().clone())
+                .expect("Failed to create RenderPass");
 
         let stencil_triangle_vsh_parameters = StencilTriangleVertexShaderParameters {
             target_width: init_target_size.0 as _,
@@ -254,7 +254,7 @@ impl TwoPassStencilSDFRenderer {
         )
         .expect("Failed to create outline_disdtance shader modules");
         let empty_pl = SharedRef::new(
-            br::PipelineLayoutBuilder::new(vec![], vec![])
+            br::PipelineLayoutBuilder::empty()
                 .create(e.graphics().device().clone())
                 .expect("Failed to create empty pipeline layout"),
         );
@@ -269,7 +269,7 @@ impl TwoPassStencilSDFRenderer {
             );
         let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
             &empty_pl,
-            (&render_pass, 0),
+            render_pass.subpass(0),
             stencil_triangle_shader,
         );
         pipebuild
@@ -394,7 +394,7 @@ impl TwoPassStencilSDFRenderer {
             .set_vertex_spec_constants(&stencil_vsh_parameters.0, &stencil_vsh_parameters.1);
         let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
             self.triangle_fans_stencil_pipeline.layout(),
-            (&self.render_pass, 0),
+            self.render_pass.subpass(0),
             stencil_triangle_shader,
         );
         pipebuild
@@ -509,7 +509,8 @@ pub struct TwoPassStencilSDFRendererBuffers {
 impl TwoPassStencilSDFRenderer {
     pub fn commands<'s>(
         &'s self,
-        framebuffer: &'s impl br::Framebuffer<ConcreteDevice = peridot::DeviceObject>,
+        framebuffer: &'s (impl br::Framebuffer
+                 + br::DeviceChild<ConcreteDevice = peridot::DeviceObject>),
         buffers: &'s TwoPassStencilSDFRendererBuffers,
     ) -> impl GraphicsCommand<peridot::DeviceObject> + 's {
         let rp = BeginRenderPass::new(&self.render_pass, framebuffer, self.render_area())
