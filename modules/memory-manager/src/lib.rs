@@ -288,9 +288,19 @@ impl MemoryManager {
     }
 
     fn device_local_memory_type(&self, index_mask: u32) -> Option<&MemoryType> {
-        self.device_local_memory_types
+        let mut target_types = self
+            .device_local_memory_types
             .iter()
-            .find(|t| (index_mask & t.index_mask()) != 0)
+            .find(|t| (index_mask & t.index_mask()) != 0);
+
+        target_types.or_else(|| {
+            // find from direct memory
+            let mut target_types = self
+                .direct_memory_types
+                .iter()
+                .filter(|t| index_mask & t.index_mask() != 0);
+            target_types.next()
+        })
     }
 
     #[tracing::instrument(skip(self, device, dedicated_allocate_additional_ops))]
@@ -451,11 +461,18 @@ impl MemoryManager {
                 }
             }
 
+            tracing::debug!("ReqMemoryMask: {:08x}", unsafe {
+                req.assume_init_ref().memoryRequirements.memoryTypeBits
+            });
             requirements.push(unsafe { (req.assume_init(), sink_dedicated_alloc.assume_init()) });
             objects.push(object);
         }
 
         let alloc_info = ObjectAllocationInfo::compute(&requirements);
+        tracing::debug!(
+            "CombinedReqMemoryMask: {:08x}",
+            alloc_info.combined_memory_index_mask
+        );
         let memory_index = self
             .device_local_memory_type(alloc_info.combined_memory_index_mask)
             .expect("no memory type")
@@ -966,10 +983,8 @@ impl MemoryManager {
         let req = unsafe { req.assume_init() };
 
         let memory_index = self
-            .device_local_memory_types
-            .iter()
-            .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
-            .expect("no memory type index")
+            .device_local_memory_type(req.memoryRequirements.memoryTypeBits)
+            .expect("no memory type")
             .index;
 
         let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
@@ -1032,12 +1047,9 @@ impl MemoryManager {
         }
 
         let alloc_info = ObjectAllocationInfo::compute(&requirements);
-
         let memory_index = self
-            .device_local_memory_types
-            .iter()
-            .find(|t| (alloc_info.combined_memory_index_mask & t.index_mask()) != 0)
-            .expect("no memory type index")
+            .device_local_memory_type(alloc_info.combined_memory_index_mask)
+            .expect("no memory type")
             .index;
 
         let combined_native_memory = if alloc_info.total_size >= Self::SMALL_ALLOCATION_THRESHOLD {

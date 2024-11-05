@@ -191,7 +191,6 @@ impl<'s> CargoNdk<'s> {
             self.target_spec,
             "--platform",
             &self.platform_target.to_string(),
-            "--",
             subcmd,
         ]);
         if !self.ext_features.is_empty() {
