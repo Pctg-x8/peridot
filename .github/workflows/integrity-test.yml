@@ -20,7 +20,7 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
@@ -29,7 +29,7 @@ jobs:
         uses: "./.github/actions/checkbuild-baselayer"
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -68,7 +68,7 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
@@ -101,7 +101,7 @@ jobs:
         shell: bash
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -146,14 +146,14 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - id: llvm-cache
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize LLVM Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-llvm-11"
           path: "./llvm"
@@ -176,7 +176,7 @@ jobs:
         shell: bash
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -215,7 +215,7 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
@@ -241,7 +241,7 @@ jobs:
         shell: bash
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -280,7 +280,7 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
@@ -304,7 +304,7 @@ jobs:
         run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -341,7 +341,7 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
@@ -352,7 +352,7 @@ jobs:
         uses: "./.github/actions/checkbuild-subdir"
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -402,7 +402,7 @@ jobs:
         uses: "./.github/actions/codeform-checker"
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -438,7 +438,7 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
@@ -449,7 +449,7 @@ jobs:
         uses: "./.github/actions/checkbuild-subdir"
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -485,7 +485,7 @@ jobs:
         uses: "actions/checkout@v4"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
-        uses: "actions/cache@v3"
+        uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
@@ -496,7 +496,7 @@ jobs:
         uses: "./.github/actions/checkbuild-subdir"
       - if: "failure()"
         name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
@@ -578,7 +578,7 @@ jobs:
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v1"
+        uses: "aws-actions/configure-aws-credentials@v4"
         with:
           aws-region: ap-northeast-1
           role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker

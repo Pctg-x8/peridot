@@ -23,7 +23,7 @@ import Workflow.GitHub.Actions qualified as GHA
 --   }
 
 step :: GHA.Step
-step = GHA.actionStep "aws-actions/configure-aws-credentials@v1" mempty
+step = GHA.actionStep "aws-actions/configure-aws-credentials@v4" mempty
 
 awsRegion :: String -> GHA.StepModifier
 awsRegion = GHA.stepSetWithParam "aws-region"
