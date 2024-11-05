@@ -9,12 +9,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -53,12 +53,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -127,12 +127,12 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -192,12 +192,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -253,12 +253,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -310,12 +310,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -352,12 +352,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - env:
           RUN_SCRIPT: codeform_check
         if: 'true'
@@ -399,12 +399,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -442,12 +442,12 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v3"
@@ -501,9 +501,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - name: Configure for Slack Notification
