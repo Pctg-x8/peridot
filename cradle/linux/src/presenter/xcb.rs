@@ -1,4 +1,7 @@
-use std::os::fd::{AsRawFd, RawFd};
+use std::{
+    ffi::CStr,
+    os::fd::{AsRawFd, RawFd},
+};
 
 use br::PhysicalDevice;
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
@@ -115,7 +118,7 @@ impl X11 {
 }
 impl PresenterProvider for SharedMutableRef<X11> {
     type Presenter = Presenter;
-    const SURFACE_EXT_NAME: &'static str = "VK_KHR_xcb_surface";
+    const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_xcb_surface";
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter {
         Presenter::new(g, g.graphics_queue_family_index(), self)
@@ -306,7 +309,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,

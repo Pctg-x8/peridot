@@ -6,6 +6,7 @@ mod input;
 mod userlib;
 use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
+use std::ffi::CStr;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -341,22 +342,22 @@ impl peridot::NativeLinker for NativeLink {
     type Presenter = Presenter;
 
     #[cfg(not(feature = "transparent"))]
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", "VK_KHR_win32_surface"]
+    fn instance_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_surface", c"VK_KHR_win32_surface"]
     }
     #[cfg(feature = "transparent")]
-    fn instance_extensions(&self) -> Vec<&str> {
+    fn instance_extensions(&self) -> Vec<&CStr> {
         vec![]
     }
     #[cfg(not(feature = "transparent"))]
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn device_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_swapchain"]
     }
     #[cfg(feature = "transparent")]
-    fn device_extensions(&self) -> Vec<&str> {
+    fn device_extensions(&self) -> Vec<&CStr> {
         vec![
-            "VK_KHR_external_memory_win32",
-            "VK_KHR_external_semaphore_win32",
+            c"VK_KHR_external_memory_win32",
+            c"VK_KHR_external_semaphore_win32",
         ]
     }
 

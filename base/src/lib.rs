@@ -6,6 +6,7 @@ use bedrock as br;
 use br::Device;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
+use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant as InstantTimer};
@@ -50,8 +51,8 @@ pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
     type Presenter: PlatformPresenter;
 
-    fn instance_extensions(&self) -> Vec<&str>;
-    fn device_extensions(&self) -> Vec<&str>;
+    fn instance_extensions(&self) -> Vec<&CStr>;
+    fn device_extensions(&self) -> Vec<&CStr>;
 
     fn asset_loader(&self) -> &Self::AssetLoader;
     fn new_presenter(&self, g: &Graphics) -> Self::Presenter;
@@ -195,7 +196,7 @@ pub struct Engine<NL: NativeLinker> {
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
         name: &str,
-        version: (u32, u32, u32),
+        version: (u16, u16, u16),
         native_link: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
@@ -294,7 +295,7 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn submit_buffered_commands(
         &mut self,
         batches: &[impl br::SubmissionBatch],
-        fence: &mut (impl br::Fence + br::VkHandleMut),
+        fence: &mut impl br::FenceMut,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
@@ -519,33 +520,6 @@ impl SubpassDependencyTemplates {
     }
 }
 
-pub enum RenderPassTemplates {}
-impl RenderPassTemplates {
-    pub fn single_render(
-        format: br::vk::VkFormat,
-        outer_requesting_layout: br::ImageLayout,
-    ) -> br::RenderPassBuilder {
-        let attachment_desc = br::AttachmentDescription::new(
-            format,
-            outer_requesting_layout,
-            outer_requesting_layout,
-        )
-        .load_op(br::LoadOp::Clear)
-        .store_op(br::StoreOp::Store);
-
-        br::RenderPassBuilder::new()
-            .add_attachment(attachment_desc)
-            .add_subpass(br::SubpassDescription::new().add_color_output(
-                0,
-                br::ImageLayout::ColorAttachmentOpt,
-                None,
-            ))
-            .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
-                None, 0, true,
-            ))
-    }
-}
-
 pub trait SpecConstantStorage {
     fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, Cow<[u8]>);
 }
@@ -573,6 +547,6 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self,
         rec: br::CmdRecord<'r, CB, Device>,
     ) -> br::CmdRecord<'r, CB, Device> {
-        rec.bind_graphics_pipeline_pair(&self.0, &self.1)
+        rec.bind_graphics_pipeline(&self.0)
     }
 }

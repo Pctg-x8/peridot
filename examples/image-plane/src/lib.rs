@@ -1,9 +1,6 @@
-use bedrock as br;
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
 use br::{resources::Image, SubmissionBatch};
-use br::{
-    CommandBuffer, DescriptorPool, Device, GraphicsPipelineBuilder, ImageChild,
-    ImageSubresourceSlice,
-};
+use br::{Device, GraphicsPipelineBuilder, ImageChild, ImageSubresourceSlice};
 use log::*;
 use peridot::math::{
     Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3,
@@ -22,9 +19,10 @@ use std::time::Duration;
 use br::VkObject;
 
 use peridot_command_object::{
-    BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBufferToImage,
-    DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner, ImageResourceRange,
-    PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
+    BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
+    ColorAttachmentBlending, CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand,
+    GraphicsCommandCombiner, ImageResourceRange, PipelineBarrier, RangedBuffer, RangedImage,
+    StandardMesh,
 };
 
 pub struct Game<PL: peridot::NativeLinker> {
@@ -37,7 +35,7 @@ pub struct Game<PL: peridot::NativeLinker> {
     _descriptor: (
         br::DescriptorSetLayoutObject<peridot::DeviceObject>,
         br::DescriptorPoolObject<peridot::DeviceObject>,
-        Vec<br::DescriptorSet>,
+        br::DescriptorSet,
     ),
     _sampler: br::SamplerObject<peridot::DeviceObject>,
     color_renders: Box<dyn GraphicsCommand<peridot::DeviceObject>>,
@@ -259,19 +257,21 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let back_buffer_attachment = e
             .back_buffer_attachment_desc()
             .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store);
-        let color_render_subpass = br::SubpassDescription::new().add_color_output(
+        let color_render_outputs = &[br::AttachmentReference::new(
             0,
             br::ImageLayout::ColorAttachmentOpt,
-            None,
-        );
-        let renderpass = br::RenderPassBuilder::new()
-            .add_attachment(back_buffer_attachment)
-            .add_subpass(color_render_subpass)
-            .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
+        )];
+        let color_render_subpass =
+            br::SubpassDescription::new().color_attachments(color_render_outputs, &[]);
+        let renderpass = br::RenderPassBuilder::new(
+            &[back_buffer_attachment],
+            &[color_render_subpass],
+            &[SubpassDependencyTemplates::to_color_attachment_in(
                 None, 0, true,
-            ))
-            .create(e.graphics().device().clone())
-            .expect("Create RenderPass");
+            )],
+        )
+        .create(e.graphics().device().clone())
+        .expect("Create RenderPass");
         let framebuffers = e
             .iter_back_buffers()
             .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create())
@@ -281,37 +281,42 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         let smp = br::SamplerBuilder::default()
             .create(e.graphics().device().clone())
             .expect("Creating Sampler");
-        let descriptor_layout = br::DescriptorSetLayoutBuilder::with_bindings(vec![
+        let descriptor_layout = br::DescriptorSetLayoutBuilder::new(&[
             br::DescriptorType::UniformBuffer
-                .make_binding(1)
+                .make_binding(0, 1)
                 .only_for_vertex(),
             br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
+                .make_binding(1, 1)
                 .only_for_fragment()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&smp)]),
+                .with_immutable_samplers(&[br::SamplerObjectRef::new(&smp)]),
         ])
         .create(e.graphics().device().clone())
         .expect("Create DescriptorSetLayout");
-        let mut descriptor_pool = br::DescriptorPoolBuilder::new(1)
-            .with_reservations(vec![
-                br::DescriptorType::UniformBuffer.with_count(1),
-                br::DescriptorType::CombinedImageSampler.with_count(1),
-            ])
-            .create(e.graphics().device().clone())
-            .expect("Create DescriptorPool");
+        let mut descriptor_pool = br::DescriptorPoolBuilder::new(
+            1,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(1),
+                br::DescriptorType::CombinedImageSampler.make_size(1),
+            ],
+        )
+        .create(e.graphics().device().clone())
+        .expect("Create DescriptorPool");
 
         let shader = e
             .load("builtin.shaders.unlit_image")
             .expect("Loading shader");
         let shader =
             PvpShaderModules::new(e.graphics().device(), shader).expect("Create ShaderModules");
-        let pl = br::PipelineLayoutBuilder::new(vec![&descriptor_layout], vec![])
-            .create(e.graphics().device().clone())
-            .expect("Create PipelineLayout");
+        let pl = br::PipelineLayoutBuilder::new(
+            &[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)],
+            &[],
+        )
+        .create(e.graphics().device().clone())
+        .expect("Create PipelineLayout");
         let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
         let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        let mut gp = br::NonDerivedGraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps);
+        let mut gp = br::NonDerivedGraphicsPipelineBuilder::new(&pl, renderpass.subpass(0), vps);
         gp.viewport_scissors(
             br::DynamicArrayState::Static(&vp),
             br::DynamicArrayState::Static(&sc),
@@ -329,7 +334,6 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             &std::ffi::CString::new("Main Pipeline").expect("invalid sequence?"),
         ))
         .expect("Failed to set pipeline name");
-        let gp = LayoutedPipeline::combine(gp, pl);
 
         async_std::task::block_on(pre_configure_awaiter)
             .expect("Failed to pre-configure resources");
@@ -339,12 +343,12 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .view_builder()
             .create()
             .expect("Failed to create main image view");
-        let descriptor_main = descriptor_pool
-            .alloc(&[&descriptor_layout])
+        let [descriptor_main] = descriptor_pool
+            .alloc_array(&[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)])
             .expect("Create main Descriptor");
         let mut descriptor_writes = Vec::with_capacity(2);
         descriptor_writes.extend(
-            br::DescriptorPointer::new(descriptor_main[0].into(), 0).write_multiple([
+            br::DescriptorPointer::new(descriptor_main.into(), 0).write_continuous_bindings([
                 br::DescriptorContents::UniformBuffer(vec![
                     uniform_buffer.make_descriptor_buffer_ref()
                 ]),
@@ -363,11 +367,11 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             vertex_count: 4,
         };
 
-        let descriptor_sets = DescriptorSets(vec![*descriptor_main[0]]);
+        let descriptor_sets = DescriptorSets(vec![descriptor_main]);
         let render_image_plane = plane_mesh
             .draw(1)
-            .after_of(descriptor_sets.into_bind_graphics());
-        let color_renders = (gp, render_image_plane);
+            .after_of(descriptor_sets.into_bind_graphics(pl));
+        let color_renders = (BindGraphicsPipeline(gp), render_image_plane);
 
         let mut render_cb = CommandBundle::new(
             e.graphics(),

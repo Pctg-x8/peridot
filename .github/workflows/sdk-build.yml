@@ -3,7 +3,7 @@ jobs:
     runs-on: "${{ matrix.os }}"
     steps:
       - name: Checking out
-        uses: "actions/checkout@v3"
+        uses: "actions/checkout@v4"
       - if: "runner.os == 'macos-latest'"
         name: "Upgrade utils (Only for macOS)"
         run: brew install bash findutils
