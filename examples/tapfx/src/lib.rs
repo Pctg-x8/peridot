@@ -1,14 +1,13 @@
-use bedrock as br;
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
 use br::{
-    CommandBuffer, DescriptorPool, Device, GraphicsPipelineBuilder, Image, ImageChild,
-    ImageSubresourceSlice, SubmissionBatch,
+    Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch,
 };
 use peridot::mthelper::SharedRef;
 use peridot_command_object::{
-    BeginRenderPass, BufferImageDataDesc, BufferUsage, ColorAttachmentBlending, CopyBuffer,
-    CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner,
-    GraphicsCommandSubmission, ImageResourceRange, PipelineBarrier, RangedBuffer, RangedImage,
-    StandardMesh,
+    BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
+    ColorAttachmentBlending, CopyBuffer, CopyBufferToImage, DescriptorSets, EndRenderPass,
+    GraphicsCommand, GraphicsCommandCombiner, GraphicsCommandSubmission, ImageResourceRange,
+    PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
 };
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 
@@ -47,7 +46,6 @@ pub struct Game<NL: peridot::NativeLinker> {
     _dsl: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
     _dsl2: br::DescriptorSetLayoutObject<peridot::DeviceObject>,
     _descriptor_pool: br::DescriptorPoolObject<peridot::DeviceObject>,
-    descriptors: Vec<br::DescriptorSet>,
     dynamic_buffer: RangedBuffer<peridot_memory_manager::Buffer>,
     _uniform_buffer: RangedBuffer<SharedRef<peridot_memory_manager::Buffer>>,
     _main_image_view: br::ImageViewObject<peridot_memory_manager::Image>,
@@ -69,9 +67,19 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             .size()
             .wh();
 
-        let renderpass = peridot::RenderPassTemplates::single_render(
-            e.back_buffer_format(),
-            e.requesting_back_buffer_layout().0,
+        let renderpass = br::RenderPassBuilder::new(
+            &[e.back_buffer_attachment_desc()
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
+            &[br::SubpassDescription::new().color_attachments(
+                &[br::AttachmentReference::new(
+                    0,
+                    br::ImageLayout::ColorAttachmentOpt,
+                )],
+                &[],
+            )],
+            &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            )],
         )
         .create(e.graphics().device().clone())
         .expect("Failed to create RenderPass");
@@ -84,29 +92,31 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         let smp = br::SamplerBuilder::default()
             .create(e.graphics().device().clone())
             .expect("Failed to create sampler");
-        let dsl =
-            br::DescriptorSetLayoutBuilder::with_bindings(vec![br::DescriptorType::UniformBuffer
-                .make_binding(1)
-                .only_for_vertex()])
-            .create(e.graphics().device().clone())
-            .expect("Failed to create DescriptorSetLayout");
-        let dsl2 = br::DescriptorSetLayoutBuilder::with_bindings(vec![
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .only_for_fragment()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&smp)]),
-        ])
+        let dsl = br::DescriptorSetLayoutBuilder::new(&[br::DescriptorType::UniformBuffer
+            .make_binding(0, 1)
+            .only_for_vertex()])
+        .create(e.graphics().device().clone())
+        .expect("Failed to create DescriptorSetLayout");
+        let dsl2 = br::DescriptorSetLayoutBuilder::new(&[br::DescriptorType::CombinedImageSampler
+            .make_binding(0, 1)
+            .only_for_fragment()
+            .with_immutable_samplers(&[br::SamplerObjectRef::new(&smp)])])
         .create(e.graphics().device().clone())
         .expect("Failed to create DescriptorSetLayout for FragmentShader");
-        let mut dp = br::DescriptorPoolBuilder::new(2)
-            .with_reservations(vec![
-                br::DescriptorType::UniformBuffer.with_count(1),
-                br::DescriptorType::CombinedImageSampler.with_count(1),
+        let mut dp = br::DescriptorPoolBuilder::new(
+            2,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(1),
+                br::DescriptorType::CombinedImageSampler.make_size(1),
+            ],
+        )
+        .create(e.graphics().device().clone())
+        .expect("Failed to create DescriptorPool");
+        let [descriptor_obj, descriptor_tex] = dp
+            .alloc_array(&[
+                br::DescriptorSetLayoutObjectRef::new(&dsl),
+                br::DescriptorSetLayoutObjectRef::new(&dsl2),
             ])
-            .create(e.graphics().device().clone())
-            .expect("Failed to create DescriptorPool");
-        let descriptors = dp
-            .alloc(&[&dsl, &dsl2])
             .expect("Failed to alloc Required Descriptors");
 
         let shaders = peridot_vertex_processing_pack::PvpShaderModules::new(
@@ -115,13 +125,19 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
         )
         .expect("Failed to generate ShaderModules");
         let vps = shaders.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        let pl = br::PipelineLayoutBuilder::new(vec![&dsl, &dsl2], vec![])
-            .create(e.graphics().device().clone())
-            .expect("Failed to create PipelineLayout");
+        let pl = br::PipelineLayoutBuilder::new(
+            &[
+                br::DescriptorSetLayoutObjectRef::new(&dsl),
+                br::DescriptorSetLayoutObjectRef::new(&dsl2),
+            ],
+            &[],
+        )
+        .create(e.graphics().device().clone())
+        .expect("Failed to create PipelineLayout");
 
         let scissors = [bb_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
         let viewports = [scissors[0].make_viewport(0.0..1.0)];
-        let pipeline = br::NonDerivedGraphicsPipelineBuilder::new(&pl, (&renderpass, 0), vps)
+        let pipeline = br::NonDerivedGraphicsPipelineBuilder::new(&pl, renderpass.subpass(0), vps)
             .viewport_scissors(
                 br::DynamicArrayState::Static(&viewports),
                 br::DynamicArrayState::Static(&scissors),
@@ -133,7 +149,6 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
             .expect("Failed to create GraphicsPipeline");
-        let pipeline = peridot::LayoutedPipeline::combine(pipeline, pl);
 
         let main_image_data: peridot_image::PNG = e
             .load("images.peridot_default_tapfx_circle")
@@ -260,12 +275,12 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
 
         e.graphics().device().update_descriptor_sets(
             &[
-                br::DescriptorPointer::new(descriptors[0].into(), 0).write(
+                br::DescriptorPointer::new(descriptor_obj.into(), 0).write(
                     br::DescriptorContents::UniformBuffer(vec![
                         uniform_buffer.make_descriptor_buffer_ref()
                     ]),
                 ),
-                br::DescriptorPointer::new(descriptors[1].into(), 0).write(
+                br::DescriptorPointer::new(descriptor_tex.into(), 0).write(
                     br::DescriptorContents::CombinedImageSampler(vec![
                         br::DescriptorImageRef::new(
                             &main_image_view,
@@ -320,12 +335,15 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
                 .expect("Failed to record commands");
         }
 
-        let descriptor_sets = DescriptorSets(vec![descriptors[0].into(), descriptors[1].into()]);
+        let descriptor_sets = DescriptorSets(vec![descriptor_obj, descriptor_tex]);
         let mesh = StandardMesh {
             vertex_buffers: vec![vertex_buffer],
             vertex_count: 4,
         };
-        let setup = (pipeline, descriptor_sets.into_bind_graphics());
+        let setup = (
+            BindGraphicsPipeline(pipeline),
+            descriptor_sets.into_bind_graphics(pl),
+        );
         let color_renders = mesh.draw(1).after_of(setup);
 
         let mut main_commands = peridot::CommandBundle::new(
@@ -356,7 +374,6 @@ impl<NL: peridot::NativeLinker> peridot::EngineEvents<NL> for Game<NL> {
             _dsl: dsl,
             _dsl2: dsl2,
             _descriptor_pool: dp,
-            descriptors,
             dynamic_buffer: uniform_mut_buffer,
             _uniform_buffer: uniform_buffer,
             main_commands,

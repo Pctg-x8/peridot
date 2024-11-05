@@ -124,9 +124,9 @@ impl Graphics {
             warn!("Validation Layer is not found!");
         }
 
-        let app_name = CString::new(app_name).expect("invalid app name");
+        let app_name = CString::new(app_name).expect("invalid sequence in app name");
         let app =
-            br::ApplicationInfo::new(&app_name, app_version, c"Interlude2:Peridot", (0, 1, 0));
+            br::ApplicationInfo::new(&app_name, app_version, c"Interluse2:Peridot", (0, 1, 0));
         let mut ib = br::InstanceBuilder::new(&app);
         ib.add_extensions(instance_extensions.iter().copied());
         #[cfg(feature = "debug")]
@@ -136,12 +136,10 @@ impl Graphics {
             if validation_layer_available {
                 ib.add_layer(c"VK_LAYER_KHRONOS_validation");
             }
+
             log::debug!("Debug reporting activated");
         }
-        let instance = SharedRef::new(ib.create()?);
-
         #[cfg(feature = "debug")]
-        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(crate::debug::debug_utils_out)
             .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
             .create(instance.clone())?;
 

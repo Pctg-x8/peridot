@@ -44,7 +44,7 @@ impl br::VkObject for Image {
         <br::ImageObject<peridot::DeviceObject> as br::VkObject>::TYPE;
 }
 impl br::DeviceChildHandle for Image {
-    #[inline]
+    #[inline(always)]
     fn device_handle(&self) -> bedrock::vk::VkDevice {
         self.object.device_handle()
     }
@@ -465,7 +465,7 @@ impl br::VkHandleMut for Buffer {
     }
 }
 impl br::DeviceChildHandle for Buffer {
-    #[inline]
+    #[inline(always)]
     fn device_handle(&self) -> bedrock::vk::VkDevice {
         self.object.device_handle()
     }

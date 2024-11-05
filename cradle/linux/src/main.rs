@@ -5,7 +5,7 @@ use peridot::{
 };
 use presenter::PresenterProvider;
 use sound_backend::SoundBackend;
-use std::path::PathBuf;
+use std::{ffi::CStr, path::PathBuf};
 use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
@@ -83,11 +83,11 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = PP::Presenter;
 
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", PP::SURFACE_EXT_NAME]
+    fn instance_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_surface", PP::SURFACE_EXT_NAME]
     }
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn device_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_swapchain"]
     }
 
     fn asset_loader(&self) -> &PlatformAssetLoader {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ffi::CStr};
 
 use bedrock as br;
 use br::PhysicalDevice;
@@ -250,7 +250,7 @@ impl WindowBackend for Wayland {
 }
 impl PresenterProvider for SharedMutableRef<Wayland> {
     type Presenter = Presenter;
-    const SURFACE_EXT_NAME: &'static str = "VK_KHR_wayland_surface";
+    const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_wayland_surface";
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter {
         Presenter::new(g, g.graphics_queue_family_index(), self)
@@ -365,7 +365,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,

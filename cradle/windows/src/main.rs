@@ -5,9 +5,9 @@ use log::*;
 use parking_lot::RwLock;
 mod input;
 mod userlib;
-use core::ffi::CStr;
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
 use peridot::{EngineEvent, EngineEvents, FeatureRequests};
+use std::ffi::CStr;
 use std::sync::Arc;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -370,8 +370,6 @@ impl peridot::NativeLinker for NativeLink {
     }
     #[cfg(feature = "transparent")]
     fn device_extensions(&self) -> Vec<&CStr> {
-        use std::ffi::CStr;
-
         vec![
             c"VK_KHR_external_memory_win32",
             c"VK_KHR_external_semaphore_win32",

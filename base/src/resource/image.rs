@@ -69,6 +69,7 @@ impl<Backend: br::Image + br::DeviceChild, Memory: br::DeviceMemory> br::DeviceC
 {
     type ConcreteDevice = Backend::ConcreteDevice;
 
+    #[inline(always)]
     fn device(&self) -> &Self::ConcreteDevice {
         self.0.device()
     }
