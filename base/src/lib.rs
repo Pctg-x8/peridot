@@ -255,8 +255,7 @@ impl<PL: NativeLinker> Engine<PL> {
             native_link.instance_extensions(),
             native_link.device_extensions(),
             requested_features,
-        )
-        .expect("Failed to initialize Graphics Base Driver");
+        );
         let presenter = native_link.new_presenter(&g);
         g.submit_commands(|r| presenter.emit_initialize_back_buffer_commands(r))
             .expect("Initializing Back Buffers");
