@@ -25,24 +25,6 @@ mod async_fence_driver;
 #[cfg(feature = "mt")]
 pub use self::async_fence_driver::*;
 
-#[derive(Debug)]
-pub enum GraphicsInitializationError {
-    VulkanError(br::vk::VkResult),
-}
-impl From<br::vk::VkResult> for GraphicsInitializationError {
-    fn from(value: br::vk::VkResult) -> Self {
-        Self::VulkanError(value)
-    }
-}
-impl std::fmt::Display for GraphicsInitializationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::VulkanError(r) => std::fmt::Display::fmt(r, f),
-        }
-    }
-}
-impl std::error::Error for GraphicsInitializationError {}
-
 cfg_if! {
     if #[cfg(feature = "mt")] {
         use std::sync::OnceLock as OnceValue;
