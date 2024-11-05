@@ -25,13 +25,10 @@ mod async_fence_driver;
 #[cfg(feature = "mt")]
 pub use self::async_fence_driver::*;
 
-cfg_if! {
-    if #[cfg(feature = "mt")] {
-        use std::sync::OnceLock as OnceValue;
-    } else {
-        use std::cell::OnceCell as OnceValue;
-    }
-}
+#[cfg(not(feature = "mt"))]
+use std::cell::OnceCell as OnceValue;
+#[cfg(feature = "mt")]
+use std::sync::OnceLock as OnceValue;
 
 struct CachedAdapterProperties {
     pub available_features: OnceValue<br::vk::VkPhysicalDeviceFeatures>,
