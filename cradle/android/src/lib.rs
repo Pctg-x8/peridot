@@ -4,6 +4,10 @@ use async_std::sync::Mutex;
 use br::PhysicalDevice;
 use log::*;
 
+use android::{Asset, AssetManager, AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
+use std::ffi::CString;
+use std::io::{Error as IOError, ErrorKind, Result as IOResult};
+
 mod userlib;
 
 use bedrock as br;
@@ -163,25 +167,6 @@ impl peridot::PlatformPresenter for Presenter {
     }
 }
 
-use android::{Asset, AssetManager, AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
-use std::ffi::CString;
-use std::io::{Error as IOError, ErrorKind, Result as IOResult};
-
-#[repr(transparent)]
-pub struct SyncAsset(pub Mutex<Asset>);
-unsafe impl Sync for SyncAsset {}
-unsafe impl Send for SyncAsset {}
-impl std::io::Read for SyncAsset {
-    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
-        self.0.get_mut().read(buf)
-    }
-}
-impl peridot::InputStream for SyncAsset {
-    fn skip(&mut self, amount: u64) -> IOResult<u64> {
-        self.0.get_mut().skip(amount)
-    }
-}
-
 struct PlatformAssetLoader {
     amgr: AssetManager,
 }
@@ -194,7 +179,7 @@ impl PlatformAssetLoader {
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset = Asset;
-    type StreamingAsset = SyncAsset;
+    type StreamingAsset = Asset;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Asset> {
         let mut path_str = path.replace(".", "/");
@@ -205,17 +190,15 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             .open(path_str.as_ptr(), AASSET_MODE_RANDOM)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<SyncAsset> {
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
-        let a = self
-            .amgr
-            .open(path_str.as_ptr(), AASSET_MODE_STREAMING)
-            .ok_or(IOError::new(ErrorKind::NotFound, ""))?;
 
-        Ok(SyncAsset(Mutex::new(a)))
+        self.amgr
+            .open(path_str.as_ptr(), AASSET_MODE_STREAMING)
+            .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
 }
 
