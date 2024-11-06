@@ -25,6 +25,7 @@ peridot-derive = { path = "../derive", optional = true }
 cfg-if = "1.0.0"
 async-std = "1.13.0"
 futures-util = "0.3.31"
+tracing.workspace = true
 
 [dependencies.bedrock]
 workspace = true

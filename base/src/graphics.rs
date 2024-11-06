@@ -126,10 +126,11 @@ impl Graphics {
         let instance = SharedRef::new(ib.create().expect("Failed to create vk instance"));
 
         #[cfg(feature = "debug")]
-        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(crate::debug::debug_utils_out)
-            .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
-            .create(instance.clone())
-            .expect("Failed to create vk debug instance");
+        let _debug_instance =
+            br::DebugUtilsMessengerCreateInfo::new(crate::debug::debug_utils_callback)
+                .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
+                .create(instance.clone())
+                .expect("Failed to create vk debug instance");
 
         let Some(adapter) = instance
             .iter_physical_devices()

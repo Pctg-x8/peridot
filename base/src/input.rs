@@ -220,24 +220,26 @@ impl InputProcessSharedState {
         self.nativelink = Some(n);
     }
 
-    /// Cradle to Engine: Native Event Handler
     #[inline]
-    fn dispatch_button_event(&mut self, msg: NativeButtonInput, is_press: bool) {
+    pub const fn make_event_receiver(&mut self) -> NativeEventReceiver {
         NativeEventReceiver {
             collect_data: &mut self.collected,
             input_map: &self.input_map,
         }
-        .dispatch_button_event(msg, is_press)
+    }
+
+    /// Cradle to Engine: Native Event Handler
+    #[inline]
+    fn dispatch_button_event(&mut self, msg: NativeButtonInput, is_press: bool) {
+        self.make_event_receiver()
+            .dispatch_button_event(msg, is_press)
     }
 
     /// Cradle to Engine: Native Event Handler
     #[inline]
     fn dispatch_analog_event(&mut self, ty: NativeAnalogInput, value: f32, is_absolute: bool) {
-        NativeEventReceiver {
-            collect_data: &mut self.collected,
-            input_map: &self.input_map,
-        }
-        .dispatch_analog_event(ty, value, is_absolute)
+        self.make_event_receiver()
+            .dispatch_analog_event(ty, value, is_absolute)
     }
 
     pub(crate) fn prepare_for_frame(&mut self, delta_time: std::time::Duration) {
