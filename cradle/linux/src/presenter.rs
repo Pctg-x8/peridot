@@ -5,7 +5,7 @@ pub mod xcb;
 
 pub trait WindowBackend {
     fn show(&mut self);
-    fn geometry(&self) -> peridot::math::Vector2<usize>;
+    fn geometry(&self) -> peridot::math::Vector2<u32>;
 }
 
 pub trait BorrowFd {
