@@ -61,16 +61,16 @@ final class NativeEngine : ViewModel() {
 }
 
 final class SurfaceCallback(private val parent: NativeActivity) : SurfaceHolder.Callback {
-    override fun surfaceCreated(p0: SurfaceHolder?) {
+    override fun surfaceCreated(p0: SurfaceHolder) {
     }
 
-    override fun surfaceDestroyed(p0: SurfaceHolder?) {
+    override fun surfaceDestroyed(p0: SurfaceHolder) {
         Log.v("peridot bootstrap", "Not yet implemented")
         parent.nativeEngine.fin()
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder?, format: Int, width: Int, height: Int) {
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         Log.v("peridot bootstrap", "surfaceChanged with $format, $width x $height")
-        parent.nativeEngine.init(holder!!.surface, parent.assets)
+        parent.nativeEngine.init(holder.surface, parent.assets)
     }
 }

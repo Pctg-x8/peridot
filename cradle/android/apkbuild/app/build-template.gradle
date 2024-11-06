@@ -5,8 +5,9 @@ plugins {
 
 android {
     namespace **APKAPPID**
-    compileSdkVersion = 28
-    
+    compileSdkVersion = 34
+    ndkVersion "28.0.12433566"
+
     defaultConfig {
         applicationId = **APKAPPID**
         minSdkVersion 21
