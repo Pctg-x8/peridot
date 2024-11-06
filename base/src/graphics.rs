@@ -25,43 +25,10 @@ mod async_fence_driver;
 #[cfg(feature = "mt")]
 pub use self::async_fence_driver::*;
 
-#[derive(Debug)]
-pub enum GraphicsInitializationError {
-    LayerEnumerationFailed(br::vk::VkResult),
-    ExtensionEnumerationFailed(br::vk::VkResult),
-    VulkanError(br::vk::VkResult),
-    NoPhysicalDevices,
-    NoSuitableGraphicsQueue,
-}
-impl From<br::vk::VkResult> for GraphicsInitializationError {
-    fn from(value: br::vk::VkResult) -> Self {
-        Self::VulkanError(value)
-    }
-}
-impl std::fmt::Display for GraphicsInitializationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LayerEnumerationFailed(r) => write!(f, "vk layer enumeration failed: {r}"),
-            Self::ExtensionEnumerationFailed(r) => {
-                write!(f, "vk extension enumeration failed: {r}")
-            }
-            Self::VulkanError(r) => std::fmt::Display::fmt(r, f),
-            Self::NoPhysicalDevices => write!(f, "no physical devices available on this machine"),
-            Self::NoSuitableGraphicsQueue => {
-                write!(f, "no suitable graphics queue found on device")
-            }
-        }
-    }
-}
-impl std::error::Error for GraphicsInitializationError {}
-
-cfg_if! {
-    if #[cfg(feature = "mt")] {
-        use std::sync::OnceLock as OnceValue;
-    } else {
-        use std::cell::OnceCell as OnceValue;
-    }
-}
+#[cfg(not(feature = "mt"))]
+use std::cell::OnceCell as OnceValue;
+#[cfg(feature = "mt")]
+use std::sync::OnceLock as OnceValue;
 
 struct CachedAdapterProperties {
     pub available_features: OnceValue<br::vk::VkPhysicalDeviceFeatures>,
@@ -99,26 +66,41 @@ impl Graphics {
         instance_extensions: Vec<&CStr>,
         device_extensions: Vec<&CStr>,
         features: br::vk::VkPhysicalDeviceFeatures,
-    ) -> Result<Self, GraphicsInitializationError> {
-        info!("Supported Layers: ");
+    ) -> Self {
         let mut validation_layer_available = false;
-        for l in br::enumerate_layer_properties()
-            .map_err(GraphicsInitializationError::LayerEnumerationFailed)?
-        {
-            let name_str = l
-                .layerName
-                .as_cstr()
-                .expect("Failed to decode")
-                .to_str()
-                .expect("invalid sequence in layer name");
-            info!(
-                "* {name_str} :: {}/{}",
-                l.specVersion, l.implementationVersion
-            );
+        match br::enumerate_layer_properties() {
+            Ok(xs) => {
+                info!("Supported Layers: ");
 
-            #[cfg(debug_assertions)]
-            if name_str == "VK_LAYER_KHRONOS_validation" {
-                validation_layer_available = true;
+                for l in xs {
+                    let name_cstr = match l.layerName.as_cstr() {
+                        Ok(x) => x,
+                        Err(_) => {
+                            warn!("layer name contains nul byte?");
+                            continue;
+                        }
+                    };
+                    let name_str = match name_cstr.to_str() {
+                        Ok(x) => x,
+                        Err(e) => {
+                            warn!("invalid sequence in layer name: {e:?}");
+                            continue;
+                        }
+                    };
+
+                    info!(
+                        "* {name_str} :: {}/{}",
+                        l.specVersion, l.implementationVersion
+                    );
+
+                    #[cfg(debug_assertions)]
+                    if name_str == "VK_LAYER_KHRONOS_validation" {
+                        validation_layer_available = true;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to enumerate vk instance layers: {e:?}");
             }
         }
 
@@ -141,17 +123,23 @@ impl Graphics {
 
             log::debug!("Debug reporting activated");
         }
-        let instance = SharedRef::new(ib.create()?);
+        let instance = SharedRef::new(ib.create().expect("Failed to create vk instance"));
 
         #[cfg(feature = "debug")]
-        let _debug_instance = br::DebugUtilsMessengerCreateInfo::new(crate::debug::debug_utils_out)
-            .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
-            .create(instance.clone())?;
+        let _debug_instance =
+            br::DebugUtilsMessengerCreateInfo::new(crate::debug::debug_utils_callback)
+                .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
+                .create(instance.clone())
+                .expect("Failed to create vk debug instance");
 
-        let adapter = instance
-            .iter_physical_devices()?
+        let Some(adapter) = instance
+            .iter_physical_devices()
+            .expect("Failed to enumerate physical devices")
             .next()
-            .ok_or(GraphicsInitializationError::NoPhysicalDevices)?;
+        else {
+            log::error!("No physical devices available");
+            panic!("Engine unrecoverable");
+        };
 
         let optional_device_features = [
             "VK_KHR_dedicated_allocation",
@@ -160,27 +148,48 @@ impl Graphics {
         ];
 
         let mut auto_device_extensions = Vec::new();
-        info!("Device Extensions: ");
-        for d in adapter
-            .enumerate_extension_properties(None)
-            .map_err(GraphicsInitializationError::ExtensionEnumerationFailed)?
-        {
-            let name_cstr = d.extensionName.as_cstr().expect("Failed to decode");
-            let name = name_cstr.to_str().expect("invalid sequence");
-            info!("* {name}: {}", d.specVersion);
+        match adapter.enumerate_extension_properties(None) {
+            Ok(xs) => {
+                info!("Device Extensions: ");
 
-            if optional_device_features.contains(&name) {
-                auto_device_extensions.push(name_cstr.to_owned());
+                for d in xs {
+                    let name_cstr = match d.extensionName.as_cstr() {
+                        Ok(x) => x,
+                        Err(_) => {
+                            warn!("extension name contains nul byte?");
+                            continue;
+                        }
+                    };
+                    let name = match name_cstr.to_str() {
+                        Ok(x) => x,
+                        Err(e) => {
+                            warn!("invalid sequence in extension name: {e:?}");
+                            continue;
+                        }
+                    };
+
+                    info!("* {name}: {}", d.specVersion);
+
+                    if optional_device_features.contains(&name) {
+                        auto_device_extensions.push(name_cstr.to_owned());
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to enumerate vk device extensions: {e:?}");
             }
         }
 
         let memory_type_manager = MemoryTypeManager::new(&adapter);
         MemoryTypeManager::diagnose_heaps(&adapter);
         memory_type_manager.diagnose_types();
-        let gqf_index = adapter
+        let Some(gqf_index) = adapter
             .queue_family_properties()
             .find_matching_index(br::QueueFlags::GRAPHICS)
-            .ok_or(GraphicsInitializationError::NoSuitableGraphicsQueue)?;
+        else {
+            log::error!("No suitable queue(graphics) found on device");
+            panic!("Engine unrecoverable");
+        };
         let device = {
             let mut db = br::DeviceBuilder::new(&adapter);
             db.add_extensions(device_extensions.iter().copied())
@@ -190,13 +199,18 @@ impl Graphics {
                 db.add_layer(c"VK_LAYER_KHRONOS_validation");
             }
             *db.mod_features() = features;
-            SharedRef::new(db.create()?.clone_parent())
+            SharedRef::new(
+                db.create()
+                    .expect("Failed to create vk device")
+                    .clone_parent(),
+            )
         };
 
-        Ok(Self {
+        Self {
             cp_onetime_submit: br::CommandPoolBuilder::new(gqf_index)
                 .transient()
-                .create(device.clone())?,
+                .create(device.clone())
+                .expect("Failed to create onetime submit command pool"),
             graphics_queue: QueueSet {
                 q: parking_lot::Mutex::new(device.clone().queue(gqf_index, 0)),
                 family: gqf_index,
@@ -218,7 +232,7 @@ impl Graphics {
             fence_reactor: FenceReactorThread::new(),
             #[cfg(feature = "debug")]
             _debug_instance,
-        })
+        }
     }
 
     /// Submits any commands as transient commands.

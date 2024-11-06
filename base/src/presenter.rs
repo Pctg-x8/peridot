@@ -32,8 +32,8 @@ pub trait PlatformPresenter {
         update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for back-buffer resources
-    fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
-    fn current_geometry_extent(&self) -> peridot_math::Vector2<usize>;
+    fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) -> bool;
+    fn current_geometry_extent(&self) -> peridot_math::Vector2<u32>;
 }
 
 type SharedSwapchainObject<Device, Surface> =
@@ -49,19 +49,19 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
         g: &crate::Graphics,
         surface: Surface,
         surface_info: &crate::SurfaceInfo,
-        default_extent: peridot_math::Vector2<usize>,
+        default_extent: peridot_math::Vector2<u32>,
     ) -> Self {
         let si = g
             .adapter
             .surface_capabilities(&surface)
             .expect("Failed to query Surface Capabilities");
         let ew = if si.currentExtent.width == u32::MAX {
-            default_extent.0 as _
+            default_extent.0
         } else {
             si.currentExtent.width
         };
         let eh = if si.currentExtent.height == u32::MAX {
-            default_extent.1 as _
+            default_extent.1
         } else {
             si.currentExtent.height
         };
@@ -146,7 +146,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn new(
         g: &crate::Graphics,
         surface: Surface,
-        default_extent: peridot_math::Vector2<usize>,
+        default_extent: peridot_math::Vector2<u32>,
     ) -> Self {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, &surface)
             .expect("Failed to gather surface info");
@@ -323,7 +323,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         )
     }
 
-    pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {
+    pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) {
         if let Some(mut old) = self.swapchain.take_lw() {
             old.back_buffer_images.clear();
             let (_, s) = SharedRef::try_unwrap(old.swapchain)

@@ -62,13 +62,13 @@
       </BuildableProductRunnable>
       <EnvironmentVariables>
          <EnvironmentVariable
-            key = "VK_ICD_FILENAMES"
-            value = "$HOME/VulkanSDK/1.3.204.1/macOS/share/vulkan/icd.d/MoltenVK_icd.json"
-            isEnabled = "NO">
-         </EnvironmentVariable>
-         <EnvironmentVariable
             key = "RUST_BACKTRACE"
             value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "RUST_LOG"
+            value = "trace"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>

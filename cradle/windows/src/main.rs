@@ -2,11 +2,13 @@ use std::mem::MaybeUninit;
 mod audio;
 use audio::NativeAudioEngine;
 use log::*;
+use parking_lot::RwLock;
 mod input;
 mod userlib;
-use peridot::mthelper::SharedRef;
-use peridot::{EngineEvents, FeatureRequests};
+use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
+use peridot::{EngineEvent, EngineEvents, FeatureRequests};
 use std::ffi::CStr;
+use std::sync::Arc;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -18,8 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
     GetWindowLongPtrA, LoadCursorW, PeekMessageA, PostQuitMessage, RegisterClassExA,
     SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW,
-    PM_REMOVE, SW_SHOWNORMAL, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW,
-    WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+    PM_REMOVE, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE,
+    WNDCLASSEXA, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
 };
 
 mod presenter;
@@ -72,64 +74,23 @@ impl ThreadsafeWindowOps {
             rc.assume_init()
         }
     }
+
+    #[inline]
+    pub fn set_window_long_ptr(&mut self, index: WINDOW_LONG_PTR_INDEX, long: isize) -> isize {
+        unsafe { SetWindowLongPtrA(self.0, index, long) }
+    }
 }
 
 pub struct GameDriver {
     base: peridot::Engine<NativeLink>,
-    usercode: userlib::Game<NativeLink>,
     _snd: NativeAudioEngine,
-    current_size: peridot::math::Vector2<usize>,
+    current_size: peridot::math::Vector2<u32>,
     ri_handler: self::input::RawInputHandler,
-}
-impl GameDriver {
-    fn new(window: HWND, init_size: peridot::math::Vector2<usize>) -> Self {
-        let window = SharedRef::new(ThreadsafeWindowOps(window));
-
-        let nl = NativeLink {
-            al: AssetProvider::new(),
-            window: window.clone(),
-        };
-        let mut base = peridot::Engine::new(
-            userlib::APP_IDENTIFIER,
-            userlib::APP_VERSION,
-            nl,
-            userlib::Game::<NativeLink>::requested_features(),
-        );
-        let usercode = userlib::Game::init(&mut base);
-        let ri_handler = self::input::RawInputHandler::init();
-        base.input_mut()
-            .set_nativelink(Box::new(self::input::NativeInputHandler::new(
-                window.clone(),
-            )));
-        base.post_init();
-        let _snd =
-            NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
-
-        /*let mut ap = PSGSine::new();
-        ap.set_amp(1.0 / 32.0); ap.set_osc_hz(440.0);
-        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap)));
-        let mut ap2 = PSGSine::new();
-        ap2.set_amp(1.0 / 32.0); ap2.set_osc_hz(882.0);
-        e.audio_mixer().write().expect("Adding PSGSine").add_process(Arc::new(RwLock::new(ap2)));*/
-
-        Self {
-            base,
-            usercode,
-            _snd,
-            current_size: init_size,
-            ri_handler,
-        }
-    }
-
-    fn update(&mut self) {
-        self.base.do_update(&mut self.usercode);
-    }
-    fn resize(&mut self, size: peridot::math::Vector2<usize>) {
-        self.base.do_resize_back_buffer(size, &mut self.usercode);
-    }
+    event_sender: async_std::channel::Sender<peridot::EngineEvent>,
 }
 
-fn main() {
+#[async_std::main]
+async fn main() {
     let fmt = tracing_subscriber::fmt::layer().pretty();
     let filter = tracing_subscriber::filter::EnvFilter::from_default_env();
     tracing_subscriber::registry().with(fmt).with(filter).init();
@@ -191,16 +152,69 @@ fn main() {
         panic!("Create Window Failed!");
     }
 
-    let mut driver = GameDriver::new(w, peridot::math::Vector2(640, 480));
-    unsafe {
-        SetWindowLongPtrA(w, GWLP_USERDATA, &mut driver as *mut GameDriver as _);
-    }
     unsafe {
         ShowWindow(w, SW_SHOWNORMAL);
     }
 
+    let w = Arc::new(RwLock::new(ThreadsafeWindowOps(w)));
+
+    // Resizeをここに入れると詰まるので対策が必要（結局個別のイベントバスになるのか.......
+    let (events_sender, events_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
+    let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
+    let events_sender_th = events_sender.clone();
+
+    let thread = async_std::task::spawn(async move {
+        let nl = NativeLink {
+            al: AssetProvider::new(),
+            window: w.clone(),
+        };
+        let mut base = peridot::Engine::new(
+            userlib::APP_IDENTIFIER,
+            userlib::APP_VERSION,
+            nl,
+            bedrock::vk::VkPhysicalDeviceFeatures {
+                ..Default::default()
+            },
+            (events_sender_th.clone(), events_receiver),
+            frame_timing_receiver,
+        );
+        let ri_handler = self::input::RawInputHandler::init();
+        base.input_mut()
+            .set_nativelink(Box::new(self::input::NativeInputHandler::new(w.clone())));
+        base.post_init();
+        let _snd =
+            NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
+
+        let mut driver = GameDriver {
+            base,
+            _snd,
+            current_size: peridot::math::Vector2(640, 480),
+            ri_handler,
+            event_sender: events_sender_th,
+        };
+        w.write()
+            .set_window_long_ptr(GWLP_USERDATA, &mut driver as *mut GameDriver as _);
+
+        userlib::game_main(&mut driver.base).await;
+    });
+
     while process_message_all() {
-        driver.update();
+        match frame_timing_sender.try_send(()) {
+            Ok(_) => (),
+            Err(async_std::channel::TrySendError::Full(_)) => (),
+            Err(async_std::channel::TrySendError::Closed(_)) => {
+                // events bus gone
+                break;
+            }
+        }
+    }
+
+    if events_sender
+        .send(peridot::EngineEvent::Shutdown)
+        .await
+        .is_ok()
+    {
+        thread.await;
     }
 }
 
@@ -216,11 +230,12 @@ extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LP
         let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
         if let Some(driver) = unsafe { p.as_mut() } {
             let (w, h) = (loword(lparam.0 as _), hiword(lparam.0 as _));
-            let size = peridot::math::Vector2(w as usize, h as usize);
+            let size = peridot::math::Vector2(w as u32, h as u32);
             if driver.current_size != size {
                 driver.current_size = size.clone();
-                driver.resize(size);
-                driver.update();
+                async_std::task::spawn(
+                    driver.event_sender.send(peridot::EngineEvent::Resize(size)),
+                );
             }
         }
 
@@ -335,7 +350,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
 
 struct NativeLink {
     al: AssetProvider,
-    window: SharedRef<ThreadsafeWindowOps>,
+    window: Arc<RwLock<ThreadsafeWindowOps>>,
 }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;

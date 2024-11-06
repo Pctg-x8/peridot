@@ -1,6 +1,9 @@
+use crate::ThreadsafeWindowOps;
 use bedrock::{self as br, Device, ImageChild, SubmissionBatch};
 use br::{Image, ImageSubresourceSlice, Semaphore};
-use peridot::mthelper::SharedRef;
+use parking_lot::RwLock;
+use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
+use std::sync::Arc;
 #[cfg(feature = "transparent")]
 use windows::core::ComInterface;
 #[cfg(feature = "transparent")]
@@ -29,16 +32,14 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
-use crate::ThreadsafeWindowOps;
-
 #[cfg(not(feature = "transparent"))]
 pub struct Presenter {
-    _window: SharedRef<ThreadsafeWindowOps>,
+    _window: Arc<RwLock<ThreadsafeWindowOps>>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: SharedRef<ThreadsafeWindowOps>) -> Self {
+    pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
         use bedrock::PhysicalDevice;
 
         if !g
@@ -49,7 +50,7 @@ impl Presenter {
         }
         let s = g
             .adapter()
-            .new_surface_win32(super::module_handle(), window.0)
+            .new_surface_win32(super::module_handle(), window.read().0)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
@@ -120,13 +121,13 @@ impl peridot::PlatformPresenter for Presenter {
         )
     }
     /// Returns whether re-initializing is needed for back-buffer resources
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs re-initializing back-buffer resource
         true
     }
     // unimplemented?
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)
     }
 }
@@ -318,7 +319,7 @@ impl Composition {
 
 #[cfg(feature = "transparent")]
 pub struct Presenter {
-    _window: SharedRef<ThreadsafeWindowOps>,
+    _window: Arc<RwLock<ThreadsafeWindowOps>>,
     _comp: Composition,
     device12: ID3D12Device,
     q: ID3D12CommandQueue,
@@ -335,9 +336,13 @@ pub struct Presenter {
     present_inflight: bool,
 }
 #[cfg(feature = "transparent")]
+unsafe impl Sync for Presenter {}
+#[cfg(feature = "transparent")]
+unsafe impl Send for Presenter {}
+#[cfg(feature = "transparent")]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: SharedRef<ThreadsafeWindowOps>) -> Self {
-        let rc = window.get_client_rect();
+    pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
+        let rc = window.read().get_client_rect();
 
         let factory: IDXGIFactory2 = unsafe {
             CreateDXGIFactory2(if cfg!(debug_assertions) {
@@ -408,7 +413,7 @@ impl Presenter {
         let sc = sc
             .cast::<IDXGISwapChain3>()
             .expect("Failed to get swapchain 3 interface");
-        let comp = Composition::new(&window, &sc);
+        let comp = Composition::new(&window.read(), &sc);
         let bb_size = br::vk::VkExtent2D {
             width: (rc.right - rc.left) as _,
             height: (rc.bottom - rc.top) as _,
@@ -631,7 +636,7 @@ impl peridot::PlatformPresenter for Presenter {
         Ok(())
     }
     /// Returns whether re-initializing is needed for backbuffer resources
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         if self.present_inflight {
             self.present_completion_event
                 .wait(windows::Win32::System::Threading::INFINITE);
@@ -672,7 +677,7 @@ impl peridot::PlatformPresenter for Presenter {
         true
     }
     // unimplemented?
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)
     }
 }

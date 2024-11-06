@@ -33,7 +33,7 @@ impl BorrowFd for ReadinessGuard {
 
 pub struct State {
     close_requested: bool,
-    geometry: peridot::math::Vector2<usize>,
+    geometry: peridot::math::Vector2<u32>,
     pointer_entered: bool,
     pointer_position: peridot::math::Vector2<usize>,
 }
@@ -244,7 +244,7 @@ impl Wayland {
 impl WindowBackend for Wayland {
     fn show(&mut self) {}
 
-    fn geometry(&self) -> peridot::math::Vector2<usize> {
+    fn geometry(&self) -> peridot::math::Vector2<u32> {
         self.state.geometry
     }
 }
@@ -378,13 +378,13 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
         true
     }
 
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         self.window_backend.borrow().state.geometry
     }
 }

@@ -29,7 +29,7 @@ pub struct X11 {
     wm_delete_window: xcb::x::Atom,
     vis: xcb::x::Visualid,
     mainwnd_id: xcb::x::Window,
-    cached_window_size: peridot::math::Vector2<usize>,
+    cached_window_size: peridot::math::Vector2<u32>,
     has_close_requested: bool,
 }
 impl X11 {
@@ -112,7 +112,7 @@ impl X11 {
         self.con.flush().expect("Failed to flush");
     }
 
-    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<usize> {
+    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<u32> {
         &self.cached_window_size
     }
 }
@@ -229,7 +229,7 @@ impl WindowBackend for X11 {
         self.con.flush().expect("Failed to flush");
     }
 
-    fn geometry(&self) -> peridot::math::Vector2<usize> {
+    fn geometry(&self) -> peridot::math::Vector2<u32> {
         self.cached_window_size
     }
 }
@@ -322,13 +322,13 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
         true
     }
 
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         self.x11_ref.borrow().mainwnd_geometry().clone()
     }
 }

@@ -8,7 +8,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::sound_backend::{Float32Converter, SignedInt24LEConverter, SignedInt32LEConverter};
+use crate::sound_backend::{
+    Float32Converter, SignedInt16BEConverter, SignedInt16LEConverter, SignedInt24LEConverter,
+    SignedInt32LEConverter,
+};
 
 use super::{AudioBitstreamConverter, SoundBackend};
 
@@ -113,6 +116,10 @@ impl NativeAudioEngine {
                 Box::new(SignedInt24LEConverter)
             } else if ss.format == pa::SampleFormat::S32LE as _ {
                 Box::new(SignedInt32LEConverter)
+            } else if ss.format == pa::SampleFormat::S16LE as _ {
+                Box::new(SignedInt16LEConverter)
+            } else if ss.format == pa::SampleFormat::S16BE as _ {
+                Box::new(SignedInt16BEConverter)
             } else {
                 panic!("pa: Unsupported sample format: {}", ss.format)
             };
