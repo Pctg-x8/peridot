@@ -221,7 +221,7 @@ impl InputProcessSharedState {
     }
 
     #[inline]
-    pub const fn make_event_receiver(&mut self) -> NativeEventReceiver {
+    pub fn make_event_receiver(&mut self) -> NativeEventReceiver {
         NativeEventReceiver {
             collect_data: &mut self.collected,
             input_map: &self.input_map,
