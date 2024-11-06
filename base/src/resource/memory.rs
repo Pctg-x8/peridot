@@ -1,7 +1,7 @@
 //! DeviceMemory Helper
 
 use bedrock as br;
-use br::{Device, PhysicalDevice};
+use br::PhysicalDevice;
 
 use crate::{
     mthelper::{DynamicMut, SharedRef},
@@ -66,8 +66,8 @@ impl<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory>
 }
 impl<'g, Buffer, Image> MemoryBadget<'g, Buffer, Image>
 where
-    Buffer: br::Buffer<ConcreteDevice = DeviceObject> + br::MemoryBound,
-    Image: br::Image<ConcreteDevice = DeviceObject> + br::MemoryBound,
+    Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = DeviceObject> + br::MemoryBound,
+    Image: br::Image + br::DeviceChild<ConcreteDevice = DeviceObject> + br::MemoryBound,
 {
     pub const fn new(g: &'g crate::Graphics) -> Self {
         Self {

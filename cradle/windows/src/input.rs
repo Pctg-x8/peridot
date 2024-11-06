@@ -1,10 +1,11 @@
 use log::*;
 use parking_lot::RwLock;
 use peridot::{NativeAnalogInput, NativeButtonInput};
-use windows::Win32::Foundation::{GetLastError, ERROR_DEVICE_NOT_CONNECTED, HWND, LPARAM, POINT};
+use std::sync::Arc;
+use windows::Win32::Foundation::{ERROR_DEVICE_NOT_CONNECTED, HWND, LPARAM, POINT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MapVirtualKeyA, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F1, VK_F24,
-    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD9,
+    MapVirtualKeyA, MAPVK_VK_TO_CHAR, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F1,
+    VK_F24, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD9,
     VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::Input::XboxController::{
@@ -19,11 +20,9 @@ use windows::Win32::UI::Input::{
     RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RIDEV_NOLEGACY, RID_INPUT, RIM_TYPEKEYBOARD,
     RIM_TYPEMOUSE,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, MAPVK_VK_TO_CHAR, RI_KEY_BREAK};
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, RI_KEY_BREAK};
 
 use crate::ThreadsafeWindowOps;
-
-use peridot::mthelper::SharedRef;
 
 pub struct RawInputHandler {}
 impl RawInputHandler {
@@ -44,13 +43,10 @@ impl RawInputHandler {
                 hwndTarget: HWND(0),
             },
         ];
-        let r = unsafe {
+        unsafe {
             RegisterRawInputDevices(&ri_devices, std::mem::size_of::<RAWINPUTDEVICE>() as _)
+                .expect("RegisterRawInputDevices failed!")
         };
-        if !r.as_bool() {
-            let ec = unsafe { GetLastError() };
-            error!("RegisterRawInputDevices failed! GetLastError={:?}", ec.ok());
-        }
 
         RawInputHandler {}
     }
@@ -193,11 +189,11 @@ impl RawInputHandler {
 }
 
 pub struct NativeInputHandler {
-    target_hw: SharedRef<ThreadsafeWindowOps>,
+    target_hw: Arc<RwLock<ThreadsafeWindowOps>>,
     xi_handler: RwLock<XInputHandler>,
 }
 impl NativeInputHandler {
-    pub fn new(hw: SharedRef<ThreadsafeWindowOps>) -> Self {
+    pub fn new(hw: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
         Self {
             target_hw: hw,
             xi_handler: RwLock::new(XInputHandler::new()),
@@ -210,12 +206,12 @@ impl peridot::NativeInput for NativeInputHandler {
             return None;
         }
 
-        let mut p0 = POINT { x: 0, y: 0 };
+        let mut p0 = [POINT { x: 0, y: 0 }];
         unsafe {
-            GetCursorPos(&mut p0);
-            self.target_hw.map_points_from_desktop(&mut [p0]);
+            GetCursorPos(&mut p0[0]).expect("Failed to get cursor pos");
+            self.target_hw.read().map_points_from_desktop(&mut p0);
         }
-        Some((p0.x as _, p0.y as _))
+        Some((p0[0].x as _, p0[0].y as _))
     }
 
     fn pull(&mut self, p: peridot::NativeEventReceiver) {

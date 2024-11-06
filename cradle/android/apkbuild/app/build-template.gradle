@@ -1,15 +1,16 @@
-apply plugin: 'com.android.application'
-apply plugin: "kotlin-android"
-apply plugin: 'kotlin-android-extensions'
+plugins {
+    alias libs.plugins.android.app
+    alias libs.plugins.kotlin.android
+}
 
 android {
+    namespace **APKAPPID**
     compileSdkVersion = 28
     
     defaultConfig {
         applicationId = **APKAPPID**
-        minSdkVersion 16
+        minSdkVersion 21
         targetSdkVersion System.getenv("NDK_PLATFORM_TARGET")
-        buildToolsVersion "28.0.3"
         externalNativeBuild.cmake {
             arguments '-DANDROID_STL=c++_shared'
         }
@@ -25,13 +26,17 @@ android {
         jniLibs.srcDir System.getenv("NDK_HOME") + '/sources/third_party/vulkan/src/build-android/jniLibs'
         assets.srcDir '../../assets'
     }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions.jvmTarget = JavaVersion.VERSION_1_8
 }
+
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'com.android.support:appcompat-v7:28.0.0'
-    implementation 'com.android.support.constraint:constraint-layout:1.1.3'
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-}
-repositories {
-    mavenCentral()
+    implementation libs.android.appcompat.v7
+    implementation libs.android.support.constraintLayout
+    implementation libs.kotlin.stdlib
 }

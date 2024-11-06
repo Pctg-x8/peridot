@@ -1,5 +1,4 @@
-use bedrock as br;
-use br::{CommandPool, Device};
+use bedrock::{self as br, CommandBufferMut, CommandPoolMut};
 use std::ops::{Deref, DerefMut};
 
 use super::{DeviceObject, Graphics};
@@ -49,15 +48,34 @@ impl<Device: br::Device> CommandBundle<Device> {
     pub fn reset(&mut self) -> br::Result<()> {
         self.1.reset(true)
     }
+
+    #[inline]
+    pub fn synchronized_nth(
+        &mut self,
+        n: usize,
+    ) -> br::SynchronizedCommandBuffer<br::CommandPoolObject<Device>, br::CommandBufferObject<Device>>
+    {
+        // self.0は必ずself.1から生成されてるのでsafe
+        unsafe { self.0[n].synchronize_with(&mut self.1) }
+    }
 }
 
 pub struct LocalCommandBundle<
     'p,
     CommandBuffer: br::CommandBuffer,
-    CommandPool: br::CommandPool + br::VkHandleMut + 'p,
+    CommandPool: br::CommandPoolMut + 'p,
 >(pub Vec<CommandBuffer>, pub &'p mut CommandPool);
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p>
-    Deref for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPoolMut + 'p> Drop
+    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+{
+    fn drop(&mut self) {
+        unsafe {
+            self.1.free(&self.0[..]);
+        }
+    }
+}
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPoolMut + 'p> Deref
+    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     type Target = [CommandBuffer];
 
@@ -65,19 +83,10 @@ impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::Vk
         &self.0
     }
 }
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p>
-    DerefMut for LocalCommandBundle<'p, CommandBuffer, CommandPool>
+impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPoolMut + 'p> DerefMut
+    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     fn deref_mut(&mut self) -> &mut [CommandBuffer] {
         &mut self.0
-    }
-}
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPool + br::VkHandleMut + 'p> Drop
-    for LocalCommandBundle<'p, CommandBuffer, CommandPool>
-{
-    fn drop(&mut self) {
-        unsafe {
-            self.1.free(&self.0[..]);
-        }
     }
 }

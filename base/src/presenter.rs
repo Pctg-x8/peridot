@@ -1,9 +1,9 @@
 //! Platform Presenter(Swapchain Abstraction)
 
-use bedrock as br;
+use bedrock::{self as br, SemaphoreMut};
 #[cfg(feature = "debug")]
 use br::VkObject;
-use br::{Device, Image, ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
+use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
 
 use crate::{mthelper::SharedRef, DeviceObject};
 
@@ -17,23 +17,23 @@ pub trait PlatformPresenter {
     fn back_buffer_count(&self) -> usize;
     fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>>;
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<'r, CB: br::CommandBufferMut + ?Sized>(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    );
+        recorder: br::CmdRecord<'r, CB, DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, DeviceObject>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut crate::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         back_buffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()>;
     /// Returns whether re-initializing is needed for back-buffer resources
-    fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) -> bool;
-    fn current_geometry_extent(&self) -> peridot_math::Vector2<usize>;
+    fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) -> bool;
+    fn current_geometry_extent(&self) -> peridot_math::Vector2<u32>;
 }
 
 type SharedSwapchainObject<Device, Surface> =
@@ -49,19 +49,19 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
         g: &crate::Graphics,
         surface: Surface,
         surface_info: &crate::SurfaceInfo,
-        default_extent: peridot_math::Vector2<usize>,
+        default_extent: peridot_math::Vector2<u32>,
     ) -> Self {
         let si = g
             .adapter
             .surface_capabilities(&surface)
             .expect("Failed to query Surface Capabilities");
         let ew = if si.currentExtent.width == u32::MAX {
-            default_extent.0 as _
+            default_extent.0
         } else {
             si.currentExtent.width
         };
         let eh = if si.currentExtent.height == u32::MAX {
-            default_extent.1 as _
+            default_extent.1
         } else {
             si.currentExtent.height
         };
@@ -84,7 +84,7 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             buffer_count,
             surface_info.fmt.clone(),
             ext,
-            br::ImageUsage::COLOR_ATTACHMENT,
+            br::ImageUsageFlags::COLOR_ATTACHMENT,
         )
         .present_mode(surface_info.pres_mode)
         .composite_alpha(surface_info.available_composite_alpha)
@@ -146,7 +146,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn new(
         g: &crate::Graphics,
         surface: Surface,
-        default_extent: peridot_math::Vector2<usize>,
+        default_extent: peridot_math::Vector2<u32>,
     ) -> Self {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, &surface)
             .expect("Failed to gather surface info");
@@ -221,46 +221,40 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         self.swapchain.get().back_buffer_images.get(index).cloned()
     }
 
-    pub fn emit_initialize_back_buffer_commands(
+    pub fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, DeviceObject> {
         let image_barriers = self
             .swapchain
             .get()
             .back_buffer_images
             .iter()
             .map(|v| {
-                br::ImageMemoryBarrier::new(
-                    &***v,
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::COLOR.0,
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
-                    br::ImageLayout::Undefined,
-                    br::ImageLayout::PresentSrc,
-                )
+                v.by_ref()
+                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                    .memory_barrier(br::ImageLayout::PresentSrc.from_undefined())
             })
             .collect::<Vec<_>>();
 
-        let _ = recorder.pipeline_barrier(
+        recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             false,
             &[],
             &[],
             &image_barriers,
-        );
+        )
     }
 
     #[inline]
     pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.swapchain.get_mut_lw().swapchain.acquire_next(
             None,
-            br::CompletionHandler::<br::FenceObject<DeviceObject>, _>::Queue(&self.rendering_order),
+            br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_mut_ref()),
         )
     }
 
@@ -275,7 +269,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn render_and_present<'s>(
         &'s mut self,
         g: &mut crate::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         bb_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -325,11 +319,11 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         self.swapchain.get_mut_lw().swapchain.queue_present(
             g.graphics_queue.q.get_mut(),
             bb_index,
-            &[&self.present_order],
+            &[self.present_order.as_transparent_ref()],
         )
     }
 
-    pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<usize>) {
+    pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) {
         if let Some(mut old) = self.swapchain.take_lw() {
             old.back_buffer_images.clear();
             let (_, s) = SharedRef::try_unwrap(old.swapchain)

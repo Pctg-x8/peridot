@@ -2,6 +2,7 @@ target/
 **/*.rs.bk
 *.lock
 .vscode/
+.zed/
 android-build/
 **/*.pvp
 **/*.spv

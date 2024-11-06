@@ -49,6 +49,11 @@ final class NativeGameEngine {
     }
 }
 
+@_cdecl("nsapp_reply_should_terminate")
+func nsapp_reply_should_terminate() {
+    NSApplication.shared.reply(toApplicationShouldTerminate: true)
+}
+
 @_cdecl("nsbundle_path_for_resource")
 func nsbundle_path_for_resource(path: NSString, ext: NSString) -> UnsafeMutableRawPointer? {
     guard let path = Bundle.main.path(forResource: path as String, ofType: ext as String) else { return nil }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ffi::CStr};
 
 use bedrock as br;
 use br::PhysicalDevice;
@@ -33,7 +33,7 @@ impl BorrowFd for ReadinessGuard {
 
 pub struct State {
     close_requested: bool,
-    geometry: peridot::math::Vector2<usize>,
+    geometry: peridot::math::Vector2<u32>,
     pointer_entered: bool,
     pointer_position: peridot::math::Vector2<usize>,
 }
@@ -59,6 +59,7 @@ impl Dispatch<XdgWmBase, ()> for State {
     }
 }
 impl Dispatch<XdgSurface, ()> for State {
+    #[tracing::instrument(skip(state, proxy, _data, _conn, _qhandle))]
     fn event(
         state: &mut Self,
         proxy: &XdgSurface,
@@ -69,7 +70,8 @@ impl Dispatch<XdgSurface, ()> for State {
     ) {
         match event {
             wayland_protocols::xdg::shell::client::xdg_surface::Event::Configure { serial } => {
-                trace!("configure xdgsurface");
+                tracing::trace!("configure xdgsurface");
+
                 proxy.ack_configure(serial);
                 if state.geometry.0 > 0 && state.geometry.1 > 0 {
                     proxy.set_window_geometry(0, 0, state.geometry.0 as _, state.geometry.1 as _);
@@ -80,6 +82,7 @@ impl Dispatch<XdgSurface, ()> for State {
     }
 }
 impl Dispatch<XdgToplevel, ()> for State {
+    #[tracing::instrument(skip(state, _proxy, _data, _conn, _qhandle))]
     fn event(
         state: &mut Self,
         _proxy: &XdgToplevel,
@@ -97,7 +100,8 @@ impl Dispatch<XdgToplevel, ()> for State {
                 height,
                 states,
             } => {
-                debug!("Configure XdgToplevel: {width} {height} {states:?}");
+                tracing::trace!({ width, height, ?states }, "Configure XdgToplevel");
+
                 if width > 0 && height > 0 {
                     state.geometry = peridot::math::Vector2(width as _, height as _);
                 }
@@ -165,7 +169,7 @@ impl Wayland {
             return None;
         };
 
-        info!("Using Wayland as window backend");
+        tracing::info!("Using Wayland as window backend");
 
         let mut registry_queue = con.new_event_queue();
         let mut interfaces = RegistryCollector(HashMap::new());
@@ -240,13 +244,13 @@ impl Wayland {
 impl WindowBackend for Wayland {
     fn show(&mut self) {}
 
-    fn geometry(&self) -> peridot::math::Vector2<usize> {
+    fn geometry(&self) -> peridot::math::Vector2<u32> {
         self.state.geometry
     }
 }
 impl PresenterProvider for SharedMutableRef<Wayland> {
     type Presenter = Presenter;
-    const SURFACE_EXT_NAME: &'static str = "VK_KHR_wayland_surface";
+    const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_wayland_surface";
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter {
         Presenter::new(g, g.graphics_queue_family_index(), self)
@@ -346,10 +350,13 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.requesting_back_buffer_layout()
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
@@ -358,7 +365,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -371,13 +378,13 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
         true
     }
 
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         self.window_backend.borrow().state.geometry
     }
 }
@@ -433,7 +440,7 @@ impl Dispatch<WlRegistry, ()> for RegistryCollector {
                 interface,
                 version,
             } => {
-                debug!("Wayland Registry collected: {interface} version={version}");
+                tracing::debug!({ interface, version }, "Wayland Registry collected");
                 state.0.insert(interface, (name, version));
             }
             wayland_client::protocol::wl_registry::Event::GlobalRemove { name } => {

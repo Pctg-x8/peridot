@@ -13,7 +13,7 @@ impl<Device: br::Device> StateFence<br::FenceObject<Device>> {
         br::FenceBuilder::new().create(d).map(Self::Unsignaled)
     }
 }
-impl<Fence: br::Fence + br::VkHandleMut> StateFence<Fence> {
+impl<Fence: br::FenceMut> StateFence<Fence> {
     /// Set state to Signaled
     ///
     /// # Safety

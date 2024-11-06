@@ -1,9 +1,10 @@
+{-# LANGUAGE NoOverloadedStrings #-}
+
 module IntegrityTest.PullRequestTriggered (integrityTest) where
 
 import Control.Eff (run)
-import Control.Eff.Reader.Strict (runReader)
-import Control.Monad (join)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
+import Data.Function ((&))
 import Data.Map qualified as M
 import IntegrityTest.Shared
 import SlackNotification
@@ -15,12 +16,11 @@ repositoryOwnerLoginExpr, repositoryNameExpr :: String
 repositoryOwnerLoginExpr = GHA.mkExpression "github.event.repository.owner.login"
 repositoryNameExpr = GHA.mkExpression "github.event.repository.name"
 
-secretGitHubTokenExpr :: String
-secretGitHubTokenExpr = GHA.mkExpression "secrets.GITHUB_TOKEN"
-
-preconditionOutputHasChanges, preconditionOutputHasWorkflowChanges :: String
+preconditionOutputHasChanges :: String
 preconditionOutputHasChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_code_changes" <> " == 1"
-preconditionOutputHasWorkflowChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_workflow_changes" <> " == 1"
+
+-- preconditionOutputHasWorkflowChanges :: String
+-- preconditionOutputHasWorkflowChanges = GHA.mkExpression $ GHA.mkNeedsOutputPath "preconditions" "has_workflow_changes" <> " == 1"
 
 slackNotifyProvider :: SlackNotificationProvider
 slackNotifyProvider = SlackNotificationProvider succ' fail'
@@ -95,10 +95,11 @@ preconditions =
                \echo \"has_workflow_changes=$HAS_WORKFLOW_CHANGES\" >> $GITHUB_OUTPUT\n\
                \"
     queryString = "query($cursor: String) { repository(owner: \"" <> repositoryOwnerLoginExpr <> "\", name: \"" <> repositoryNameExpr <> "\") { pullRequest(number: " <> pullRequestNumberExpr <> ") { files(first: 50, after: $cursor) { nodes { path } pageInfo { hasNextPage endCursor } } } } }"
-    apiRequest = "curl -s -H \"Authorization: Bearer " <> secretGitHubTokenExpr <> "\" -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
+    apiRequestAuthHeader = "\"Authorization: Bearer " <> GHA.githubToken <> "\""
+    apiRequest = "curl -s -H " <> apiRequestAuthHeader <> " -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
 
 integrityTest :: GHA.Workflow
-integrityTest = run $ runReader slackNotifyProvider $ do
+integrityTest = run $ withSlackNotification slackNotifyProvider do
   let preconditions' = M.singleton "preconditions" preconditions
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 
@@ -120,15 +121,11 @@ integrityTest = run $ runReader slackNotifyProvider $ do
           ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
       ]
 
-  let trigger =
-        GHA.onPullRequest $
-          GHA.workflowPullRequestTrigger
-            { GHA.prTriggerTypes = ["opened", "synchronize"]
-            }
-  pure $
-    GHA.buildWorkflow
+  pure
+    $ GHA.buildWorkflow
       [ GHA.namedAs "Integrity Check",
-        GHA.workflowConcurrency $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
-        GHA.workflowJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
+        GHA.concurrentPolicy $ GHA.ConcurrentCancelledGroup $ GHA.mkExpression "github.ref",
+        GHA.workflowReplaceJobs $ preconditions' ~=> checkJobs ~=> reportSuccessJob'
       ]
-      trigger
+    $ GHA.onPullRequest
+    $ GHA.workflowPullRequestTrigger & GHA.filterType "opened" & GHA.filterType "synchronize"

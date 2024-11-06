@@ -61,7 +61,7 @@ impl Context {
     }
 }
 
-fn tfconv_st_ext(v: Transform2D<f32>) -> ([f32; 4], [f32; 2]) {
+fn tfconv_st_ext(v: &Transform2D<f32>) -> ([f32; 4], [f32; 2]) {
     ([v.m11, v.m22, v.m31, v.m32], [v.m21, v.m12])
 }
 
@@ -79,26 +79,31 @@ impl Context {
         }
     }
 
-    pub fn text(&mut self, font: &Font, text: &str) -> Result<&mut Self, GlyphLoadingError> {
+    pub fn text<F>(&mut self, font: &F, text: &str) -> Result<&mut Self, GlyphLoadingError>
+    where
+        F: Font,
+        <F as Font>::GlyphID: Default,
+    {
         let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or_default());
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
+        let mut g0 = Partitioner::new();
         for g in glyphs {
-            let (adv, size) = (font.advance_h(g)?, font.bounds(g)?);
-            let mut g0 = Partitioner::new();
-            let tf = self.current_transform.post_translate(Vector2D::new(
-                left_offs * font.scale_value() * self.screen_scaling,
-                -font.ascent() * font.scale_value() * self.screen_scaling,
-            ));
-            if font.outline(g, g0.builder_mut()).is_ok() {
-                g0.partition(FillRule::Winding);
-                g0.builder_mut().build_and_reset();
-                let (st, ext) = tfconv_st_ext(tf);
-                self.meshes.push((g0.into_mesh(), st, ext));
-            }
+            let (adv, size) = (font.advance_h(&g)?, font.bounds(&g)?);
+            let tf = euclid::Transform2D::create_translation(
+                left_offs * self.screen_scaling + 0.5,
+                -font.ascent() * self.screen_scaling + 0.5,
+            );
+            let _ = font.outline(&g, &tf, g0.builder_mut());
             left_offs += adv;
             max_height = max_height.max(size.size.height);
         }
-        return Ok(self);
+
+        g0.partition(FillRule::Winding);
+        g0.builder_mut().build_and_reset();
+        let (st, ext) = tfconv_st_ext(&self.current_transform);
+        self.meshes.push((g0.into_mesh(), st, ext));
+
+        Ok(self)
     }
 }
 /*type V2F32 = euclid::Vector2D<f32>;
@@ -457,7 +462,7 @@ impl<'c> FigureContext<'c> {
     pub fn end(mut self) -> &'c mut Context {
         self.partitioner.partition(self.fill_rule);
         self.partitioner.builder_mut().build_and_reset();
-        let (st, ext) = tfconv_st_ext(self.ctx.current_transform);
+        let (st, ext) = tfconv_st_ext(&self.ctx.current_transform);
         self.ctx
             .meshes
             .push((self.partitioner.into_mesh(), st, ext));

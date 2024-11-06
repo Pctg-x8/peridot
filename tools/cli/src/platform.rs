@@ -17,6 +17,21 @@ arg_enum! {
         Android
     }
 }
+impl Platform {
+    pub const fn runtime() -> Option<Self> {
+        if cfg!(windows) {
+            Some(Self::Windows)
+        } else if cfg!(target_os = "macos") {
+            Some(Self::Mac)
+        } else if cfg!(target_os = "linux") {
+            Some(Self::Linux)
+        } else if cfg!(target_os = "android") {
+            Some(Self::Android)
+        } else {
+            None
+        }
+    }
+}
 
 pub struct BuildOptions<'s> {
     pub userlib: &'s Path,
@@ -24,7 +39,7 @@ pub struct BuildOptions<'s> {
     pub engine_features: Vec<&'s str>,
     pub update_deps: bool,
     pub ext_asset_path: Option<std::borrow::Cow<'s, Path>>,
-    pub entry_ty_name: &'s str,
+    pub entry_fn_name: &'s str,
     pub appid: &'s str,
     pub fast_build: bool,
     pub release: bool,
@@ -37,7 +52,7 @@ impl<'s> Default for BuildOptions<'s> {
             engine_features: Vec::new(),
             update_deps: false,
             ext_asset_path: None,
-            entry_ty_name: "",
+            entry_fn_name: "game_main",
             appid: "",
             fast_build: false,
             release: false,

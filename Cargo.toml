@@ -1,5 +1,6 @@
 [workspace]
-exclude = ["extras/", "cradle/", "examples/", "tools"]
+resolver = "2"
+exclude = ["extras/", "cradle/", "examples/", "tools/"]
 members = [
     "base",
     "derive",
@@ -10,7 +11,14 @@ members = [
     "modules/image",
     "modules/vg",
     "modules/transition",
+    "modules/command-object",
+    "modules/memory-manager",
 ]
 
 [workspace.dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+tracing = "0.1"
+async-std = "1.13"
+futures-util = "0.3"
+cfg-if = "1.0"
+

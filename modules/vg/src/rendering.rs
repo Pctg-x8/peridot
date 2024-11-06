@@ -9,6 +9,10 @@ use peridot::{
     BufferContent, BufferPrealloc, DefaultRenderCommands, Engine, LayoutedPipeline, ModelData,
     NativeLinker,
 };
+use peridot_command_object::{
+    BindGraphicsPipeline, DescriptorSets, GraphicsCommand, GraphicsCommandCombiner, PushConstant,
+    RangedBuffer, SimpleDrawIndexed, StandardIndexedMesh,
+};
 use std::mem::size_of;
 use std::ops::Range;
 
@@ -126,7 +130,17 @@ impl ModelData for Context {
         mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
-        let transforms_stg = unsafe { mem.slice_mut(offsets.transforms, self.meshes().len()) };
+        unsafe { self.write_data_into(mem.get_mut(0) as _, offsets) }
+    }
+}
+impl Context {
+    pub unsafe fn write_data_into(
+        &self,
+        ptr: *mut u8,
+        offsets: ContextPreallocOffsets,
+    ) -> RendererParams {
+        let transforms_stg =
+            core::slice::from_raw_parts_mut(ptr.add(offsets.transforms) as _, self.meshes.len());
         let mut vofs = offsets.interior_positions;
         let (mut cpofs, mut chofs) = (offsets.curve_positions, offsets.curve_helper_coords);
         let mut interior_index_range_per_mesh = Vec::new();
@@ -142,50 +156,54 @@ impl ModelData for Context {
             let ii_start = interior_index_offset;
             interior_index_offset += v.b_quad_vertex_interior_indices.len() as u32;
             interior_index_range_per_mesh.push(ii_start..interior_index_offset);
-            unsafe {
-                mem.slice_mut(vofs, v.b_quad_vertex_positions.len())
-                    .clone_from_slice(&v.b_quad_vertex_positions);
-                mem.slice_mut(cpofs, v.b_vertex_positions.len())
-                    .clone_from_slice(&v.b_vertex_positions);
-                mem.slice_mut(chofs, v.b_vertex_loop_blinn_data.len())
-                    .clone_from_slice(&v.b_vertex_loop_blinn_data);
 
-                let idxslice = mem.slice_mut(
-                    offsets.interior_indices + ii_start as usize * size_of::<u32>(),
-                    v.b_quad_vertex_interior_indices.len(),
-                );
-                for (i, ib) in v
-                    .b_quad_vertex_interior_indices
-                    .iter()
-                    .zip(idxslice.iter_mut())
-                {
-                    *ib = i + vindex_offset;
-                }
-                let ci_start = curve_index_offset;
-                for bq in &v.b_quads {
-                    if bq.upper_control_point_vertex_index != 0xffff_ffff {
-                        let idx = mem.slice_mut(
-                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
-                            3,
-                        );
-                        idx[0] = curve_vindex_offset + bq.upper_control_point_vertex_index;
-                        idx[1] = curve_vindex_offset + bq.upper_right_vertex_index;
-                        idx[2] = curve_vindex_offset + bq.upper_left_vertex_index;
-                        curve_index_offset += 3;
-                    }
-                    if bq.lower_control_point_vertex_index != 0xffff_ffff {
-                        let idx = mem.slice_mut(
-                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
-                            3,
-                        );
-                        idx[0] = curve_vindex_offset + bq.lower_control_point_vertex_index;
-                        idx[1] = curve_vindex_offset + bq.lower_right_vertex_index;
-                        idx[2] = curve_vindex_offset + bq.lower_left_vertex_index;
-                        curve_index_offset += 3;
-                    }
-                }
-                curve_index_range_per_mesh.push(ci_start..curve_index_offset);
+            core::slice::from_raw_parts_mut(ptr.add(vofs) as _, v.b_quad_vertex_positions.len())
+                .clone_from_slice(&v.b_quad_vertex_positions);
+            core::slice::from_raw_parts_mut(ptr.add(cpofs) as _, v.b_vertex_positions.len())
+                .clone_from_slice(&v.b_vertex_positions);
+            core::slice::from_raw_parts_mut(ptr.add(chofs) as _, v.b_vertex_loop_blinn_data.len())
+                .clone_from_slice(&v.b_vertex_loop_blinn_data);
+
+            let idxslice = core::slice::from_raw_parts_mut(
+                ptr.add(offsets.interior_indices + ii_start as usize * size_of::<u32>()) as _,
+                v.b_quad_vertex_interior_indices.len(),
+            );
+            for (i, ib) in v
+                .b_quad_vertex_interior_indices
+                .iter()
+                .zip(idxslice.iter_mut())
+            {
+                *ib = i + vindex_offset;
             }
+            let ci_start = curve_index_offset;
+            for bq in &v.b_quads {
+                if bq.upper_control_point_vertex_index != 0xffff_ffff {
+                    let idx = core::slice::from_raw_parts_mut(
+                        ptr.add(
+                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
+                        ) as _,
+                        3,
+                    );
+                    idx[0] = curve_vindex_offset + bq.upper_control_point_vertex_index;
+                    idx[1] = curve_vindex_offset + bq.upper_right_vertex_index;
+                    idx[2] = curve_vindex_offset + bq.upper_left_vertex_index;
+                    curve_index_offset += 3;
+                }
+                if bq.lower_control_point_vertex_index != 0xffff_ffff {
+                    let idx = core::slice::from_raw_parts_mut(
+                        ptr.add(
+                            offsets.curve_indices + curve_index_offset as usize * size_of::<u32>(),
+                        ) as _,
+                        3,
+                    );
+                    idx[0] = curve_vindex_offset + bq.lower_control_point_vertex_index;
+                    idx[1] = curve_vindex_offset + bq.lower_right_vertex_index;
+                    idx[2] = curve_vindex_offset + bq.lower_left_vertex_index;
+                    curve_index_offset += 3;
+                }
+            }
+            curve_index_range_per_mesh.push(ci_start..curve_index_offset);
+
             vofs += v.b_quad_vertex_positions.len() * size_of::<BQuadVertexPositions>();
             cpofs += v.b_vertex_positions.len() * size_of::<[f32; 2]>();
             chofs += v.b_vertex_loop_blinn_data.len() * size_of::<BVertexLoopBlinnData>();
@@ -205,73 +223,224 @@ impl ModelData for Context {
 impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for RendererParams {
     type Extras = RendererExternalInstances<'e, Device>;
 
-    fn default_render_commands<NL: NativeLinker>(
+    fn default_render_commands<
+        'r,
+        NL: NativeLinker,
+        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
+    >(
         &self,
         e: &Engine<NL>,
-        cmd: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-        buffer: &(impl br::Buffer<ConcreteDevice = Device> + ?Sized),
+        cmd: br::CmdRecord<'r, CB, Device>,
+        buffer: &(impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
-    ) {
+    ) -> br::CmdRecord<'r, CB, Device> {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
-        extras.interior_pipeline.bind(cmd);
-        let _ = cmd
-            .push_graphics_constant(br::ShaderStage::VERTEX, 0, &renderscale)
-            .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 3, &0u32)
+        let cmd = cmd
+            .bind_graphics_pipeline(extras.interior_pipeline.pipeline())
+            .push_constant(
+                extras.interior_pipeline.layout(),
+                br::ShaderStage::VERTEX,
+                0,
+                &renderscale,
+            )
+            .push_constant(
+                extras.interior_pipeline.layout(),
+                br::ShaderStage::VERTEX,
+                4 * 3,
+                &0u32,
+            )
             .bind_graphics_descriptor_sets(
+                extras.interior_pipeline.layout(),
                 0,
                 &[extras.transform_buffer_descriptor_set.into()],
                 &[],
-            );
-
-        let _ = cmd
-            .bind_vertex_buffers(0, &[(buffer, self.buffer_offsets.interior_positions)])
+            )
+            .bind_vertex_buffers(
+                0,
+                &[br::BufferObjectRef::new(buffer)],
+                &[self.buffer_offsets.interior_positions as _],
+            )
             .bind_index_buffer(
                 buffer,
                 self.buffer_offsets.interior_indices,
                 br::IndexType::U32,
-            );
-        for (n, ir) in self
-            .render_info
-            .interior_index_range_per_mesh
-            .iter()
-            .enumerate()
-        {
-            // skip if there is no indices
-            if ir.end == ir.start {
-                continue;
-            }
+            )
+            .inject(|r| {
+                self.render_info
+                    .interior_index_range_per_mesh
+                    .iter()
+                    .enumerate()
+                    // skip if there is no indices
+                    .filter(|(_, ir)| ir.end != ir.start)
+                    .fold(r, |r, (n, ir)| {
+                        r.push_constant(
+                            extras.interior_pipeline.layout(),
+                            br::ShaderStage::VERTEX,
+                            4 * 2,
+                            &(n as u32),
+                        )
+                        .draw_indexed(
+                            (ir.end - ir.start) as _,
+                            1,
+                            ir.start as _,
+                            0,
+                            0,
+                        )
+                    })
+            });
 
-            let _ = cmd
-                .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
-                .draw_indexed((ir.end - ir.start) as _, 1, ir.start as _, 0, 0);
-        }
-        extras.curve_pipeline.bind(cmd);
-        let _ = cmd
+        cmd.bind_graphics_pipeline(extras.curve_pipeline.pipeline())
             .bind_vertex_buffers(
                 0,
                 &[
-                    (buffer, self.buffer_offsets.curve_positions),
-                    (buffer, self.buffer_offsets.curve_helper_coords),
+                    br::BufferObjectRef::new(buffer),
+                    br::BufferObjectRef::new(buffer),
+                ],
+                &[
+                    self.buffer_offsets.curve_positions as _,
+                    self.buffer_offsets.curve_helper_coords as _,
                 ],
             )
             .bind_index_buffer(
                 buffer,
                 self.buffer_offsets.curve_indices,
                 br::IndexType::U32,
-            );
-        for (n, ir) in self
-            .render_info
-            .curve_index_range_per_mesh
-            .iter()
-            .enumerate()
-        {
-            if ir.end == ir.start {
-                continue;
-            }
+            )
+            .inject(|r| {
+                self.render_info
+                    .curve_index_range_per_mesh
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ir)| ir.end != ir.start)
+                    .fold(r, |r, (n, ir)| {
+                        r.push_constant(
+                            extras.curve_pipeline.layout(),
+                            br::ShaderStage::VERTEX,
+                            4 * 2,
+                            &(n as u32),
+                        )
+                        .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0)
+                    })
+            })
+    }
+}
 
-            let _ = cmd
-                .push_graphics_constant(br::ShaderStage::VERTEX, 4 * 2, &(n as u32))
-                .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0);
-        }
+pub struct RenderVG<
+    Device: br::Device,
+    Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = Device>,
+> {
+    pub params: RendererParams,
+    pub interior_pipeline:
+        LayoutedPipeline<br::PipelineObject<Device>, SharedRef<br::PipelineLayoutObject<Device>>>,
+    pub curve_pipeline:
+        LayoutedPipeline<br::PipelineObject<Device>, SharedRef<br::PipelineLayoutObject<Device>>>,
+    pub transform_buffer_descriptor_set: br::DescriptorSet,
+    pub target_pixels: Vector2<f32>,
+    pub buffer: Buffer,
+    pub rendering_precision: f32,
+}
+impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = Device>>
+    RenderVG<Device, Buffer>
+{
+    pub fn set_target_pixels(&mut self, new_target_pixels: Vector2<f32>) {
+        self.target_pixels = new_target_pixels;
+    }
+
+    pub fn replace_buffer(&mut self, new_buffer: Buffer) -> Buffer {
+        core::mem::replace(&mut self.buffer, new_buffer)
+    }
+}
+impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = Device>>
+    GraphicsCommand<Device> for RenderVG<Device, Buffer>
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device> {
+        let render_scale = self.target_pixels.clone() * self.rendering_precision.recip();
+
+        let common_configs = (
+            PushConstant::for_vertex(self.interior_pipeline.layout(), 0, render_scale),
+            PushConstant::for_vertex(self.interior_pipeline.layout(), 4 * 3, 0u32),
+            DescriptorSets(vec![self.transform_buffer_descriptor_set])
+                .into_bind_graphics(self.interior_pipeline.layout()),
+        );
+
+        let interior_mesh = StandardIndexedMesh {
+            vertex_buffers: vec![RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.interior_positions as _,
+                1,
+            )],
+            index_buffer: RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.interior_indices as _,
+                1,
+            ),
+            index_type: br::IndexType::U32,
+            vertex_count: 0,
+        };
+        let curve_mesh = StandardIndexedMesh {
+            vertex_buffers: vec![
+                RangedBuffer::from_offset_length(
+                    &self.buffer,
+                    self.params.buffer_offsets.curve_positions as _,
+                    1,
+                ),
+                RangedBuffer::from_offset_length(
+                    &self.buffer,
+                    self.params.buffer_offsets.curve_helper_coords as _,
+                    1,
+                ),
+            ],
+            index_buffer: RangedBuffer::from_offset_length(
+                &self.buffer,
+                self.params.buffer_offsets.curve_indices as _,
+                1,
+            ),
+            index_type: br::IndexType::U32,
+            vertex_count: 0,
+        };
+
+        let interior_render = interior_mesh.ref_pre_configure_for_draw().then(
+            self.params
+                .render_info
+                .interior_index_range_per_mesh
+                .iter()
+                .enumerate()
+                // skip if there is no indices
+                .filter(|(_, ir)| ir.end != ir.start)
+                .map(|(n, ir)| {
+                    (
+                        PushConstant::for_vertex(self.interior_pipeline.layout(), 4 * 2, n as u32),
+                        SimpleDrawIndexed::new(ir.end - ir.start, 1).from_index(ir.start),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        let curve_render = curve_mesh.ref_pre_configure_for_draw().then(
+            self.params
+                .render_info
+                .curve_index_range_per_mesh
+                .iter()
+                .enumerate()
+                // skip if there is no indices
+                .filter(|(_, ir)| ir.end != ir.start)
+                .map(|(n, ir)| {
+                    (
+                        PushConstant::for_vertex(self.curve_pipeline.layout(), 4 * 2, n as u32),
+                        SimpleDrawIndexed::new(ir.end - ir.start, 1).from_index(ir.start),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        (
+            interior_render.after_of(
+                BindGraphicsPipeline(self.interior_pipeline.pipeline()).then(common_configs),
+            ),
+            curve_render.after_of(BindGraphicsPipeline(self.curve_pipeline.pipeline())),
+        )
+            .execute(cb)
     }
 }

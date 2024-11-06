@@ -68,9 +68,20 @@ impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::VkHandle for Buffer<Back
         self.0.native_ptr()
     }
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::DeviceChild for Buffer<Backend, Memory> {
+impl<Backend: br::Buffer + br::DeviceChildHandle, Memory: br::DeviceMemory> br::DeviceChildHandle
+    for Buffer<Backend, Memory>
+{
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.0.device_handle()
+    }
+}
+impl<Backend: br::Buffer + br::DeviceChild, Memory: br::DeviceMemory> br::DeviceChild
+    for Buffer<Backend, Memory>
+{
     type ConcreteDevice = Backend::ConcreteDevice;
 
+    #[inline(always)]
     fn device(&self) -> &Self::ConcreteDevice {
         self.0.device()
     }
@@ -226,6 +237,9 @@ impl BufferContent {
             std::mem::align_of::<T>() as _,
         )
     }
+    pub const fn vertices_for<T>(slice: &[T]) -> Self {
+        Self::vertices::<T>(slice.len())
+    }
 
     pub const fn index<T>() -> Self {
         BufferContent::Index(
@@ -291,6 +305,26 @@ impl BufferContent {
             std::mem::align_of::<T>() as _,
         )
     }
+
+    pub const fn raw<T>() -> Self {
+        BufferContent::Raw(
+            std::mem::size_of::<T>() as _,
+            std::mem::align_of::<T>() as _,
+        )
+    }
+    pub const fn raw_dynarray<T>(count: usize) -> Self {
+        BufferContent::Raw(
+            std::mem::size_of::<T>() as u64 * count as u64,
+            std::mem::align_of::<T>() as _,
+        )
+    }
+
+    pub const fn raw_for_slice<T>(slice: &[T]) -> Self {
+        Self::Raw(
+            (core::mem::size_of::<T>() * slice.len()) as _,
+            core::mem::align_of::<T>() as _,
+        )
+    }
 }
 #[derive(Clone)]
 pub struct BufferPrealloc<'g> {
@@ -309,6 +343,15 @@ impl<'g> BufferPrealloc<'g> {
             total: 0,
             common_align: 1,
         }
+    }
+
+    pub fn build_desc(&self) -> br::BufferDesc {
+        br::BufferDesc::new(self.total as _, self.usage)
+    }
+
+    /// this ignores usage flags from appended contents
+    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferDesc {
+        br::BufferDesc::new(self.total as _, usage)
     }
 
     pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {

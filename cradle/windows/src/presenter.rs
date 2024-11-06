@@ -1,8 +1,13 @@
+use crate::ThreadsafeWindowOps;
 use bedrock::{self as br, Device, ImageChild, SubmissionBatch};
 use br::{Image, ImageSubresourceSlice, Semaphore};
-use peridot::mthelper::SharedRef;
+use parking_lot::RwLock;
+use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
+use std::sync::Arc;
 #[cfg(feature = "transparent")]
-use windows::core::Interface;
+use windows::core::ComInterface;
+#[cfg(feature = "transparent")]
+use windows::Win32::Foundation::GENERIC_ALL;
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 #[cfg(feature = "transparent")]
@@ -26,19 +31,15 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_DISCARD,
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
-#[cfg(feature = "transparent")]
-use windows::Win32::System::SystemServices::GENERIC_ALL;
-
-use crate::ThreadsafeWindowOps;
 
 #[cfg(not(feature = "transparent"))]
 pub struct Presenter {
-    _window: SharedRef<ThreadsafeWindowOps>,
+    _window: Arc<RwLock<ThreadsafeWindowOps>>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: SharedRef<ThreadsafeWindowOps>) -> Self {
+    pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
         use bedrock::PhysicalDevice;
 
         if !g
@@ -49,7 +50,7 @@ impl Presenter {
         }
         let s = g
             .adapter()
-            .new_surface_win32(super::module_handle(), window.0)
+            .new_surface_win32(super::module_handle(), window.read().0)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
@@ -88,10 +89,13 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.back_buffer(index)
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
@@ -103,7 +107,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         back_buffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -117,13 +121,13 @@ impl peridot::PlatformPresenter for Presenter {
         )
     }
     /// Returns whether re-initializing is needed for back-buffer resources
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs re-initializing back-buffer resource
         true
     }
     // unimplemented?
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)
     }
 }
@@ -223,22 +227,19 @@ impl InteropBackbufferResource {
                 .CreateSharedHandle(
                     resource,
                     None,
-                    GENERIC_ALL,
+                    GENERIC_ALL.0,
                     windows::core::PCWSTR(hname.as_ptr()),
                 )
                 .expect("Failed to create SharedHandle from D3D12")
         });
         let vk_shared_handle =
             br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
-        let image = br::ImageDesc::new(
-            size,
-            format,
-            br::ImageUsage::COLOR_ATTACHMENT,
-            br::ImageLayout::Preinitialized,
-        )
-        .exportable_as(vk_shared_handle.0.into())
-        .create(g.device().clone())
-        .expect("Failed to create Interop Image");
+        let image = br::ImageDesc::new(size, format)
+            .as_color_attachment()
+            .init_layout(br::ImageLayout::Preinitialized)
+            .exportable_as(vk_shared_handle.0.into())
+            .create(g.device().clone())
+            .expect("Failed to create Interop Image");
         let image_mreq = image.requirements();
         let handle_import_props = unsafe {
             vk_shared_handle
@@ -255,7 +256,7 @@ impl InteropBackbufferResource {
             .index();
         let memory = SharedRef::new(
             vk_shared_handle
-                .into_import_request(memory_type_index, &hname)
+                .into_import_request(memory_type_index, Some(&hname))
                 .execute(g.device().clone())
                 .expect("Failed to import memory")
                 .into(),
@@ -285,12 +286,9 @@ struct Composition {
 #[cfg(feature = "transparent")]
 impl Composition {
     fn new(w: &ThreadsafeWindowOps, swapchain: &IDXGISwapChain3) -> Self {
-        let mut dh = std::ptr::null_mut();
-        unsafe {
-            DCompositionCreateDevice3(None, &IDCompositionDesktopDevice::IID, &mut dh)
-                .expect("Failed to create DirectComposition Device")
+        let device: IDCompositionDesktopDevice = unsafe {
+            DCompositionCreateDevice3(None).expect("Failed to create DirectComposition Device")
         };
-        let device = unsafe { std::mem::transmute::<_, IDCompositionDesktopDevice>(dh) };
         let target = unsafe {
             device
                 .CreateTargetForHwnd(w.0, true)
@@ -311,7 +309,7 @@ impl Composition {
             device.Commit().expect("Failed to commit composition");
         }
 
-        Composition {
+        Self {
             device,
             target,
             root,
@@ -321,7 +319,7 @@ impl Composition {
 
 #[cfg(feature = "transparent")]
 pub struct Presenter {
-    _window: SharedRef<ThreadsafeWindowOps>,
+    _window: Arc<RwLock<ThreadsafeWindowOps>>,
     _comp: Composition,
     device12: ID3D12Device,
     q: ID3D12CommandQueue,
@@ -338,9 +336,13 @@ pub struct Presenter {
     present_inflight: bool,
 }
 #[cfg(feature = "transparent")]
+unsafe impl Sync for Presenter {}
+#[cfg(feature = "transparent")]
+unsafe impl Send for Presenter {}
+#[cfg(feature = "transparent")]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: SharedRef<ThreadsafeWindowOps>) -> Self {
-        let rc = window.get_client_rect();
+    pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
+        let rc = window.read().get_client_rect();
 
         let factory: IDXGIFactory2 = unsafe {
             CreateDXGIFactory2(if cfg!(debug_assertions) {
@@ -411,7 +413,7 @@ impl Presenter {
         let sc = sc
             .cast::<IDXGISwapChain3>()
             .expect("Failed to get swapchain 3 interface");
-        let comp = Composition::new(&window, &sc);
+        let comp = Composition::new(&window.read(), &sc);
         let bb_size = br::vk::VkExtent2D {
             width: (rc.right - rc.left) as _,
             height: (rc.bottom - rc.top) as _,
@@ -458,7 +460,7 @@ impl Presenter {
                 .CreateSharedHandle(
                     &render_completion_fence,
                     None,
-                    GENERIC_ALL,
+                    GENERIC_ALL.0,
                     windows::core::PCWSTR(render_completion_fence_name.as_ptr()),
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence")
@@ -473,7 +475,7 @@ impl Presenter {
         let present_completion_event =
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
 
-        Presenter {
+        Self {
             _window: window,
             _comp: comp,
             device12,
@@ -511,10 +513,13 @@ impl peridot::PlatformPresenter for Presenter {
         self.back_buffers.get(index).map(|b| b.image_view.clone())
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         let barriers = self
             .back_buffers
             .iter()
@@ -522,18 +527,18 @@ impl peridot::PlatformPresenter for Presenter {
                 b.image_view
                     .image()
                     .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                    .memory_barrier(br::ImageLayout::Preinitialized, br::ImageLayout::General)
+                    .memory_barrier(br::ImageLayout::Preinitialized.to(br::ImageLayout::General))
             })
             .collect::<Vec<_>>();
 
-        let _ = recorder.pipeline_barrier(
+        recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::TOP_OF_PIPE,
             true,
             &[],
             &[],
             &barriers,
-        );
+        )
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         Ok(unsafe { self.sc.GetCurrentBackBufferIndex() })
@@ -547,7 +552,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         _backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -599,7 +604,7 @@ impl peridot::PlatformPresenter for Presenter {
 
         if self.present_inflight {
             self.present_completion_event
-                .wait(windows::Win32::System::WindowsProgramming::INFINITE);
+                .wait(windows::Win32::System::Threading::INFINITE);
             self.present_inflight = false;
         }
 
@@ -631,10 +636,10 @@ impl peridot::PlatformPresenter for Presenter {
         Ok(())
     }
     /// Returns whether re-initializing is needed for backbuffer resources
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         if self.present_inflight {
             self.present_completion_event
-                .wait(windows::Win32::System::WindowsProgramming::INFINITE);
+                .wait(windows::Win32::System::Threading::INFINITE);
             self.present_inflight = false;
         }
 
@@ -672,7 +677,7 @@ impl peridot::PlatformPresenter for Presenter {
         true
     }
     // unimplemented?
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)
     }
 }
@@ -680,6 +685,6 @@ impl peridot::PlatformPresenter for Presenter {
 impl Drop for Presenter {
     fn drop(&mut self) {
         self.present_completion_event
-            .wait(windows::Win32::System::WindowsProgramming::INFINITE);
+            .wait(windows::Win32::System::Threading::INFINITE);
     }
 }

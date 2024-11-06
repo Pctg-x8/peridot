@@ -1,6 +1,6 @@
-use bedrock as br;
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
 use br::{resources::Image, SubmissionBatch};
-use br::{CommandBuffer, DescriptorPool, Device, ImageChild, ImageSubresourceSlice};
+use br::{Device, GraphicsPipelineBuilder, ImageChild, ImageSubresourceSlice};
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{
@@ -8,9 +8,10 @@ use peridot::math::{
 };
 use peridot::mthelper::{DynamicMutabilityProvider, SharedRef};
 use peridot::{
-    audio::StreamingPlayableWav, BufferContent, BufferPrealloc, CBSubmissionType, CommandBundle,
-    LayoutedPipeline, SubpassDependencyTemplates,
+    audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, SubpassDependencyTemplates,
 };
+use peridot_math::Zero;
+use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_vertex_processing_pack::PvpShaderModules;
 use std::convert::TryInto;
 use std::marker::PhantomData;
@@ -19,461 +20,314 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn range_from_length<N>(start: N, length: N) -> Range<N>
-where
-    N: std::ops::Add<N, Output = N> + Copy,
-{
-    start..start + length
-}
+#[cfg(feature = "debug")]
+use br::VkObject;
 
-fn reverse_buffer_barriers(barriers: &[br::BufferMemoryBarrier]) -> Vec<br::BufferMemoryBarrier> {
-    barriers
-        .iter()
-        .cloned()
-        .map(br::BufferMemoryBarrier::flip)
-        .rev()
-        .collect()
-}
+use peridot_command_object::{
+    BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
+    ColorAttachmentBlending, CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand,
+    GraphicsCommandCombiner, ImageResourceRange, PipelineBarrier, RangedBuffer, RangedImage,
+    StandardMesh,
+};
 
-pub struct Game<PL: peridot::NativeLinker> {
-    ph: PhantomData<*const PL>,
-    rot: f32,
-    render_cb: peridot::CommandBundle<peridot::DeviceObject>,
-    update_cb: peridot::CommandBundle<peridot::DeviceObject>,
-    renderpass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<
-        br::FramebufferObject<
-            peridot::DeviceObject,
-            SharedRef<<PL::Presenter as peridot::PlatformPresenter>::BackBuffer>,
-        >,
-    >,
-    gp_main: LayoutedPipeline<
-        br::PipelineObject<peridot::DeviceObject>,
-        br::PipelineLayoutObject<peridot::DeviceObject>,
-    >,
-    descriptor: (
-        br::DescriptorSetLayoutObject<peridot::DeviceObject>,
-        br::DescriptorPoolObject<peridot::DeviceObject>,
-        Vec<br::DescriptorSet>,
-    ),
-    _sampler: br::SamplerObject<peridot::DeviceObject>,
-    vertices_offset: u64,
-    buffer: peridot::Buffer<
-        br::BufferObject<peridot::DeviceObject>,
-        br::DeviceMemoryObject<peridot::DeviceObject>,
-    >,
-    mutable_buffer: peridot::Buffer<
-        br::BufferObject<peridot::DeviceObject>,
-        br::DeviceMemoryObject<peridot::DeviceObject>,
-    >,
-    _image_view: br::ImageViewObject<
-        peridot::Image<
-            br::ImageObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >,
-    mut_uniform_offset: u64,
-}
-impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
-impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
-    fn init(e: &mut peridot::Engine<PL>) -> Self {
-        let screen_size = e
-            .back_buffer(0)
-            .expect("no back buffers")
-            .image()
-            .size()
-            .clone();
-        let screen_aspect = screen_size.width as f32 / screen_size.height as f32;
+pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+    let screen_size = e
+        .back_buffer(0)
+        .expect("no back buffers?")
+        .image()
+        .size()
+        .clone();
+    let screen_aspect = screen_size.width as f32 / screen_size.height as f32;
 
-        let image_data: peridot_image::PNG = e.load("images.example").expect("No image found");
-        debug!("Image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
-        debug!("ImageFormat: {:?}", image_data.0.format);
-        debug!("ImageStride: {} bytes", image_data.0.stride);
+    let image_data: peridot_image::PNG = e.load("images.example").expect("No image found");
+    debug!("image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
+    debug!("ImageFormat: {:?}", image_data.0.format);
+    debug!("ImageStride: {} bytes", image_data.0.stride);
 
-        let bgm = Arc::new(RwLock::new(
-            e.streaming::<StreamingPlayableWav>("bgm")
-                .expect("Loading BGM"),
-        ));
-        e.audio_mixer().write().add_process(bgm.clone());
-        e.audio_mixer().write().set_master_volume(0.5);
+    let bgm = Arc::new(RwLock::new(
+        e.streaming::<StreamingPlayableWav>("bgm")
+            .expect("Loading BGM"),
+    ));
+    e.audio_mixer().write().add_process(bgm.clone());
+    e.audio_mixer().write().set_master_volume(0.5);
 
-        let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
-        let mut cam = Camera {
-            projection: Some(ProjectionMethod::Perspective {
-                fov: 75.0f32.to_radians(),
-            }),
-            position: Vector3(-4.0, -1.0, -3.0),
-            rotation: Quaternion::ONE,
-            // position: Vector3(0.0, 0.0, -3.0), rotation: Quaternion::ONE,
-            depth_range: 1.0..10.0,
-        };
-        cam.look_at(Vector3(0.0, 0.0, 0.0));
+    let mut memory_manager = MemoryManager::new(e.graphics());
 
-        let mut bp = BufferPrealloc::new(e.graphics());
-        let vertices_offset = bp.add(BufferContent::vertices::<peridot::VertexUV>(
-            plane_mesh.vertices.len(),
-        ));
+    let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
+    let mut cam = Camera {
+        projection: Some(ProjectionMethod::Perspective {
+            fov: 75.0f32.to_radians(),
+        }),
+        position: Vector3(-4.0, -1.0, -3.0),
+        rotation: Quaternion::ONE,
+        depth_range: 1.0..10.0,
+    };
+    cam.look_at(Vector3::ZERO);
 
-        let mut bp_stg = bp.clone();
-        let copy_buffer_data_length = bp_stg.total_size();
-        let staging_image_offset = bp_stg.add(BufferContent::Raw(
-            image_data.0.u8_pixels().len() as _,
-            align_of::<u32>() as _,
-        ));
+    let [vertex_buffer, uniform_buffer] = memory_manager
+        .allocate_device_local_buffer_array(
+            e.graphics(),
+            [
+                br::BufferDesc::new(
+                    plane_mesh.byte_length(),
+                    br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
+                ),
+                br::BufferDesc::new_for_type::<Uniform>(
+                    br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
+                ),
+            ],
+        )
+        .expect("Failed to allocate buffers");
+    let vertex_buffer = RangedBuffer::from(vertex_buffer);
+    let uniform_buffer = RangedBuffer::from(uniform_buffer);
+    #[cfg(feature = "debug")]
+    vertex_buffer
+        .0
+        .set_name(Some(c"Vertex Buffer"))
+        .expect("Failed to set object name");
+    #[cfg(feature = "debug")]
+    uniform_buffer
+        .0
+        .set_name(Some(c"Uniform Buffer"))
+        .expect("Faield to set object name");
 
-        let mut bp_mut = BufferPrealloc::new(e.graphics());
-        let mut_uniform_offset = bp_mut.add(BufferContent::uniform::<Uniform>());
-        let mutable_data_offset = bp.merge(&bp_mut);
+    let [vertex_buffer_stg, uniform_mut_buffer] = memory_manager
+        .allocate_upload_buffer_array(
+            e.graphics(),
+            [
+                br::BufferDesc::new(
+                    vertex_buffer.byte_length() as _,
+                    br::BufferUsage::TRANSFER_SRC,
+                ),
+                br::BufferDesc::new(
+                    uniform_buffer.byte_length() as _,
+                    br::BufferUsage::TRANSFER_SRC,
+                ),
+            ],
+        )
+        .expect("Failed to allocate upload buffer");
+    let mut vertex_buffer_stg = RangedBuffer::from(vertex_buffer_stg);
+    let mut uniform_mut_buffer = RangedBuffer::from(uniform_mut_buffer);
+    vertex_buffer_stg
+        .0
+        .clone_content_from_slice(&plane_mesh.vertices)
+        .expect("Failed to set upload content");
+    uniform_mut_buffer
+        .0
+        .write_content(Uniform {
+            camera: cam.view_projection_matrix(screen_aspect),
+            object: Matrix4::ONE,
+        })
+        .expect("Failed to set initial data of uniform buffer");
 
-        let mut mb = peridot::MemoryBadget::new(e.graphics());
-        mb.add(peridot::MemoryBadgetEntry::Buffer(
-            bp.build_transferred().expect("Failed to create buffer"),
-        ));
-        mb.add(peridot::MemoryBadgetEntry::Image(
-            br::ImageDesc::new(
-                image_data.0.size,
-                image_data.0.format as _,
-                br::ImageUsage::SAMPLED.transfer_dest(),
+    let image = memory_manager
+        .allocate_device_local_image(
+            e.graphics(),
+            br::ImageDesc::new(image_data.0.size, image_data.0.format as _)
+                .sampled()
+                .transfer_dest()
+                .init_layout(br::ImageLayout::Preinitialized),
+        )
+        .expect("Failed to allocate main image");
+    let mut image_data_stg_buffer = memory_manager
+        .allocate_upload_linear_image_buffer(
+            e.graphics(),
+            *image_data.0.size.x(),
+            *image_data.0.size.y(),
+            image_data.0.format,
+            br::BufferUsage::TRANSFER_SRC,
+        )
+        .expect("Failed to allocate linear image buffer");
+    image_data_stg_buffer
+        .copy_content_from_slice(image_data.0.u8_pixels())
+        .expect("Failed to set image data");
+
+    let pre_configure_awaiter = e
+        .submit_commands_async(|mut r| {
+            let texture = RangedImage::single_color_plane(&image);
+            let image_data_stg_buffer_ranged = RangedBuffer::from(&image_data_stg_buffer.inner);
+
+            let [mut_uniform_in_barrier, mut_uniform_out_barrier] = uniform_mut_buffer
+                .make_ref()
+                .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
+            let [tex_init_barrier, tex_ready_barrier] = texture.barrier3(
                 br::ImageLayout::Preinitialized,
-            )
-            .create(e.graphics().device().clone())
-            .expect("Failed to create main image object"),
-        ));
-        let Ok::<[_; 2], _>([
-            peridot::MemoryBoundResource::Buffer(buffer),
-            peridot::MemoryBoundResource::Image(image)
-        ]) = mb.alloc().expect("Failed to allocate memory").try_into() else {
-            unreachable!("invalid return combination");
-        };
-        let mut mb =
-            peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(e.graphics());
-        mb.add(peridot::MemoryBadgetEntry::Buffer(
-            bp_mut
-                .build_upload()
-                .expect("Failed to create mutable data buffer"),
-        ));
-        let Ok::<[_; 1], _>([
-            peridot::MemoryBoundResource::Buffer(mut mut_buffer)
-        ]) = mb.alloc_upload().expect("Failed to allocate mutable data memory").try_into() else {
-            unreachable!("invalid return combination");
-        };
-
-        let (mut buffer_staging, stg_requires_flushing) = {
-            let mut mb = peridot::MemoryBadget::<_, br::ImageObject<peridot::DeviceObject>>::new(
-                e.graphics(),
+                br::ImageLayout::TransferDestOpt,
+                br::ImageLayout::ShaderReadOnlyOpt,
             );
-            mb.add(peridot::MemoryBadgetEntry::Buffer(
-                bp_stg
-                    .build_upload()
-                    .expect("Failed to create staging buffer"),
-            ));
-            let Ok::<[_; 1], _>([
-                peridot::MemoryBoundResource::Buffer(b)
-            ]) = mb.alloc_upload().expect("Failed to allocate staging memory").try_into() else {
-                unreachable!("invalid return combination")
-            };
 
-            // TODO: requires flushing?
-            (b, false)
-        };
-
-        buffer_staging
-            .guard_map(0..bp_stg.total_size(), |r| unsafe {
-                r.clone_from_slice_at(vertices_offset as _, &plane_mesh.vertices);
-                r.clone_from_slice_at(staging_image_offset as _, image_data.0.u8_pixels());
-            })
-            .expect("Failed to setup staging data");
-        mut_buffer
-            .guard_map(0..bp_mut.total_size(), |r| unsafe {
-                *r.get_mut(mut_uniform_offset as _) = Uniform {
-                    camera: cam.view_projection_matrix(screen_aspect),
-                    object: Matrix4::ONE,
-                };
-            })
-            .expect("Failed to setup mutable data");
-
-        let pre_configure_task = e
-            .submit_commands_async(|mut r| {
-                let _ = r
-                    .pipeline_barrier(
-                        br::PipelineStageFlags::ALL_COMMANDS,
-                        br::PipelineStageFlags::TRANSFER,
-                        true,
-                        &[],
-                        &[
-                            br::BufferMemoryBarrier::new(
-                                &buffer,
-                                0..bp.total_size(),
-                                br::AccessFlags::MEMORY.read,
-                                br::AccessFlags::TRANSFER.write,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &mut_buffer,
-                                range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                                br::AccessFlags::HOST.write,
-                                br::AccessFlags::TRANSFER.read,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &buffer_staging,
-                                0..bp_stg.total_size(),
-                                br::AccessFlags::HOST.write,
-                                br::AccessFlags::TRANSFER.read,
-                            ),
-                        ],
-                        &[image
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier(
-                                br::ImageLayout::Preinitialized,
-                                br::ImageLayout::TransferDestOpt,
-                            )],
-                    )
-                    .copy_buffer(
-                        &buffer_staging,
-                        &buffer,
-                        &[br::vk::VkBufferCopy {
-                            srcOffset: 0,
-                            dstOffset: 0,
-                            size: copy_buffer_data_length,
-                        }],
-                    )
-                    .copy_buffer(
-                        &mut_buffer,
-                        &buffer,
-                        &[br::vk::VkBufferCopy {
-                            srcOffset: mut_uniform_offset,
-                            dstOffset: mutable_data_offset,
-                            size: size_of::<Uniform>() as _,
-                        }],
-                    )
-                    .copy_buffer_to_image(
-                        &buffer_staging,
-                        &image,
-                        br::ImageLayout::TransferDestOpt,
-                        &[br::vk::VkBufferImageCopy {
-                            bufferOffset: staging_image_offset,
-                            bufferRowLength: (image_data.0.stride
-                                / (image_data.0.format.bpp() >> 3))
-                                as _,
-                            bufferImageHeight: 0,
-                            imageSubresource: br::vk::VkImageSubresourceLayers {
-                                aspectMask: br::vk::VK_IMAGE_ASPECT_COLOR_BIT,
-                                mipLevel: 0,
-                                baseArrayLayer: 0,
-                                layerCount: 1,
-                            },
-                            imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-                            imageExtent: br::vk::VkExtent3D {
-                                width: image_data.0.size.0,
-                                height: image_data.0.size.1,
-                                depth: 1,
-                            },
-                        }],
-                    )
-                    .pipeline_barrier(
-                        br::PipelineStageFlags::TRANSFER,
-                        br::PipelineStageFlags::VERTEX_SHADER
-                            .fragment_shader()
-                            .host()
-                            .vertex_input(),
-                        true,
-                        &[],
-                        &[
-                            br::BufferMemoryBarrier::new(
-                                &buffer,
-                                range_from_length(
-                                    0,
-                                    (size_of::<peridot::VertexUV>() * plane_mesh.vertices.len())
-                                        as _,
-                                ),
-                                br::AccessFlags::TRANSFER.write,
-                                br::AccessFlags::VERTEX_ATTRIBUTE_READ,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &buffer,
-                                range_from_length(mutable_data_offset, size_of::<Uniform>() as _),
-                                br::AccessFlags::TRANSFER.write,
-                                br::AccessFlags::UNIFORM_READ,
-                            ),
-                            br::BufferMemoryBarrier::new(
-                                &mut_buffer,
-                                range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                                br::AccessFlags::TRANSFER.read,
-                                br::AccessFlags::HOST.write,
-                            ),
-                        ],
-                        &[image
-                            .by_ref()
-                            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                            .memory_barrier(
-                                br::ImageLayout::TransferDestOpt,
-                                br::ImageLayout::ShaderReadOnlyOpt,
-                            )],
-                    );
-                r
-            })
-            .expect("Failed to submit pre-configure commands");
-
-        let mut update_cb = CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1)
-            .expect("Alloc UpdateCB");
-        {
-            let mut rec = unsafe { update_cb[0].begin().expect("Begin UpdateCmdRec") };
-            let enter_buffer_barriers = &[
-                br::BufferMemoryBarrier::new(
-                    &mut_buffer,
-                    range_from_length(mut_uniform_offset, size_of::<Uniform>() as _),
-                    br::AccessFlags::HOST.write,
-                    br::AccessFlags::TRANSFER.read,
+            let in_barriers = PipelineBarrier::new()
+                .with_barriers([
+                    mut_uniform_in_barrier,
+                    uniform_buffer
+                        .make_ref()
+                        .usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
+                    vertex_buffer_stg
+                        .make_ref()
+                        .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                    vertex_buffer
+                        .make_ref()
+                        .usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
+                    image_data_stg_buffer_ranged
+                        .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
+                ])
+                .with_barrier(tex_init_barrier)
+                .by_region();
+            let out_barriers = PipelineBarrier::new()
+                .with_barriers([
+                    vertex_buffer
+                        .make_ref()
+                        .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_BUFFER),
+                    mut_uniform_out_barrier,
+                    uniform_buffer
+                        .make_ref()
+                        .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_UNIFORM),
+                ])
+                .with_barrier(tex_ready_barrier)
+                .by_region();
+            let init_vertex = vertex_buffer.byref_mirror_from(&vertex_buffer_stg);
+            let init_uniform = uniform_buffer.byref_mirror_from(&uniform_mut_buffer);
+            let init_tex = CopyBufferToImage::new(&image_data_stg_buffer.inner, &image).with_range(
+                BufferImageDataDesc::new(0, image_data_stg_buffer.row_texels),
+                ImageResourceRange::for_single_color_from_rect2d(
+                    image.size().wh().into_rect(br::vk::VkOffset2D::ZERO),
                 ),
-                br::BufferMemoryBarrier::new(
-                    &buffer,
-                    range_from_length(mutable_data_offset, size_of::<Uniform>() as _),
-                    br::AccessFlags::UNIFORM_READ,
-                    br::AccessFlags::TRANSFER.write,
-                ),
-            ];
+            );
+            let copies = (init_vertex, init_uniform, init_tex);
 
-            let _ = rec
-                .pipeline_barrier(
-                    // TODO: use excluding bits for less stalling
-                    br::PipelineStageFlags::VERTEX_SHADER.host(),
-                    br::PipelineStageFlags::TRANSFER,
-                    true,
-                    &[],
-                    enter_buffer_barriers,
-                    &[],
-                )
-                .copy_buffer(
-                    &mut_buffer,
-                    &buffer,
-                    &[br::vk::VkBufferCopy {
-                        srcOffset: mut_uniform_offset,
-                        dstOffset: mutable_data_offset,
-                        size: size_of::<Uniform>() as _,
-                    }],
-                )
-                .pipeline_barrier(
-                    br::PipelineStageFlags::TRANSFER,
-                    br::PipelineStageFlags::VERTEX_SHADER.host(),
-                    true,
-                    &[],
-                    &reverse_buffer_barriers(enter_buffer_barriers),
-                    &[],
-                );
-            rec.end().expect("Failed to record update commands");
-        }
+            let _ = copies
+                .between(in_barriers, out_barriers)
+                .execute(r.as_dyn_ref());
+            r
+        })
+        .expect("Failed to submit pre-configure commands");
 
-        let outer_layout = e.requesting_back_buffer_layout().0;
-        let attdesc =
-            br::AttachmentDescription::new(e.back_buffer_format(), outer_layout, outer_layout)
-                .load_op(br::LoadOp::Clear)
-                .store_op(br::StoreOp::Store);
-        let renderpass = br::RenderPassBuilder::new()
-            .add_attachment(attdesc)
-            .add_subpass(br::SubpassDescription::new().add_color_output(
-                0,
-                br::ImageLayout::ColorAttachmentOpt,
-                None,
-            ))
-            .add_dependency(SubpassDependencyTemplates::to_color_attachment_in(
-                None, 0, true,
-            ))
-            .create(e.graphics().device().clone())
-            .expect("Create RenderPass");
-        let framebuffers = e
-            .iter_back_buffers()
-            .map(|b| {
-                e.graphics().device().clone().new_framebuffer(
-                    &renderpass,
-                    vec![b.clone()],
-                    b.image().size().as_ref(),
-                    1,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .expect("Bind Framebuffer");
+    let mut update_cb =
+        CommandBundle::new(&e.graphics(), CBSubmissionType::Graphics, 1).expect("Alloc UpdateCB");
+    {
+        let uniform_buffer_ref = uniform_buffer.make_ref();
+        let uniform_mut_buffer_ref = uniform_mut_buffer.make_ref();
 
-        let smp = br::SamplerBuilder::default()
-            .create(e.graphics().device().clone())
-            .expect("Creating Sampler");
-        let descriptor_layout = br::DescriptorSetLayoutBuilder::with_bindings(vec![
-            br::DescriptorType::UniformBuffer
-                .make_binding(1)
-                .only_for_vertex(),
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1)
-                .only_for_fragment()
-                .with_immutable_samplers(vec![br::SamplerObjectRef::new(&smp)]),
-        ])
+        let [uniform_in_barrier, uniform_out_barrier] = uniform_buffer_ref
+            .usage_barrier3_switching(BufferUsage::VERTEX_UNIFORM, BufferUsage::TRANSFER_DST);
+        let [staging_uniform_in_barrier, staging_uniform_out_barrier] = uniform_mut_buffer_ref
+            .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
+
+        let in_barriers = [uniform_in_barrier, staging_uniform_in_barrier];
+        let out_barriers = [uniform_out_barrier, staging_uniform_out_barrier];
+        let copy_uniform = uniform_buffer.byref_mirror_from(&uniform_mut_buffer);
+
+        copy_uniform
+            .between(in_barriers, out_barriers)
+            .execute_and_finish(
+                update_cb
+                    .synchronized_nth(0)
+                    .begin()
+                    .expect("Failed to begin recording update command")
+                    .as_dyn_ref(),
+            )
+            .expect("Failed to record update commands");
+    }
+
+    let back_buffer_attachment = e
+        .back_buffer_attachment_desc()
+        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store);
+    let color_outputs = [br::AttachmentReference::new(
+        0,
+        br::ImageLayout::ColorAttachmentOpt,
+    )];
+    let color_render_subpass = br::SubpassDescription::new().color_attachments(&color_outputs, &[]);
+    let renderpass = br::RenderPassBuilder::new(
+        &[back_buffer_attachment],
+        &[color_render_subpass],
+        &[SubpassDependencyTemplates::to_color_attachment_in(
+            None, 0, true,
+        )],
+    )
+    .create(e.graphics().device().clone())
+    .expect("Create RenderPass");
+    let mut framebuffers = e
+        .iter_back_buffers()
+        .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create())
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Bind Framebuffer");
+
+    let smp = br::SamplerBuilder::default()
         .create(e.graphics().device().clone())
-        .expect("Create DescriptorSetLayout");
-        let mut descriptor_pool = br::DescriptorPoolBuilder::new(1)
-            .with_reservations(vec![
-                br::DescriptorType::UniformBuffer.with_count(1),
-                br::DescriptorType::CombinedImageSampler.with_count(1),
-            ])
-            .create(e.graphics().device().clone())
-            .expect("Create DescriptorPool");
+        .expect("Creating Sampler");
+    let descriptor_layout = br::DescriptorSetLayoutBuilder::new(&[
+        br::DescriptorType::UniformBuffer
+            .make_binding(0, 1)
+            .only_for_vertex(),
+        br::DescriptorType::CombinedImageSampler
+            .make_binding(1, 1)
+            .only_for_fragment()
+            .with_immutable_samplers(&[br::SamplerObjectRef::new(&smp)]),
+    ])
+    .create(e.graphics().device().clone())
+    .expect("Create DescriptorSetLayout");
+    let mut descriptor_pool = br::DescriptorPoolBuilder::new(
+        1,
+        &[
+            br::DescriptorType::UniformBuffer.make_size(1),
+            br::DescriptorType::CombinedImageSampler.make_size(1),
+        ],
+    )
+    .create(e.graphics().device().clone())
+    .expect("Create DescriptorPool");
 
-        let shaderfile = e
+    let pl = br::PipelineLayoutBuilder::new(
+        &[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)],
+        &[],
+    )
+    .create(e.graphics().device().clone())
+    .expect("Create PipelineLayout");
+    let gp = {
+        let shader = e
             .load("builtin.shaders.unlit_image")
             .expect("Loading shader");
         let shader =
-            PvpShaderModules::new(e.graphics().device(), shaderfile).expect("Create ShaderModules");
+            PvpShaderModules::new(e.graphics().device(), shader).expect("Create ShaderModules");
         let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
-        let pl = br::PipelineLayoutBuilder::new(vec![&descriptor_layout], vec![])
-            .create(e.graphics().device().clone())
-            .expect("Create PipelineLayout");
         let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-        let gp = br::GraphicsPipelineBuilder::<
-            _,
-            br::PipelineObject<peridot::DeviceObject>,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        >::new(&pl, (&renderpass, 0), vps)
-        .viewport_scissors(
+        let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(&pl, renderpass.subpass(0), vps);
+        gpb.viewport_scissors(
             br::DynamicArrayState::Static(&vp),
             br::DynamicArrayState::Static(&sc),
         )
         .multisample_state(br::MultisampleState::new().into())
-        .add_attachment_blend(br::AttachmentColorBlendState::noblend())
-        .create(
+        .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
+
+        gpb.create(
             e.graphics().device().clone(),
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
         )
-        .expect("Create GraphicsPipeline");
-        #[cfg(feature = "debug")]
-        gp.set_name(Some(
-            &std::ffi::CString::new("Main Pipeline").expect("invalid sequence?"),
-        ))
+        .expect("Create GraphicsPipeline")
+    };
+    #[cfg(feature = "debug")]
+    gp.set_name(Some(c"Main Pipeline"))
         .expect("Failed to set pipeline name");
-        let gp = LayoutedPipeline::combine(gp, pl);
 
-        async_std::task::block_on(pre_configure_task).expect("Failed to pre-configure resources");
+    pre_configure_awaiter
+        .await
+        .expect("Failed to pre-configure resources");
 
-        let image_view = image
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()
-            .expect("Failed to create main image view");
-        let descriptor_main = descriptor_pool
-            .alloc(&[&descriptor_layout])
-            .expect("Create main Descriptor");
+    let image_view = image
+        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+        .view_builder()
+        .create()
+        .expect("Failed to create main image view");
+    let [descriptor_main] = descriptor_pool
+        .alloc_array(&[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)])
+        .expect("Create main Descriptor");
+    {
         let mut descriptor_writes = Vec::with_capacity(2);
         descriptor_writes.extend(
-            br::DescriptorPointer::new(descriptor_main[0].into(), 0).write_multiple([
-                br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferRef::new(
-                    &buffer,
-                    range_from_length(
-                        mutable_data_offset as _,
-                        std::mem::size_of::<Uniform>() as _,
-                    ),
-                )]),
+            br::DescriptorPointer::new(descriptor_main.into(), 0).write_continuous_bindings([
+                br::DescriptorContents::UniformBuffer(vec![
+                    uniform_buffer.make_descriptor_buffer_ref()
+                ]),
                 br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageRef::new(
                     &image_view,
                     br::ImageLayout::ShaderReadOnlyOpt,
@@ -483,137 +337,161 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
         e.graphics()
             .device()
             .update_descriptor_sets(&descriptor_writes, &[]);
-
-        let mut render_cb = CommandBundle::new(
-            e.graphics(),
-            CBSubmissionType::Graphics,
-            e.back_buffer_count(),
-        )
-        .expect("Alloc RenderCB");
-        #[allow(unused_variables)]
-        for (n, (cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
-            #[cfg(feature = "debug")]
-            br::DebugUtilsObjectNameInfo::new(
-                cb,
-                Some(
-                    &std::ffi::CString::new(format!("Primary Render Commands #{}", n))
-                        .expect("invalid sequence?"),
-                ),
-            )
-            .apply(e.graphics())
-            .expect("Failed to set render cb name");
-            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
-            let _ = cr.begin_render_pass(
-                &renderpass,
-                fb,
-                fb.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[br::ClearValue::color([0.0; 4])],
-                true,
-            );
-            gp.bind(&mut cr);
-            let _ = cr
-                .bind_graphics_descriptor_sets(
-                    0,
-                    unsafe { std::mem::transmute(&descriptor_main[..]) },
-                    &[],
-                )
-                .bind_vertex_buffers(0, &[(&buffer, vertices_offset as _)])
-                .draw(4, 1, 0, 0)
-                .end_render_pass();
-            cr.end().expect("Failed to record render commands");
-        }
-
-        bgm.write().play();
-
-        Game {
-            render_cb,
-            renderpass,
-            framebuffers,
-            descriptor: (descriptor_layout, descriptor_pool, descriptor_main),
-            gp_main: gp,
-            rot: 0.0,
-            vertices_offset,
-            _sampler: smp,
-            buffer,
-            mutable_buffer: mut_buffer,
-            _image_view: image_view,
-            update_cb,
-            mut_uniform_offset,
-            ph: PhantomData,
-        }
     }
 
-    fn update(&mut self, e: &mut peridot::Engine<PL>, on_backbuffer_of: u32, delta_time: Duration) {
-        let dtsec = delta_time.as_secs() as f32 + delta_time.subsec_micros() as f32 / 1000_0000.0;
-        self.rot += dtsec * 15.0;
-        let (mut_uniform_offset, rot) = (self.mut_uniform_offset, self.rot);
-        self.mutable_buffer
-            .guard_map(
-                0..mut_uniform_offset + size_of::<Uniform>() as u64,
-                |m| unsafe {
-                    m.get_mut::<Uniform>(mut_uniform_offset as _).object =
-                        Quaternion::new(rot, Vector3::up()).into();
-                },
-            )
-            .expect("Update DynamicStgBuffer");
+    let plane_mesh = StandardMesh {
+        vertex_buffers: vec![vertex_buffer],
+        vertex_count: 4,
+    };
 
-        e.do_render(
-            on_backbuffer_of,
-            Some(br::EmptySubmissionBatch.with_command_buffers(&self.update_cb)),
-            br::EmptySubmissionBatch.with_command_buffers(
-                &self.render_cb[on_backbuffer_of as usize..on_backbuffer_of as usize + 1],
+    let descriptor_sets = DescriptorSets(vec![descriptor_main]);
+    let render_image_plane = plane_mesh
+        .draw(1)
+        .after_of(descriptor_sets.into_bind_graphics(&pl));
+    let color_renders = BindGraphicsPipeline(&gp).then(render_image_plane);
+
+    let mut render_cb = CommandBundle::new(
+        e.graphics(),
+        CBSubmissionType::Graphics,
+        e.back_buffer_count(),
+    )
+    .expect("Alloc RenderCB");
+    #[allow(unused_variables)]
+    for (n, (cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
+        #[cfg(feature = "debug")]
+        br::DebugUtilsObjectNameInfo::new(
+            cb,
+            Some(
+                &std::ffi::CString::new(format!("Primary Render Commands #{}", n))
+                    .expect("invalid sequence?"),
             ),
         )
-        .expect("Falied to present");
+        .apply(e.graphics().device())
+        .expect("Failed to set render cb name");
+
+        let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
+            .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+
+        (&color_renders)
+            .between(begin_main_rp, EndRenderPass)
+            .execute_and_finish(unsafe {
+                cb.begin(e.graphics_device())
+                    .expect("Failed to begin command recording")
+                    .as_dyn_ref()
+            })
+            .expect("Failed to record render commands");
     }
 
-    fn discard_back_buffer_resources(&mut self) {
-        self.framebuffers.clear();
-        self.render_cb.reset().expect("Resetting RenderCB");
-    }
-    fn on_resize(&mut self, e: &mut peridot::Engine<PL>, _new_size: Vector2<usize>) {
-        self.framebuffers = e
-            .iter_back_buffers()
-            .map(|b| {
-                e.graphics().device().clone().new_framebuffer(
-                    &self.renderpass,
-                    vec![b.clone()],
-                    b.image().size().as_ref(),
-                    1,
+    bgm.write().play();
+
+    let mut rot = 0.0f32;
+    while let Some(ev) = e.event_receivers().wait_for_event().await {
+        match ev {
+            peridot::Event::Shutdown => break,
+            peridot::Event::NextFrame => {
+                let fd = match e.prepare_frame() {
+                    Ok(fd) => fd,
+                    Err(peridot::PrepareFrameError::FramebufferOutOfDate) => {
+                        // resize and do nothing
+                        let new_size = e
+                            .back_buffer(0)
+                            .expect("no back buffers?")
+                            .image()
+                            .size()
+                            .clone();
+                        let new_size = peridot::math::Vector2(new_size.width, new_size.height);
+
+                        e.wait_for_last_rendering_completion();
+
+                        render_cb.reset().expect("Resetting RenderCB");
+                        framebuffers.clear();
+
+                        e.resize_presenter_backbuffers(new_size);
+
+                        framebuffers = e
+                            .iter_back_buffers()
+                            .map(|b| {
+                                br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone())
+                                    .create()
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .expect("Bind Framebuffers");
+
+                        for (cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
+                            let begin_main_rp =
+                                BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
+                                    .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+
+                            (&color_renders)
+                                .between(begin_main_rp, EndRenderPass)
+                                .execute_and_finish(unsafe {
+                                    cb.begin(e.graphics_device())
+                                        .expect("Failed to begin command recording")
+                                        .as_dyn_ref()
+                                })
+                                .expect("Failed to record render commands");
+                        }
+
+                        continue;
+                    }
+                };
+
+                let dtsec = fd.delta_time.as_secs() as f32
+                    + fd.delta_time.subsec_micros() as f32 / 1000_0000.0;
+                rot += dtsec * 15.0;
+                let rot = rot;
+                uniform_mut_buffer
+                    .0
+                    .guard_map(BufferMapMode::Write, |ptr| unsafe {
+                        ptr.get_mut_at::<Uniform>(0).object =
+                            Quaternion::new(rot, Vector3::up()).into();
+                    })
+                    .expect("Update DynamicStgBuffer");
+
+                e.do_render(
+                    fd.backbuffer_index,
+                    Some(br::EmptySubmissionBatch.with_command_buffers(&update_cb)),
+                    br::EmptySubmissionBatch.with_command_buffers(
+                        &render_cb[fd.backbuffer_index as usize..=fd.backbuffer_index as usize],
+                    ),
                 )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .expect("Bind Framebuffers");
-        self.populate_render_commands();
-    }
-}
-impl<PL: peridot::NativeLinker> Game<PL> {
-    fn populate_render_commands(&mut self) {
-        for (cb, fb) in self.render_cb.iter_mut().zip(&self.framebuffers) {
-            let mut cr = unsafe { cb.begin().expect("Begin CmdRecord") };
-            let _ = cr.begin_render_pass(
-                &self.renderpass,
-                fb,
-                fb.size()
-                    .clone()
-                    .into_rect(br::vk::VkOffset2D { x: 0, y: 0 }),
-                &[br::ClearValue::color([0.0; 4])],
-                true,
-            );
-            self.gp_main.bind(&mut cr);
-            let _ = cr
-                .bind_graphics_descriptor_sets(
-                    0,
-                    unsafe { std::mem::transmute(&self.descriptor.2[..]) },
-                    &[],
-                )
-                .bind_vertex_buffers(0, &[(&self.buffer, self.vertices_offset as _)])
-                .draw(4, 1, 0, 0)
-                .end_render_pass();
-            cr.end().expect("Failed to record render commands");
+                .expect("Failed to present");
+            }
+            peridot::Event::Resize(new_size) => {
+                e.wait_for_last_rendering_completion();
+
+                render_cb.reset().expect("Resetting RenderCB");
+                framebuffers.clear();
+
+                e.resize_presenter_backbuffers(new_size);
+
+                framebuffers = e
+                    .iter_back_buffers()
+                    .map(|b| {
+                        br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create()
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("Bind Framebuffers");
+
+                for (cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
+                    let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
+                        .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+
+                    (&color_renders)
+                        .between(begin_main_rp, EndRenderPass)
+                        .execute_and_finish(unsafe {
+                            cb.begin(e.graphics_device())
+                                .expect("Failed to begin command recording")
+                                .as_dyn_ref()
+                        })
+                        .expect("Failed to record render commands");
+                }
+            }
         }
+    }
+
+    unsafe {
+        e.graphics_device().wait().expect("Failed to wait for work");
     }
 }
 

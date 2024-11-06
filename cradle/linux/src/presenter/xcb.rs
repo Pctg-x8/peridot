@@ -1,4 +1,7 @@
-use std::os::fd::{AsRawFd, RawFd};
+use std::{
+    ffi::CStr,
+    os::fd::{AsRawFd, RawFd},
+};
 
 use br::PhysicalDevice;
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
@@ -26,7 +29,7 @@ pub struct X11 {
     wm_delete_window: xcb::x::Atom,
     vis: xcb::x::Visualid,
     mainwnd_id: xcb::x::Window,
-    cached_window_size: peridot::math::Vector2<usize>,
+    cached_window_size: peridot::math::Vector2<u32>,
     has_close_requested: bool,
 }
 impl X11 {
@@ -109,13 +112,13 @@ impl X11 {
         self.con.flush().expect("Failed to flush");
     }
 
-    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<usize> {
+    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<u32> {
         &self.cached_window_size
     }
 }
 impl PresenterProvider for SharedMutableRef<X11> {
     type Presenter = Presenter;
-    const SURFACE_EXT_NAME: &'static str = "VK_KHR_xcb_surface";
+    const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_xcb_surface";
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter {
         Presenter::new(g, g.graphics_queue_family_index(), self)
@@ -137,7 +140,7 @@ impl PointerPositionProvider for X11 {
             // Note: なぜかLinux/XCBでも5.0だけずれるんですけど！！
             Some((ptrinfo.win_x() as _, ptrinfo.win_y() as f32 - 5.0))
         } else {
-            debug!("Fixme: Handle same_screen = false");
+            tracing::debug!("Fixme: Handle same_screen = false");
             None
         }
     }
@@ -191,6 +194,9 @@ impl EventProcessor for X11 {
             .poll_for_event()
             .expect("Failed to poll window system events")
         {
+            let _span =
+                tracing::span!(tracing::Level::TRACE, "Event Handler(xcb)", event = ?ev).entered();
+
             match ev {
                 xcb::Event::X(xcb::x::Event::ClientMessage(e)) => match e.data() {
                     xcb::x::ClientMessageData::Data32(d)
@@ -205,7 +211,7 @@ impl EventProcessor for X11 {
                         peridot::math::Vector2(e.width() as _, e.height() as _);
                 }
                 _ => {
-                    debug!("Unhandled Event: {ev:?}");
+                    tracing::debug!("Unhandled Event");
                 }
             }
         }
@@ -223,7 +229,7 @@ impl WindowBackend for X11 {
         self.con.flush().expect("Failed to flush");
     }
 
-    fn geometry(&self) -> peridot::math::Vector2<usize> {
+    fn geometry(&self) -> peridot::math::Vector2<u32> {
         self.cached_window_size
     }
 }
@@ -288,10 +294,13 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.requesting_back_buffer_layout()
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
@@ -300,7 +309,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -313,13 +322,13 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
         true
     }
 
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         self.x11_ref.borrow().mainwnd_geometry().clone()
     }
 }

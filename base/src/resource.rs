@@ -25,14 +25,28 @@ pub enum PixelFormat {
     RGB24 = br::vk::VK_FORMAT_R8G8B8_UNORM,
     BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
     RGBA64F = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
+    RGB96F = br::vk::VK_FORMAT_R32G32B32_SFLOAT,
 }
 impl PixelFormat {
     /// Bits per pixel for each format enums
-    pub fn bpp(self) -> usize {
+    pub const fn bpp(self) -> usize {
         match self {
             PixelFormat::RGBA32 | PixelFormat::BGRA32 => 32,
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
             PixelFormat::RGBA64F => 64,
+            PixelFormat::RGB96F => 96,
+        }
+    }
+
+    /// Optimal alignment for the format
+    pub const fn alignment(self) -> usize {
+        match self {
+            PixelFormat::RGBA32
+            | PixelFormat::BGRA32
+            | PixelFormat::RGB24
+            | PixelFormat::BGR24
+            | PixelFormat::RGB96F => 4,
+            PixelFormat::RGBA64F => 8,
         }
     }
 }
@@ -51,12 +65,10 @@ impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
         format: PixelFormat,
         prealloc: &mut BufferPrealloc,
     ) -> br::Result<(br::ImageObject<Device>, u64)> {
-        let idesc = br::ImageDesc::new(
-            size.clone(),
-            format as _,
-            br::ImageUsage::SAMPLED.transfer_dest(),
-            br::ImageLayout::Preinitialized,
-        );
+        let idesc = br::ImageDesc::new(size.clone(), format as _)
+            .sampled()
+            .transfer_dest()
+            .init_layout(br::ImageLayout::Preinitialized);
         let bytes_per_pixel = (format.bpp() >> 3) as u64;
         let pixels_stg = prealloc.add(BufferContent::Raw(
             (size.x() * size.y()) as u64 * bytes_per_pixel,
@@ -167,7 +179,10 @@ impl<Device: br::Device> TextureInitializationGroup<Device> {
 }
 impl TexturePreallocatedGroup<br::ImageObject<DeviceObject>> {
     pub fn alloc_and_instantiate<
-        Buffer: br::Buffer<ConcreteDevice = DeviceObject> + br::MemoryBound + br::VkHandleMut,
+        Buffer: br::Buffer
+            + br::DeviceChild<ConcreteDevice = DeviceObject>
+            + br::MemoryBound
+            + br::VkHandleMut,
     >(
         self,
         mut badget: MemoryBadget<Buffer, br::ImageObject<DeviceObject>>,
@@ -218,7 +233,7 @@ impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
         tb: &mut TransferBatch<Device>,
         stgbuf: &SharedRef<
             Buffer<
-                impl br::Buffer<ConcreteDevice = Device> + 'static,
+                impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + 'static,
                 impl br::DeviceMemory + 'static,
             >,
         >,
@@ -410,14 +425,13 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector2<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture2DRef {
-        self.planes.push(br::ImageDesc::new(
-            size,
-            format as _,
-            usage,
-            br::ImageLayout::Preinitialized,
-        ));
+        self.planes.push(
+            br::ImageDesc::new(size, format as _)
+                .usage_with(usage)
+                .init_layout(br::ImageLayout::Preinitialized),
+        );
         DeviceWorkingTexture2DRef(self.planes.len() - 1)
     }
 
@@ -426,14 +440,13 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector3<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture3DRef {
-        self.volumes.push(br::ImageDesc::new(
-            size,
-            format as _,
-            usage,
-            br::ImageLayout::Preinitialized,
-        ));
+        self.volumes.push(
+            br::ImageDesc::new(size, format as _)
+                .usage_with(usage)
+                .init_layout(br::ImageLayout::Preinitialized),
+        );
         DeviceWorkingTexture3DRef(self.volumes.len() - 1)
     }
 
@@ -442,9 +455,11 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector2<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
     ) -> DeviceWorkingCubeTextureRef {
-        let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
+        let id = br::ImageDesc::new(size, format as _)
+            .usage_with(usage)
+            .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6);
         self.cube.push(id);
@@ -457,10 +472,12 @@ impl DeviceWorkingTextureAllocator<'_> {
         &mut self,
         size: math::Vector2<u32>,
         format: PixelFormat,
-        usage: br::ImageUsage,
+        usage: br::ImageUsageFlags,
         mipmaps: u32,
     ) -> DeviceWorkingCubeTextureRef {
-        let id = br::ImageDesc::new(size, format as _, usage, br::ImageLayout::Preinitialized)
+        let id = br::ImageDesc::new(size, format as _)
+            .usage_with(usage)
+            .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6)
             .mip_levels(mipmaps);
@@ -618,8 +635,8 @@ pub trait FixedBufferInitializer {
         tfb: &mut TransferBatch,
         buf: &SharedRef<
             Buffer<
-                impl br::Buffer<ConcreteDevice = Device> + 'static,
-                impl br::DeviceMemory<ConcreteDevice = Device> + 'static,
+                impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + 'static,
+                impl br::DeviceMemory + br::DeviceChild<ConcreteDevice = Device> + 'static,
             >,
         >,
         range: Range<u64>,

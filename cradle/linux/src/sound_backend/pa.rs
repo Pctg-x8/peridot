@@ -6,7 +6,10 @@ use std::cell::RefCell;
 use std::pin::Pin;
 use std::{mem::ManuallyDrop, sync::Arc};
 
-use crate::sound_backend::{Float32Converter, SignedInt24LEConverter, SignedInt32LEConverter};
+use crate::sound_backend::{
+    Float32Converter, SignedInt16BEConverter, SignedInt16LEConverter, SignedInt24LEConverter,
+    SignedInt32LEConverter,
+};
 
 use super::{AudioBitstreamConverter, SoundBackend};
 
@@ -48,7 +51,7 @@ impl NativeAudioEngine {
     }
 
     pub fn new(mixer: &Arc<RwLock<peridot::audio::Mixer>>) -> Self {
-        info!("Starting AudioEngine via PulseAudio......");
+        tracing::info!("Starting AudioEngine via PulseAudio......");
 
         let mlp = Box::pin(
             pa::mainloop::Threaded::new().expect("Failed to initialize PulseAudio Mainloop"),
@@ -101,19 +104,23 @@ impl NativeAudioEngine {
                 l.wait();
                 current_state = stream.state();
             }
-            info!("PulseAudio Sink Device = {}", stream.device_name());
+            tracing::info!("PulseAudio Sink Device = {}", stream.device_name());
             let ss = stream.sample_spec();
-            debug!("SampleSpec: {} {} {}", ss.format, ss.rate, ss.channels);
+            tracing::debug!("SampleSpec: {} {} {}", ss.format, ss.rate, ss.channels);
             *writer.conv.borrow_mut() = if ss.format == pa::SampleFormat::S24LE as _ {
                 Box::new(SignedInt24LEConverter)
             } else if ss.format == pa::SampleFormat::S32LE as _ {
                 Box::new(SignedInt32LEConverter)
+            } else if ss.format == pa::SampleFormat::S16LE as _ {
+                Box::new(SignedInt16LEConverter)
+            } else if ss.format == pa::SampleFormat::S16BE as _ {
+                Box::new(SignedInt16BEConverter)
             } else {
                 panic!("pa: Unsupported sample format: {}", ss.format)
             };
         }
 
-        trace!("Done!");
+        tracing::trace!("Done!");
         NativeAudioEngine {
             mlp,
             context: ManuallyDrop::new(context),

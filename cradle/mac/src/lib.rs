@@ -7,9 +7,35 @@ use bedrock as br;
 use br::PhysicalDevice;
 use peridot::mthelper::SharedRef;
 use peridot::{EngineEvents, FeatureRequests};
+use std::ffi::CStr;
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::{Layer, Registry};
+
+struct NativeLogStream;
+impl std::io::Write for &'_ NativeLogStream {
+    fn write(&mut self, buf: &[u8]) -> IOResult<usize> {
+        unsafe {
+            let mut fmt =
+                NSString::from_str(core::str::from_utf8_unchecked(buf)).expect("NSString");
+            NSLog(&mut *fmt);
+            Ok(buf.len())
+        }
+    }
+
+    fn flush(&mut self) -> IOResult<()> {
+        std::io::stderr().flush()
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for NativeLogStream {
+    type Writer = &'a Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self
+    }
+}
 
 struct NSLogger;
 impl log::Log for NSLogger {
@@ -158,15 +184,17 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         }
     }
 }
-fn acquire_view_size(view: *mut c_void) -> peridot::math::Vector2<usize> {
+fn acquire_view_size(view: *mut c_void) -> peridot::math::Vector2<u32> {
     let NSRect { size, .. } = unsafe { msg_send![view as *mut objc::runtime::Object, frame] };
-    debug!("current geometry extent: {}/{}", size.width, size.height);
+
     peridot::math::Vector2(size.width as _, size.height as _)
 }
 pub struct Presenter {
     view_ptr: *mut c_void,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<SharedRef<br::InstanceObject>>>,
 }
+unsafe impl Sync for Presenter {}
+unsafe impl Send for Presenter {}
 impl Presenter {
     fn new(view_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
         let obj = g
@@ -212,11 +240,14 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.requesting_back_buffer_layout()
     }
 
-    fn emit_initialize_back_buffer_commands(
+    fn emit_initialize_back_buffer_commands<
+        'r,
+        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
+    >(
         &self,
-        recorder: &mut br::CmdRecord<impl br::CommandBuffer + br::VkHandleMut + ?Sized>,
-    ) {
-        self.sc.emit_initialize_back_buffer_commands(recorder);
+        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
+    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
+        self.sc.emit_initialize_back_buffer_commands(recorder)
     }
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.sc.acquire_next_back_buffer_index()
@@ -224,7 +255,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         back_buffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -238,12 +269,12 @@ impl peridot::PlatformPresenter for Presenter {
         )
     }
     /// Returns whether re-initializing is needed for back-buffer resources
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs re-initializing back-buffer resource
         true
     }
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         acquire_view_size(self.view_ptr)
     }
 }
@@ -251,6 +282,8 @@ pub struct NativeLink {
     rt_view: *mut c_void,
     al: PlatformAssetLoader,
 }
+unsafe impl Sync for NativeLink {}
+unsafe impl Send for NativeLink {}
 impl NativeLink {
     pub fn new(rt_view: *mut c_void) -> Self {
         NativeLink {
@@ -263,11 +296,11 @@ impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = Presenter;
 
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", "VK_MVK_macos_surface"]
+    fn instance_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_surface", c"VK_MVK_macos_surface"]
     }
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn device_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_swapchain"]
     }
 
     fn asset_loader(&self) -> &PlatformAssetLoader {
@@ -282,49 +315,53 @@ impl peridot::NativeLinker for NativeLink {
     }
 }
 mod userlib;
-type Game = userlib::Game<NativeLink>;
 type Engine = peridot::Engine<NativeLink>;
 
 pub struct GameDriver {
-    engine: Engine,
-    usercode: Game,
-    #[allow(dead_code)]
-    nae: NativeAudioEngine,
+    ex_input: peridot::InputProcess,
+    frame_timing_sender: async_std::channel::Sender<()>,
+    event_sender: async_std::channel::Sender<peridot::EngineEvent>,
+    usercode_thread: async_std::task::JoinHandle<()>,
 }
 impl GameDriver {
     pub fn new(rt_view: *mut libc::c_void) -> Self {
+        let (event_sender, event_receiver) =
+            async_std::channel::unbounded::<peridot::EngineEvent>();
+        let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
+
         let nl = NativeLink::new(rt_view);
         let mut engine = Engine::new(
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
             nl,
-            Game::requested_features(),
+            Default::default(),
+            (event_sender.clone(), event_receiver),
+            frame_timing_receiver,
         );
-        let usercode = Game::init(&mut engine);
         let nih = Box::new(NativeInputHandler::new(rt_view));
-        engine.input_mut().set_nativelink(nih);
+        engine.input().set_nativelink(nih);
         let mut nae = NativeAudioEngine::init();
         nae.start(engine.audio_mixer().clone());
         engine.post_init();
+        let ex_input = engine.input().clone();
+
+        let usercode_thread = async_std::task::spawn(async move {
+            userlib::game_main(&mut engine).await;
+        });
 
         GameDriver {
-            engine,
-            usercode,
-            nae,
+            ex_input,
+            frame_timing_sender,
+            event_sender,
+            usercode_thread,
         }
-    }
-
-    fn update(&mut self) {
-        self.engine.do_update(&mut self.usercode);
-    }
-    fn resize(&mut self, size: peridot::math::Vector2<usize>) {
-        self.engine.do_resize_back_buffer(size, &mut self.usercode);
     }
 }
 
 // Swift Linking //
 
 extern "C" {
+    fn nsapp_reply_should_terminate();
     fn nsbundle_path_for_resource(
         name: *mut NSString,
         oftype: *mut NSString,
@@ -338,24 +375,54 @@ pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameDriver {
     log::set_logger(&LOGGER).expect("Failed to set logger");
     log::set_max_level(log::LevelFilter::Trace);
 
+    let subscriber = Registry::default().with(
+        tracing_subscriber::fmt::layer()
+            .pretty()
+            .with_writer(NativeLogStream)
+            .with_filter(tracing_subscriber::filter::EnvFilter::from_default_env()),
+    );
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set log subscriber");
+
     Box::into_raw(Box::new(GameDriver::new(v)))
 }
 #[no_mangle]
 pub extern "C" fn terminate_game(g: *mut GameDriver) {
-    unsafe {
-        drop(Box::from_raw(g));
-    }
+    let driver = unsafe { Box::from_raw(g) };
+
+    async_std::task::spawn(async move {
+        if driver
+            .event_sender
+            .send(peridot::EngineEvent::Shutdown)
+            .await
+            .is_ok()
+        {
+            driver.usercode_thread.await;
+        }
+
+        unsafe {
+            nsapp_reply_should_terminate();
+        }
+    });
 }
 #[no_mangle]
 pub extern "C" fn update_game(g: *mut GameDriver) {
     unsafe {
-        (*g).update();
+        match (*g).frame_timing_sender.try_send(()) {
+            Ok(_) => (),
+            Err(async_std::channel::TrySendError::Full(_)) => (),
+            Err(async_std::channel::TrySendError::Closed(_)) => {
+                warn!("Frame timing channel was closed");
+            }
+        }
     }
 }
 #[no_mangle]
 pub extern "C" fn resize_game(g: *mut GameDriver, w: u32, h: u32) {
     unsafe {
-        (*g).resize(peridot::math::Vector2(w as _, h as _));
+        async_std::task::spawn(
+            (*g).event_sender
+                .send(peridot::EngineEvent::Resize(peridot::math::Vector2(w, h))),
+        );
     }
 }
 #[no_mangle]
@@ -367,7 +434,7 @@ pub extern "C" fn captionbar_text() -> *mut c_void {
 
 pub struct OutputAU(appkit::AudioUnit);
 impl OutputAU {
-    fn new() -> Self {
+    fn new() -> Option<Self> {
         unsafe {
             let d = appkit::AudioComponentDescription {
                 component_type: appkit::kAudioUnitType_Output,
@@ -379,7 +446,8 @@ impl OutputAU {
 
             let c = appkit::AudioComponentFindNext(std::ptr::null_mut(), &d);
             if c.is_null() {
-                panic!("No output audio component found");
+                warn!("No output audio component found");
+                return None;
             }
             let mut au = std::mem::MaybeUninit::uninit();
             if appkit::AudioComponentInstanceNew(c, au.as_mut_ptr()) != 0 {
@@ -388,7 +456,7 @@ impl OutputAU {
             let au = au.assume_init();
             appkit::AudioUnitInitialize(au);
 
-            OutputAU(au)
+            Some(OutputAU(au))
         }
     }
 
@@ -439,12 +507,17 @@ impl Drop for OutputAU {
 }
 
 pub struct NativeAudioEngine {
-    output: OutputAU,
+    output: Option<OutputAU>,
     amixer: Option<Box<Arc<RwLock<peridot::audio::Mixer>>>>,
 }
 impl NativeAudioEngine {
     fn init() -> Self {
-        let output = OutputAU::new();
+        let Some(output) = OutputAU::new() else {
+            return Self {
+                output: None,
+                amixer: None,
+            };
+        };
 
         let af = appkit::AudioStreamBasicDescription {
             sample_rate: 44100.0,
@@ -460,17 +533,18 @@ impl NativeAudioEngine {
         output.set_stream_format(&af);
 
         NativeAudioEngine {
-            output,
+            output: Some(output),
             amixer: None,
         }
     }
     fn start(&mut self, mixer: Arc<RwLock<peridot::audio::Mixer>>) {
-        let mut mixer = Box::new(mixer);
-        self.output
-            .set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
-        self.output.start();
-        mixer.write().start();
-        self.amixer = Some(mixer);
+        if let Some(ref o) = self.output {
+            let mut mixer = Box::new(mixer);
+            o.set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
+            o.start();
+            mixer.write().start();
+            self.amixer = Some(mixer);
+        }
     }
 
     extern "C" fn render(
@@ -501,7 +575,7 @@ impl NativeAudioEngine {
 pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Down Event: {}", character);
     unsafe {
-        (*g).engine.input_mut().dispatch_button_event(
+        (*g).ex_input.dispatch_button_event(
             peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
             true,
         );
@@ -511,7 +585,7 @@ pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
 pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Up Event: {}", character);
     unsafe {
-        (*g).engine.input_mut().dispatch_button_event(
+        (*g).ex_input.dispatch_button_event(
             peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
             false,
         );
@@ -535,9 +609,7 @@ pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
         _ => return,
     };
     unsafe {
-        (*g).engine
-            .input_mut()
-            .dispatch_button_event(code_to_bty, true);
+        (*g).ex_input.dispatch_button_event(code_to_bty, true);
     }
 }
 #[no_mangle]
@@ -552,9 +624,7 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
         _ => return,
     };
     unsafe {
-        (*g).engine
-            .input_mut()
-            .dispatch_button_event(code_to_bty, false);
+        (*g).ex_input.dispatch_button_event(code_to_bty, false);
     }
 }
 
@@ -586,16 +656,14 @@ impl peridot::NativeInput for NativeInputHandler {
 #[no_mangle]
 pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
     unsafe {
-        (*g).engine
-            .input_mut()
+        (*g).ex_input
             .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), true);
     }
 }
 #[no_mangle]
 pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
     unsafe {
-        (*g).engine
-            .input_mut()
+        (*g).ex_input
             .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false);
     }
 }
@@ -604,15 +672,9 @@ pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
 pub extern "C" fn report_mouse_move_abs(g: *mut GameDriver, x: f32, y: f32) {
     unsafe {
         let scale = nsscreen_backing_scale_factor();
-        (*g).engine.input_mut().dispatch_analog_event(
-            peridot::NativeAnalogInput::MouseX,
-            x * scale,
-            true,
-        );
-        (*g).engine.input_mut().dispatch_analog_event(
-            peridot::NativeAnalogInput::MouseY,
-            y * scale,
-            true,
-        );
+        (*g).ex_input
+            .dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x * scale, true);
+        (*g).ex_input
+            .dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
     }
 }
