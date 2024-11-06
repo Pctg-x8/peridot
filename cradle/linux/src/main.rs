@@ -1,4 +1,5 @@
 use input::PointerPositionProvider;
+use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 use presenter::PresenterProvider;
 use sound_backend::SoundBackend;
@@ -98,7 +99,7 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
 
 pub struct GameDriver {
     engine_input: peridot::InputProcess,
-    engine_audio: Arc<std::sync::RwLock<peridot::audio::Mixer>>,
+    engine_audio: Arc<RwLock<peridot::audio::Mixer>>,
     _snd: Box<dyn SoundBackend>,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
     frame_timing_sender: async_std::channel::Sender<()>,
