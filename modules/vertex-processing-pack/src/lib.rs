@@ -442,7 +442,7 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
     }
 }
 impl PvpContainerReader<BufReader<File>> {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> IOResult<Self> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, PvpContainerReadError> {
         File::open(path).and_then(|fp| Self::new(BufReader::new(fp)))
     }
 }
