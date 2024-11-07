@@ -2,5 +2,12 @@
 name = "peridot-serialization-utils"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2021"
+
+[features]
+default = []
+
+async-rt-async-std = ["dep:async-std"]
 
 [dependencies]
+async-std = { workspace = true, optional = true }
