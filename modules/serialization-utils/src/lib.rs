@@ -25,7 +25,7 @@ impl Iterator for UIntFragmentIterator {
     #[inline(always)]
     fn size_hint(&self) -> (usize, Option<usize>) {
         // 一番右の1の位置を7で切り上げ
-        let s = (32 - self.0.unwrap_or(0).leading_zeros() + 6) / 7;
+        let s = (32 - self.0.unwrap_or(0).leading_zeros() as usize + 6) / 7;
 
         (s, Some(s))
     }
@@ -44,12 +44,12 @@ impl VariableUInt {
     #[cfg(feature = "async-rt-async-std")]
     pub async fn write_async(
         &self,
-        writer: &mut (impl async_std::io::Write + ?Sized),
+        writer: &mut (impl async_std::io::Write + ?Sized + Unpin),
     ) -> IOResult<usize> {
         let write_bytes = UIntFragmentIterator::from(self.0).collect::<Vec<_>>();
-        async_std::io::WriteExt::write_all(writer, &write_buffer).await?;
+        async_std::io::WriteExt::write_all(writer, &write_bytes).await?;
 
-        Ok(write_buffer.len())
+        Ok(write_bytes.len())
     }
 
     pub fn read(reader: &mut (impl BufRead + ?Sized)) -> IOResult<Self> {
@@ -87,33 +87,41 @@ impl VariableUInt {
     }
 
     #[cfg(feature = "async-rt-async-std")]
-    pub async fn read_async(reader: &mut (impl async_std::io::BufRead + ?Sized)) -> IOResult<Self> {
+    pub async fn read_async(
+        reader: &mut (impl async_std::io::BufRead + ?Sized + Unpin),
+    ) -> IOResult<Self> {
         let (mut v, mut shifts) = (0u32, 0usize);
 
         loop {
-            let mut available = match std::future::poll_fn(|cx| {
-                async_std::io::BufRead::poll_fill_buf(std::pin::Pin::new(reader), cx)
-            })
-            .await
-            {
-                Ok(v) => v,
-                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) => break Err(e),
-            };
-            let (mut consumed, mut done) = (0, false);
-            while consumed < available.len() {
-                v |= ((available[consumed] & 0x7f) as u32) << shifts;
-                shifts += 7;
-                consumed += 1;
+            let done = std::future::poll_fn(|cx| {
+                let available = match std::task::ready!(async_std::io::BufRead::poll_fill_buf(
+                    std::pin::Pin::new(reader),
+                    cx
+                )) {
+                    Ok(v) => v,
+                    Err(e) if e.kind() == ErrorKind::Interrupted => {
+                        return std::task::Poll::Ready(Ok(false))
+                    }
+                    Err(e) => return std::task::Poll::Ready(Err(e)),
+                };
+                let (mut consumed, mut done) = (0, false);
+                while consumed < available.len() {
+                    v |= ((available[consumed] & 0x7f) as u32) << shifts;
+                    shifts += 7;
+                    consumed += 1;
 
-                if (available[consumed - 1] & 0x80) == 0 {
-                    // last byte
-                    done = true;
-                    break;
+                    if (available[consumed - 1] & 0x80) == 0 {
+                        // last byte
+                        done = true;
+                        break;
+                    }
                 }
-            }
 
-            reader.consume(consumed);
+                async_std::io::BufRead::consume(std::pin::Pin::new(reader), consumed);
+                std::task::Poll::Ready(Ok(done))
+            })
+            .await?;
+
             if done {
                 break Ok(VariableUInt(v));
             }
@@ -132,7 +140,7 @@ impl PascalString {
     #[cfg(feature = "async-rt-async-std")]
     pub async fn write_async(
         &self,
-        writer: &mut (impl async_std::io::Write + ?Sized),
+        writer: &mut (impl async_std::io::Write + ?Sized + Unpin),
     ) -> IOResult<usize> {
         PascalStr(&self.0).write_async(writer).await
     }
@@ -151,7 +159,9 @@ impl PascalString {
     }
 
     #[cfg(feature = "async-rt-async-std")]
-    pub async fn read_async(reader: &mut (impl async_std::io::BufRead + ?Sized)) -> IOResult<Self> {
+    pub async fn read_async(
+        reader: &mut (impl async_std::io::BufRead + ?Sized + Unpin),
+    ) -> IOResult<Self> {
         let VariableUInt(byte_length) = VariableUInt::read_async(reader).await?;
 
         let mut bytes = Vec::with_capacity(byte_length as _);
@@ -179,7 +189,7 @@ impl<'s> PascalStr<'s> {
     #[cfg(feature = "async-rt-async-std")]
     pub async fn write_async(
         &self,
-        writer: &mut (impl async_std::io::Write + ?Sized),
+        writer: &mut (impl async_std::io::Write + ?Sized + Unpin),
     ) -> IOResult<usize> {
         let len_bytes = VariableUInt(self.0.as_bytes().len() as _)
             .write_async(writer)
