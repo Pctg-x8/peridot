@@ -201,6 +201,7 @@ pub enum Event {
     Resize(math::Vector2<u32>),
 }
 
+#[derive(Debug)]
 pub enum PrepareFrameError {
     FramebufferOutOfDate,
 }
@@ -401,6 +402,9 @@ impl<PL: NativeLinker> Engine<PL> {
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
+        StateFence::wait(&mut self.last_rendering_completion)
+            .expect("Waiting last command completion");
+
         let dt = self.game_timer.delta_time();
         let backbuffer_index = match self.presenter.next_back_buffer_index() {
             Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
@@ -408,9 +412,6 @@ impl<PL: NativeLinker> Engine<PL> {
             }
             e => e.expect("Acquiring available back-buffer index failed"),
         };
-
-        StateFence::wait(&mut self.last_rendering_completion)
-            .expect("Waiting last command completion");
 
         self.ip.prepare_for_frame(dt);
 

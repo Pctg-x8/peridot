@@ -1,8 +1,8 @@
-use std::{collections::HashMap, ffi::CStr};
+use std::{collections::HashMap, ffi::CStr, sync::Arc};
 
 use bedrock as br;
 use br::PhysicalDevice;
-use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
+use parking_lot::RwLock;
 use wayland_backend::client::ReadEventsGuard;
 use wayland_client::{
     protocol::{
@@ -248,7 +248,7 @@ impl WindowBackend for Wayland {
         self.state.geometry
     }
 }
-impl PresenterProvider for SharedMutableRef<Wayland> {
+impl PresenterProvider for Arc<RwLock<Wayland>> {
     type Presenter = Presenter;
     const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_wayland_surface";
 
@@ -285,16 +285,12 @@ impl EventProcessor for Wayland {
 }
 
 pub struct Presenter {
-    window_backend: SharedMutableRef<Wayland>,
+    window_backend: Arc<RwLock<Wayland>>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 impl Presenter {
-    fn new(
-        g: &peridot::Graphics,
-        renderer_queue_family: u32,
-        w: &SharedMutableRef<Wayland>,
-    ) -> Self {
-        let wlock = w.borrow();
+    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &Arc<RwLock<Wayland>>) -> Self {
+        let wlock = w.read();
 
         if !g.adapter().wayland_presentation_support(
             renderer_queue_family,
@@ -328,7 +324,7 @@ impl Presenter {
 impl peridot::PlatformPresenter for Presenter {
     type BackBuffer = br::ImageViewObject<
         br::SwapchainImage<
-            SharedRef<
+            peridot::mthelper::SharedRef<
                 br::SurfaceSwapchainObject<
                     peridot::DeviceObject,
                     br::SurfaceObject<peridot::InstanceObject>,
@@ -343,7 +339,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+    fn back_buffer(&self, index: usize) -> Option<peridot::mthelper::SharedRef<Self::BackBuffer>> {
         self.sc.back_buffer(index)
     }
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
@@ -385,7 +381,7 @@ impl peridot::PlatformPresenter for Presenter {
     }
 
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
-        self.window_backend.borrow().state.geometry
+        self.window_backend.read().state.geometry
     }
 }
 impl PointerPositionProvider for Wayland {

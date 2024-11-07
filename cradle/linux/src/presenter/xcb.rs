@@ -1,10 +1,11 @@
 use std::{
     ffi::CStr,
     os::fd::{AsRawFd, RawFd},
+    sync::Arc,
 };
 
 use br::PhysicalDevice;
-use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
+use parking_lot::RwLock;
 use wayland_backend::io_lifetimes::BorrowedFd;
 use xcb::XidNew;
 
@@ -116,7 +117,7 @@ impl X11 {
         &self.cached_window_size
     }
 }
-impl PresenterProvider for SharedMutableRef<X11> {
+impl PresenterProvider for Arc<RwLock<X11>> {
     type Presenter = Presenter;
     const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_xcb_surface";
 
@@ -235,12 +236,12 @@ impl WindowBackend for X11 {
 }
 
 pub struct Presenter {
-    x11_ref: SharedMutableRef<X11>,
+    x11_ref: Arc<RwLock<X11>>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 impl Presenter {
-    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &SharedMutableRef<X11>) -> Self {
-        let wlock = w.borrow();
+    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &Arc<RwLock<X11>>) -> Self {
+        let wlock = w.read();
 
         if !g.adapter().xcb_presentation_support(
             renderer_queue_family,
@@ -272,7 +273,7 @@ impl Presenter {
 impl peridot::PlatformPresenter for Presenter {
     type BackBuffer = br::ImageViewObject<
         br::SwapchainImage<
-            SharedRef<
+            peridot::mthelper::SharedRef<
                 br::SurfaceSwapchainObject<
                     peridot::DeviceObject,
                     br::SurfaceObject<peridot::InstanceObject>,
@@ -287,7 +288,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+    fn back_buffer(&self, index: usize) -> Option<peridot::mthelper::SharedRef<Self::BackBuffer>> {
         self.sc.back_buffer(index)
     }
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
@@ -329,6 +330,6 @@ impl peridot::PlatformPresenter for Presenter {
     }
 
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
-        self.x11_ref.borrow().mainwnd_geometry().clone()
+        self.x11_ref.read().mainwnd_geometry().clone()
     }
 }
