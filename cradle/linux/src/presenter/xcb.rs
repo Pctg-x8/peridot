@@ -1,7 +1,11 @@
-use std::os::fd::{AsRawFd, RawFd};
+use std::{
+    ffi::CStr,
+    os::fd::{AsRawFd, RawFd},
+    sync::Arc,
+};
 
 use br::PhysicalDevice;
-use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
+use parking_lot::RwLock;
 use wayland_backend::io_lifetimes::BorrowedFd;
 use xcb::XidNew;
 
@@ -26,7 +30,7 @@ pub struct X11 {
     wm_delete_window: xcb::x::Atom,
     vis: xcb::x::Visualid,
     mainwnd_id: xcb::x::Window,
-    cached_window_size: peridot::math::Vector2<usize>,
+    cached_window_size: peridot::math::Vector2<u32>,
     has_close_requested: bool,
 }
 impl X11 {
@@ -109,13 +113,13 @@ impl X11 {
         self.con.flush().expect("Failed to flush");
     }
 
-    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<usize> {
+    fn mainwnd_geometry(&self) -> &peridot::math::Vector2<u32> {
         &self.cached_window_size
     }
 }
-impl PresenterProvider for SharedMutableRef<X11> {
+impl PresenterProvider for Arc<RwLock<X11>> {
     type Presenter = Presenter;
-    const SURFACE_EXT_NAME: &'static str = "VK_KHR_xcb_surface";
+    const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_xcb_surface";
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter {
         Presenter::new(g, g.graphics_queue_family_index(), self)
@@ -226,18 +230,18 @@ impl WindowBackend for X11 {
         self.con.flush().expect("Failed to flush");
     }
 
-    fn geometry(&self) -> peridot::math::Vector2<usize> {
+    fn geometry(&self) -> peridot::math::Vector2<u32> {
         self.cached_window_size
     }
 }
 
 pub struct Presenter {
-    x11_ref: SharedMutableRef<X11>,
+    x11_ref: Arc<RwLock<X11>>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 impl Presenter {
-    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &SharedMutableRef<X11>) -> Self {
-        let wlock = w.borrow();
+    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &Arc<RwLock<X11>>) -> Self {
+        let wlock = w.read();
 
         if !g.adapter().xcb_presentation_support(
             renderer_queue_family,
@@ -269,7 +273,7 @@ impl Presenter {
 impl peridot::PlatformPresenter for Presenter {
     type BackBuffer = br::ImageViewObject<
         br::SwapchainImage<
-            SharedRef<
+            peridot::mthelper::SharedRef<
                 br::SurfaceSwapchainObject<
                     peridot::DeviceObject,
                     br::SurfaceObject<peridot::InstanceObject>,
@@ -284,7 +288,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+    fn back_buffer(&self, index: usize) -> Option<peridot::mthelper::SharedRef<Self::BackBuffer>> {
         self.sc.back_buffer(index)
     }
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
@@ -306,7 +310,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -319,13 +323,13 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
         true
     }
 
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
-        self.x11_ref.borrow().mainwnd_geometry().clone()
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
+        self.x11_ref.read().mainwnd_geometry().clone()
     }
 }

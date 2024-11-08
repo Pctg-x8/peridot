@@ -1,11 +1,11 @@
-use std::os::fd::BorrowedFd;
+use std::{ffi::CStr, os::fd::BorrowedFd};
 
 pub mod wayland;
 pub mod xcb;
 
 pub trait WindowBackend {
     fn show(&mut self);
-    fn geometry(&self) -> peridot::math::Vector2<usize>;
+    fn geometry(&self) -> peridot::math::Vector2<u32>;
 }
 
 pub trait BorrowFd {
@@ -22,7 +22,7 @@ pub trait EventProcessor {
 
 pub trait PresenterProvider {
     type Presenter: peridot::PlatformPresenter;
-    const SURFACE_EXT_NAME: &'static str;
+    const SURFACE_EXT_NAME: &'static CStr;
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter;
 }

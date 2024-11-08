@@ -43,6 +43,12 @@ impl br::VkObject for Image {
     const TYPE: br::vk::VkObjectType =
         <br::ImageObject<peridot::DeviceObject> as br::VkObject>::TYPE;
 }
+impl br::DeviceChildHandle for Image {
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.object.device_handle()
+    }
+}
 impl br::DeviceChild for Image {
     type ConcreteDevice =
         <br::ImageObject<peridot::DeviceObject> as br::DeviceChild>::ConcreteDevice;
@@ -456,6 +462,12 @@ impl br::VkObject for Buffer {
 impl br::VkHandleMut for Buffer {
     fn native_ptr_mut(&mut self) -> Self::Handle {
         self.object.native_ptr_mut()
+    }
+}
+impl br::DeviceChildHandle for Buffer {
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.object.device_handle()
     }
 }
 impl br::DeviceChild for Buffer {

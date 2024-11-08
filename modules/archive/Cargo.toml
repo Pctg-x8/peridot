@@ -4,9 +4,18 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2018"
 
+[features]
+default = []
+
+async-rt-async-std = [
+    "peridot-serialization-utils/async-rt-async-std",
+    "dep:async-std",
+]
+
 [dependencies]
 crc = "1.8"
 lz4-compression = "0.6"
 libflate = "0.1"
 zstd = "0.4"
 peridot-serialization-utils = { path = "../serialization-utils" }
+async-std = { workspace = true, optional = true }

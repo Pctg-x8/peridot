@@ -7,9 +7,37 @@ trait AudioBitstreamConverter {
     fn sample_count(&self, bytes: usize) -> usize;
     fn convert(&self, floats: &[f32], into: &mut [u8]);
 }
+pub struct SignedInt16LEConverter;
+pub struct SignedInt16BEConverter;
 pub struct SignedInt24LEConverter;
 pub struct SignedInt32LEConverter;
 pub struct Float32Converter;
+impl AudioBitstreamConverter for SignedInt16LEConverter {
+    fn sample_count(&self, bytes: usize) -> usize {
+        bytes / 2
+    }
+
+    fn convert(&self, floats: &[f32], into: &mut [u8]) {
+        for (n, &e) in floats.into_iter().enumerate() {
+            let v = unsafe { std::mem::transmute::<_, u16>((e * 65535.0) as i16) };
+            into[n * 2 + 0] = (v & 0xff) as _;
+            into[n * 2 + 1] = ((v >> 8) & 0xff) as _;
+        }
+    }
+}
+impl AudioBitstreamConverter for SignedInt16BEConverter {
+    fn sample_count(&self, bytes: usize) -> usize {
+        bytes / 2
+    }
+
+    fn convert(&self, floats: &[f32], into: &mut [u8]) {
+        for (n, &e) in floats.into_iter().enumerate() {
+            let v = unsafe { std::mem::transmute::<_, u16>((e * 65535.0) as i16) };
+            into[n * 2 + 0] = ((v >> 8) & 0xff) as _;
+            into[n * 2 + 1] = (v & 0xff) as _;
+        }
+    }
+}
 impl AudioBitstreamConverter for SignedInt24LEConverter {
     fn sample_count(&self, bytes: usize) -> usize {
         bytes / 3

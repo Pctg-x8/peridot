@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ffi::CStr, sync::Arc};
 
 use bedrock as br;
 use br::PhysicalDevice;
-use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
+use parking_lot::RwLock;
 use wayland_backend::client::ReadEventsGuard;
 use wayland_client::{
     protocol::{
@@ -33,7 +33,7 @@ impl BorrowFd for ReadinessGuard {
 
 pub struct State {
     close_requested: bool,
-    geometry: peridot::math::Vector2<usize>,
+    geometry: peridot::math::Vector2<u32>,
     pointer_entered: bool,
     pointer_position: peridot::math::Vector2<usize>,
 }
@@ -244,13 +244,13 @@ impl Wayland {
 impl WindowBackend for Wayland {
     fn show(&mut self) {}
 
-    fn geometry(&self) -> peridot::math::Vector2<usize> {
+    fn geometry(&self) -> peridot::math::Vector2<u32> {
         self.state.geometry
     }
 }
-impl PresenterProvider for SharedMutableRef<Wayland> {
+impl PresenterProvider for Arc<RwLock<Wayland>> {
     type Presenter = Presenter;
-    const SURFACE_EXT_NAME: &'static str = "VK_KHR_wayland_surface";
+    const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_wayland_surface";
 
     fn create(&self, g: &peridot::Graphics) -> Self::Presenter {
         Presenter::new(g, g.graphics_queue_family_index(), self)
@@ -285,16 +285,12 @@ impl EventProcessor for Wayland {
 }
 
 pub struct Presenter {
-    window_backend: SharedMutableRef<Wayland>,
+    window_backend: Arc<RwLock<Wayland>>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 impl Presenter {
-    fn new(
-        g: &peridot::Graphics,
-        renderer_queue_family: u32,
-        w: &SharedMutableRef<Wayland>,
-    ) -> Self {
-        let wlock = w.borrow();
+    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &Arc<RwLock<Wayland>>) -> Self {
+        let wlock = w.read();
 
         if !g.adapter().wayland_presentation_support(
             renderer_queue_family,
@@ -328,7 +324,7 @@ impl Presenter {
 impl peridot::PlatformPresenter for Presenter {
     type BackBuffer = br::ImageViewObject<
         br::SwapchainImage<
-            SharedRef<
+            peridot::mthelper::SharedRef<
                 br::SurfaceSwapchainObject<
                     peridot::DeviceObject,
                     br::SurfaceObject<peridot::InstanceObject>,
@@ -343,7 +339,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+    fn back_buffer(&self, index: usize) -> Option<peridot::mthelper::SharedRef<Self::BackBuffer>> {
         self.sc.back_buffer(index)
     }
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
@@ -365,7 +361,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -378,14 +374,14 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
         true
     }
 
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
-        self.window_backend.borrow().state.geometry
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
+        self.window_backend.read().state.geometry
     }
 }
 impl PointerPositionProvider for Wayland {

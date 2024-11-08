@@ -72,11 +72,11 @@ impl Args {
                 .or(project_config
                     .asset_dir
                     .map(|p| std::borrow::Cow::Owned(self.userlib_path.join(p)))),
-            entry_ty_name: self
+            entry_fn_name: self
                 .entry_ty_name
                 .as_deref()
-                .or(project_config.entry_type_name)
-                .unwrap_or("Game"),
+                .or(project_config.entry_fn_name)
+                .unwrap_or("game_main"),
             appid: self
                 .app_package_id
                 .as_deref()

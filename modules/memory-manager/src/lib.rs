@@ -184,6 +184,7 @@ impl MemoryManager {
 
         let heap_stats = memory_properties
             .heaps()
+            .iter()
             .map(|h| HeapStats {
                 info: h.clone(),
                 used_bytes: 0,
@@ -192,7 +193,7 @@ impl MemoryManager {
 
         let (mut device_local_memory_types, mut host_visible_memory_types, mut direct_memory_types) =
             (Vec::new(), Vec::new(), Vec::new());
-        for (n, t) in memory_properties.types().enumerate() {
+        for (n, t) in memory_properties.types().iter().enumerate() {
             let mt = MemoryType {
                 index: n as _,
                 heap_index: t.heapIndex,
@@ -215,7 +216,7 @@ impl MemoryManager {
         tracing::debug!("adapter features: {features:#?}");
         tracing::debug!("adapter limits: {limits:#?}");
         tracing::debug!("memory heaps");
-        for (n, h) in memory_properties.heaps().enumerate() {
+        for (n, h) in memory_properties.heaps().iter().enumerate() {
             let mut flags = Vec::new();
             if (h.flags & br::vk::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 {
                 flags.push("Device Local");
@@ -247,6 +248,7 @@ impl MemoryManager {
 
             for (n, t) in memory_properties
                 .types()
+                .iter()
                 .enumerate()
                 .filter(|(_, t)| t.heapIndex == n as _)
             {
@@ -286,9 +288,19 @@ impl MemoryManager {
     }
 
     fn device_local_memory_type(&self, index_mask: u32) -> Option<&MemoryType> {
-        self.device_local_memory_types
+        let mut target_types = self
+            .device_local_memory_types
             .iter()
-            .find(|t| (index_mask & t.index_mask()) != 0)
+            .find(|t| (index_mask & t.index_mask()) != 0);
+
+        target_types.or_else(|| {
+            // find from direct memory
+            let mut target_types = self
+                .direct_memory_types
+                .iter()
+                .filter(|t| index_mask & t.index_mask() != 0);
+            target_types.next()
+        })
     }
 
     #[tracing::instrument(skip(self, device, dedicated_allocate_additional_ops))]
@@ -449,11 +461,18 @@ impl MemoryManager {
                 }
             }
 
+            tracing::debug!("ReqMemoryMask: {:08x}", unsafe {
+                req.assume_init_ref().memoryRequirements.memoryTypeBits
+            });
             requirements.push(unsafe { (req.assume_init(), sink_dedicated_alloc.assume_init()) });
             objects.push(object);
         }
 
         let alloc_info = ObjectAllocationInfo::compute(&requirements);
+        tracing::debug!(
+            "CombinedReqMemoryMask: {:08x}",
+            alloc_info.combined_memory_index_mask
+        );
         let memory_index = self
             .device_local_memory_type(alloc_info.combined_memory_index_mask)
             .expect("no memory type")
@@ -964,10 +983,8 @@ impl MemoryManager {
         let req = unsafe { req.assume_init() };
 
         let memory_index = self
-            .device_local_memory_types
-            .iter()
-            .find(|t| (req.memoryRequirements.memoryTypeBits & t.index_mask()) != 0)
-            .expect("no memory type index")
+            .device_local_memory_type(req.memoryRequirements.memoryTypeBits)
+            .expect("no memory type")
             .index;
 
         let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
@@ -1030,12 +1047,9 @@ impl MemoryManager {
         }
 
         let alloc_info = ObjectAllocationInfo::compute(&requirements);
-
         let memory_index = self
-            .device_local_memory_types
-            .iter()
-            .find(|t| (alloc_info.combined_memory_index_mask & t.index_mask()) != 0)
-            .expect("no memory type index")
+            .device_local_memory_type(alloc_info.combined_memory_index_mask)
+            .expect("no memory type")
             .index;
 
         let combined_native_memory = if alloc_info.total_size >= Self::SMALL_ALLOCATION_THRESHOLD {
@@ -1057,7 +1071,7 @@ impl MemoryManager {
             Vec::with_capacity(objects.len()),
             Vec::with_capacity(objects.len()),
         );
-        for ((mut object, mode), (req, _)) in objects
+        for ((object, mode), (req, _)) in objects
             .into_iter()
             .zip(alloc_info.allocation_modes.into_iter())
             .zip(requirements.into_iter())
@@ -1217,15 +1231,8 @@ fn bind_buffers(
         // use old binding
 
         for b in binds.iter() {
-            unsafe {
-                br::vkresolve::bind_buffer_memory(
-                    e.device().native_ptr(),
-                    b.buffer,
-                    b.memory,
-                    b.memoryOffset,
-                )
-                .into_result()?;
-            }
+            e.device()
+                .bind_buffer_raw(b.buffer, b.memory, b.memoryOffset)?;
         }
     }
 
@@ -1244,15 +1251,8 @@ fn bind_images(
         // use old binding
 
         for b in binds.iter() {
-            unsafe {
-                br::vkresolve::bind_image_memory(
-                    e.device().native_ptr(),
-                    b.image,
-                    b.memory,
-                    b.memoryOffset,
-                )
-                .into_result()?;
-            }
+            e.device()
+                .bind_image_raw(b.image, b.memory, b.memoryOffset)?;
         }
     }
 

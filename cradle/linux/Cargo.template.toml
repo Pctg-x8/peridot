@@ -2,7 +2,7 @@
 name = "peridot-cradle-linux"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [features]
 UseExternalAssetPath = []
@@ -34,4 +34,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dependencies.async-std]
-version = "1.0"
+version = "1.13"
+features = ["attributes"]

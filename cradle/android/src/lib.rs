@@ -8,18 +8,26 @@ mod userlib;
 use bedrock as br;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use peridot::{EngineEvents, FeatureRequests};
+use std::ffi::CStr;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 struct Game {
-    engine: peridot::Engine<NativeLink>,
-    userlib: userlib::Game<NativeLink>,
+    engine_input: peridot::InputProcess,
     snd: NativeAudioEngine,
     stopping_render: bool,
     pos_cache: SharedRef<DynamicMut<TouchPositionCache>>,
+    event_sender: async_std::channel::Sender<peridot::EngineEvent>,
+    frame_timing_sender: async_std::channel::Sender<()>,
+    usercode_thread: async_std::task::JoinHandle<()>,
 }
 impl Game {
     fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
+        let (event_sender, event_receiver) = async_std::channel::unbounded();
+        let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
+
         let nl = NativeLink {
             al: PlatformAssetLoader::new(asset_manager),
             w: window,
@@ -28,7 +36,9 @@ impl Game {
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
             nl,
-            userlib::Game::<NativeLink>::requested_features(),
+            Default::default(),
+            (event_sender.clone(), event_receiver),
+            frame_timing_receiver,
         );
         let snd = NativeAudioEngine::new(engine.audio_mixer());
         let pos_cache = SharedRef::new(DynamicMut::new(TouchPositionCache::new()));
@@ -37,17 +47,20 @@ impl Game {
         }));
         engine.post_init();
 
+        let engine_input = engine.input().clone();
+        let usercode_thread = async_std::task::spawn(async move {
+            userlib::game_main(&mut engine).await;
+        });
+
         Self {
-            userlib: userlib::Game::init(&mut engine),
-            engine,
+            engine_input,
             snd,
             stopping_render: false,
             pos_cache,
+            event_sender,
+            frame_timing_sender,
+            usercode_thread,
         }
-    }
-
-    fn update(&mut self) {
-        self.engine.do_update(&mut self.userlib);
     }
 }
 
@@ -55,6 +68,8 @@ struct Presenter {
     window: *mut android::ANativeWindow,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
+unsafe impl Sync for Presenter {}
+unsafe impl Send for Presenter {}
 impl Presenter {
     pub fn new(
         g: &peridot::Graphics,
@@ -121,7 +136,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut (impl br::Fence + br::VkHandleMut),
+        last_render_fence: &mut impl br::FenceMut,
         backbuffer_index: u32,
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
@@ -135,13 +150,13 @@ impl peridot::PlatformPresenter for Presenter {
         )
     }
     /// Returns whether re-initializing is needed for backbuffer resources
-    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<usize>) -> bool {
+    fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
         true
     }
 
-    fn current_geometry_extent(&self) -> peridot::math::Vector2<usize> {
+    fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         unsafe { peridot::math::Vector2((*self.window).width() as _, (*self.window).height() as _) }
     }
 }
@@ -152,6 +167,8 @@ use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 struct PlatformAssetLoader {
     amgr: AssetManager,
 }
+unsafe impl Sync for PlatformAssetLoader {}
+unsafe impl Send for PlatformAssetLoader {}
 impl PlatformAssetLoader {
     fn new(amgr: AssetManager) -> Self {
         PlatformAssetLoader { amgr }
@@ -185,14 +202,16 @@ struct NativeLink {
     al: PlatformAssetLoader,
     w: *mut android::ANativeWindow,
 }
+unsafe impl Sync for NativeLink {}
+unsafe impl Send for NativeLink {}
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = Presenter;
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", "VK_KHR_android_surface"]
+    fn instance_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_surface", c"VK_KHR_android_surface"]
     }
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn device_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_swapchain"]
     }
 
     fn asset_loader(&self) -> &PlatformAssetLoader {
@@ -243,11 +262,21 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
     surface: JObject,
     asset_manager: JObject,
 ) -> JByteBuffer<'e> {
-    android_logger::init_once(android_logger::Filter::default().with_min_level(log::Level::Trace));
-    info!("Initializing NativeGameEngine...");
+    // android_logger::init_once(android_logger::Filter::default().with_min_level(log::Level::Trace));
 
     std::panic::set_hook(Box::new(|p| {
-        error!("Panicking in app! {}", p);
+        log::error!("Panicking in app! {}", p);
+    }));
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().pretty())
+        .with(tracing_android::layer("Peridot").expect("Failed to create android tracing layer"))
+        .init();
+
+    tracing::info!("Initializing NativeGameEngine...");
+
+    std::panic::set_hook(Box::new(|p| {
+        tracing::error!("Panicking in app! {}", p);
     }));
 
     let window = unsafe { android::ANativeWindow_fromSurface(env.clone(), surface) };
@@ -269,7 +298,17 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(
     let bytes = e
         .get_direct_buffer_address(obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    drop(unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) });
+    let e = unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) };
+
+    async_std::task::block_on(async move {
+        if e.event_sender
+            .send(peridot::EngineEvent::Shutdown)
+            .await
+            .is_ok()
+        {
+            e.usercode_thread.await;
+        }
+    });
 }
 #[no_mangle]
 pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(
@@ -282,7 +321,13 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(
         .expect("Getting Pointer from DirectByteBuffer failed");
     let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
-    e.update();
+    match e.frame_timing_sender.try_send(()) {
+        Ok(_) => (),
+        Err(async_std::channel::TrySendError::Full(_)) => (),
+        Err(async_std::channel::TrySendError::Closed(_)) => {
+            tracing::warn!("Frame Timing channel was closed!");
+        }
+    }
 }
 
 mod audio_backend;
@@ -375,8 +420,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
         .expect("Getting Pointer from DirectByteBuffer failed");
     let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
-    gd.engine
-        .input_mut()
+    gd.engine_input
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
 }
 #[no_mangle]
@@ -391,8 +435,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
         .expect("Getting Pointer from DirectByteBuffer failed");
     let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
-    gd.engine
-        .input_mut()
+    gd.engine_input
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
 }
 #[no_mangle]
@@ -410,14 +453,8 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolut
     let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
 
     gd.pos_cache.borrow_mut().set(id as _, x, y);
-    gd.engine.input_mut().dispatch_analog_event(
-        peridot::NativeAnalogInput::TouchMoveX(id as _),
-        x,
-        true,
-    );
-    gd.engine.input_mut().dispatch_analog_event(
-        peridot::NativeAnalogInput::TouchMoveY(id as _),
-        y,
-        true,
-    );
+    gd.engine_input
+        .dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveX(id as _), x, true);
+    gd.engine_input
+        .dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveY(id as _), y, true);
 }

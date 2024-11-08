@@ -1,13 +1,12 @@
 use input::PointerPositionProvider;
-use peridot::{
-    mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef},
-    EngineEvents, FeatureRequests, NativeLinker,
-};
+use parking_lot::RwLock;
+use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 use presenter::PresenterProvider;
 use sound_backend::SoundBackend;
-use std::path::PathBuf;
+use std::{ffi::CStr, path::PathBuf, sync::Arc};
 use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
+use tracing::warn;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 mod sound_backend;
@@ -83,11 +82,11 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
     type AssetLoader = PlatformAssetLoader;
     type Presenter = PP::Presenter;
 
-    fn instance_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_surface", PP::SURFACE_EXT_NAME]
+    fn instance_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_surface", PP::SURFACE_EXT_NAME]
     }
-    fn device_extensions(&self) -> Vec<&str> {
-        vec!["VK_KHR_swapchain"]
+    fn device_extensions(&self) -> Vec<&CStr> {
+        vec![c"VK_KHR_swapchain"]
     }
 
     fn asset_loader(&self) -> &PlatformAssetLoader {
@@ -98,17 +97,24 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
     }
 }
 
-pub struct GameDriver<NL: NativeLinker> {
-    engine: peridot::Engine<NL>,
-    usercode: userlib::Game<NL>,
+pub struct GameDriver {
+    engine_input: peridot::InputProcess,
+    engine_audio: Arc<std::sync::RwLock<peridot::audio::Mixer>>,
     _snd: Box<dyn SoundBackend>,
+    event_sender: async_std::channel::Sender<peridot::EngineEvent>,
+    frame_timing_sender: async_std::channel::Sender<()>,
+    usercode_thread: async_std::task::JoinHandle<()>,
 }
-impl<PP> GameDriver<NativeLink<SharedMutableRef<PP>>>
-where
-    SharedMutableRef<PP>: PresenterProvider + PointerPositionProvider + 'static,
-    PP: Send + Sync,
-{
-    fn new(pp: SharedMutableRef<PP>) -> Self {
+impl GameDriver {
+    fn new<PP>(pp: Arc<RwLock<PP>>) -> Self
+    where
+        PP: PointerPositionProvider + Send + Sync + 'static,
+        Arc<RwLock<PP>>: PresenterProvider,
+        <Arc<RwLock<PP>> as PresenterProvider>::Presenter: Sync + Send,
+    {
+        let (event_sender, event_receiver) = async_std::channel::unbounded();
+        let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
+
         let nl = NativeLink {
             al: PlatformAssetLoader::new(),
             pp: pp.clone(),
@@ -117,38 +123,40 @@ where
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
             nl,
-            userlib::Game::<NativeLink<SharedMutableRef<PP>>>::requested_features(),
+            Default::default(),
+            (event_sender.clone(), event_receiver),
+            frame_timing_receiver,
         );
-        let usercode = userlib::Game::init(&mut engine);
         engine
-            .input_mut()
+            .input()
             .set_nativelink(Box::new(input::InputNativeLink::new(pp)));
         engine.post_init();
-        let _snd = if sound_backend::pipewire::NativeAudioEngine::is_available() {
-            Box::new(sound_backend::pipewire::NativeAudioEngine::new(
-                engine.audio_mixer(),
-            )) as Box<dyn SoundBackend>
-        } else {
-            // fallback
-            Box::new(sound_backend::pa::NativeAudioEngine::new(
-                engine.audio_mixer(),
-            ))
-        };
+        let _snd: Box<dyn SoundBackend> =
+            if sound_backend::pipewire::NativeAudioEngine::is_available() {
+                Box::new(sound_backend::pipewire::NativeAudioEngine::new(
+                    engine.audio_mixer(),
+                ))
+            } else {
+                // fallback
+                Box::new(sound_backend::pa::NativeAudioEngine::new(
+                    engine.audio_mixer(),
+                ))
+            };
+
+        let engine_input = engine.input().clone();
+        let engine_audio = engine.audio_mixer().clone();
+        let usercode_thread = async_std::task::spawn(async move {
+            userlib::game_main(&mut engine).await;
+        });
 
         Self {
-            engine,
-            usercode,
+            engine_input,
+            engine_audio,
             _snd,
+            event_sender,
+            frame_timing_sender,
+            usercode_thread,
         }
-    }
-
-    fn update(&mut self) {
-        self.engine.do_update(&mut self.usercode);
-    }
-
-    fn resize(&mut self, newsize: peridot::math::Vector2<usize>) {
-        self.engine
-            .do_resize_back_buffer(newsize, &mut self.usercode);
     }
 }
 
@@ -175,25 +183,25 @@ impl Drop for EpollTemporaryAddFd<'_> {
     }
 }
 
-fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
+async fn run_with_window_backend<W>(window_backend: Arc<RwLock<W>>)
 where
     W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
-    SharedMutableRef<W>: PresenterProvider + PointerPositionProvider,
+    Arc<RwLock<W>>: PresenterProvider,
+    <Arc<RwLock<W>> as PresenterProvider>::Presenter: Sync + Send,
 {
-    let mut gd = GameDriver::new(window_backend.clone());
+    let gd = GameDriver::new(window_backend.clone());
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
-    window_backend.borrow_mut().show();
-    gd.engine
-        .audio_mixer()
+    window_backend.write().show();
+    gd.engine_audio
         .write()
         .expect("Failed to mutate audio mixer")
         .start();
     let mut events = Vec::new();
-    let mut last_drawn_geometry = window_backend.borrow().geometry();
-    while !window_backend.borrow().has_close_requested() {
+    let mut last_drawn_geometry = window_backend.read().geometry();
+    while !window_backend.read().has_close_requested() {
         if events.len() != 2 + input.managed_devices_count() {
             // resize
             events.resize(2 + input.managed_devices_count(), unsafe {
@@ -201,7 +209,7 @@ where
             });
         }
 
-        let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
+        let window_backend_readiness_guard = window_backend.write().readiness_guard();
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
             window_backend_readiness_guard.borrow_fd().as_raw_fd(),
@@ -217,11 +225,25 @@ where
         // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 {
             drop(window_backend_readiness_guard);
-            if last_drawn_geometry != window_backend.borrow().geometry() {
-                last_drawn_geometry = window_backend.borrow().geometry();
-                gd.resize(last_drawn_geometry);
+            let current_geometry = window_backend.read().geometry();
+            if last_drawn_geometry != current_geometry {
+                last_drawn_geometry = current_geometry;
+                if let Err(e) = gd
+                    .event_sender
+                    .send(peridot::EngineEvent::Resize(last_drawn_geometry))
+                    .await
+                {
+                    warn!("Failed to send resize event: {e:?}");
+                }
             }
-            gd.update();
+
+            match gd.frame_timing_sender.try_send(()) {
+                Ok(_) => (),
+                Err(async_std::channel::TrySendError::Full(_)) => (),
+                Err(async_std::channel::TrySendError::Closed(_)) => {
+                    warn!("Frame Timing channel was closed!");
+                }
+            }
             continue;
         }
 
@@ -229,28 +251,39 @@ where
         for e in &events[..count as usize] {
             if e.u64 == 0 {
                 window_backend
-                    .borrow_mut()
+                    .write()
                     .process_all_events(rg.take().expect("window events signaled twice"));
             } else if e.u64 == 1 {
                 input.process_monitor_event(&ep);
             } else {
+                let mut input_lock = gd.engine_input.state_write_lock();
                 input.process_device_event(
-                    &mut gd.engine.input_mut().make_event_receiver(),
+                    &mut input_lock.make_event_receiver(),
                     e.u64,
-                    &*window_backend.borrow(),
+                    &*window_backend.read(),
                 );
             }
         }
     }
-    gd.engine
-        .audio_mixer()
+
+    if gd
+        .event_sender
+        .send(peridot::EngineEvent::Shutdown)
+        .await
+        .is_ok()
+    {
+        gd.usercode_thread.await;
+    }
+
+    gd.engine_audio
         .write()
         .expect("Failed to mutate audio mixer")
         .stop();
     tracing::trace!("Terminating Program...");
 }
 
-fn main() {
+#[async_std::main]
+async fn main() {
     let fmt = tracing_subscriber::fmt::layer().pretty();
     let env_filter = tracing_subscriber::filter::EnvFilter::from_default_env();
     tracing_subscriber::registry()
@@ -260,15 +293,17 @@ fn main() {
 
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
-            run_with_window_backend(make_shared_mutable_ref(
+            run_with_window_backend(Arc::new(RwLock::new(
                 Wayland::try_init().expect("Failed to initialize wayland backend"),
-            ));
+            )))
+            .await;
             return;
         }
         if backend_name == "xcb" {
-            run_with_window_backend(make_shared_mutable_ref(
+            run_with_window_backend(Arc::new(RwLock::new(
                 X11::try_init().expect("Failed to initialize xcb backend"),
-            ));
+            )))
+            .await;
             return;
         }
 
@@ -279,11 +314,11 @@ fn main() {
     }
 
     if let Some(x) = Wayland::try_init() {
-        run_with_window_backend(make_shared_mutable_ref(x));
+        run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }
     if let Some(x) = X11::try_init() {
-        run_with_window_backend(make_shared_mutable_ref(x));
+        run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }
 

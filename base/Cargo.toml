@@ -3,7 +3,7 @@ name = "peridot"
 description = "Peridot Engine"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [features]
 debug = ["bedrock/VK_EXT_debug_utils"]
@@ -22,7 +22,10 @@ parking_lot = "0.12"
 peridot-archive = { path = "../modules/archive" }
 peridot-math = { path = "../modules/math" }
 peridot-derive = { path = "../derive", optional = true }
-cfg-if = "1.0.0"
+cfg-if.workspace = true
+async-std.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
 
 [dependencies.bedrock]
 workspace = true

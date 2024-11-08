@@ -179,7 +179,10 @@ impl<Device: br::Device> TextureInitializationGroup<Device> {
 }
 impl TexturePreallocatedGroup<br::ImageObject<DeviceObject>> {
     pub fn alloc_and_instantiate<
-        Buffer: br::Buffer<ConcreteDevice = DeviceObject> + br::MemoryBound + br::VkHandleMut,
+        Buffer: br::Buffer
+            + br::DeviceChild<ConcreteDevice = DeviceObject>
+            + br::MemoryBound
+            + br::VkHandleMut,
     >(
         self,
         mut badget: MemoryBadget<Buffer, br::ImageObject<DeviceObject>>,
@@ -230,7 +233,7 @@ impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
         tb: &mut TransferBatch<Device>,
         stgbuf: &SharedRef<
             Buffer<
-                impl br::Buffer<ConcreteDevice = Device> + 'static,
+                impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + 'static,
                 impl br::DeviceMemory + 'static,
             >,
         >,
@@ -632,8 +635,8 @@ pub trait FixedBufferInitializer {
         tfb: &mut TransferBatch,
         buf: &SharedRef<
             Buffer<
-                impl br::Buffer<ConcreteDevice = Device> + 'static,
-                impl br::DeviceMemory<ConcreteDevice = Device> + 'static,
+                impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + 'static,
+                impl br::DeviceMemory + br::DeviceChild<ConcreteDevice = Device> + 'static,
             >,
         >,
         range: Range<u64>,
