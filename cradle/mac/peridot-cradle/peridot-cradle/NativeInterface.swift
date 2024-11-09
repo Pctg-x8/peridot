@@ -12,8 +12,8 @@ import Cocoa
 final class NativeGameEngine {
     private var p: OpaquePointer
     
-    init(forView v: inout NSView) {
-        self.p = launch_game(unsafeBitCast(v, to: UnsafeMutablePointer.self))
+    init(forLayer layer: CAMetalLayer) {
+        self.p = launch_game(unsafeBitCast(layer, to: UnsafeMutablePointer.self))
     }
     deinit {
         NSLog("GameEngine Terminating")

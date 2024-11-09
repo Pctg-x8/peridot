@@ -1,4 +1,4 @@
-use appkit::{CocoaObject, NSRect, NSString};
+use appkit::{CocoaObject, NSString};
 use libc::c_void;
 use log::*;
 use objc::{msg_send, sel, sel_impl};
@@ -184,22 +184,23 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         }
     }
 }
-fn acquire_view_size(view: *mut c_void) -> peridot::math::Vector2<u32> {
-    let NSRect { size, .. } = unsafe { msg_send![view as *mut objc::runtime::Object, frame] };
+fn acquire_layer_size(layer: *mut c_void) -> peridot::math::Vector2<u32> {
+    let cr: appkit::CGRect =
+        unsafe { msg_send![layer as *mut objc::runtime::Object, contentsRect] };
 
-    peridot::math::Vector2(size.width as _, size.height as _)
+    peridot::math::Vector2(cr.size.width as _, cr.size.height as _)
 }
 pub struct Presenter {
-    view_ptr: *mut c_void,
+    layer_ptr: *mut c_void,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<SharedRef<br::InstanceObject>>>,
 }
 unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
 impl Presenter {
-    fn new(view_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
+    fn new(layer_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
         let obj = g
             .adapter()
-            .new_surface_macos(view_ptr as *const _)
+            .new_surface_metal(layer_ptr as *const _)
             .expect("Failed to create Surface");
         let support = g
             .adapter()
@@ -210,8 +211,8 @@ impl Presenter {
         }
 
         Presenter {
-            view_ptr,
-            sc: peridot::IntegratedSwapchain::new(g, obj, acquire_view_size(view_ptr)),
+            layer_ptr,
+            sc: peridot::IntegratedSwapchain::new(g, obj, acquire_layer_size(layer_ptr)),
         }
     }
 }
@@ -275,7 +276,7 @@ impl peridot::PlatformPresenter for Presenter {
         true
     }
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
-        acquire_view_size(self.view_ptr)
+        acquire_layer_size(self.layer_ptr)
     }
 }
 pub struct NativeLink {
