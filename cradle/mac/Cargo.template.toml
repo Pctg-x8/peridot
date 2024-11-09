@@ -19,7 +19,7 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "VK_KHR_surface",
     "VK_KHR_swapchain",
     "Implements",
-    "VK_MVK_macos_surface",
+    "VK_EXT_metal_surface",
 ] }
 peridot = { path = "../../base" }
 log = "0.4"
