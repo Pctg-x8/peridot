@@ -15,7 +15,7 @@ pub trait PlatformPresenter {
 
     fn format(&self) -> br::vk::VkFormat;
     fn back_buffer_count(&self) -> usize;
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>>;
+    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>>;
 
     fn emit_initialize_back_buffer_commands<'r, CB: br::CommandBufferMut + ?Sized>(
         &self,
@@ -137,7 +137,7 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
 /// WSI Swapchain implementation for PlatformPresenter
 pub struct IntegratedSwapchain<Surface: br::Surface> {
     surface_info: crate::SurfaceInfo,
-    swapchain: crate::Discardable<IntegratedSwapchainObject<DeviceObject, Surface>>,
+    swapchain: crate::Discardable1<IntegratedSwapchainObject<DeviceObject, Surface>>,
     rendering_order: br::SemaphoreObject<DeviceObject>,
     buffer_ready_order: br::SemaphoreObject<DeviceObject>,
     present_order: br::SemaphoreObject<DeviceObject>,
@@ -163,30 +163,20 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         #[cfg(feature = "debug")]
         {
             rendering_order
-                .set_name(Some(unsafe {
-                    std::ffi::CStr::from_bytes_with_nul_unchecked(
-                        b"Peridot-Default Presenter-Rendering Order Semaphore\0",
-                    )
-                }))
+                .set_name(Some(c"Peridot-Default Presenter-Rendering Order Semaphore"))
                 .expect("Failed to set Rendering Order Semaphore name");
             buffer_ready_order
-                .set_name(Some(unsafe {
-                    std::ffi::CStr::from_bytes_with_nul_unchecked(
-                        b"Peridot-Default Presenter-BufferReady Order Semaphore\0",
-                    )
-                }))
+                .set_name(Some(
+                    c"Peridot-Default Presenter-BufferReady Order Semaphore",
+                ))
                 .expect("Failed to set BufferReady Order Semaphore name");
             present_order
-                .set_name(Some(unsafe {
-                    std::ffi::CStr::from_bytes_with_nul_unchecked(
-                        b"Peridot-Default Presenter-Present Order Semaphore\0",
-                    )
-                }))
+                .set_name(Some(c"Peridot-Default Presenter-Present Order Semaphore"))
                 .expect("Failed to set Present Order Semaphore name");
         }
 
         Self {
-            swapchain: crate::Discardable::from(IntegratedSwapchainObject::new(
+            swapchain: crate::Discardable1::from(IntegratedSwapchainObject::new(
                 g,
                 surface,
                 &surface_info,
@@ -210,15 +200,15 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     }
 
     #[inline]
-    pub fn back_buffer(
-        &self,
+    pub fn back_buffer<'s>(
+        &'s self,
         index: usize,
     ) -> Option<
-        SharedRef<
+        &'s SharedRef<
             br::ImageViewObject<br::SwapchainImage<SharedSwapchainObject<DeviceObject, Surface>>>,
         >,
     > {
-        self.swapchain.get().back_buffer_images.get(index).cloned()
+        self.swapchain.get().back_buffer_images.get(index)
     }
 
     pub fn emit_initialize_back_buffer_commands<
@@ -252,7 +242,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
 
     #[inline]
     pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
-        self.swapchain.get_mut_lw().swapchain.acquire_next(
+        self.swapchain.get_mut().swapchain.acquire_next(
             None,
             br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_mut_ref()),
         )
@@ -316,7 +306,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             g.submit_buffered_commands(&[render_submission], last_render_fence)?;
         }
 
-        self.swapchain.get_mut_lw().swapchain.queue_present(
+        self.swapchain.get_mut().swapchain.queue_present(
             g.graphics_queue.q.get_mut(),
             bb_index,
             &[self.present_order.as_transparent_ref()],
@@ -324,7 +314,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) {
-        if let Some(mut old) = self.swapchain.take_lw() {
+        if let Some(mut old) = self.swapchain.take() {
             old.back_buffer_images.clear();
             let (_, s) = SharedRef::try_unwrap(old.swapchain)
                 .unwrap_or_else(|refs| {
@@ -335,7 +325,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
                     )
                 })
                 .deconstruct();
-            self.swapchain.set_lw(IntegratedSwapchainObject::new(
+            self.swapchain.set(IntegratedSwapchainObject::new(
                 g,
                 s,
                 &self.surface_info,

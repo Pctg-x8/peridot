@@ -402,23 +402,6 @@ impl<R: br::RenderPass, F: br::Framebuffer> BeginRenderPass<R, F> {
         }
     }
 }
-impl<'f, R, D> BeginRenderPass<R, &'f br::FramebufferObject<'f, D>>
-where
-    R: br::RenderPass + br::DeviceChild<ConcreteDevice = D>,
-    D: br::Device,
-{
-    pub fn for_entire_framebuffer(
-        render_pass: R,
-        framebuffer: &'f br::FramebufferObject<'f, D>,
-        framebuffer_size: br::vk::VkExtent2D,
-    ) -> Self {
-        Self::new(
-            render_pass,
-            framebuffer,
-            framebuffer_size.into_rect(br::vk::VkOffset2D::ZERO),
-        )
-    }
-}
 impl<
         R: br::RenderPass + br::DeviceChild<ConcreteDevice = Device>,
         F: br::Framebuffer + br::DeviceChild<ConcreteDevice = Device>,

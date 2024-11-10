@@ -321,12 +321,12 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn back_buffer(
         &self,
         index: usize,
-    ) -> Option<SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> {
+    ) -> Option<&SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> {
         self.presenter.back_buffer(index)
     }
     pub fn iter_back_buffers<'s>(
         &'s self,
-    ) -> impl Iterator<Item = SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> + 's
+    ) -> impl Iterator<Item = &'s SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> + 's
     {
         (0..self.back_buffer_count())
             .map(move |x| self.back_buffer(x).expect("unreachable while iteration"))
@@ -534,6 +534,43 @@ impl<T> LateInit<T> {
     }
     pub fn get(&self) -> Ref<T> {
         Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
+    }
+}
+
+pub struct Discardable1<T>(Option<T>);
+impl<T> Discardable1<T> {
+    pub const fn new() -> Self {
+        Self(None)
+    }
+
+    pub fn set(&mut self, v: T) {
+        self.0 = Some(v);
+    }
+
+    pub fn get<'v>(&'v self) -> &'v T {
+        self.0.as_ref().expect("value unset")
+    }
+
+    pub fn get_mut<'v>(&'v mut self) -> &'v mut T {
+        self.0.as_mut().expect("value unset")
+    }
+
+    pub fn discard(&mut self) {
+        self.0 = None;
+    }
+
+    pub fn take(&mut self) -> Option<T> {
+        self.0.take()
+    }
+
+    pub const fn is_available(&self) -> bool {
+        self.0.is_some()
+    }
+}
+impl<T> From<T> for Discardable1<T> {
+    #[inline(always)]
+    fn from(value: T) -> Self {
+        Self(Some(value))
     }
 }
 
