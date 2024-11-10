@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-peridot = { path = "../../base" }
+peridot = { path = "../../base", features = ["mt"] }
+peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack", features = [
+    "with-loader-impl",
+] }
+peridot-memory-manager = { path = "../../modules/memory-manager" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
