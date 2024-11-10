@@ -9,9 +9,221 @@ pub struct Vertex {
     pub pos: peridot::math::Vector2<f32>,
 }
 #[repr(C)]
+#[derive(Clone)]
 pub struct BoxInstance {
     pub pos_st: peridot::math::Vector4<f32>,
     pub col: peridot::math::Vector4<f32>,
+}
+
+pub enum UIElementSize {
+    Fixed(f32),
+    Percent(f32),
+    Fill,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LayoutSize {
+    Unscaled,
+    Scaled,
+    Fixed(f32),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Overflow {
+    Flexible,
+    Hidden,
+    Overflow,
+}
+
+pub enum GridCellSize {
+    Fixed(f32),
+    Flexible(f32),
+    FitContent,
+}
+
+pub enum ChildrenLayoutMode {
+    Free,
+    Vertical {
+        overflow: Overflow,
+        gap: f32,
+    },
+    Horizontal {
+        overflow: Overflow,
+        gap: f32,
+    },
+    Grid {
+        columns: Vec<GridCellSize>,
+        rows: Vec<GridCellSize>,
+        gap: f32,
+    },
+}
+
+pub struct UIElement {
+    pub size: peridot::math::Vector2<UIElementSize>,
+    pub scale: peridot::math::Vector2<f32>,
+    pub offset: peridot::math::Vector2<f32>,
+    pub margin_left: f32,
+    pub margin_top: f32,
+    pub margin_right: f32,
+    pub margin_bottom: f32,
+    pub padding_left: f32,
+    pub padding_top: f32,
+    pub padding_right: f32,
+    pub padding_bottom: f32,
+    pub layout_width: LayoutSize,
+    pub layout_height: LayoutSize,
+    pub children_layout: ChildrenLayoutMode,
+    pub debug_color: peridot::math::Vector4<f32>,
+    pub children: Vec<UIElement>,
+}
+
+pub struct LayoutState {
+    global_content_offset: peridot::math::Vector2<f32>,
+    available_content_size: peridot::math::Vector2<f32>,
+}
+
+pub struct LayoutResult {
+    layout_size: peridot::math::Vector2<f32>,
+}
+
+fn layout<'t>(
+    target: &'t UIElement,
+    boxes: &mut Vec<BoxInstance>,
+    state: LayoutState,
+) -> LayoutResult {
+    let content_size = peridot::math::Vector2(
+        match target.size.0 {
+            UIElementSize::Fixed(x) => x,
+            UIElementSize::Percent(p) => state.available_content_size.0 * p / 100.0,
+            UIElementSize::Fill => state.available_content_size.0,
+        },
+        match target.size.1 {
+            UIElementSize::Fixed(x) => x,
+            UIElementSize::Percent(p) => state.available_content_size.1 * p / 100.0,
+            UIElementSize::Fill => state.available_content_size.1,
+        },
+    );
+    let pos = peridot::math::Vector2(
+        state.global_content_offset.0 + target.offset.0,
+        state.global_content_offset.1 + target.offset.1,
+    );
+
+    boxes.push(BoxInstance {
+        pos_st: peridot::math::Vector4(
+            content_size.0 * target.scale.0,
+            content_size.1 * target.scale.1,
+            pos.0,
+            pos.1,
+        ),
+        col: target.debug_color,
+    });
+    let child_layout_global_offset =
+        peridot::math::Vector2(pos.0 + target.padding_left, pos.1 + target.padding_top);
+    let child_layout_available_size = peridot::math::Vector2(
+        content_size.0 - target.padding_left - target.padding_right,
+        content_size.1 - target.padding_top - target.padding_bottom,
+    );
+    match target.children_layout {
+        ChildrenLayoutMode::Free => {
+            for c in target.children.iter() {
+                layout(
+                    c,
+                    boxes,
+                    LayoutState {
+                        global_content_offset: child_layout_global_offset,
+                        available_content_size: child_layout_available_size,
+                    },
+                );
+            }
+        }
+        ChildrenLayoutMode::Vertical { overflow, gap } => {
+            let mut global_content_offset = child_layout_global_offset;
+            let mut available_content_size = child_layout_available_size;
+
+            for c in target.children.iter() {
+                let child_layout = layout(
+                    c,
+                    boxes,
+                    LayoutState {
+                        global_content_offset,
+                        available_content_size,
+                    },
+                );
+
+                global_content_offset.1 += child_layout.layout_size.1 + gap;
+                available_content_size.1 -= child_layout.layout_size.1 + gap;
+                // TODO: overflow
+            }
+        }
+        ChildrenLayoutMode::Horizontal { overflow, gap } => {
+            let mut global_content_offset = child_layout_global_offset;
+            let mut available_content_size = child_layout_available_size;
+
+            for c in target.children.iter() {
+                let child_layout = layout(
+                    c,
+                    boxes,
+                    LayoutState {
+                        global_content_offset,
+                        available_content_size,
+                    },
+                );
+
+                global_content_offset.0 += child_layout.layout_size.0 + gap;
+                available_content_size.0 -= child_layout.layout_size.0 + gap;
+                // TODO: overflow
+            }
+        }
+        ChildrenLayoutMode::Grid {
+            ref columns,
+            ref rows,
+            gap,
+        } => {
+            // TODO: computing size
+            let column_size = columns.iter().map(|_| 0.0f32).collect::<Vec<_>>();
+            let row_size = rows.iter().map(|_| 0.0f32).collect::<Vec<_>>();
+
+            let mut current_column = 0;
+            let mut current_row = 0;
+
+            for c in target.children.iter() {
+                layout(
+                    c,
+                    boxes,
+                    LayoutState {
+                        global_content_offset: peridot::math::Vector2(
+                            child_layout_global_offset.0 + column_size[current_column],
+                            // TODO: 行数が多くなったときの処理（親コンテナの残りを全部割当、でいいはず）
+                            child_layout_global_offset.1 + row_size[current_row],
+                        ),
+                        available_content_size: child_layout_available_size,
+                    },
+                );
+
+                current_column += 1;
+                if current_column >= columns.len() {
+                    // 折り返し
+                    current_column = 0;
+                    current_row += 1;
+                }
+            }
+        }
+    }
+
+    LayoutResult {
+        layout_size: peridot::math::Vector2(
+            match target.layout_width {
+                LayoutSize::Fixed(x) => x,
+                LayoutSize::Scaled => content_size.0 * target.scale.0,
+                LayoutSize::Unscaled => content_size.0,
+            },
+            match target.layout_height {
+                LayoutSize::Fixed(x) => x,
+                LayoutSize::Scaled => content_size.1 * target.scale.1,
+                LayoutSize::Unscaled => content_size.1,
+            },
+        ),
+    }
 }
 
 pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
@@ -41,8 +253,9 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     )
     .create(e.graphics().device().clone())
     .expect("Failed to create main renderpass");
-    let main_framebuffers = e
-        .iter_back_buffers()
+    let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+    let main_framebuffers = backbuffer_resources
+        .iter()
         .map(|bb| {
             br::FramebufferBuilder::new_with_attachment(&main_renderpass, bb)
                 .create()
@@ -89,6 +302,80 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .expect("Failed to create unlit_fill pipeline")
     };
 
+    let ui_tree = UIElement {
+        size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::Fill),
+        scale: peridot::math::Vector2(1.0, 1.0),
+        offset: peridot::math::Vector2(0.0, 0.0),
+        margin_left: 0.0,
+        margin_top: 0.0,
+        margin_right: 0.0,
+        margin_bottom: 0.0,
+        padding_left: 8.0,
+        padding_top: 8.0,
+        padding_right: 8.0,
+        padding_bottom: 8.0,
+        layout_width: LayoutSize::Unscaled,
+        layout_height: LayoutSize::Unscaled,
+        debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.1),
+        children_layout: ChildrenLayoutMode::Vertical {
+            overflow: Overflow::Overflow,
+            gap: 8.0,
+        },
+        children: vec![
+            UIElement {
+                size: peridot::math::Vector2(
+                    UIElementSize::Fixed(100.0),
+                    UIElementSize::Fixed(32.0),
+                ),
+                scale: peridot::math::Vector2(1.0, 1.0),
+                offset: peridot::math::Vector2(0.0, 0.0),
+                margin_left: 0.0,
+                margin_top: 0.0,
+                margin_right: 0.0,
+                margin_bottom: 0.0,
+                padding_left: 0.0,
+                padding_top: 0.0,
+                padding_right: 0.0,
+                padding_bottom: 0.0,
+                layout_width: LayoutSize::Unscaled,
+                layout_height: LayoutSize::Unscaled,
+                debug_color: peridot::math::Vector4(1.0, 1.0, 0.0, 0.8),
+                children_layout: ChildrenLayoutMode::Free,
+                children: vec![],
+            },
+            UIElement {
+                size: peridot::math::Vector2(
+                    UIElementSize::Fixed(192.0),
+                    UIElementSize::Fixed(32.0),
+                ),
+                scale: peridot::math::Vector2(1.0, 1.0),
+                offset: peridot::math::Vector2(0.0, 0.0),
+                margin_left: 0.0,
+                margin_top: 0.0,
+                margin_right: 0.0,
+                margin_bottom: 0.0,
+                padding_left: 0.0,
+                padding_top: 0.0,
+                padding_right: 0.0,
+                padding_bottom: 0.0,
+                layout_width: LayoutSize::Unscaled,
+                layout_height: LayoutSize::Unscaled,
+                debug_color: peridot::math::Vector4(0.0, 1.0, 1.0, 0.8),
+                children_layout: ChildrenLayoutMode::Free,
+                children: vec![],
+            },
+        ],
+    };
+    let mut boxes = Vec::new();
+    layout(
+        &ui_tree,
+        &mut boxes,
+        LayoutState {
+            global_content_offset: peridot::math::Vector2(0.0, 0.0),
+            available_content_size: peridot::math::Vector2(640.0, 480.0),
+        },
+    );
+
     let mut pmm = peridot_memory_manager::MemoryManager::new(e.graphics());
     let [vertex_buffer, instance_buffer] = pmm
         .allocate_device_local_buffer_array(
@@ -97,7 +384,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 br::BufferDesc::new_for_type::<[Vertex; 4]>(
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
-                br::BufferDesc::new_for_type::<[BoxInstance; 2]>(
+                br::BufferDesc::new_for_type::<[BoxInstance; 1024]>(
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
             ],
@@ -106,7 +393,6 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     #[repr(C)]
     struct BufferInitContent {
         vertex: [Vertex; 4],
-        instance: [BoxInstance; 2],
     }
     let mut init_buffer = pmm
         .allocate_upload_buffer(
@@ -130,18 +416,20 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     pos: peridot::math::Vector2(1.0, 1.0),
                 },
             ],
-            instance: [
-                BoxInstance {
-                    pos_st: peridot::math::Vector4(100.0, 100.0, 8.0, 8.0),
-                    col: peridot::math::Vector4(1.0, 1.0, 1.0, 1.0),
-                },
-                BoxInstance {
-                    pos_st: peridot::math::Vector4(160.0, 100.0, 8.0, 116.0),
-                    col: peridot::math::Vector4(1.0, 1.0, 0.0, 1.0),
-                },
-            ],
         })
         .expect("Failed to write init buffer content");
+    let mut instance_init_buffer = pmm
+        .allocate_upload_buffer(
+            e.graphics(),
+            br::BufferDesc::new(
+                core::mem::size_of::<BoxInstance>() * boxes.len(),
+                br::BufferUsage::TRANSFER_SRC,
+            ),
+        )
+        .expect("Failed to create instance init buffer");
+    instance_init_buffer
+        .clone_content_from_slice(&boxes)
+        .expect("Failed to write instance init content");
     let content_init = e
         .submit_commands_async(|r| {
             r.copy_buffer(
@@ -153,12 +441,13 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 )],
             )
             .copy_buffer(
-                &init_buffer,
+                &instance_init_buffer,
                 &instance_buffer,
-                &[br::BufferCopy::copy_data::<[BoxInstance; 2]>(
-                    core::mem::offset_of!(BufferInitContent, instance) as _,
-                    0,
-                )],
+                &[br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: 0,
+                    dstOffset: 0,
+                    size: (core::mem::size_of::<BoxInstance>() * boxes.len()) as _,
+                })],
             )
             .pipeline_barrier(
                 br::PipelineStageFlags::TRANSFER,
@@ -220,7 +509,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         ],
         &[0, 0],
     )
-    .draw(4, 2, 0, 0)
+    .draw(4, boxes.len() as _, 0, 0)
     .end()
     .expect("Failed to finish ui render command recording");
 
