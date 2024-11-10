@@ -19,6 +19,7 @@ pub enum UIElementSize {
     Fixed(f32),
     Percent(f32),
     Fill,
+    FitContent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,6 +40,27 @@ pub enum GridCellSize {
     Fixed(f32),
     Flexible(f32),
     FitContent,
+}
+
+pub struct RectEdge<T> {
+    pub left: T,
+    pub right: T,
+    pub top: T,
+    pub bottom: T,
+}
+impl<T> RectEdge<T> {
+    #[inline]
+    pub const fn all(value: T) -> Self
+    where
+        T: Copy,
+    {
+        Self {
+            left: value,
+            right: value,
+            top: value,
+            bottom: value,
+        }
+    }
 }
 
 pub enum ChildrenLayoutMode {
@@ -62,19 +84,29 @@ pub struct UIElement {
     pub size: peridot::math::Vector2<UIElementSize>,
     pub scale: peridot::math::Vector2<f32>,
     pub offset: peridot::math::Vector2<f32>,
-    pub margin_left: f32,
-    pub margin_top: f32,
-    pub margin_right: f32,
-    pub margin_bottom: f32,
-    pub padding_left: f32,
-    pub padding_top: f32,
-    pub padding_right: f32,
-    pub padding_bottom: f32,
+    pub margin: RectEdge<f32>,
+    pub padding: RectEdge<f32>,
     pub layout_width: LayoutSize,
     pub layout_height: LayoutSize,
     pub children_layout: ChildrenLayoutMode,
     pub debug_color: peridot::math::Vector4<f32>,
     pub children: Vec<UIElement>,
+}
+impl Default for UIElement {
+    fn default() -> Self {
+        Self {
+            size: peridot::math::Vector2(UIElementSize::FitContent, UIElementSize::FitContent),
+            scale: peridot::math::Vector2(1.0, 1.0),
+            offset: peridot::math::Vector2(0.0, 0.0),
+            margin: RectEdge::all(0.0),
+            padding: RectEdge::all(0.0),
+            layout_width: LayoutSize::Unscaled,
+            layout_height: LayoutSize::Unscaled,
+            children_layout: ChildrenLayoutMode::Free,
+            debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 1.0),
+            children: Vec::new(),
+        }
+    }
 }
 
 pub struct LayoutState {
@@ -86,21 +118,217 @@ pub struct LayoutResult {
     layout_size: peridot::math::Vector2<f32>,
 }
 
+pub enum InstantiatedGridCellSize {
+    Fixed(f32),
+    Flexible(f32),
+}
+
+pub struct LayoutRect {
+    pos: peridot::math::Vector2<f32>,
+    size: peridot::math::Vector2<f32>,
+}
+impl LayoutRect {
+    #[inline(always)]
+    pub fn right(&self) -> f32 {
+        self.pos.0 + self.size.0
+    }
+
+    #[inline(always)]
+    pub fn bottom(&self) -> f32 {
+        self.pos.1 + self.size.1
+    }
+}
+
+fn compute_layout_rect(target: &UIElement) -> LayoutRect {
+    // TODO: marginの考慮
+    let pos = target.offset;
+    let content_size = peridot::math::Vector2(
+        match target.size.0 {
+            // FitContentなのに親コンテナ依存は意味がわからないので0につぶす
+            UIElementSize::Fill => 0.0,
+            UIElementSize::Percent(_) => 0.0,
+            UIElementSize::Fixed(x) => x,
+            UIElementSize::FitContent => {
+                match target.children_layout {
+                    ChildrenLayoutMode::Free => {
+                        let mut max_right = 0.0f32;
+                        for c in target.children.iter() {
+                            let r = compute_layout_rect(c);
+                            max_right = max_right.max(r.right());
+                        }
+
+                        max_right
+                    }
+                    ChildrenLayoutMode::Vertical { overflow, .. } => {
+                        // TODO: overflow
+                        let mut max_right = 0.0f32;
+                        for c in target.children.iter() {
+                            max_right = max_right.max(compute_layout_rect(c).right());
+                        }
+
+                        max_right
+                    }
+                    ChildrenLayoutMode::Horizontal { overflow, gap } => {
+                        // TODO: overflow
+                        let mut max_right = 0.0f32;
+                        let mut first = true;
+                        for c in target.children.iter() {
+                            if !first {
+                                max_right += gap;
+                            }
+
+                            first = false;
+                            max_right += compute_layout_rect(c).right();
+                        }
+
+                        max_right
+                    }
+                    ChildrenLayoutMode::Grid {
+                        ref columns, gap, ..
+                    } => {
+                        let mut max_right = 0.0f32;
+                        let mut row_right = 0.0f32;
+                        let mut current_column = 0;
+                        for c in target.children.iter() {
+                            if current_column > 0 {
+                                row_right += gap;
+                            }
+
+                            let cell_content_rect = compute_layout_rect(c);
+                            row_right += match columns[current_column] {
+                                GridCellSize::FitContent => cell_content_rect.right(),
+                                GridCellSize::Fixed(x) => x,
+                                // 親コンテナのサイズがわからないので0あつかい
+                                GridCellSize::Flexible(_) => 0.0,
+                            };
+
+                            current_column += 1;
+                            if current_column >= columns.len() {
+                                current_column = 0;
+                                max_right = max_right.max(row_right);
+                                row_right = 0.0;
+                            }
+                        }
+
+                        max_right.max(row_right)
+                    }
+                }
+            }
+        },
+        match target.size.1 {
+            // FitContentなのに親コンテナ依存は意味がわからないので0につぶす
+            UIElementSize::Fill => 0.0,
+            UIElementSize::Percent(_) => 0.0,
+            UIElementSize::Fixed(x) => x,
+            UIElementSize::FitContent => {
+                match target.children_layout {
+                    ChildrenLayoutMode::Free => {
+                        let mut max_bottom = 0.0f32;
+                        for c in target.children.iter() {
+                            let r = compute_layout_rect(c);
+                            max_bottom = max_bottom.max(r.bottom());
+                        }
+
+                        max_bottom
+                    }
+                    ChildrenLayoutMode::Vertical { overflow, gap } => {
+                        // TODO: overflow
+                        let mut max_bottom = 0.0f32;
+                        let mut first = true;
+                        for c in target.children.iter() {
+                            if !first {
+                                max_bottom += gap;
+                            }
+
+                            first = false;
+                            max_bottom += compute_layout_rect(c).bottom();
+                        }
+
+                        max_bottom
+                    }
+                    ChildrenLayoutMode::Horizontal { overflow, .. } => {
+                        // TODO: overflow
+                        let mut max_bottom = 0.0f32;
+                        for c in target.children.iter() {
+                            max_bottom = max_bottom.max(compute_layout_rect(c).bottom());
+                        }
+
+                        max_bottom
+                    }
+                    ChildrenLayoutMode::Grid {
+                        ref columns,
+                        ref rows,
+                        gap,
+                        ..
+                    } => {
+                        let mut accum_bottom = 0.0f32;
+                        let mut row_bottom = 0.0f32;
+                        let mut current_column = 0;
+                        let mut current_row = 0;
+                        for c in target.children.iter() {
+                            let cell_content_rect = compute_layout_rect(c);
+                            row_bottom = row_bottom.max(match rows[current_row] {
+                                GridCellSize::FitContent => cell_content_rect.bottom(),
+                                GridCellSize::Fixed(x) => x,
+                                // 親コンテナのサイズがわからないので0あつかい
+                                GridCellSize::Flexible(_) => 0.0,
+                            });
+
+                            current_column += 1;
+                            if current_column >= columns.len() {
+                                current_column = 0;
+                                accum_bottom += row_bottom + gap;
+                                row_bottom = 0.0;
+                                current_row += 1;
+                            }
+                        }
+
+                        accum_bottom + row_bottom
+                    }
+                }
+            }
+        },
+    );
+
+    LayoutRect {
+        pos,
+        size: peridot::math::Vector2(
+            match target.layout_width {
+                LayoutSize::Unscaled => content_size.0,
+                LayoutSize::Scaled => content_size.0 * target.scale.0,
+                LayoutSize::Fixed(x) => x,
+            },
+            match target.layout_height {
+                LayoutSize::Unscaled => content_size.1,
+                LayoutSize::Scaled => content_size.1 * target.scale.1,
+                LayoutSize::Fixed(x) => x,
+            },
+        ),
+    }
+}
+
 fn layout<'t>(
     target: &'t UIElement,
     boxes: &mut Vec<BoxInstance>,
     state: LayoutState,
 ) -> LayoutResult {
+    let inner_content_size = compute_layout_rect(target);
     let content_size = peridot::math::Vector2(
         match target.size.0 {
             UIElementSize::Fixed(x) => x,
             UIElementSize::Percent(p) => state.available_content_size.0 * p / 100.0,
             UIElementSize::Fill => state.available_content_size.0,
+            UIElementSize::FitContent => {
+                inner_content_size.right() + target.padding.left + target.padding.right
+            }
         },
         match target.size.1 {
             UIElementSize::Fixed(x) => x,
             UIElementSize::Percent(p) => state.available_content_size.1 * p / 100.0,
             UIElementSize::Fill => state.available_content_size.1,
+            UIElementSize::FitContent => {
+                inner_content_size.bottom() + target.padding.top + target.padding.bottom
+            }
         },
     );
     let pos = peridot::math::Vector2(
@@ -118,10 +346,10 @@ fn layout<'t>(
         col: target.debug_color,
     });
     let child_layout_global_offset =
-        peridot::math::Vector2(pos.0 + target.padding_left, pos.1 + target.padding_top);
+        peridot::math::Vector2(pos.0 + target.padding.left, pos.1 + target.padding.top);
     let child_layout_available_size = peridot::math::Vector2(
-        content_size.0 - target.padding_left - target.padding_right,
-        content_size.1 - target.padding_top - target.padding_bottom,
+        content_size.0 - target.padding.left - target.padding.right,
+        content_size.1 - target.padding.top - target.padding.bottom,
     );
     match target.children_layout {
         ChildrenLayoutMode::Free => {
@@ -179,9 +407,95 @@ fn layout<'t>(
             ref rows,
             gap,
         } => {
-            // TODO: computing size
-            let column_size = columns.iter().map(|_| 0.0f32).collect::<Vec<_>>();
-            let row_size = rows.iter().map(|_| 0.0f32).collect::<Vec<_>>();
+            let mut column_fixed_sizes = vec![0.0; columns.len()];
+            let mut row_fixed_sizes = vec![0.0; columns.len()];
+            let mut current_column = 0;
+            let mut current_row = 0;
+            for c in target.children.iter() {
+                let cell_rect = compute_layout_rect(c);
+                match columns[current_column] {
+                    GridCellSize::Fixed(x) => {
+                        column_fixed_sizes[current_column] = x;
+                    }
+                    GridCellSize::Flexible(_) => (),
+                    GridCellSize::FitContent => {
+                        column_fixed_sizes[current_column] =
+                            column_fixed_sizes[current_column].max(cell_rect.right());
+                    }
+                };
+                match rows[current_row] {
+                    GridCellSize::Fixed(x) => {
+                        row_fixed_sizes[current_row] = x;
+                    }
+                    GridCellSize::Flexible(_) => (),
+                    GridCellSize::FitContent => {
+                        row_fixed_sizes[current_row] =
+                            row_fixed_sizes[current_row].max(cell_rect.bottom());
+                    }
+                }
+
+                current_column += 1;
+                if current_column >= columns.len() {
+                    // 折り返し
+                    current_column = 0;
+                    current_row += 1;
+                }
+            }
+            let column_flexible_total = columns
+                .iter()
+                .filter_map(|x| match x {
+                    GridCellSize::Flexible(x) => Some(x),
+                    _ => None,
+                })
+                .sum::<f32>();
+            let row_flexible_total = rows
+                .iter()
+                .filter_map(|x| match x {
+                    GridCellSize::Flexible(x) => Some(x),
+                    _ => None,
+                })
+                .sum::<f32>();
+            let column_flexible_region = child_layout_available_size.0
+                - column_fixed_sizes.iter().copied().sum::<f32>()
+                - (gap * (columns.len() - 1) as f32);
+            let row_flexible_region = child_layout_available_size.1
+                - row_fixed_sizes.iter().copied().sum::<f32>()
+                - (gap * (rows.len() - 1) as f32);
+
+            let column_size = columns
+                .iter()
+                .zip(column_fixed_sizes.into_iter())
+                .map(|(x, f)| match x {
+                    GridCellSize::FitContent => f,
+                    GridCellSize::Fixed(x) => *x,
+                    GridCellSize::Flexible(n) => column_flexible_region * n / column_flexible_total,
+                })
+                .collect::<Vec<_>>();
+            let row_size = rows
+                .iter()
+                .zip(row_fixed_sizes.into_iter())
+                .map(|(x, f)| match x {
+                    GridCellSize::FitContent => f,
+                    GridCellSize::Fixed(x) => *x,
+                    GridCellSize::Flexible(n) => row_flexible_region * n / row_flexible_total,
+                })
+                .collect::<Vec<_>>();
+            let column_offsets = column_size
+                .iter()
+                .scan(0.0f32, |a, v| {
+                    let o = *a;
+                    *a += v + gap;
+                    Some(o)
+                })
+                .collect::<Vec<_>>();
+            let row_offsets = row_size
+                .iter()
+                .scan(0.0f32, |a, v| {
+                    let o = *a;
+                    *a += v + gap;
+                    Some(o)
+                })
+                .collect::<Vec<_>>();
 
             let mut current_column = 0;
             let mut current_row = 0;
@@ -192,11 +506,14 @@ fn layout<'t>(
                     boxes,
                     LayoutState {
                         global_content_offset: peridot::math::Vector2(
-                            child_layout_global_offset.0 + column_size[current_column],
+                            child_layout_global_offset.0 + column_offsets[current_column],
                             // TODO: 行数が多くなったときの処理（親コンテナの残りを全部割当、でいいはず）
-                            child_layout_global_offset.1 + row_size[current_row],
+                            child_layout_global_offset.1 + row_offsets[current_row],
                         ),
-                        available_content_size: child_layout_available_size,
+                        available_content_size: peridot::math::Vector2(
+                            column_size[current_column],
+                            row_size[current_row],
+                        ),
                     },
                 );
 
@@ -304,18 +621,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
     let ui_tree = UIElement {
         size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::Fill),
-        scale: peridot::math::Vector2(1.0, 1.0),
-        offset: peridot::math::Vector2(0.0, 0.0),
-        margin_left: 0.0,
-        margin_top: 0.0,
-        margin_right: 0.0,
-        margin_bottom: 0.0,
-        padding_left: 8.0,
-        padding_top: 8.0,
-        padding_right: 8.0,
-        padding_bottom: 8.0,
-        layout_width: LayoutSize::Unscaled,
-        layout_height: LayoutSize::Unscaled,
+        padding: RectEdge::all(8.0),
         debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.1),
         children_layout: ChildrenLayoutMode::Vertical {
             overflow: Overflow::Overflow,
@@ -327,44 +633,73 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     UIElementSize::Fixed(100.0),
                     UIElementSize::Fixed(32.0),
                 ),
-                scale: peridot::math::Vector2(1.0, 1.0),
-                offset: peridot::math::Vector2(0.0, 0.0),
-                margin_left: 0.0,
-                margin_top: 0.0,
-                margin_right: 0.0,
-                margin_bottom: 0.0,
-                padding_left: 0.0,
-                padding_top: 0.0,
-                padding_right: 0.0,
-                padding_bottom: 0.0,
-                layout_width: LayoutSize::Unscaled,
-                layout_height: LayoutSize::Unscaled,
                 debug_color: peridot::math::Vector4(1.0, 1.0, 0.0, 0.8),
-                children_layout: ChildrenLayoutMode::Free,
-                children: vec![],
+                ..Default::default()
             },
             UIElement {
                 size: peridot::math::Vector2(
                     UIElementSize::Fixed(192.0),
                     UIElementSize::Fixed(32.0),
                 ),
-                scale: peridot::math::Vector2(1.0, 1.0),
-                offset: peridot::math::Vector2(0.0, 0.0),
-                margin_left: 0.0,
-                margin_top: 0.0,
-                margin_right: 0.0,
-                margin_bottom: 0.0,
-                padding_left: 0.0,
-                padding_top: 0.0,
-                padding_right: 0.0,
-                padding_bottom: 0.0,
-                layout_width: LayoutSize::Unscaled,
-                layout_height: LayoutSize::Unscaled,
                 debug_color: peridot::math::Vector4(0.0, 1.0, 1.0, 0.8),
-                children_layout: ChildrenLayoutMode::Free,
-                children: vec![],
+                ..Default::default()
+            },
+            UIElement {
+                size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::FitContent),
+                debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.2),
+                padding: RectEdge::all(4.0),
+                children_layout: ChildrenLayoutMode::Grid {
+                    columns: vec![
+                        GridCellSize::FitContent,
+                        GridCellSize::Flexible(1.0),
+                        GridCellSize::Flexible(1.0),
+                    ],
+                    rows: vec![GridCellSize::FitContent, GridCellSize::FitContent],
+                    gap: 4.0,
+                },
+                children: vec![
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(32.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(0.0, 1.0, 1.0, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fill,
+                            UIElementSize::Fixed(64.0),
+                        ),
+                        debug_color: peridot::math::Vector4(0.0, 1.0, 1.0, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::Fill),
+                        debug_color: peridot::math::Vector4(0.0, 1.0, 1.0, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(32.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(0.0, 1.0, 1.0, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(32.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(0.0, 1.0, 1.0, 0.8),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
             },
         ],
+        ..Default::default()
     };
     let mut boxes = Vec::new();
     layout(
