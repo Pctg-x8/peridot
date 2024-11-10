@@ -1,7 +1,6 @@
 use crate::mthelper::SharedRef;
 use bedrock::{self as br, CommandBufferMut, CommandPoolMut, QueueMut};
 use br::{Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch};
-use cfg_if::cfg_if;
 use log::{info, warn};
 use std::{
     collections::HashSet,
@@ -269,10 +268,12 @@ impl Graphics {
         batches: &[br::vk::VkSubmitInfo],
         fence: &mut impl br::FenceMut,
     ) -> br::Result<()> {
-        self.graphics_queue
-            .q
-            .get_mut()
-            .submit_raw(batches, Some(fence.as_transparent_mut_ref()))
+        unsafe {
+            self.graphics_queue
+                .q
+                .get_mut()
+                .submit_raw(batches, Some(fence.as_transparent_mut_ref()))
+        }
     }
 
     /// Submits any commands as transient commands.

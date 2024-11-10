@@ -234,7 +234,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
         self.sc.back_buffer(index)
     }
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {

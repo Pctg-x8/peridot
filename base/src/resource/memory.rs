@@ -177,11 +177,10 @@ where
 }
 
 #[repr(transparent)]
-pub struct AutocloseMappedMemoryRange<
-    'm,
-    DeviceMemory: br::DeviceMemory + br::VkHandleMut + ?Sized + 'm,
->(pub(super) Option<br::MappedMemoryRange<'m, DeviceMemory>>);
-impl<'m, DeviceMemory: br::DeviceMemory + br::VkHandleMut + ?Sized + 'm> std::ops::Deref
+pub struct AutocloseMappedMemoryRange<'m, DeviceMemory: br::DeviceMemoryMut + ?Sized + 'm>(
+    pub(super) Option<br::MappedMemoryRange<'m, DeviceMemory>>,
+);
+impl<'m, DeviceMemory: br::DeviceMemoryMut + ?Sized + 'm> std::ops::Deref
     for AutocloseMappedMemoryRange<'m, DeviceMemory>
 {
     type Target = br::MappedMemoryRange<'m, DeviceMemory>;
@@ -190,7 +189,7 @@ impl<'m, DeviceMemory: br::DeviceMemory + br::VkHandleMut + ?Sized + 'm> std::op
         self.0.as_ref().expect("object has been dropped")
     }
 }
-impl<'m, DeviceMemory: br::DeviceMemory + br::VkHandleMut + ?Sized + 'm> Drop
+impl<'m, DeviceMemory: br::DeviceMemoryMut + ?Sized + 'm> Drop
     for AutocloseMappedMemoryRange<'m, DeviceMemory>
 {
     fn drop(&mut self) {

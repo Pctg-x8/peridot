@@ -85,7 +85,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
         self.sc.back_buffer(index)
     }
 
@@ -509,8 +509,8 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         2
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
-        self.back_buffers.get(index).map(|b| b.image_view.clone())
+    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
+        self.back_buffers.get(index).map(|b| &b.image_view)
     }
 
     fn emit_initialize_back_buffer_commands<

@@ -236,7 +236,7 @@ impl<B: br::Buffer + peridot::TransferrableBufferResource + 'static> RangedBuffe
         );
     }
 }
-impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br::VkHandleMut>
+impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemoryMut>
     RangedBuffer<peridot::Buffer<B, M>>
 {
     pub fn guard_map<R>(

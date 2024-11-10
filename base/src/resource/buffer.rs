@@ -37,7 +37,10 @@ impl<
         &mut self,
         range: std::ops::Range<u64>,
         f: impl FnOnce(&br::MappedMemoryRange<Memory>) -> R,
-    ) -> br::Result<R> {
+    ) -> br::Result<R>
+    where
+        Memory: br::DeviceMemoryMut,
+    {
         let mut mem = self.1.borrow_mut();
         let mapped_range = AutocloseMappedMemoryRange(
             mem.map((self.2 + range.start) as _..(self.2 + range.end) as _)?
