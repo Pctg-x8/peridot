@@ -111,7 +111,7 @@ impl GameDriver {
         PP: PointerPositionProvider + Send + Sync + 'static,
         Arc<RwLock<PP>>: PresenterProvider,
         <Arc<RwLock<PP>> as PresenterProvider>::Presenter: Sync + Send,
-        <<Arc<RwLock<PP>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::Backbuffer: Sync + Send
+        <<Arc<RwLock<PP>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer: Sync + Send
     {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
@@ -189,7 +189,7 @@ where
     W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
     Arc<RwLock<W>>: PresenterProvider,
     <Arc<RwLock<W>> as PresenterProvider>::Presenter: Sync + Send,
-    <<Arc<RwLock<W>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::Backbuffer:
+    <<Arc<RwLock<W>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer:
         Sync + Send,
 {
     let gd = GameDriver::new(window_backend.clone());
