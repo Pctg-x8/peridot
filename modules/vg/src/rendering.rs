@@ -127,7 +127,7 @@ impl ModelData for Context {
 
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
         unsafe { self.write_data_into(mem.get_mut(0) as _, offsets) }

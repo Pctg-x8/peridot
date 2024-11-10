@@ -288,7 +288,7 @@ impl MemoryManager {
     }
 
     fn device_local_memory_type(&self, index_mask: u32) -> Option<&MemoryType> {
-        let mut target_types = self
+        let target_types = self
             .device_local_memory_types
             .iter()
             .find(|t| (index_mask & t.index_mask()) != 0);

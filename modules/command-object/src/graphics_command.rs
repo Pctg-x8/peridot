@@ -410,14 +410,12 @@ where
     pub fn for_entire_framebuffer(
         render_pass: R,
         framebuffer: &'f br::FramebufferObject<'f, D>,
+        framebuffer_size: br::vk::VkExtent2D,
     ) -> Self {
         Self::new(
             render_pass,
             framebuffer,
-            framebuffer
-                .size()
-                .clone()
-                .into_rect(br::vk::VkOffset2D::ZERO),
+            framebuffer_size.into_rect(br::vk::VkOffset2D::ZERO),
         )
     }
 }
