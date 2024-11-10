@@ -243,9 +243,10 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     )
     .create(e.graphics().device().clone())
     .expect("Create RenderPass");
-    let mut framebuffers = e
-        .iter_back_buffers()
-        .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create())
+    let mut backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+    let mut framebuffers = backbuffer_resources
+        .iter()
+        .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b).create())
         .collect::<Result<Vec<_>, _>>()
         .expect("Bind Framebuffer");
 
@@ -366,8 +367,12 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .apply(e.graphics().device())
         .expect("Failed to set render cb name");
 
-        let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
-            .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+        let begin_main_rp = BeginRenderPass::new(
+            &renderpass,
+            fb,
+            screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO),
+        )
+        .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
         (&color_renders)
             .between(begin_main_rp, EndRenderPass)
@@ -401,23 +406,28 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         e.wait_for_last_rendering_completion();
 
                         render_cb.reset().expect("Resetting RenderCB");
-                        framebuffers.clear();
+                        drop(framebuffers);
+                        drop(backbuffer_resources);
 
                         e.resize_presenter_backbuffers(new_size);
 
-                        framebuffers = e
-                            .iter_back_buffers()
+                        backbuffer_resources = e.iter_back_buffers().cloned().collect();
+                        framebuffers = backbuffer_resources
+                            .iter()
                             .map(|b| {
-                                br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone())
-                                    .create()
+                                br::FramebufferBuilder::new_with_attachment(&renderpass, b).create()
                             })
                             .collect::<Result<Vec<_>, _>>()
                             .expect("Bind Framebuffers");
 
                         for (cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
-                            let begin_main_rp =
-                                BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
-                                    .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+                            let begin_main_rp = BeginRenderPass::new(
+                                &renderpass,
+                                fb,
+                                br::vk::VkExtent2D::from(new_size)
+                                    .into_rect(br::vk::VkOffset2D::ZERO),
+                            )
+                            .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
                             (&color_renders)
                                 .between(begin_main_rp, EndRenderPass)
@@ -458,21 +468,25 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 e.wait_for_last_rendering_completion();
 
                 render_cb.reset().expect("Resetting RenderCB");
-                framebuffers.clear();
+                drop(framebuffers);
+                drop(backbuffer_resources);
 
                 e.resize_presenter_backbuffers(new_size);
 
-                framebuffers = e
-                    .iter_back_buffers()
-                    .map(|b| {
-                        br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create()
-                    })
+                backbuffer_resources = e.iter_back_buffers().cloned().collect();
+                framebuffers = backbuffer_resources
+                    .iter()
+                    .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b).create())
                     .collect::<Result<Vec<_>, _>>()
                     .expect("Bind Framebuffers");
 
                 for (cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
-                    let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
-                        .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+                    let begin_main_rp = BeginRenderPass::new(
+                        &renderpass,
+                        fb,
+                        br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO),
+                    )
+                    .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
                     (&color_renders)
                         .between(begin_main_rp, EndRenderPass)
