@@ -31,7 +31,7 @@ pub enum LayoutSize {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Overflow {
-    Flexible,
+    Wrap,
     Hidden,
     Overflow,
 }
@@ -202,7 +202,6 @@ fn compute_layout_rect(
     target: &UIElement,
     available_size: peridot::math::Vector2<f32>,
 ) -> LayoutRect {
-    // TODO: marginの考慮
     let pos = target.offset;
     let content_size = peridot::math::Vector2(
         match target.size.0 {
@@ -729,299 +728,240 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
         } => {
             let mut available_content_size = child_layout_available_size;
 
-            match (direction, justify) {
-                (LayoutDirection::Normal, LayoutJustify::Start) => {
+            match justify {
+                LayoutJustify::Start => {
                     let mut global_content_offset = child_layout_global_offset;
+                    let mut layout_rects = Vec::with_capacity(target.children.len());
+                    match direction {
+                        LayoutDirection::Normal => {
+                            for c in target.children.iter() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                    for c in target.children.iter() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout.r#move(global_content_offset));
+                                global_content_offset.0 += content_width + gap;
+                                available_content_size.0 -= content_width + gap;
+                                // TODO: overflow
+                            }
+                        }
+                        LayoutDirection::Reverse => {
+                            for c in target.children.iter().rev() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos,
-                                size: child_layout.size,
-                            },
-                        );
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout.r#move(global_content_offset));
+                                global_content_offset.0 += content_width + gap;
+                                available_content_size.0 -= content_width + gap;
+                                // TODO: overflow
+                            }
 
-                        global_content_offset.0 += child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                        // TODO: overflow
+                            layout_rects.reverse();
+                        }
+                    }
+
+                    for (c, r) in target.children.iter().zip(layout_rects.into_iter()) {
+                        layout1(c, boxes, r);
                     }
                 }
-                (LayoutDirection::Reverse, LayoutJustify::Start) => {
-                    let mut global_content_offset = child_layout_global_offset;
+                LayoutJustify::End => {
+                    let mut global_content_offset = child_layout_global_offset
+                        + peridot::math::Vector2(child_layout_available_size.0, 0.0);
+                    let mut layout_rects = Vec::with_capacity(target.children.len());
+                    // 右から詰めていくので逆向きに処理する
+                    match direction {
+                        LayoutDirection::Normal => {
+                            for c in target.children.iter().rev() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                    for c in target.children.iter().rev() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout.r#move(
+                                    global_content_offset
+                                        - peridot::math::Vector2(content_width, 0.0),
+                                ));
+                                global_content_offset.0 -= content_width + gap;
+                                available_content_size.0 -= content_width + gap;
+                                // TODO: overflow
+                            }
 
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos,
-                                size: child_layout.size,
-                            },
-                        );
+                            layout_rects.reverse();
+                        }
+                        LayoutDirection::Reverse => {
+                            for c in target.children.iter() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                        global_content_offset.0 += child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                        // TODO: overflow
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout.r#move(
+                                    global_content_offset
+                                        - peridot::math::Vector2(content_width, 0.0),
+                                ));
+                                global_content_offset.0 -= content_width + gap;
+                                available_content_size.0 -= content_width + gap;
+                                // TODO: overflow
+                            }
+                        }
+                    }
+
+                    for (c, r) in target.children.iter().zip(layout_rects.into_iter()) {
+                        layout1(c, boxes, r);
                     }
                 }
-                (LayoutDirection::Normal, LayoutJustify::End) => {
-                    let mut global_content_offset = peridot::math::Vector2(
-                        child_layout_global_offset.0 + available_content_size.0,
-                        child_layout_global_offset.1,
-                    );
+                LayoutJustify::Center => {
+                    let mut layout_rects = Vec::with_capacity(target.children.len());
+                    let content_available_width = available_content_size.0;
+                    let mut content_total_width = 0.0f32;
+                    match direction {
+                        LayoutDirection::Normal => {
+                            for c in target.children.iter() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                    // 右から積んでくるので逆向きに動かす
-                    for c in target.children.iter().rev() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(
+                                    child_layout
+                                        .r#move(peridot::math::Vector2(content_total_width, 0.0)),
+                                );
+                                content_total_width += content_width + gap;
+                                available_content_size.0 -= content_width + gap;
+                                // TODO: overflow
+                            }
+                        }
+                        LayoutDirection::Reverse => {
+                            for c in target.children.iter().rev() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos
-                                    - peridot::math::Vector2(child_layout.size.0, 0.0),
-                                size: child_layout.size,
-                            },
-                        );
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(
+                                    child_layout
+                                        .r#move(peridot::math::Vector2(content_total_width, 0.0)),
+                                );
+                                content_total_width += content_width + gap;
+                                available_content_size.0 -= content_width + gap;
+                                // TODO: overflow
+                            }
 
-                        global_content_offset.0 -= child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                        // TODO: overflow
+                            layout_rects.reverse();
+                        }
+                    }
+
+                    content_total_width -= gap;
+                    let space = content_available_width - content_total_width;
+                    let global_content_offset =
+                        child_layout_global_offset + peridot::math::Vector2(space * 0.5, 0.0);
+
+                    for (c, r) in target.children.iter().zip(layout_rects.into_iter()) {
+                        layout1(c, boxes, r.r#move(global_content_offset));
                     }
                 }
-                (LayoutDirection::Reverse, LayoutJustify::End) => {
-                    let mut global_content_offset = peridot::math::Vector2(
-                        child_layout_global_offset.0 + available_content_size.0,
-                        child_layout_global_offset.1,
-                    );
+                LayoutJustify::SpaceBetween => {
+                    let mut layout_rects = Vec::with_capacity(target.children.len());
+                    let content_available_width = available_content_size.0;
+                    let mut content_total_width = 0.0f32;
+                    match direction {
+                        LayoutDirection::Normal => {
+                            for c in target.children.iter() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                    // 右から積んでくるので逆向きに動かす
-                    for c in target.children.iter() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout);
+                                content_total_width += content_width;
+                                available_content_size.0 -= content_width;
+                                // TODO: overflow
+                            }
+                        }
+                        LayoutDirection::Reverse => {
+                            for c in target.children.iter().rev() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos
-                                    - peridot::math::Vector2(child_layout.size.0, 0.0),
-                                size: child_layout.size,
-                            },
-                        );
-
-                        global_content_offset.0 -= child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                        // TODO: overflow
-                    }
-                }
-                (LayoutDirection::Normal, LayoutJustify::Center) => {
-                    let mut offsets = Vec::with_capacity(target.children.len());
-                    let mut left_offset = 0.0f32;
-                    let mut available_size = child_layout_available_size;
-                    for c in target.children.iter() {
-                        let child_layout = compute_layout_rect(c, available_size);
-
-                        offsets.push(left_offset);
-                        left_offset += child_layout.right() + gap;
-                        available_size.0 -= child_layout.right() + gap;
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout);
+                                content_total_width += content_width;
+                                available_content_size.0 -= content_width;
+                                // TODO: overflow
+                            }
+                        }
                     }
 
-                    left_offset -= gap;
-                    let left_width = available_content_size.0 - left_offset;
-
-                    let global_content_offset = peridot::math::Vector2(
-                        child_layout_global_offset.0 + left_width * 0.5,
-                        child_layout_global_offset.1,
-                    );
-
-                    for (c, o) in target.children.iter().zip(offsets.into_iter()) {
-                        let child_layout = compute_layout_rect(c, available_content_size);
-
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset
-                                    + child_layout.pos
-                                    + peridot::math::Vector2(o, 0.0),
-                                size: child_layout.size,
-                            },
-                        );
-
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                    }
-                }
-                (LayoutDirection::Reverse, LayoutJustify::Center) => {
-                    let mut offsets = Vec::with_capacity(target.children.len());
-                    let mut left_offset = 0.0f32;
-                    let mut available_size = child_layout_available_size;
-                    for c in target.children.iter().rev() {
-                        let child_layout = compute_layout_rect(c, available_size);
-
-                        offsets.push(left_offset);
-                        left_offset += child_layout.right() + gap;
-                        available_size.0 -= child_layout.right() + gap;
-                    }
-
-                    left_offset -= gap;
-                    let left_width = available_content_size.0 - left_offset;
-
-                    let global_content_offset = peridot::math::Vector2(
-                        child_layout_global_offset.0 + left_width * 0.5,
-                        child_layout_global_offset.1,
-                    );
-
-                    for (c, o) in target.children.iter().rev().zip(offsets.into_iter()) {
-                        let child_layout = compute_layout_rect(c, available_content_size);
-
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset
-                                    + child_layout.pos
-                                    + peridot::math::Vector2(o, 0.0),
-                                size: child_layout.size,
-                            },
-                        );
-
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                    }
-                }
-                (LayoutDirection::Normal, LayoutJustify::SpaceBetween) => {
-                    let mut content_width = 0.0f32;
-                    let mut available_size = child_layout_available_size;
-                    for c in target.children.iter() {
-                        let w = compute_layout_rect(c, available_size).right();
-
-                        content_width += w;
-                        available_size.0 -= w;
-                    }
-
-                    let left_width = available_content_size.0 - content_width;
-                    let gap = left_width / (target.children.len() - 1) as f32;
+                    content_total_width -= gap;
+                    let space = content_available_width - content_total_width;
+                    let gap = if target.children.len() <= 1 {
+                        0.0
+                    } else {
+                        space / (target.children.len() - 1) as f32
+                    };
 
                     let mut global_content_offset = child_layout_global_offset;
+                    match direction {
+                        LayoutDirection::Normal => {
+                            for (c, r) in target.children.iter().zip(layout_rects.into_iter()) {
+                                let content_width = r.size.0;
+                                layout1(c, boxes, r.r#move(global_content_offset));
 
-                    for c in target.children.iter() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
+                                global_content_offset.0 += content_width + gap;
+                            }
+                        }
+                        LayoutDirection::Reverse => {
+                            for (c, r) in target.children.iter().rev().zip(layout_rects.into_iter())
+                            {
+                                let content_width = r.size.0;
+                                layout1(c, boxes, r.r#move(global_content_offset));
 
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos,
-                                size: child_layout.size,
-                            },
-                        );
-
-                        global_content_offset.0 += child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
+                                global_content_offset.0 += content_width + gap;
+                            }
+                        }
                     }
                 }
-                (LayoutDirection::Reverse, LayoutJustify::SpaceBetween) => {
-                    let mut content_width = 0.0f32;
-                    let mut available_size = child_layout_available_size;
-                    for c in target.children.iter().rev() {
-                        let w = compute_layout_rect(c, available_size).right();
+                LayoutJustify::SpaceAround => {
+                    let mut layout_rects = Vec::with_capacity(target.children.len());
+                    let content_available_width = available_content_size.0;
+                    let mut content_total_width = 0.0f32;
+                    match direction {
+                        LayoutDirection::Normal => {
+                            for c in target.children.iter() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                        content_width += w;
-                        available_size.0 -= w;
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout);
+                                content_total_width += content_width;
+                                available_content_size.0 -= content_width;
+                                // TODO: overflow
+                            }
+                        }
+                        LayoutDirection::Reverse => {
+                            for c in target.children.iter().rev() {
+                                let child_layout = compute_layout_rect(c, available_content_size);
+
+                                let content_width = child_layout.size.0;
+                                layout_rects.push(child_layout);
+                                content_total_width += content_width;
+                                available_content_size.0 -= content_width;
+                                // TODO: overflow
+                            }
+                        }
                     }
 
-                    let left_width = available_content_size.0 - content_width;
-                    let gap = left_width / (target.children.len() - 1) as f32;
+                    content_total_width -= gap;
+                    let space = content_available_width - content_total_width;
+                    let gap = space / (target.children.len() + 1) as f32;
 
-                    let mut global_content_offset = child_layout_global_offset;
+                    let mut global_content_offset =
+                        child_layout_global_offset + peridot::math::Vector2(gap, 0.0);
+                    match direction {
+                        LayoutDirection::Normal => {
+                            for (c, r) in target.children.iter().zip(layout_rects.into_iter()) {
+                                let content_width = r.size.0;
+                                layout1(c, boxes, r.r#move(global_content_offset));
 
-                    for c in target.children.iter().rev() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
+                                global_content_offset.0 += content_width + gap;
+                            }
+                        }
+                        LayoutDirection::Reverse => {
+                            for (c, r) in target.children.iter().rev().zip(layout_rects.into_iter())
+                            {
+                                let content_width = r.size.0;
+                                layout1(c, boxes, r.r#move(global_content_offset));
 
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos,
-                                size: child_layout.size,
-                            },
-                        );
-
-                        global_content_offset.0 += child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                    }
-                }
-                (LayoutDirection::Normal, LayoutJustify::SpaceAround) => {
-                    let mut content_width = 0.0f32;
-                    let mut available_size = child_layout_available_size;
-                    for c in target.children.iter() {
-                        let w = compute_layout_rect(c, available_size).right();
-
-                        content_width += w;
-                        available_size.0 -= w;
-                    }
-
-                    let left_width = available_content_size.0 - content_width;
-                    let gap = left_width / (target.children.len() + 1) as f32;
-
-                    let mut global_content_offset = peridot::math::Vector2(
-                        child_layout_global_offset.0 + gap,
-                        child_layout_global_offset.1,
-                    );
-
-                    for c in target.children.iter() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
-
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos,
-                                size: child_layout.size,
-                            },
-                        );
-
-                        global_content_offset.0 += child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
-                    }
-                }
-                (LayoutDirection::Reverse, LayoutJustify::SpaceAround) => {
-                    let mut content_width = 0.0f32;
-                    let mut available_size = child_layout_available_size;
-                    for c in target.children.iter().rev() {
-                        let w = compute_layout_rect(c, available_size).right();
-
-                        content_width += w;
-                        available_size.0 -= w;
-                    }
-
-                    let left_width = available_content_size.0 - content_width;
-                    let gap = left_width / (target.children.len() + 1) as f32;
-
-                    let mut global_content_offset = peridot::math::Vector2(
-                        child_layout_global_offset.0 + gap,
-                        child_layout_global_offset.1,
-                    );
-
-                    for c in target.children.iter().rev() {
-                        let child_layout = compute_layout_rect(c, available_content_size);
-
-                        layout1(
-                            c,
-                            boxes,
-                            LayoutRect {
-                                pos: global_content_offset + child_layout.pos,
-                                size: child_layout.size,
-                            },
-                        );
-
-                        global_content_offset.0 += child_layout.size.0 + gap;
-                        available_content_size.0 -= child_layout.size.0 + gap;
+                                global_content_offset.0 += content_width + gap;
+                            }
+                        }
                     }
                 }
             }
@@ -1238,18 +1178,87 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.0),
         children_layout: ChildrenLayoutMode::Vertical {
             direction: LayoutDirection::Normal,
-            justify: LayoutJustify::Center,
-            alignment: LayoutAlignment::Center,
+            justify: LayoutJustify::Start,
+            alignment: LayoutAlignment::Start,
             overflow: Overflow::Overflow,
             gap: 8.0,
         },
         children: vec![
             UIElement {
-                size: peridot::math::Vector2(
-                    UIElementSize::Fixed(100.0),
-                    UIElementSize::Fixed(32.0),
-                ),
-                debug_color: peridot::math::Vector4(1.0, 1.0, 0.0, 0.8),
+                debug_color: peridot::math::Vector4(1.0, 0.0, 1.0, 0.5),
+                children_layout: ChildrenLayoutMode::Horizontal {
+                    direction: LayoutDirection::Normal,
+                    justify: LayoutJustify::Start,
+                    alignment: LayoutAlignment::Start,
+                    overflow: Overflow::Wrap,
+                    gap: 8.0,
+                },
+                children: vec![
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 1.0, 0.0, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
+                        ..Default::default()
+                    },
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             },
             UIElement {
