@@ -472,8 +472,8 @@ fn compute_vertical_alignment_axis_offset(
         LayoutAlignment::Start => 0.0,
         LayoutAlignment::End => available_width - element_width,
         LayoutAlignment::Center => (available_width - element_width) * 0.5,
-        // VerticalのAlignmentはBaselineが取れないのでStartと同じ扱いにする
-        LayoutAlignment::Baseline => 0.0,
+        // VerticalのAlignmentはBaselineが取れないのでEndと同じ扱いにする
+        LayoutAlignment::Baseline => available_width - element_width,
     }
 }
 
@@ -486,8 +486,8 @@ fn compute_horizontal_alignment_axis_offset(
         LayoutAlignment::Start => 0.0,
         LayoutAlignment::End => available_height - element_height,
         LayoutAlignment::Center => (available_height - element_height) * 0.5,
-        // TODO: Baseline Alignment
-        LayoutAlignment::Baseline => 0.0,
+        // TODO: Baseline Alignment(フォント指定がない場合はEndとおなじ扱いにする)
+        LayoutAlignment::Baseline => available_height - element_height,
     }
 }
 
