@@ -190,6 +190,16 @@ impl LayoutRect {
     }
 
     #[inline(always)]
+    pub const fn width(&self) -> f32 {
+        self.size.0
+    }
+
+    #[inline(always)]
+    pub const fn height(&self) -> f32 {
+        self.size.1
+    }
+
+    #[inline(always)]
     pub fn right(&self) -> f32 {
         self.pos.0 + self.size.0
     }
@@ -221,7 +231,6 @@ fn compute_layout_rect(
                 .map(|c| compute_layout_rect(c, None).max_point())
                 .fold(peridot::math::Vector2::ZERO, peridot::math::Vector2::max),
             ChildrenLayoutMode::Vertical { overflow, gap, .. } => {
-                // TODO: overflow
                 let mut max_right = 0.0f32;
                 let mut max_bottom = 0.0f32;
                 for c in target.children.iter() {
@@ -234,42 +243,139 @@ fn compute_layout_rect(
                 peridot::math::Vector2(max_right, max_bottom - gap)
             }
             ChildrenLayoutMode::Horizontal { overflow, gap, .. } => {
-                let mut max_right = 0.0f32;
-                let mut max_bottom = 0.0f32;
-                let mut row_height = 0.0f32;
-                let mut wrapped = false;
-                for c in target.children.iter() {
-                    let child_layout = compute_layout_rect(c, None);
-                    if available_size.is_some_and(|s| max_right + child_layout.right() > s.0) {
-                        // overflowしそう
+                match target.size.0 {
+                    UIElementSize::FitContent => {
+                        // Note: 配置方向がFitContentの場合はoverflowしないはずなので(中身のサイズに外側が合うようになるから)処理しない
+                        let mut max_right = 0.0f32;
+                        let mut max_bottom = 0.0f32;
+                        for c in target.children.iter() {
+                            let child_layout = compute_layout_rect(c, None);
 
-                        match overflow {
-                            Overflow::Wrap => {
-                                // 改行
-                                max_right = 0.0;
-                                max_bottom += row_height + gap;
-                                row_height = 0.0;
-                                wrapped = true;
-                            }
-                            Overflow::Hidden => (),
-                            Overflow::Overflow => (),
+                            max_right += child_layout.width() + gap;
+                            max_bottom = max_bottom.max(child_layout.height());
                         }
+
+                        peridot::math::Vector2(max_right - gap, max_bottom)
                     }
+                    UIElementSize::Fill => {
+                        let mut max_right = 0.0f32;
+                        let mut max_bottom = 0.0f32;
+                        let mut row_height = 0.0f32;
+                        let mut wrapped = false;
+                        for c in target.children.iter() {
+                            let child_layout = compute_layout_rect(c, None);
+                            if available_size
+                                .is_some_and(|s| max_right + child_layout.width() > s.0)
+                            {
+                                // overflowしそう
 
-                    max_right += child_layout.right() + gap;
-                    row_height = row_height.max(child_layout.bottom());
+                                match overflow {
+                                    Overflow::Wrap => {
+                                        // 改行
+                                        max_right = 0.0;
+                                        max_bottom += row_height + gap;
+                                        row_height = 0.0;
+                                        wrapped = true;
+                                    }
+                                    Overflow::Hidden => (),
+                                    Overflow::Overflow => (),
+                                }
+                            }
+
+                            max_right += child_layout.width() + gap;
+                            row_height = row_height.max(child_layout.height());
+                        }
+
+                        max_bottom += row_height;
+
+                        peridot::math::Vector2(
+                            if wrapped {
+                                available_size.map_or(0.0, |x| x.0)
+                            } else {
+                                max_right - gap
+                            },
+                            max_bottom,
+                        )
+                    }
+                    UIElementSize::Percent(r) => {
+                        let mut max_right = 0.0f32;
+                        let mut max_bottom = 0.0f32;
+                        let mut row_height = 0.0f32;
+                        let mut wrapped = false;
+                        let available_width = available_size.map(|x| x.0 * r / 100.0);
+                        for c in target.children.iter() {
+                            let child_layout = compute_layout_rect(c, None);
+                            if available_width.is_some_and(|s| max_right + child_layout.width() > s)
+                            {
+                                // overflowしそう
+
+                                match overflow {
+                                    Overflow::Wrap => {
+                                        // 改行
+                                        max_right = 0.0;
+                                        max_bottom += row_height + gap;
+                                        row_height = 0.0;
+                                        wrapped = true;
+                                    }
+                                    Overflow::Hidden => (),
+                                    Overflow::Overflow => (),
+                                }
+                            }
+
+                            max_right += child_layout.width() + gap;
+                            row_height = row_height.max(child_layout.height());
+                        }
+
+                        max_bottom += row_height;
+
+                        peridot::math::Vector2(
+                            if wrapped {
+                                available_size.map_or(0.0, |x| x.0)
+                            } else {
+                                max_right - gap
+                            },
+                            max_bottom,
+                        )
+                    }
+                    UIElementSize::Fixed(available_width) => {
+                        let mut max_right = 0.0f32;
+                        let mut max_bottom = 0.0f32;
+                        let mut row_height = 0.0f32;
+                        let mut wrapped = false;
+                        for c in target.children.iter() {
+                            let child_layout = compute_layout_rect(c, None);
+                            if max_right + child_layout.width() > available_width {
+                                // overflowしそう
+
+                                match overflow {
+                                    Overflow::Wrap => {
+                                        // 改行
+                                        max_right = 0.0;
+                                        max_bottom += row_height + gap;
+                                        row_height = 0.0;
+                                        wrapped = true;
+                                    }
+                                    Overflow::Hidden => (),
+                                    Overflow::Overflow => (),
+                                }
+                            }
+
+                            max_right += child_layout.width() + gap;
+                            row_height = row_height.max(child_layout.height());
+                        }
+
+                        max_bottom += row_height;
+
+                        peridot::math::Vector2(
+                            if wrapped {
+                                available_size.map_or(0.0, |x| x.0)
+                            } else {
+                                max_right - gap
+                            },
+                            max_bottom,
+                        )
+                    }
                 }
-
-                max_bottom += row_height;
-
-                peridot::math::Vector2(
-                    if wrapped {
-                        available_size.map_or(0.0, |x| x.0)
-                    } else {
-                        max_right - gap
-                    },
-                    max_bottom,
-                )
             }
             ChildrenLayoutMode::Grid {
                 ref columns,
@@ -1193,7 +1299,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let child_layout =
                                     compute_layout_rect(c, Some(available_content_size));
 
-                                if available_content_size.0 < child_layout.right() {
+                                if available_content_size.0 < child_layout.width() {
                                     // overflowしそう
                                     match overflow {
                                         Overflow::Wrap => {
@@ -1207,7 +1313,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                                     + peridot::math::Vector2(new_gap, 0.0);
                                             layout_rects.reserve(row_rects.len());
                                             for r in row_rects.drain(..) {
-                                                let content_width = r.right();
+                                                let content_width = r.width();
                                                 layout_rects.push(r.r#move(global_content_offset));
 
                                                 global_content_offset.0 += content_width + new_gap;
@@ -1223,7 +1329,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                     }
                                 }
 
-                                let content_width = child_layout.right();
+                                let content_width = child_layout.width();
                                 row_max_height = row_max_height.max(child_layout.bottom());
                                 row_rects.push(
                                     child_layout
@@ -1235,13 +1341,21 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
 
                             let space = content_available_width
                                 - (content_total_width - gap * row_rects.len() as f32);
-                            let new_gap = (space / (row_rects.len() + 1) as f32).max(gap);
+                            let new_gap = space / (row_rects.len() + 1) as f32;
 
-                            let mut global_content_offset =
-                                child_layout_global_offset + peridot::math::Vector2(new_gap, 0.0);
+                            let mut global_content_offset;
+                            let new_gap = if new_gap < gap {
+                                // gapを最低保証にしたいので、均等割がそれ以下になったら両端のスペースを作らないようにする
+                                global_content_offset = child_layout_global_offset;
+                                gap
+                            } else {
+                                global_content_offset = child_layout_global_offset
+                                    + peridot::math::Vector2(new_gap, 0.0);
+                                new_gap
+                            };
                             layout_rects.reserve(row_rects.len());
                             for r in row_rects.drain(..) {
-                                let content_width = r.right();
+                                let content_width = r.width();
                                 layout_rects.push(r.r#move(global_content_offset));
 
                                 global_content_offset.0 += content_width + new_gap;
@@ -1252,7 +1366,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let child_layout =
                                     compute_layout_rect(c, Some(available_content_size));
 
-                                if available_content_size.0 < child_layout.right() {
+                                if available_content_size.0 < child_layout.width() {
                                     // overflowしそう
                                     match overflow {
                                         Overflow::Wrap => {
@@ -1266,7 +1380,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                                     + peridot::math::Vector2(new_gap, 0.0);
                                             layout_rects.reserve(row_rects.len());
                                             for r in row_rects.drain(..) {
-                                                let content_width = r.right();
+                                                let content_width = r.width();
                                                 layout_rects.push(r.r#move(global_content_offset));
 
                                                 global_content_offset.0 += content_width + new_gap;
@@ -1282,7 +1396,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                     }
                                 }
 
-                                let content_width = child_layout.right();
+                                let content_width = child_layout.width();
                                 row_max_height = row_max_height.max(child_layout.bottom());
                                 row_rects.push(
                                     child_layout
@@ -1294,13 +1408,21 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
 
                             let space = content_available_width
                                 - (content_total_width - gap * row_rects.len() as f32);
-                            let new_gap = (space / (row_rects.len() + 1) as f32).max(gap);
+                            let new_gap = space / (row_rects.len() + 1) as f32;
 
-                            let mut global_content_offset =
-                                child_layout_global_offset + peridot::math::Vector2(new_gap, 0.0);
+                            let mut global_content_offset;
+                            let new_gap = if new_gap < gap {
+                                // gapを最低保証にしたいので、均等割がそれ以下になったら両端のスペースを作らないようにする
+                                global_content_offset = child_layout_global_offset;
+                                gap
+                            } else {
+                                global_content_offset = child_layout_global_offset
+                                    + peridot::math::Vector2(new_gap, 0.0);
+                                new_gap
+                            };
                             layout_rects.reserve(row_rects.len());
                             for r in row_rects.drain(..) {
-                                let content_width = r.right();
+                                let content_width = r.width();
                                 layout_rects.push(r.r#move(global_content_offset));
 
                                 global_content_offset.0 += content_width + new_gap;
@@ -1538,6 +1660,10 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         },
         children: vec![
             UIElement {
+                size: peridot::math::Vector2(
+                    UIElementSize::Percent(50.0),
+                    UIElementSize::FitContent,
+                ),
                 debug_color: peridot::math::Vector4(1.0, 0.0, 1.0, 0.5),
                 children_layout: ChildrenLayoutMode::Horizontal {
                     direction: LayoutDirection::Normal,
