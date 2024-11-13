@@ -2,6 +2,7 @@ use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, Device, GraphicsPipelineBuilder, Image,
     ImageChild, RenderPass, SubmissionBatch, VkHandle, VkRawHandle, VulkanStructure,
 };
+use peridot::math::Zero;
 use peridot_vertex_processing_pack::PvpShaderModules;
 
 #[repr(C)]
@@ -15,6 +16,7 @@ pub struct BoxInstance {
     pub col: peridot::math::Vector4<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UIElementSize {
     Fixed(f32),
     Percent(f32),
@@ -196,159 +198,143 @@ impl LayoutRect {
     pub fn bottom(&self) -> f32 {
         self.pos.1 + self.size.1
     }
+
+    #[inline(always)]
+    pub fn max_point(&self) -> peridot::math::Vector2<f32> {
+        peridot::math::Vector2(self.right(), self.bottom())
+    }
 }
 
 fn compute_layout_rect(
     target: &UIElement,
-    available_size: peridot::math::Vector2<f32>,
+    available_size: Option<peridot::math::Vector2<f32>>,
 ) -> LayoutRect {
     let pos = target.offset;
+    let inner_content_size = if target.size.0 == UIElementSize::FitContent
+        || target.size.1 == UIElementSize::FitContent
+    {
+        // どっちかがFitContentなら参照されるので計算しておく
+        match target.children_layout {
+            ChildrenLayoutMode::Free => target
+                .children
+                .iter()
+                .map(|c| compute_layout_rect(c, None).max_point())
+                .fold(peridot::math::Vector2::ZERO, peridot::math::Vector2::max),
+            ChildrenLayoutMode::Vertical { overflow, gap, .. } => {
+                // TODO: overflow
+                let mut max_right = 0.0f32;
+                let mut max_bottom = 0.0f32;
+                for c in target.children.iter() {
+                    let child_layout = compute_layout_rect(c, None);
+
+                    max_right = max_right.max(child_layout.right());
+                    max_bottom += child_layout.bottom() + gap;
+                }
+
+                peridot::math::Vector2(max_right, max_bottom - gap)
+            }
+            ChildrenLayoutMode::Horizontal { overflow, gap, .. } => {
+                let mut max_right = 0.0f32;
+                let mut max_bottom = 0.0f32;
+                let mut row_height = 0.0f32;
+                let mut wrapped = false;
+                for c in target.children.iter() {
+                    let child_layout = compute_layout_rect(c, None);
+                    if available_size.is_some_and(|s| max_right + child_layout.right() > s.0) {
+                        // overflowしそう
+
+                        match overflow {
+                            Overflow::Wrap => {
+                                // 改行
+                                max_right = 0.0;
+                                max_bottom += row_height + gap;
+                                row_height = 0.0;
+                                wrapped = true;
+                            }
+                            Overflow::Hidden => (),
+                            Overflow::Overflow => (),
+                        }
+                    }
+
+                    max_right += child_layout.right() + gap;
+                    row_height = row_height.max(child_layout.bottom());
+                }
+
+                max_bottom += row_height;
+
+                peridot::math::Vector2(
+                    if wrapped {
+                        available_size.map_or(0.0, |x| x.0)
+                    } else {
+                        max_right - gap
+                    },
+                    max_bottom,
+                )
+            }
+            ChildrenLayoutMode::Grid {
+                ref columns,
+                ref rows,
+                gap,
+                ..
+            } => {
+                let mut max_right = 0.0f32;
+                let mut row_right = 0.0f32;
+                let mut accum_bottom = 0.0f32;
+                let mut row_bottom = 0.0f32;
+                let mut current_column = 0;
+                let mut current_row = 0;
+                for c in target.children.iter() {
+                    if current_column > 0 {
+                        row_right += gap;
+                    }
+
+                    let cell_content_rect = compute_layout_rect(c, None);
+                    row_right += match columns[current_column] {
+                        GridCellSize::FitContent => cell_content_rect.right(),
+                        GridCellSize::Fixed(x) => x,
+                        // 一旦計算しない（あとでやる）
+                        GridCellSize::Flexible(_) => 0.0,
+                    };
+                    row_bottom = row_bottom.max(match rows[current_row] {
+                        GridCellSize::FitContent => cell_content_rect.bottom(),
+                        GridCellSize::Fixed(x) => x,
+                        // 一旦計算しない（あとでやる）
+                        GridCellSize::Flexible(_) => 0.0,
+                    });
+
+                    current_column += 1;
+                    if current_column >= columns.len() {
+                        current_column = 0;
+                        max_right = max_right.max(row_right);
+                        accum_bottom += row_bottom + gap;
+                        row_bottom = 0.0;
+                        row_right = 0.0;
+                        current_row += 1;
+                    }
+                }
+
+                peridot::math::Vector2(max_right.max(row_right), accum_bottom + row_bottom)
+            }
+        }
+    } else {
+        peridot::math::Vector2::ZERO
+    };
+
     let content_size = peridot::math::Vector2(
         match target.size.0 {
-            UIElementSize::Fill => available_size.0,
-            UIElementSize::Percent(p) => available_size.0 * p / 100.0,
+            UIElementSize::Fill => available_size.map_or(0.0, |s| s.0),
+            UIElementSize::Percent(p) => available_size.map_or(0.0, |s| s.0) * p / 100.0,
             UIElementSize::Fixed(x) => x,
             UIElementSize::FitContent => {
-                let base = match target.children_layout {
-                    ChildrenLayoutMode::Free => target
-                        .children
-                        .iter()
-                        .map(|c| compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0)).right())
-                        .fold(0.0f32, |a, b| a.max(b)),
-                    ChildrenLayoutMode::Vertical { overflow, .. } => {
-                        // TODO: overflow
-                        let mut max_right = 0.0f32;
-                        for c in target.children.iter() {
-                            max_right = max_right.max(
-                                compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0)).right(),
-                            );
-                        }
-
-                        max_right
-                    }
-                    ChildrenLayoutMode::Horizontal { overflow, gap, .. } => {
-                        // TODO: overflow
-                        let mut max_right = 0.0f32;
-                        let mut first = true;
-                        for c in target.children.iter() {
-                            if !first {
-                                max_right += gap;
-                            }
-
-                            first = false;
-                            max_right +=
-                                compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0)).right();
-                        }
-
-                        max_right
-                    }
-                    ChildrenLayoutMode::Grid {
-                        ref columns, gap, ..
-                    } => {
-                        let mut max_right = 0.0f32;
-                        let mut row_right = 0.0f32;
-                        let mut current_column = 0;
-                        for c in target.children.iter() {
-                            if current_column > 0 {
-                                row_right += gap;
-                            }
-
-                            let cell_content_rect =
-                                compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0));
-                            row_right += match columns[current_column] {
-                                GridCellSize::FitContent => cell_content_rect.right(),
-                                GridCellSize::Fixed(x) => x,
-                                // 一旦計算しない（あとでやる）
-                                GridCellSize::Flexible(_) => 0.0,
-                            };
-
-                            current_column += 1;
-                            if current_column >= columns.len() {
-                                current_column = 0;
-                                max_right = max_right.max(row_right);
-                                row_right = 0.0;
-                            }
-                        }
-
-                        max_right.max(row_right)
-                    }
-                };
-
-                base + target.padding.left + target.padding.right
+                inner_content_size.0 + target.padding.left + target.padding.right
             }
         },
         match target.size.1 {
-            UIElementSize::Fill => available_size.1,
-            UIElementSize::Percent(p) => available_size.1 * p / 100.0,
+            UIElementSize::Fill => available_size.map_or(0.0, |s| s.1),
+            UIElementSize::Percent(p) => available_size.map_or(0.0, |s| s.1) * p / 100.0,
             UIElementSize::Fixed(x) => x,
             UIElementSize::FitContent => {
-                let base = match target.children_layout {
-                    ChildrenLayoutMode::Free => target
-                        .children
-                        .iter()
-                        .map(|c| compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0)).bottom())
-                        .fold(0.0f32, |a, b| a.max(b)),
-                    ChildrenLayoutMode::Vertical { overflow, gap, .. } => {
-                        // TODO: overflow
-                        let mut max_bottom = 0.0f32;
-                        let mut first = true;
-                        for c in target.children.iter() {
-                            if !first {
-                                max_bottom += gap;
-                            }
-
-                            first = false;
-                            max_bottom +=
-                                compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0)).bottom();
-                        }
-
-                        max_bottom
-                    }
-                    ChildrenLayoutMode::Horizontal { overflow, .. } => {
-                        // TODO: overflow
-                        let mut max_bottom = 0.0f32;
-                        for c in target.children.iter() {
-                            max_bottom = max_bottom.max(
-                                compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0)).bottom(),
-                            );
-                        }
-
-                        max_bottom
-                    }
-                    ChildrenLayoutMode::Grid {
-                        ref columns,
-                        ref rows,
-                        gap,
-                        ..
-                    } => {
-                        let mut accum_bottom = 0.0f32;
-                        let mut row_bottom = 0.0f32;
-                        let mut current_column = 0;
-                        let mut current_row = 0;
-                        for c in target.children.iter() {
-                            let cell_content_rect =
-                                compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0));
-                            row_bottom = row_bottom.max(match rows[current_row] {
-                                GridCellSize::FitContent => cell_content_rect.bottom(),
-                                GridCellSize::Fixed(x) => x,
-                                // 一旦計算しない（あとでやる）
-                                GridCellSize::Flexible(_) => 0.0,
-                            });
-
-                            current_column += 1;
-                            if current_column >= columns.len() {
-                                current_column = 0;
-                                accum_bottom += row_bottom + gap;
-                                row_bottom = 0.0;
-                                current_row += 1;
-                            }
-                        }
-
-                        accum_bottom + row_bottom
-                    }
-                };
-
-                base + target.padding.top + target.padding.bottom
+                inner_content_size.1 + target.padding.top + target.padding.bottom
             }
         },
     );
@@ -402,7 +388,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
     match target.children_layout {
         ChildrenLayoutMode::Free => {
             for c in target.children.iter() {
-                let layout_rect = compute_layout_rect(c, child_layout_available_size);
+                let layout_rect = compute_layout_rect(c, Some(child_layout_available_size));
 
                 layout1(
                     c,
@@ -430,7 +416,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -449,7 +436,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -485,7 +473,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -506,7 +495,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -536,7 +526,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_size);
+                                let child_layout = compute_layout_rect(c, Some(available_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -554,7 +544,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_size);
+                                let child_layout = compute_layout_rect(c, Some(available_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -594,7 +584,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     let content_height = target
                         .children
                         .iter()
-                        .map(|c| compute_layout_rect(c, child_layout_available_size).bottom())
+                        .map(|c| compute_layout_rect(c, Some(child_layout_available_size)).bottom())
                         .sum::<f32>();
                     let space = available_content_size.1 - content_height;
                     let gap = if target.children.len() == 1 {
@@ -607,7 +597,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -631,7 +622,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -659,7 +651,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     let content_height = target
                         .children
                         .iter()
-                        .map(|c| compute_layout_rect(c, child_layout_available_size).bottom())
+                        .map(|c| compute_layout_rect(c, Some(child_layout_available_size)).bottom())
                         .sum::<f32>();
                     let space = available_content_size.1 - content_height;
                     let gap = space / (target.children.len() + 1) as f32;
@@ -669,7 +661,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -693,7 +686,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
@@ -732,27 +726,69 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                 LayoutJustify::Start => {
                     let mut global_content_offset = child_layout_global_offset;
                     let mut layout_rects = Vec::with_capacity(target.children.len());
+                    let mut max_row_height = 0.0f32;
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
-
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let content_width = child_layout.size.0;
+                                max_row_height = max_row_height.max(child_layout.size.1);
+
+                                if available_content_size.0 < content_width {
+                                    // overflowしそう
+                                    match overflow {
+                                        Overflow::Wrap => {
+                                            // 改行
+                                            global_content_offset = peridot::math::Vector2(
+                                                child_layout_global_offset.0,
+                                                global_content_offset.1 + max_row_height + gap,
+                                            );
+                                            available_content_size = peridot::math::Vector2(
+                                                child_layout_available_size.0,
+                                                available_content_size.1 - max_row_height + gap,
+                                            );
+                                            max_row_height = 0.0;
+                                        }
+                                        Overflow::Hidden => (),
+                                        Overflow::Overflow => (),
+                                    }
+                                }
+
                                 layout_rects.push(child_layout.r#move(global_content_offset));
                                 global_content_offset.0 += content_width + gap;
                                 available_content_size.0 -= content_width + gap;
-                                // TODO: overflow
                             }
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
-
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
                                 let content_width = child_layout.size.0;
+
+                                if available_content_size.0 < content_width {
+                                    // overflowしそう
+                                    match overflow {
+                                        Overflow::Wrap => {
+                                            // 改行
+                                            global_content_offset = peridot::math::Vector2(
+                                                child_layout_global_offset.0,
+                                                global_content_offset.1 + max_row_height + gap,
+                                            );
+                                            available_content_size = peridot::math::Vector2(
+                                                child_layout_available_size.0,
+                                                available_content_size.1 - max_row_height + gap,
+                                            );
+                                            max_row_height = 0.0;
+                                        }
+                                        Overflow::Hidden => (),
+                                        Overflow::Overflow => (),
+                                    }
+                                }
+
                                 layout_rects.push(child_layout.r#move(global_content_offset));
                                 global_content_offset.0 += content_width + gap;
                                 available_content_size.0 -= content_width + gap;
-                                // TODO: overflow
                             }
 
                             layout_rects.reverse();
@@ -764,39 +800,122 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     }
                 }
                 LayoutJustify::End => {
-                    let mut global_content_offset = child_layout_global_offset
-                        + peridot::math::Vector2(child_layout_available_size.0, 0.0);
                     let mut layout_rects = Vec::with_capacity(target.children.len());
-                    // 右から詰めていくので逆向きに処理する
-                    match direction {
-                        LayoutDirection::Normal => {
-                            for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
 
-                                let content_width = child_layout.size.0;
-                                layout_rects.push(child_layout.r#move(
-                                    global_content_offset
-                                        - peridot::math::Vector2(content_width, 0.0),
-                                ));
-                                global_content_offset.0 -= content_width + gap;
-                                available_content_size.0 -= content_width + gap;
-                                // TODO: overflow
+                    match overflow {
+                        Overflow::Wrap => {
+                            let mut global_content_offset = child_layout_global_offset;
+                            let mut row_height = 0.0f32;
+
+                            match direction {
+                                LayoutDirection::Normal => {
+                                    let mut row_rects = Vec::<LayoutRect>::new();
+                                    for c in target.children.iter() {
+                                        let child_layout =
+                                            compute_layout_rect(c, Some(available_content_size));
+
+                                        if available_content_size.0 < child_layout.right() {
+                                            // Overflowしそう
+                                            let space = available_content_size.0 + gap;
+                                            layout_rects.extend(row_rects.drain(..).map(|r| {
+                                                r.r#move(peridot::math::Vector2(space, 0.0))
+                                            }));
+                                            global_content_offset.0 = child_layout_global_offset.0;
+                                            available_content_size.0 =
+                                                child_layout_available_size.0;
+                                            global_content_offset.1 += row_height + gap;
+                                            available_content_size.1 -= row_height + gap;
+                                            row_height = 0.0;
+                                        }
+
+                                        let content_width = child_layout.right();
+                                        row_height = row_height.max(child_layout.bottom());
+                                        row_rects.push(child_layout.r#move(global_content_offset));
+                                        global_content_offset.0 += content_width + gap;
+                                        available_content_size.0 -= content_width + gap;
+                                    }
+
+                                    let space = available_content_size.0 + gap;
+                                    layout_rects.extend(
+                                        row_rects
+                                            .drain(..)
+                                            .map(|r| r.r#move(peridot::math::Vector2(space, 0.0))),
+                                    );
+                                }
+                                LayoutDirection::Reverse => {
+                                    let mut row_rects = Vec::<LayoutRect>::new();
+                                    for c in target.children.iter().rev() {
+                                        let child_layout =
+                                            compute_layout_rect(c, Some(available_content_size));
+
+                                        if available_content_size.0 < child_layout.right() {
+                                            // Overflowしそう
+                                            let space = available_content_size.0 + gap;
+                                            layout_rects.extend(row_rects.drain(..).map(|r| {
+                                                r.r#move(peridot::math::Vector2(space, 0.0))
+                                            }));
+                                            global_content_offset.0 = child_layout_global_offset.0;
+                                            available_content_size.0 =
+                                                child_layout_available_size.0;
+                                            global_content_offset.1 += row_height + gap;
+                                            available_content_size.1 -= row_height + gap;
+                                            row_height = 0.0;
+                                        }
+
+                                        let content_width = child_layout.right();
+                                        row_height = row_height.max(child_layout.bottom());
+                                        row_rects.push(child_layout.r#move(global_content_offset));
+                                        global_content_offset.0 += content_width + gap;
+                                        available_content_size.0 -= content_width + gap;
+                                    }
+
+                                    let space = available_content_size.0 + gap;
+                                    layout_rects.extend(
+                                        row_rects
+                                            .drain(..)
+                                            .map(|r| r.r#move(peridot::math::Vector2(space, 0.0))),
+                                    );
+
+                                    layout_rects.reverse();
+                                }
                             }
-
-                            layout_rects.reverse();
                         }
-                        LayoutDirection::Reverse => {
-                            for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                        Overflow::Hidden | Overflow::Overflow => {
+                            // レイアウト時点ではOverflowの処理をしないもの（あとでマスクかけるかどうかで分岐する）
+                            let mut global_content_offset = child_layout_global_offset
+                                + peridot::math::Vector2(child_layout_available_size.0, 0.0);
+                            // 右から詰めていくので逆向きに処理する
+                            match direction {
+                                LayoutDirection::Normal => {
+                                    for c in target.children.iter().rev() {
+                                        let child_layout =
+                                            compute_layout_rect(c, Some(available_content_size));
 
-                                let content_width = child_layout.size.0;
-                                layout_rects.push(child_layout.r#move(
-                                    global_content_offset
-                                        - peridot::math::Vector2(content_width, 0.0),
-                                ));
-                                global_content_offset.0 -= content_width + gap;
-                                available_content_size.0 -= content_width + gap;
-                                // TODO: overflow
+                                        let content_width = child_layout.size.0;
+                                        layout_rects.push(child_layout.r#move(
+                                            global_content_offset
+                                                - peridot::math::Vector2(content_width, 0.0),
+                                        ));
+                                        global_content_offset.0 -= content_width + gap;
+                                        available_content_size.0 -= content_width + gap;
+                                    }
+
+                                    layout_rects.reverse();
+                                }
+                                LayoutDirection::Reverse => {
+                                    for c in target.children.iter() {
+                                        let child_layout =
+                                            compute_layout_rect(c, Some(available_content_size));
+
+                                        let content_width = child_layout.size.0;
+                                        layout_rects.push(child_layout.r#move(
+                                            global_content_offset
+                                                - peridot::math::Vector2(content_width, 0.0),
+                                        ));
+                                        global_content_offset.0 -= content_width + gap;
+                                        available_content_size.0 -= content_width + gap;
+                                    }
+                                }
                             }
                         }
                     }
@@ -812,7 +931,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
 
                                 let content_width = child_layout.size.0;
                                 layout_rects.push(
@@ -826,7 +946,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
 
                                 let content_width = child_layout.size.0;
                                 layout_rects.push(
@@ -858,7 +979,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
 
                                 let content_width = child_layout.size.0;
                                 layout_rects.push(child_layout);
@@ -869,7 +991,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
 
                                 let content_width = child_layout.size.0;
                                 layout_rects.push(child_layout);
@@ -916,7 +1039,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                     match direction {
                         LayoutDirection::Normal => {
                             for c in target.children.iter() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
 
                                 let content_width = child_layout.size.0;
                                 layout_rects.push(child_layout);
@@ -927,7 +1051,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         }
                         LayoutDirection::Reverse => {
                             for c in target.children.iter().rev() {
-                                let child_layout = compute_layout_rect(c, available_content_size);
+                                let child_layout =
+                                    compute_layout_rect(c, Some(available_content_size));
 
                                 let content_width = child_layout.size.0;
                                 layout_rects.push(child_layout);
@@ -976,7 +1101,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
             let mut current_column = 0;
             let mut current_row = 0;
             for c in target.children.iter() {
-                let cell_rect = compute_layout_rect(c, peridot::math::Vector2(0.0, 0.0));
+                let cell_rect = compute_layout_rect(c, None);
                 match columns[current_column] {
                     GridCellSize::Fixed(x) => {
                         column_fixed_sizes[current_column] = x;
@@ -1067,7 +1192,10 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
             for c in target.children.iter() {
                 let child_layout = compute_layout_rect(
                     c,
-                    peridot::math::Vector2(column_size[current_column], row_size[current_row]),
+                    Some(peridot::math::Vector2(
+                        column_size[current_column],
+                        row_size[current_row],
+                    )),
                 );
 
                 layout1(
@@ -1188,7 +1316,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 debug_color: peridot::math::Vector4(1.0, 0.0, 1.0, 0.5),
                 children_layout: ChildrenLayoutMode::Horizontal {
                     direction: LayoutDirection::Normal,
-                    justify: LayoutJustify::Start,
+                    justify: LayoutJustify::End,
                     alignment: LayoutAlignment::Start,
                     overflow: Overflow::Wrap,
                     gap: 8.0,
@@ -1220,7 +1348,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     },
                     UIElement {
                         size: peridot::math::Vector2(
-                            UIElementSize::Fixed(100.0),
+                            UIElementSize::Fixed(32.0),
                             UIElementSize::Fixed(32.0),
                         ),
                         debug_color: peridot::math::Vector4(1.0, 0.5, 0.5, 0.8),
