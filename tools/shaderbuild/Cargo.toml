@@ -1,6 +1,7 @@
 [package]
 name = "peridot-shaderbuild"
 version = "0.1.0"
+description = "Combined Shader Script to Combined SPIR-V Builder for Peridot Engine"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2021"
 
@@ -11,3 +12,4 @@ regex = "1.11"
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+thiserror = "2.0.3"

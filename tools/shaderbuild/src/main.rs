@@ -3,13 +3,13 @@ use clap::Parser;
 use decombiner::*;
 use peridot_vertex_processing_pack::*;
 use std::borrow::Cow;
+use std::fmt::Debug;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// Combined Shader Script to Combined SPIR-V Builder for Peridot Engine
 #[derive(Parser)]
 struct Args {
     /// Input File(s)
@@ -20,7 +20,15 @@ struct Args {
     pub input_file: Vec<String>,
 }
 
-fn main() {
+#[derive(Debug, thiserror::Error)]
+enum AppError {
+    #[error("No input file")]
+    NoInputFile,
+    #[error(transparent)]
+    ProcessError(#[from] ProcessError),
+}
+
+fn main() -> Result<(), AppError> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().pretty())
         .with(tracing_subscriber::EnvFilter::from_default_env())
@@ -30,21 +38,34 @@ fn main() {
     for fp in args.input_file.into_iter() {
         // ifile=ofileのペアで渡ってくるはず
         let mut fp_pair = fp.split("=");
-        let Some(ifile) = fp_pair.next() else {
-            tracing::error!("No input file");
-            std::process::exit(1);
-        };
+        let ifile = fp_pair.next().ok_or(AppError::NoInputFile)?;
         // ofileの指定がなければ拡張子を変更して使う
         let ofile = match fp_pair.next() {
             Some(x) => Cow::Borrowed(Path::new(x)),
             None => Cow::Owned(PathBuf::from(ifile).with_extension("pvp")),
         };
 
-        process(ifile, &ofile);
+        process(ifile, &ofile)?;
     }
+
+    Ok(())
 }
 
-fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
+#[derive(Debug, thiserror::Error)]
+enum ProcessError {
+    #[error("reading source failed: {0}")]
+    ReadingSourceFailed(#[source] std::io::Error),
+    #[error("file output error: {0}")]
+    FileOutputError(#[source] std::io::Error),
+    #[error("glsl compilation failed")]
+    GLSLCompilationFailed,
+}
+
+#[tracing::instrument]
+fn process(
+    infile_path: &(impl AsRef<Path> + Debug + ?Sized),
+    outfile_path: &(impl AsRef<Path> + Debug + ?Sized),
+) -> Result<(), ProcessError> {
     println!(
         "Loading/Decomposing \"{}\"...",
         infile_path.as_ref().display()
@@ -53,14 +74,15 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
     let content = std::fs::File::open(infile_path)
         .and_then(|mut fp| {
             let mut s = String::new();
-            fp.read_to_string(&mut s).map(|_| s)
+            fp.read_to_string(&mut s).map(move |_| s)
         })
-        .expect("reading source");
+        .map_err(ProcessError::ReadingSourceFailed)?;
     let mut tok = Tokenizer::new(&content);
     let comsh = CombinedShader::from_parsed_blocks(tok.toplevel_blocks());
+
+    let mut err = false;
     let compile_vs = run_compiler_process("vertex", &comsh.emit_vertex_shader())
         .expect("Failed to spawn compiler process");
-    let mut err = false;
     let fragment_shader = if comsh.is_provided_fsh() {
         let compile_fs = run_compiler_process("fragment", &comsh.emit_fragment_shader())
             .expect("Failed to spawn compiler process");
@@ -87,14 +109,12 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
         err = true;
     }
     if err {
-        return;
+        return Err(ProcessError::GLSLCompilationFailed);
     }
+
     let cout = std::str::from_utf8(&cvs_out.stdout).expect("in shaderc[v] output");
     tracing::trace!("Vertex shader output:\n{cout}");
-    // let vsh_str = String::from_utf8(cvs_out.stdout).unwrap();
-    // println!("cvs output: {:?}", vsh_str);
     let vertex_shader = parse_num_output(cout);
-    // println!("vsh size: {}", vertex_shader.len());
 
     println!(
         "Packaging compiled vertex processing stages to \"{}\"...",
@@ -106,24 +126,20 @@ fn process<I: AsRef<Path>, O: AsRef<Path>>(infile_path: I, outfile_path: O) {
         vertex_shader,
         fragment_shader,
     };
-    // println!("!Container: {:?}", container);
-    let mut fp_out = std::fs::File::create(outfile_path).expect("Failed to create output file");
     container
-        .write(&mut fp_out)
-        .expect("Failed to write Peridot Vertex Processing file");
+        .write(&mut std::fs::File::create(outfile_path).map_err(ProcessError::FileOutputError)?)
+        .map_err(ProcessError::FileOutputError)?;
+
+    Ok(())
 }
+
+#[tracing::instrument]
 fn run_compiler_process(
     shader_stage: &str,
     stdin_bytes: &str,
 ) -> std::io::Result<std::process::Child> {
-    tracing::trace!(
-        "Compiling {}: Generated Code: \n{}",
-        shader_stage,
-        stdin_bytes
-    );
-
     let mut compiler = Command::new("glslc")
-        .arg(&format!("-fshader-stage={}", shader_stage))
+        .arg(&format!("-fshader-stage={shader_stage}"))
         .args(&["-o", "-", "-mfmt=num", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -133,18 +149,25 @@ fn run_compiler_process(
         .stdin
         .as_mut()
         .expect("Failed to open stdin of compiler process")
-        .write_all(stdin_bytes.as_bytes())
-        .map(move |_| compiler)
+        .write_all(stdin_bytes.as_bytes())?;
+
+    Ok(compiler)
 }
+
 fn parse_num_output(cout: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     let elements = cout.split("\r\n").flat_map(|line| line.split(","));
     for nums in elements
         .filter(|s| !s.is_empty())
-        .map(|s| s.trim_matches(&['\n', '\r', ' ', '\t'][..]))
+        .map(|s| s.trim_matches(['\n', '\r', ' ', '\t']))
     {
-        let n = u32::from_str_radix(&nums[2..], 16)
-            .expect(&format!("invalid hexstr output: {:?}", &nums));
+        // assumes that nums is 0x-prefixed 32bit hexstring
+        assert_eq!(&nums[..2], "0x");
+
+        let Ok(n) = u32::from_str_radix(&nums[2..], 16) else {
+            panic!("invalid hexstr output: {nums:?}");
+        };
+
         bytes.extend_from_slice(&n.to_le_bytes());
     }
     return bytes;
