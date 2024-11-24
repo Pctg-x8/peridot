@@ -101,7 +101,7 @@ impl<'s> Tokenizer<'s> {
         }
         let slice = &self.0[..bytes];
         self.0 = &self.0[bytes..];
-        trace!("Tokenizer::strip_ident: {}", slice);
+        tracing::trace!("Tokenizer::strip_ident: {slice}");
 
         Some(slice)
     }
@@ -384,7 +384,7 @@ impl<'s> BindingBlock<'s> {
                     let offset = align2(total, align_of::<[u8; 4]>());
                     total = offset + size_of::<[u8; 4]>();
                 }
-                _ => warn!("Unimplement: Unable to determine exact packed size"),
+                _ => tracing::warn!("Unimplement: Unable to determine exact packed size"),
             }
         }
         return total;
@@ -1036,16 +1036,15 @@ impl<'s> CombinedShader<'s> {
                             align_of::<[u8; 4]>(),
                         );
                     }
-                    _ => warn!(
-                        "Unimplemented: Cannot estimate appropriate attribute info for `{}`",
-                        type_str
+                    _ => tracing::warn!(
+                        "Unimplemented: Cannot estimate appropriate attribute info for `{type_str}`"
                     ),
                 }
             }
             location_offs += blk.vars.len();
         }
 
-        debug!("Generated Attributes: {:?}", attrs);
+        tracing::debug!("Generated Attributes: {attrs:?}");
         return attrs;
     }
 }
