@@ -13,3 +13,6 @@ peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 thiserror = "2.0.3"
+smol = "2.0.2"
+async-process = "2.3.0"
+futures-util = "0.3.31"

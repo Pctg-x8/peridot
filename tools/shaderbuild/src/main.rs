@@ -2,11 +2,11 @@ mod decombiner;
 use clap::Parser;
 use decombiner::*;
 use peridot_vertex_processing_pack::*;
+use smol::io::AsyncWriteExt;
 use std::borrow::Cow;
 use std::fmt::Debug;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -29,26 +29,28 @@ enum AppError {
 }
 
 fn main() -> Result<(), AppError> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().pretty())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    smol::block_on(async move {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().pretty())
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
 
-    let args = Args::parse();
-    for fp in args.input_file.into_iter() {
-        // ifile=ofileのペアで渡ってくるはず
-        let mut fp_pair = fp.split("=");
-        let ifile = fp_pair.next().ok_or(AppError::NoInputFile)?;
-        // ofileの指定がなければ拡張子を変更して使う
-        let ofile = match fp_pair.next() {
-            Some(x) => Cow::Borrowed(Path::new(x)),
-            None => Cow::Owned(PathBuf::from(ifile).with_extension("pvp")),
-        };
+        let args = Args::parse();
+        for fp in args.input_file.into_iter() {
+            // ifile=ofileのペアで渡ってくるはず
+            let mut fp_pair = fp.split("=");
+            let ifile = fp_pair.next().ok_or(AppError::NoInputFile)?;
+            // ofileの指定がなければ拡張子を変更して使う
+            let ofile = match fp_pair.next() {
+                Some(x) => Cow::Borrowed(Path::new(x)),
+                None => Cow::Owned(PathBuf::from(ifile).with_extension("pvp")),
+            };
 
-        process(ifile, &ofile)?;
-    }
+            process(ifile, &ofile).await?;
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,10 +61,12 @@ enum ProcessError {
     FileOutputError(#[source] std::io::Error),
     #[error("glsl compilation failed")]
     GLSLCompilationFailed,
+    #[error("compiler process i/o error: {0}")]
+    CompilerProcessIOError(#[source] std::io::Error),
 }
 
 #[tracing::instrument]
-fn process(
+async fn process(
     infile_path: &(impl AsRef<Path> + Debug + ?Sized),
     outfile_path: &(impl AsRef<Path> + Debug + ?Sized),
 ) -> Result<(), ProcessError> {
@@ -71,50 +75,38 @@ fn process(
         infile_path.as_ref().display()
     );
 
-    let content = std::fs::File::open(infile_path)
-        .and_then(|mut fp| {
-            let mut s = String::new();
-            fp.read_to_string(&mut s).map(move |_| s)
-        })
-        .map_err(ProcessError::ReadingSourceFailed)?;
+    let content =
+        std::fs::read_to_string(infile_path).map_err(ProcessError::ReadingSourceFailed)?;
     let mut tok = Tokenizer::new(&content);
     let comsh = CombinedShader::from_parsed_blocks(tok.toplevel_blocks());
 
-    let mut err = false;
-    let compile_vs = run_compiler_process("vertex", &comsh.emit_vertex_shader())
-        .expect("Failed to spawn compiler process");
-    let fragment_shader = if comsh.is_provided_fsh() {
-        let compile_fs = run_compiler_process("fragment", &comsh.emit_fragment_shader())
-            .expect("Failed to spawn compiler process");
-        let cfs_out = compile_fs
-            .wait_with_output()
-            .expect("Failed to waiting compiler");
-        if !cfs_out.status.success() {
-            eprintln!("There are some errors while compiling fragment shader");
-            err = true;
-            None
-        } else {
-            let cout = std::str::from_utf8(&cfs_out.stdout).expect("in shaderc[f] output");
-            tracing::trace!("Fragment shader output:\n{cout}");
-            Some(parse_num_output(cout))
-        }
-    } else {
-        None
-    };
-    let cvs_out = compile_vs
-        .wait_with_output()
-        .expect("Failed to waiting compiler");
-    if !cvs_out.status.success() {
-        eprintln!("There are some errors while compiling vertex shader.");
-        err = true;
-    }
-    if err {
-        return Err(ProcessError::GLSLCompilationFailed);
-    }
+    let compilation_results =
+        futures_util::try_join!(compile_glsl("vertex", comsh.emit_vertex_shader()), async {
+            if comsh.is_provided_fsh() {
+                compile_glsl("fragment", comsh.emit_fragment_shader()).await
+            } else {
+                Ok(CompilationResult::Successful(Vec::new()))
+            }
+        })
+        .map_err(ProcessError::CompilerProcessIOError)?;
+    let (vertex_shader, fragment_shader) = match compilation_results {
+        (CompilationResult::Successful(vs), CompilationResult::Successful(fs)) => (vs, fs),
+        (CompilationResult::Failed, CompilationResult::Successful(_)) => {
+            eprintln!("There are some errors while compiling vertex shader.");
 
-    let cout = std::str::from_utf8(&cvs_out.stdout).expect("in shaderc[v] output");
-    tracing::trace!("Vertex shader output:\n{cout}");
-    let vertex_shader = parse_num_output(cout);
+            return Err(ProcessError::GLSLCompilationFailed);
+        }
+        (CompilationResult::Successful(_), CompilationResult::Failed) => {
+            eprintln!("There are some errors while compiling fragment shader.");
+
+            return Err(ProcessError::GLSLCompilationFailed);
+        }
+        (CompilationResult::Failed, CompilationResult::Failed) => {
+            eprintln!("There are some errors while compiling both vertex and fragment shader.");
+
+            return Err(ProcessError::GLSLCompilationFailed);
+        }
+    };
 
     println!(
         "Packaging compiled vertex processing stages to \"{}\"...",
@@ -124,7 +116,7 @@ fn process(
         vertex_bindings: comsh.emit_vertex_bindings(),
         vertex_attributes: comsh.emit_vertex_attributes(),
         vertex_shader,
-        fragment_shader,
+        fragment_shader: comsh.is_provided_fsh().then_some(fragment_shader),
     };
     container
         .write(&mut std::fs::File::create(outfile_path).map_err(ProcessError::FileOutputError)?)
@@ -133,25 +125,40 @@ fn process(
     Ok(())
 }
 
+enum CompilationResult {
+    Successful(Vec<u8>),
+    Failed,
+}
+
 #[tracing::instrument]
-fn run_compiler_process(
+async fn compile_glsl(
     shader_stage: &str,
-    stdin_bytes: &str,
-) -> std::io::Result<std::process::Child> {
-    let mut compiler = Command::new("glslc")
-        .arg(&format!("-fshader-stage={shader_stage}"))
-        .args(&["-o", "-", "-mfmt=num", "-"])
+    stdin_bytes: String,
+) -> std::io::Result<CompilationResult> {
+    let shader_stage_option = format!("-fshader-stage={shader_stage}");
+    let mut p = async_process::Command::new("glslc")
+        .args([&shader_stage_option, "-o", "-", "-mfmt=num", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()?;
-    compiler
-        .stdin
+    p.stdin
         .as_mut()
-        .expect("Failed to open stdin of compiler process")
-        .write_all(stdin_bytes.as_bytes())?;
+        .expect("No stdin for compiler process?")
+        .write_all(stdin_bytes.as_bytes())
+        .await?;
+    let o = p.output().await?;
 
-    Ok(compiler)
+    if !o.status.success() {
+        // このタイミングでログ出す（と食わせたglslがstdin_bytesとしてtracingで出せる）
+        tracing::error!("glsl compilation failed");
+        return Ok(CompilationResult::Failed);
+    }
+
+    let output_str =
+        std::str::from_utf8(&o.stdout).expect("invalid utf-8 sequence in glslc output");
+    tracing::trace!("glslc[{shader_stage}] output:\n{output_str}");
+    Ok(CompilationResult::Successful(parse_num_output(output_str)))
 }
 
 fn parse_num_output(cout: &str) -> Vec<u8> {
@@ -170,5 +177,6 @@ fn parse_num_output(cout: &str) -> Vec<u8> {
 
         bytes.extend_from_slice(&n.to_le_bytes());
     }
-    return bytes;
+
+    bytes
 }
