@@ -192,10 +192,9 @@ impl TwoPassStencilSDFRenderer {
             srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
             dstSubpass: 0,
             srcStageMask: target_layout_transition_stage.0,
-            dstStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+            dstStageMask: br::vk::VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
                 // Note: LoadOpがClearだとLoad時にWriteが走るらしいのでearlyステージで遷移できてないといけない
-                .early_fragment_tests()
-                .0,
+                | br::vk::VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
             srcAccessMask: 0,
             dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write
                 | br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write,
@@ -253,7 +252,7 @@ impl TwoPassStencilSDFRenderer {
         )
         .expect("Failed to create outline_disdtance shader modules");
         let empty_pl = SharedRef::new(
-            br::PipelineLayoutBuilder::empty()
+            br::PipelineLayoutBuilder::EMPTY
                 .create(e.graphics().device().clone())
                 .expect("Failed to create empty pipeline layout"),
         );
@@ -311,8 +310,8 @@ impl TwoPassStencilSDFRenderer {
             .vertex_processing(invert_fill_shader)
             .stencil_control(Self::stencil_match())
             .set_attachment_blends(vec![ColorAttachmentBlending::new(
-                Blending::source_only(br::BlendFactor::OneMinusDestColor),
-                Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
+                Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR),
+                Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA),
             )
             .into_vk()]);
         let invert_pipeline = pipebuild
@@ -435,8 +434,8 @@ impl TwoPassStencilSDFRenderer {
             .vertex_processing(invert_fill_shader)
             .stencil_control(Self::stencil_match())
             .set_attachment_blends(vec![ColorAttachmentBlending::new(
-                Blending::source_only(br::BlendFactor::OneMinusDestColor),
-                Blending::source_only(br::BlendFactor::OneMinusDestAlpha),
+                Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR),
+                Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA),
             )
             .into_vk()]);
         let invert_pipeline = pipebuild
@@ -809,16 +808,6 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             })
             .expect("Failed to record commands");
     }
-
-    /*Self {
-        memory_manager,
-        buffers,
-        stencil_buffer_view,
-        sdf_renderer,
-        fb,
-        cmd,
-        ph: std::marker::PhantomData,
-    }*/
 
     while let Some(ev) = e.event_receivers().wait_for_event().await {
         match ev {
