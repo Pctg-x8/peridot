@@ -88,20 +88,20 @@ impl<Image: br::Image> Texture2D<Image> {
         let view_builder = match pf {
             PixelFormat::RGB24 => view_builder
                 .with_format_mutation(PixelFormat::RGBA32 as _)
-                .with_mapping(br::ComponentMapping(
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::One,
-                )),
+                .with_mapping(br::vk::VkComponentMapping {
+                    r: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    g: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    b: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    a: br::vk::VK_COMPONENT_SWIZZLE_ONE,
+                }),
             PixelFormat::BGR24 => view_builder
                 .with_format_mutation(PixelFormat::BGRA32 as _)
-                .with_mapping(br::ComponentMapping(
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::One,
-                )),
+                .with_mapping(br::vk::VkComponentMapping {
+                    r: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    g: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    b: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    a: br::vk::VK_COMPONENT_SWIZZLE_ONE,
+                }),
             _ => view_builder,
         };
 

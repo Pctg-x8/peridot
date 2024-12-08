@@ -48,10 +48,13 @@ impl Presenter {
         {
             panic!("WindowSubsystem does not support Vulkan Rendering");
         }
-        let s = g
-            .adapter()
-            .new_surface_win32(super::module_handle(), window.read().0)
-            .expect("Failed to create Surface");
+        let s = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkWin32SurfaceCreateInfoKHR::new(super::module_handle(), window.read().0),
+            )
+            .expect("Failed to create Surface")
+        };
         let support = g
             .adapter()
             .surface_support(g.graphics_queue_family_index(), &s)

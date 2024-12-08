@@ -45,8 +45,9 @@ impl CommandBundle<DeviceObject> {
 }
 impl<Device: br::Device> CommandBundle<Device> {
     #[inline]
-    pub fn reset(&mut self) -> br::Result<()> {
-        self.1.reset(true)
+    pub unsafe fn reset(&mut self) -> br::Result<()> {
+        self.1
+            .reset(br::vk::VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT)
     }
 
     #[inline]

@@ -1,6 +1,6 @@
 //! Platform Presenter(Swapchain Abstraction)
 
-use bedrock::{self as br, SemaphoreMut};
+use bedrock::{self as br, QueueMut, SemaphoreMut};
 #[cfg(feature = "debug")]
 use br::VkObject;
 use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
@@ -74,11 +74,12 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             height: eh,
         };
         let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
-        let pre_transform = if br::SurfaceTransform::Identity.contains(si.supportedTransforms) {
-            br::SurfaceTransform::Identity
-        } else {
-            br::SurfaceTransform::Inherit
-        };
+        let pre_transform =
+            if (si.supportedTransforms & br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0 {
+                br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+            } else {
+                br::vk::VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR
+            };
         let chain = br::SwapchainBuilder::new(
             surface,
             buffer_count,
@@ -306,11 +307,15 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             g.submit_buffered_commands(&[render_submission], last_render_fence)?;
         }
 
-        self.swapchain.get_mut().swapchain.queue_present(
-            g.graphics_queue.q.get_mut(),
-            bb_index,
-            &[self.present_order.as_transparent_ref()],
-        )
+        g.graphics_queue
+            .q
+            .get_mut()
+            .present(br::PresentInfo::new(
+                &[self.present_order.as_transparent_ref()],
+                &[self.swapchain.get().swapchain.as_transparent_ref()],
+                &[bb_index],
+            ))
+            .map(drop)
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) {

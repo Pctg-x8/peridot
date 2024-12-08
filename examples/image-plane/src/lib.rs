@@ -405,7 +405,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
                         e.wait_for_last_rendering_completion();
 
-                        render_cb.reset().expect("Resetting RenderCB");
+                        unsafe { render_cb.reset().expect("Resetting RenderCB") };
                         drop(framebuffers);
                         drop(backbuffer_resources);
 
@@ -467,7 +467,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             peridot::Event::Resize(new_size) => {
                 e.wait_for_last_rendering_completion();
 
-                render_cb.reset().expect("Resetting RenderCB");
+                unsafe { render_cb.reset().expect("Resetting RenderCB") };
                 drop(framebuffers);
                 drop(backbuffer_resources);
 

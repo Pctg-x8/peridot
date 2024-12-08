@@ -11,8 +11,7 @@ use std::fs::File;
 #[cfg(feature = "with-loader-impl")]
 use std::io::Read;
 use std::io::{
-    BufRead, BufReader, Cursor, Error as IOError, ErrorKind, Result as IOResult, Seek, SeekFrom,
-    Write,
+    BufRead, BufReader, Cursor, Error as IOError, Result as IOResult, Seek, SeekFrom, Write,
 };
 use std::path::Path;
 
@@ -42,10 +41,10 @@ impl PvpContainer {
         VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
         self.vertex_attributes.binary_serialize(&mut blob)?;
         VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
-        self.vertex_shader.binary_serialize(&mut blob)?;
+        RawBinary::from_ref(&self.vertex_shader).binary_serialize(&mut blob)?;
         if let Some(ref b) = self.fragment_shader {
             VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
-            b.binary_serialize(&mut blob)?;
+            RawBinary::from_ref(b).binary_serialize(&mut blob)?;
         } else {
             VariableUInt(0).write(writer)?;
         }
@@ -67,10 +66,10 @@ impl PvpContainer {
         VariableUInt(blob.len() as _).write_async(writer).await?;
         self.vertex_attributes.binary_serialize(&mut blob)?;
         VariableUInt(blob.len() as _).write_async(writer).await?;
-        self.vertex_shader.binary_serialize(&mut blob)?;
+        RawBinary::from_ref(&self.vertex_shader).binary_serialize(&mut blob)?;
         if let Some(ref b) = self.fragment_shader {
             VariableUInt(blob.len() as _).write_async(writer).await?;
-            b.binary_serialize(&mut blob)?;
+            RawBinary::from_ref(b).binary_serialize(&mut blob)?;
         } else {
             VariableUInt(0).write_async(writer).await?;
         }
@@ -239,7 +238,7 @@ impl<'d, Device: br::Device + Clone> PvpShaderModules<'d, Device> {
         let bindings = unsafe {
             // Transparentなのでok
             std::slice::from_raw_parts(
-                self.bindings.as_ptr() as *const br::VertexInputBindingDescription,
+                self.bindings.as_ptr() as *const br::vk::VkVertexInputBindingDescription,
                 self.bindings.len(),
             )
         };
@@ -337,7 +336,9 @@ impl<R: async_std::io::BufRead + async_std::io::Seek + Unpin> PvpContainerReader
 
     pub async fn read_vertex_shader(&mut self) -> IOResult<Vec<u8>> {
         async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(self.vsh_offset)).await?;
-        Vec::binary_deserialize_async(&mut self.reader).await
+        RawBinary::binary_deserialize_async(&mut self.reader)
+            .await
+            .map(|x| x.0)
     }
 
     pub fn is_fragment_stage_provided(&self) -> bool {
@@ -350,9 +351,9 @@ impl<R: async_std::io::BufRead + async_std::io::Seek + Unpin> PvpContainerReader
         };
 
         async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(o)).await?;
-        Vec::binary_deserialize_async(&mut self.reader)
+        RawBinary::binary_deserialize_async(&mut self.reader)
             .await
-            .map(Some)
+            .map(|x| Some(x.0))
     }
 
     pub async fn into_container(mut self) -> IOResult<PvpContainer> {
@@ -372,6 +373,7 @@ impl PvpContainerReaderAsync<async_std::io::BufReader<async_std::fs::File>> {
         Self::new(async_std::io::BufReader::new(
             async_std::fs::File::open(path).await?,
         ))
+        .await
     }
 }
 
@@ -422,7 +424,7 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
     }
     pub fn read_vertex_shader(&mut self) -> IOResult<Vec<u8>> {
         self.reader.seek(SeekFrom::Start(self.vsh_offset))?;
-        Vec::<u8>::binary_unserialize(&mut self.reader)
+        RawBinary::binary_unserialize(&mut self.reader).map(|x| x.0)
     }
     pub fn is_fragment_stage_provided(&mut self) -> bool {
         self.fsh_offset.is_some()
@@ -433,7 +435,7 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
         };
 
         self.reader.seek(SeekFrom::Start(o))?;
-        Vec::<u8>::binary_unserialize(&mut self.reader).map(Some)
+        RawBinary::binary_unserialize(&mut self.reader).map(|x| Some(x.0))
     }
 
     pub fn into_container(mut self) -> IOResult<PvpContainer> {
@@ -468,7 +470,7 @@ trait AsyncBinarySerializeVkStructures {
         sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<usize>> + 's;
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized;
@@ -518,7 +520,7 @@ impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputBindingDescriptio
     }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -589,7 +591,7 @@ impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescript
     }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -646,7 +648,7 @@ impl<T: AsyncBinarySerializeVkStructures> AsyncBinarySerializeVkStructures for V
     }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -663,11 +665,20 @@ impl<T: AsyncBinarySerializeVkStructures> AsyncBinarySerializeVkStructures for V
         }
     }
 }
-impl BinarySerializeVkStructures for Vec<u8> {
+
+#[repr(transparent)]
+pub struct RawBinary(pub Vec<u8>);
+impl RawBinary {
+    pub const fn from_ref(b: &Vec<u8>) -> &Self {
+        unsafe { core::mem::transmute(b) }
+    }
+}
+
+impl BinarySerializeVkStructures for RawBinary {
     fn binary_serialize<W: Write>(&self, sink: &mut W) -> IOResult<usize> {
-        VariableUInt(self.len() as _)
+        VariableUInt(self.0.len() as _)
             .write(sink)
-            .and_then(|w0| sink.write_all(self).map(move |_| self.len() + w0))
+            .and_then(|w0| sink.write_all(&self.0).map(move |_| self.0.len() + w0))
     }
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>
     where
@@ -675,25 +686,25 @@ impl BinarySerializeVkStructures for Vec<u8> {
     {
         let VariableUInt(element_count) = VariableUInt::read(source)?;
         let mut buf = vec![0u8; element_count as usize];
-        source.read_exact(&mut buf).map(|_| buf)
+        source.read_exact(&mut buf).map(|_| Self(buf))
     }
 }
 #[cfg(feature = "async-rt-async-std")]
-impl AsyncBinarySerializeVkStructures for Vec<u8> {
+impl AsyncBinarySerializeVkStructures for RawBinary {
     fn binary_serialize_async<'s>(
         &'s self,
         sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
         async move {
-            let l = VariableUInt(self.len() as _).write_async(sink).await?;
-            async_std::io::WriteExt::write_all(sink, self).await?;
+            let l = VariableUInt(self.0.len() as _).write_async(sink).await?;
+            async_std::io::WriteExt::write_all(sink, &self.0).await?;
 
-            Ok(l + self.len())
+            Ok(l + self.0.len())
         }
     }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -706,7 +717,7 @@ impl AsyncBinarySerializeVkStructures for Vec<u8> {
             }
             async_std::io::ReadExt::read_exact(source, &mut buf).await?;
 
-            Ok(buf)
+            Ok(Self(buf))
         }
     }
 }

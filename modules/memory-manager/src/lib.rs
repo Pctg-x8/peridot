@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use bedrock as br;
-use br::{Device, MemoryBound, StructureChainQuery, VkHandle, VulkanStructure};
+use bedrock::{self as br, SinkStructureChainQuery};
+use br::{Device, MemoryBound, VkHandle, VulkanStructure};
 use num_integer::Integer;
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;

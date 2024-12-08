@@ -76,10 +76,13 @@ impl Presenter {
         render_queue_family_index: u32,
         window: *mut android::ANativeWindow,
     ) -> Self {
-        let obj = g
-            .adapter()
-            .new_surface_android(window)
-            .expect("Failed to create Surface");
+        let obj = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkAndroidSurfaceCreateInfoKHR::new(window),
+            )
+            .expect("Failed to create Surface")
+        };
         let supported = g
             .adapter()
             .surface_support(render_queue_family_index, &obj)
