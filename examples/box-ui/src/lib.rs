@@ -1088,155 +1088,145 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
             direction,
             justify,
             alignment,
-        } => match justify {
-            LayoutJustify::Start => match direction {
-                LayoutDirection::Normal => {
-                    let layout_rects = layout_horizontal(
-                        target.children.iter(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                    );
+        } => match (justify, direction) {
+            (LayoutJustify::Start, LayoutDirection::Normal) => {
+                let layout_rects = layout_horizontal(
+                    target.children.iter(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                );
 
-                    apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
-                }
-                LayoutDirection::Reverse => {
-                    let layout_rects = layout_horizontal(
-                        target.children.iter().rev(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                    );
+                apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
+            }
+            (LayoutJustify::Start, LayoutDirection::Reverse) => {
+                let layout_rects = layout_horizontal(
+                    target.children.iter().rev(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                );
 
-                    apply_layout_rects(
-                        target.children.iter().rev(),
-                        layout_rects.into_iter(),
-                        boxes,
-                    );
-                }
-            },
-            LayoutJustify::End => match direction {
-                LayoutDirection::Normal => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifyEnd { gap },
-                    );
+                apply_layout_rects(
+                    target.children.iter().rev(),
+                    layout_rects.into_iter(),
+                    boxes,
+                );
+            }
+            (LayoutJustify::End, LayoutDirection::Normal) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifyEnd { gap },
+                );
 
-                    apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
-                }
-                LayoutDirection::Reverse => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter().rev(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifyEnd { gap },
-                    );
+                apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
+            }
+            (LayoutJustify::End, LayoutDirection::Reverse) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter().rev(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifyEnd { gap },
+                );
 
-                    apply_layout_rects(
-                        target.children.iter().rev(),
-                        layout_rects.into_iter(),
-                        boxes,
-                    );
-                }
-            },
-            LayoutJustify::Center => match direction {
-                LayoutDirection::Normal => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifyCenter { gap },
-                    );
+                apply_layout_rects(
+                    target.children.iter().rev(),
+                    layout_rects.into_iter(),
+                    boxes,
+                );
+            }
+            (LayoutJustify::Center, LayoutDirection::Normal) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifyCenter { gap },
+                );
 
-                    apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
-                }
-                LayoutDirection::Reverse => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter().rev(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifyCenter { gap },
-                    );
+                apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
+            }
+            (LayoutJustify::Center, LayoutDirection::Reverse) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter().rev(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifyCenter { gap },
+                );
 
-                    apply_layout_rects(
-                        target.children.iter().rev(),
-                        layout_rects.into_iter(),
-                        boxes,
-                    );
-                }
-            },
-            LayoutJustify::SpaceBetween => match direction {
-                LayoutDirection::Normal => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifySpaceBetween { min_gap: gap },
-                    );
+                apply_layout_rects(
+                    target.children.iter().rev(),
+                    layout_rects.into_iter(),
+                    boxes,
+                );
+            }
+            (LayoutJustify::SpaceBetween, LayoutDirection::Normal) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifySpaceBetween { min_gap: gap },
+                );
 
-                    apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
-                }
-                LayoutDirection::Reverse => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter().rev(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifySpaceBetween { min_gap: gap },
-                    );
+                apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
+            }
+            (LayoutJustify::SpaceBetween, LayoutDirection::Reverse) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter().rev(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifySpaceBetween { min_gap: gap },
+                );
 
-                    apply_layout_rects(
-                        target.children.iter().rev(),
-                        layout_rects.into_iter(),
-                        boxes,
-                    );
-                }
-            },
-            LayoutJustify::SpaceAround => match direction {
-                LayoutDirection::Normal => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifySpaceAround { min_gap: gap },
-                    );
+                apply_layout_rects(
+                    target.children.iter().rev(),
+                    layout_rects.into_iter(),
+                    boxes,
+                );
+            }
+            (LayoutJustify::SpaceAround, LayoutDirection::Normal) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifySpaceAround { min_gap: gap },
+                );
 
-                    apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
-                }
-                LayoutDirection::Reverse => {
-                    let layout_rects = layout_horizontal_justify_per_row(
-                        target.children.iter().rev(),
-                        alignment,
-                        overflow,
-                        gap,
-                        &child_layout_global_rect,
-                        HorizontalJustifySpaceAround { min_gap: gap },
-                    );
+                apply_layout_rects(target.children.iter(), layout_rects.into_iter(), boxes);
+            }
+            (LayoutJustify::SpaceAround, LayoutDirection::Reverse) => {
+                let layout_rects = layout_horizontal_justify_per_row(
+                    target.children.iter().rev(),
+                    alignment,
+                    overflow,
+                    gap,
+                    &child_layout_global_rect,
+                    HorizontalJustifySpaceAround { min_gap: gap },
+                );
 
-                    apply_layout_rects(
-                        target.children.iter().rev(),
-                        layout_rects.into_iter(),
-                        boxes,
-                    );
-                }
-            },
+                apply_layout_rects(
+                    target.children.iter().rev(),
+                    layout_rects.into_iter(),
+                    boxes,
+                );
+            }
         },
         ChildrenLayoutMode::Grid {
             ref columns,
