@@ -1,4 +1,4 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, DescriptorSetLayout, RenderPass};
 use br::{
     Buffer, Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice,
     SubmissionBatch,
@@ -314,8 +314,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let vp = [sc[0].make_viewport(0.0..1.0)];
     let pl = SharedRef::new(
         br::PipelineLayoutBuilder::new(
-            &[br::DescriptorSetLayoutObjectRef::new(&dsl)],
-            &[br::PushConstantRange::new(
+            &[dsl.as_transparent_ref()],
+            &[br::vk::VkPushConstantRange::new(
                 br::ShaderStage::VERTEX,
                 0..4 * 4,
             )],
