@@ -237,7 +237,8 @@ impl InteropBackbufferResource {
         });
         let vk_shared_handle =
             br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
-        let exportable = br::vk::VkExternalMemoryImageCreateInfo::new(vk_shared_handle.0.into().0);
+        let exportable =
+            br::vk::VkExternalMemoryImageCreateInfoKHR::new(vk_shared_handle.0.into().0);
         let image = br::ImageObject::new(
             g.device().clone(),
             &br::ImageCreateInfo::new(size, format)
