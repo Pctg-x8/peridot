@@ -290,7 +290,9 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             PvpShaderModules::new(e.graphics().device(), &shader).expect("Create ShaderModules");
         let shader_stages = [
             shader_modules.pipeline_vertex_shader_stage(),
-            shader_modules.pipeline_fragment_shader_stage().unwrap(),
+            shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?"),
         ];
         let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];

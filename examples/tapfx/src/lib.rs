@@ -109,7 +109,9 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .expect("Failed to generate ShaderModules");
     let shader_stages = [
         shader_modules.pipeline_vertex_shader_stage(),
-        shader_modules.pipeline_fragment_shader_stage().unwrap(),
+        shader_modules
+            .pipeline_fragment_shader_stage()
+            .expect("no fsh?"),
     ];
     let pl = br::PipelineLayoutBuilder::new(
         &[
