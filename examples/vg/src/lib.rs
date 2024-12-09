@@ -350,7 +350,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .with_specialization_info(&vsh_parameters),
         shader_modules
             .pipeline_fragment_shader_stage()
-            .unwrap()
+            .expect("no fsh?")
             .with_specialization_info(&color1_fsh_parameters),
     ];
     let curve_shader_stages = [
@@ -359,7 +359,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .with_specialization_info(&vsh_parameters),
         curve_shader_modules
             .pipeline_fragment_shader_stage()
-            .unwrap()
+            .expect("no fsh?")
             .with_specialization_info(&color1_fsh_parameters),
     ];
     let interior_vertex_processing = br::VertexProcessingStages::new(
@@ -419,7 +419,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .with_specialization_info(&vsh_parameters),
         shader_modules
             .pipeline_fragment_shader_stage()
-            .unwrap()
+            .expect("no fsh?")
             .with_specialization_info(&fsh_parameters),
     ];
     let curve_shader_stages = [
@@ -428,7 +428,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .with_specialization_info(&vsh_parameters),
         curve_shader_modules
             .pipeline_fragment_shader_stage()
-            .unwrap()
+            .expect("no fsh?")
             .with_specialization_info(&fsh_parameters),
     ];
     let interior_vertex_processing = br::VertexProcessingStages::new(

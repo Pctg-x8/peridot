@@ -268,7 +268,7 @@ impl TwoPassStencilSDFRenderer {
                 .with_specialization_info(&stencil_triangle_vsh_parameters),
             fill_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap(),
+                .expect("no fsh?"),
         ];
         let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
             &empty_pl,
@@ -303,7 +303,7 @@ impl TwoPassStencilSDFRenderer {
                 .with_specialization_info(&stencil_triangle_vsh_parameters),
             curve_fill_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap(),
+                .expect("no fsh?"),
         ];
         pipebuild.vertex_processing(br::VertexProcessingStages::new(
             &stencil_curve_shader_stages,
@@ -322,7 +322,7 @@ impl TwoPassStencilSDFRenderer {
             fill_shader_modules.pipeline_vertex_shader_stage(),
             fill_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap()
+                .expect("no fsh?")
                 .with_specialization_info(&fill_color_fsh_parameters),
         ];
         let color_blends = [ColorAttachmentBlending::new(
@@ -358,7 +358,7 @@ impl TwoPassStencilSDFRenderer {
                 .with_specialization_info(&outline_vsh_parameters),
             outline_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap(),
+                .expect("no fsh?"),
         ];
         let color_blends = [ColorAttachmentBlending::MAX.into_vk()];
         pipebuild
@@ -436,7 +436,7 @@ impl TwoPassStencilSDFRenderer {
                 .with_specialization_info(&vsh_parameters),
             self.fill_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap(),
+                .expect("no fsh?"),
         ];
         let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
             self.triangle_fans_stencil_pipeline.layout(),
@@ -471,7 +471,7 @@ impl TwoPassStencilSDFRenderer {
                 .with_specialization_info(&vsh_parameters),
             self.curve_fill_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap(),
+                .expect("no fsh?"),
         ];
         pipebuild.vertex_processing(br::VertexProcessingStages::new(
             &shader_stages,
@@ -490,7 +490,7 @@ impl TwoPassStencilSDFRenderer {
             self.fill_shader_modules.pipeline_vertex_shader_stage(),
             self.fill_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap()
+                .expect("no fsh?")
                 .with_specialization_info(&fsh_parameters),
         ];
         let color_blends = [ColorAttachmentBlending::new(
@@ -526,7 +526,7 @@ impl TwoPassStencilSDFRenderer {
                 .with_specialization_info(&vsh_parameters),
             self.outline_shader_modules
                 .pipeline_fragment_shader_stage()
-                .unwrap(),
+                .expect("no fsh?"),
         ];
         let color_blends = [ColorAttachmentBlending::MAX.into_vk()];
         pipebuild
