@@ -15,11 +15,10 @@ use peridot_command_object::{
     GraphicsCommandCombiner, GraphicsCommandSubmission, PipelineBarrier, RangedBuffer, RangedImage,
 };
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
-use peridot_vertex_processing_pack::PvpShaderModules;
+use peridot_vertex_processing_pack::{PvpContainer, PvpShaderModules};
 use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
 use pvg::{FontProvider, FontProviderConstruct, RenderVG};
-use std::borrow::Cow;
 
 #[derive(SpecConstantStorage)]
 #[repr(C)]
@@ -208,7 +207,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let attachments = [
         e.back_buffer_attachment_desc()
             .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
-        br::AttachmentDescription::new(
+        br::vk::VkAttachmentDescription::new(
             e.back_buffer_format(),
             br::ImageLayout::ColorAttachmentOpt,
             br::ImageLayout::ColorAttachmentOpt,
@@ -216,11 +215,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
         .samples(msaa_count),
     ];
-    let color_outputs = [br::AttachmentReference::new(
+    let color_outputs = [br::vk::VkAttachmentReference::new(
         1,
         br::ImageLayout::ColorAttachmentOpt,
     )];
-    let color_resolves = [br::AttachmentReference::new(
+    let color_resolves = [br::vk::VkAttachmentReference::new(
         0,
         br::ImageLayout::ColorAttachmentOpt,
     )];
@@ -244,12 +243,14 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         dstAccessMask: br::AccessFlags::MEMORY.read,
         dependencyFlags: 0,
     };
-    let render_pass = br::RenderPassBuilder::new(
-        &attachments,
-        &[color_subpass],
-        &[color_subpass_enter_dep, color_subpass_leave_dep],
+    let render_pass = br::RenderPassObject::new(
+        e.graphics().device().clone(),
+        &br::RenderPassBuilder::new(
+            &attachments,
+            &[color_subpass],
+            &[color_subpass_enter_dep, color_subpass_leave_dep],
+        ),
     )
-    .create(e.graphics_device().clone())
     .expect("Failed to create render pass");
 
     let screen_size = e.back_buffer(0).expect("no backbuffer").image().size().wh();
@@ -297,18 +298,16 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         &[],
     );
 
-    let mut shader = PvpShaderModules::new(
-        e.graphics().device(),
-        e.load("shaders.interiorColorFixed")
-            .expect("Loading PvpContainer"),
-    )
-    .expect("Creating Shader");
-    let mut curve_shader = PvpShaderModules::new(
-        e.graphics().device(),
-        e.load("shaders.curveColorFixed")
-            .expect("Loading CurveShader"),
-    )
-    .expect("Creating CurveShader");
+    let shader: PvpContainer = e
+        .load("shaders.interiorColorFixed")
+        .expect("Loading PvpContainer");
+    let shader_modules =
+        PvpShaderModules::new(e.graphics().device(), &shader).expect("Creating Shader");
+    let curve_shader: PvpContainer = e
+        .load("shaders.curveColorFixed")
+        .expect("Loading CurveShader");
+    let curve_shader_modules =
+        PvpShaderModules::new(e.graphics().device(), &curve_shader).expect("Creating CurveShader");
     debug!("ScreenSize: {screen_size:?}");
     let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
     let vp = [sc[0].make_viewport(0.0..1.0)];
@@ -316,7 +315,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         br::PipelineLayoutBuilder::new(
             &[dsl.as_transparent_ref()],
             &[br::vk::VkPushConstantRange::new(
-                br::ShaderStage::VERTEX,
+                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                 0..4 * 4,
             )],
         )
@@ -335,30 +334,48 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             size: 4,
         },
     ];
-    shader.set_vertex_spec_constants(
-        Cow::Borrowed(spc_map),
-        Cow::Borrowed(unsafe { as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]) }),
-    );
-    curve_shader.set_vertex_spec_constants(
-        Cow::Borrowed(spc_map),
-        Cow::Borrowed(unsafe { as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]) }),
-    );
+    let vsh_parameters = br::SpecializationInfo::from_binary(spc_map, unsafe {
+        as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..])
+    });
 
-    let (color1_emap, color1_values) = VgRendererFragmentFixedColor {
+    let color1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
         r: 1.0,
         g: 0.5,
         b: 0.0,
         a: 1.0,
-    }
-    .as_pair();
-    // TODO: このcloneなんとかしたい
-    shader.set_fragment_spec_constants(color1_emap.clone(), color1_values.clone());
-    curve_shader.set_fragment_spec_constants(color1_emap, color1_values);
-    let interior_vertex_processing =
-        shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    let curve_vertex_processing =
-        curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    });
+    let shader_stages = [
+        shader_modules
+            .pipeline_vertex_shader_stage()
+            .with_specialization_info(&vsh_parameters),
+        shader_modules
+            .pipeline_fragment_shader_stage()
+            .unwrap()
+            .with_specialization_info(&color1_fsh_parameters),
+    ];
+    let curve_shader_stages = [
+        curve_shader_modules
+            .pipeline_vertex_shader_stage()
+            .with_specialization_info(&vsh_parameters),
+        curve_shader_modules
+            .pipeline_fragment_shader_stage()
+            .unwrap()
+            .with_specialization_info(&color1_fsh_parameters),
+    ];
+    let interior_vertex_processing = br::VertexProcessingStages::new(
+        &shader_stages,
+        &shader.vertex_bindings,
+        &shader.vertex_attributes,
+        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    );
+    let curve_vertex_processing = br::VertexProcessingStages::new(
+        &curve_shader_stages,
+        &curve_shader.vertex_bindings,
+        &curve_shader.vertex_attributes,
+        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    );
 
+    let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
     let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(
         &pl,
         render_pass.subpass(0),
@@ -370,36 +387,14 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
         state
     }))
-    .viewport_scissors(
-        br::DynamicArrayState::Static(&vp),
-        br::DynamicArrayState::Static(&sc),
-    )
-    .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()]);
+    .viewport_state(br::ViewportState::new(&vp, &sc))
+    .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
     let gp = LayoutedPipeline::combine(
         gpb.create(
             e.graphics().device().clone(),
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
         )
         .expect("Create GraphicsPipeline"),
-        pl.clone(),
-    );
-
-    let (color2_layout, color2_values) = VgRendererFragmentFixedColor {
-        r: 0.0,
-        g: 0.5,
-        b: 1.0,
-        a: 1.0,
-    }
-    .as_pair();
-    gpb.vertex_processing_mut()
-        .shader_stages_mut()
-        .set_fragment_spec_constants(color2_layout.as_ref(), &color2_values);
-    let gp2 = LayoutedPipeline::combine(
-        gpb.create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Creating GraphicsPipeline2"),
         pl.clone(),
     );
     gpb.vertex_processing(curve_vertex_processing);
@@ -411,9 +406,53 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .expect("Create GraphicsPipeline of CurveRender"),
         pl.clone(),
     );
-    gpb.vertex_processing_mut()
-        .shader_stages_mut()
-        .set_fragment_spec_constants(&*color2_layout, &color2_values);
+
+    let fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
+        r: 0.0,
+        g: 0.5,
+        b: 1.0,
+        a: 1.0,
+    });
+    let shader_stages = [
+        shader_modules
+            .pipeline_vertex_shader_stage()
+            .with_specialization_info(&vsh_parameters),
+        shader_modules
+            .pipeline_fragment_shader_stage()
+            .unwrap()
+            .with_specialization_info(&fsh_parameters),
+    ];
+    let curve_shader_stages = [
+        curve_shader_modules
+            .pipeline_vertex_shader_stage()
+            .with_specialization_info(&vsh_parameters),
+        curve_shader_modules
+            .pipeline_fragment_shader_stage()
+            .unwrap()
+            .with_specialization_info(&fsh_parameters),
+    ];
+    let interior_vertex_processing = br::VertexProcessingStages::new(
+        &shader_stages,
+        &shader.vertex_bindings,
+        &shader.vertex_attributes,
+        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    );
+    let curve_vertex_processing = br::VertexProcessingStages::new(
+        &curve_shader_stages,
+        &curve_shader.vertex_bindings,
+        &curve_shader.vertex_attributes,
+        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    );
+    gpb.vertex_processing(interior_vertex_processing);
+    let gp2 = LayoutedPipeline::combine(
+        gpb.create(
+            e.graphics().device().clone(),
+            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Creating GraphicsPipeline2"),
+        pl.clone(),
+    );
+    gpb.vertex_processing(curve_vertex_processing);
     let gp2_curve = LayoutedPipeline::combine(
         gpb.create(
             e.graphics().device().clone(),

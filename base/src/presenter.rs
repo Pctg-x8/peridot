@@ -1,6 +1,6 @@
 //! Platform Presenter(Swapchain Abstraction)
 
-use bedrock::{self as br, QueueMut, SemaphoreMut};
+use bedrock::{self as br, QueueMut, VkHandle, VkHandleMut};
 #[cfg(feature = "debug")]
 use br::VkObject;
 use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
@@ -152,15 +152,15 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, &surface)
             .expect("Failed to gather surface info");
 
-        let rendering_order = br::SemaphoreBuilder::new()
-            .create(g.device.clone())
-            .expect("Failed to create Rendering Order Semaphore");
-        let buffer_ready_order = br::SemaphoreBuilder::new()
-            .create(g.device.clone())
-            .expect("Failed to create BufferReady Order Semaphore");
-        let present_order = br::SemaphoreBuilder::new()
-            .create(g.device.clone())
-            .expect("Failed to create Present Order Semaphore");
+        let rendering_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Rendering Order Semaphore");
+        let buffer_ready_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create BufferReady Order Semaphore");
+        let present_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Present Order Semaphore");
         #[cfg(feature = "debug")]
         {
             rendering_order
@@ -245,7 +245,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.swapchain.get_mut().swapchain.acquire_next(
             None,
-            br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_mut_ref()),
+            br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_ref_mut()),
         )
     }
 

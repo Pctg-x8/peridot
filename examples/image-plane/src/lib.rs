@@ -229,19 +229,21 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let back_buffer_attachment = e
         .back_buffer_attachment_desc()
         .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store);
-    let color_outputs = [br::AttachmentReference::new(
+    let color_outputs = [br::vk::VkAttachmentReference::new(
         0,
         br::ImageLayout::ColorAttachmentOpt,
     )];
     let color_render_subpass = br::SubpassDescription::new().color_attachments(&color_outputs, &[]);
-    let renderpass = br::RenderPassBuilder::new(
-        &[back_buffer_attachment],
-        &[color_render_subpass],
-        &[SubpassDependencyTemplates::to_color_attachment_in(
-            None, 0, true,
-        )],
+    let renderpass = br::RenderPassObject::new(
+        e.graphics().device().clone(),
+        &br::RenderPassBuilder::new(
+            &[back_buffer_attachment],
+            &[color_render_subpass],
+            &[SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            )],
+        ),
     )
-    .create(e.graphics().device().clone())
     .expect("Create RenderPass");
     let mut backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
     let mut framebuffers = backbuffer_resources
@@ -284,18 +286,25 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         let shader = e
             .load("builtin.shaders.unlit_image")
             .expect("Loading shader");
-        let shader =
-            PvpShaderModules::new(e.graphics().device(), shader).expect("Create ShaderModules");
+        let shader_modules =
+            PvpShaderModules::new(e.graphics().device(), &shader).expect("Create ShaderModules");
+        let shader_stages = [
+            shader_modules.pipeline_vertex_shader_stage(),
+            shader_modules.pipeline_fragment_shader_stage().unwrap(),
+        ];
         let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
-        let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+        let vps = br::VertexProcessingStages::new(
+            &shader_stages,
+            &shader.vertex_bindings,
+            &shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+        );
         let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(&pl, renderpass.subpass(0), vps);
-        gpb.viewport_scissors(
-            br::DynamicArrayState::Static(&vp),
-            br::DynamicArrayState::Static(&sc),
-        )
-        .multisample_state(br::MultisampleState::new().into())
-        .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
+        let color_blends = [ColorAttachmentBlending::Disabled.into_vk()];
+        gpb.viewport_state(br::ViewportState::new(&vp, &sc))
+            .multisample_state(br::MultisampleState::new().into())
+            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
 
         gpb.create(
             e.graphics().device().clone(),

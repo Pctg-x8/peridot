@@ -261,7 +261,7 @@ impl Graphics {
         self.graphics_queue
             .q
             .get_mut()
-            .submit(batches, Some(fence.as_transparent_mut_ref()))
+            .submit(batches, Some(fence.as_transparent_ref_mut()))
     }
     pub fn submit_buffered_commands_raw(
         &mut self,
@@ -272,7 +272,7 @@ impl Graphics {
             self.graphics_queue
                 .q
                 .get_mut()
-                .submit_raw(batches, Some(fence.as_transparent_mut_ref()))
+                .submit_raw(batches, Some(fence.as_transparent_ref_mut()))
         }
     }
 
@@ -287,9 +287,12 @@ impl Graphics {
         )
             -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
-        use bedrock::FenceMut;
+        use bedrock::VkHandleMut;
 
-        let mut fence = std::sync::Arc::new(br::FenceBuilder::new().create(self.device.clone())?);
+        let mut fence = std::sync::Arc::new(br::FenceObject::new(
+            self.device().clone(),
+            &br::FenceCreateInfo::new(0),
+        )?);
 
         let mut pool = br::CommandPoolBuilder::new(self.graphics_queue_family_index())
             .transient()
@@ -301,7 +304,7 @@ impl Graphics {
             Some(unsafe {
                 std::sync::Arc::get_mut(&mut fence)
                     .unwrap_unchecked()
-                    .as_transparent_mut_ref()
+                    .as_transparent_ref_mut()
             }),
         )?;
 

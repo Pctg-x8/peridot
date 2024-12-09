@@ -10,7 +10,7 @@ pub enum StateFence<Fence: br::Fence> {
 impl<Device: br::Device> StateFence<br::FenceObject<Device>> {
     /// Create a fence with Unsignaled state
     pub fn new(d: Device) -> br::Result<Self> {
-        br::FenceBuilder::new().create(d).map(Self::Unsignaled)
+        br::FenceObject::new(d, &br::FenceCreateInfo::new(0)).map(Self::Unsignaled)
     }
 }
 impl<Fence: br::FenceMut> StateFence<Fence> {

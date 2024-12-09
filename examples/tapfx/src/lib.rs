@@ -10,6 +10,7 @@ use peridot_command_object::{
     PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
 };
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
+use peridot_vertex_processing_pack::{PvpContainer, PvpShaderModules};
 
 #[repr(C)]
 #[derive(Clone)]
@@ -48,21 +49,23 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .size()
         .wh();
 
-    let renderpass = br::RenderPassBuilder::new(
-        &[e.back_buffer_attachment_desc()
-            .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
-        &[br::SubpassDescription::new().color_attachments(
-            &[br::AttachmentReference::new(
-                0,
-                br::ImageLayout::ColorAttachmentOpt,
+    let renderpass = br::RenderPassObject::new(
+        e.graphics().device().clone(),
+        &br::RenderPassBuilder::new(
+            &[e.back_buffer_attachment_desc()
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
+            &[br::SubpassDescription::new().color_attachments(
+                &[br::vk::VkAttachmentReference::new(
+                    0,
+                    br::ImageLayout::ColorAttachmentOpt,
+                )],
+                &[],
             )],
-            &[],
-        )],
-        &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
-            None, 0, true,
-        )],
+            &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            )],
+        ),
     )
-    .create(e.graphics().device().clone())
     .expect("Failed to create RenderPass");
     let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
     let framebuffers: Vec<_> = backbuffer_resources
@@ -101,12 +104,13 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         ])
         .expect("Failed to alloc Required Descriptors");
 
-    let shaders = peridot_vertex_processing_pack::PvpShaderModules::new(
-        e.graphics().device(),
-        e.load("shaders.blit").expect("Failed to blit shader"),
-    )
-    .expect("Failed to generate ShaderModules");
-    let vps = shaders.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+    let shaders: PvpContainer = e.load("shaders.blit").expect("Failed to load blit shader");
+    let shader_modules = PvpShaderModules::new(e.graphics().device(), &shaders)
+        .expect("Failed to generate ShaderModules");
+    let shader_stages = [
+        shader_modules.pipeline_vertex_shader_stage(),
+        shader_modules.pipeline_fragment_shader_stage().unwrap(),
+    ];
     let pl = br::PipelineLayoutBuilder::new(
         &[
             br::DescriptorSetLayoutObjectRef::new(&dsl),
@@ -119,18 +123,25 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
     let scissors = [bb_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
     let viewports = [scissors[0].make_viewport(0.0..1.0)];
-    let pipeline = br::NonDerivedGraphicsPipelineBuilder::new(&pl, renderpass.subpass(0), vps)
-        .viewport_scissors(
-            br::DynamicArrayState::Static(&viewports),
-            br::DynamicArrayState::Static(&scissors),
-        )
-        .multisample_state(br::MultisampleState::new().into())
-        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()])
-        .create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Failed to create GraphicsPipeline");
+    let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
+    let pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
+        &pl,
+        renderpass.subpass(0),
+        br::VertexProcessingStages::new(
+            &shader_stages,
+            &shaders.vertex_bindings,
+            &shaders.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+        ),
+    )
+    .viewport_state(br::ViewportState::new(&viewports, &scissors))
+    .multisample_state(br::MultisampleState::new().into())
+    .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]))
+    .create(
+        e.graphics().device().clone(),
+        None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+    )
+    .expect("Failed to create GraphicsPipeline");
 
     let main_image_data: peridot_image::PNG = e
         .load("images.peridot_default_tapfx_circle")

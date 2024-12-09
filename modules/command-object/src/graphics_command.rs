@@ -556,7 +556,7 @@ where
     PipelineLayout: br::PipelineLayout,
 {
     pub layout: PipelineLayout,
-    pub shader_stage: br::ShaderStage,
+    pub shader_stage: br::vk::VkShaderStageFlags,
     pub offset: u32,
     pub value: T,
 }
@@ -567,7 +567,7 @@ where
     pub const fn for_fragment(layout: PipelineLayout, offset: u32, value: T) -> Self {
         Self {
             layout,
-            shader_stage: br::ShaderStage::FRAGMENT,
+            shader_stage: br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
             offset,
             value,
         }
@@ -576,7 +576,7 @@ where
     pub const fn for_vertex(layout: PipelineLayout, offset: u32, value: T) -> Self {
         Self {
             layout,
-            shader_stage: br::ShaderStage::VERTEX,
+            shader_stage: br::vk::VK_SHADER_STAGE_VERTEX_BIT,
             offset,
             value,
         }
