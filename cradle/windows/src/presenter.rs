@@ -237,12 +237,15 @@ impl InteropBackbufferResource {
         });
         let vk_shared_handle =
             br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
-        let image = br::ImageDesc::new(size, format)
-            .as_color_attachment()
-            .init_layout(br::ImageLayout::Preinitialized)
-            .exportable_as(vk_shared_handle.0.into())
-            .create(g.device().clone())
-            .expect("Failed to create Interop Image");
+        let exportable = br::vk::VkExternalMemoryImageCreateInfo::new(vk_shared_handle.0.into().0);
+        let image = br::ImageObject::new(
+            g.device().clone(),
+            &br::ImageCreateInfo::new(size, format)
+                .as_color_attachment()
+                .init_layout(br::ImageLayout::Preinitialized)
+                .with_next(&exportable),
+        )
+        .expect("Failed to create Interop Image");
         let image_mreq = image.requirements();
         let handle_import_props = unsafe {
             vk_shared_handle
@@ -439,12 +442,12 @@ impl Presenter {
             })
             .collect();
 
-        let buffer_ready_order = br::SemaphoreBuilder::new()
-            .create(g.device().clone())
-            .expect("Failed to create Buffer Ready Semaphore");
-        let present_order = br::SemaphoreBuilder::new()
-            .create(g.device().clone())
-            .expect("Failed to create Present Order Semaphore");
+        let buffer_ready_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Buffer Ready Semaphore");
+        let present_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Present Order Semaphore");
         let render_completion_fence = unsafe {
             device12
                 .CreateFence(0, D3D12_FENCE_FLAG_SHARED)

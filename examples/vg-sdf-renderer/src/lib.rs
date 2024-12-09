@@ -716,7 +716,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut stencil_buffer = memory_manager
         .allocate_device_local_image(
             e.graphics(),
-            br::ImageDesc::new(back_buffer_size.clone(), br::vk::VK_FORMAT_S8_UINT)
+            br::ImageCreateInfo::new(back_buffer_size.clone(), br::vk::VK_FORMAT_S8_UINT)
                 .as_depth_stencil_attachment(),
         )
         .expect("Failed to allocate stencil buffer");
@@ -998,7 +998,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 stencil_buffer = memory_manager
                     .allocate_device_local_image(
                         e.graphics(),
-                        br::ImageDesc::new(
+                        br::ImageCreateInfo::new(
                             peridot::math::Vector2(new_size.0 as u32, new_size.1 as u32),
                             br::vk::VK_FORMAT_S8_UINT,
                         )

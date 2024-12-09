@@ -170,7 +170,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let main_image = memory_manager
         .allocate_device_local_image(
             e.graphics(),
-            br::ImageDesc::new(main_image_data.0.size, main_image_data.0.format as _)
+            br::ImageCreateInfo::new(main_image_data.0.size, main_image_data.0.format as _)
                 .sampled()
                 .transfer_dest()
                 .init_layout(br::ImageLayout::Preinitialized),
@@ -186,7 +186,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut uniform_mut_buffer: RangedBuffer<_> = memory_manager
         .allocate_upload_buffer(
             e.graphics(),
-            br::BufferDesc::new(
+            br::BufferCreateInfo::new(
                 core::mem::size_of::<UniformValues>(),
                 br::BufferUsage::TRANSFER_SRC,
             ),

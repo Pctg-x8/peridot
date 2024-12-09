@@ -65,11 +65,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .allocate_device_local_buffer_array(
             e.graphics(),
             [
-                br::BufferDesc::new(
+                br::BufferCreateInfo::new(
                     plane_mesh.byte_length(),
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
-                br::BufferDesc::new_for_type::<Uniform>(
+                br::BufferCreateInfo::new_for_type::<Uniform>(
                     br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
                 ),
             ],
@@ -92,11 +92,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .allocate_upload_buffer_array(
             e.graphics(),
             [
-                br::BufferDesc::new(
+                br::BufferCreateInfo::new(
                     vertex_buffer.byte_length() as _,
                     br::BufferUsage::TRANSFER_SRC,
                 ),
-                br::BufferDesc::new(
+                br::BufferCreateInfo::new(
                     uniform_buffer.byte_length() as _,
                     br::BufferUsage::TRANSFER_SRC,
                 ),
@@ -120,7 +120,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let image = memory_manager
         .allocate_device_local_image(
             e.graphics(),
-            br::ImageDesc::new(image_data.0.size, image_data.0.format as _)
+            br::ImageCreateInfo::new(image_data.0.size, image_data.0.format as _)
                 .sampled()
                 .transfer_dest()
                 .init_layout(br::ImageLayout::Preinitialized),

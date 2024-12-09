@@ -137,7 +137,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let msaa_texture = memory_manager
         .allocate_device_local_image(
             e.graphics(),
-            br::ImageDesc::new(rt_size.clone(), e.back_buffer_format())
+            br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
                 .as_color_attachment()
                 .as_transient_attachment()
                 .sample_counts(msaa_count),
@@ -550,7 +550,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 let msaa_texture_res = memory_manager
                     .allocate_device_local_image(
                         e.graphics(),
-                        br::ImageDesc::new(rt_size.clone(), e.back_buffer_format())
+                        br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
                             .as_color_attachment()
                             .as_transient_attachment()
                             .sample_counts(msaa_count),
