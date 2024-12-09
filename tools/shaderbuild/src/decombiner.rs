@@ -182,10 +182,10 @@ impl<'s> Tokenizer<'s> {
     pub fn shader_stage(&mut self) -> ParseResult<br::ShaderStage> {
         self.strip_ignores();
         if self.strip_prefix("FragmentShader") {
-            return Ok(br::ShaderStage::FRAGMENT);
+            return Ok(br::ShaderStage::Fragment);
         }
         if self.strip_prefix("VertexShader") {
-            return Ok(br::ShaderStage::VERTEX);
+            return Ok(br::ShaderStage::Vertex);
         }
         return Err(());
     }
@@ -573,11 +573,11 @@ impl<'s> Tokenizer<'s> {
                 }
             }
             DeclarationOps::VertexShader => ToplevelBlock::ShaderCode(
-                br::ShaderStage::VERTEX,
+                br::ShaderStage::Vertex,
                 self.codeblock().expect("GLSL CodeBlock required"),
             ),
             DeclarationOps::FragmentShader => ToplevelBlock::ShaderCode(
-                br::ShaderStage::FRAGMENT,
+                br::ShaderStage::Fragment,
                 self.codeblock().expect("GLSL CodeBlock required"),
             ),
             DeclarationOps::Varyings => {
@@ -645,14 +645,14 @@ impl<'s> CombinedShader<'s> {
         for tb in blocks {
             match tb {
                 ToplevelBlock::VertexInput(mut bindings) => cs.vertex_input.append(&mut bindings),
-                ToplevelBlock::ShaderCode(br::ShaderStage::VERTEX, c) => {
+                ToplevelBlock::ShaderCode(br::ShaderStage::Vertex, c) => {
                     if cs.vertex_shader_code.is_empty() {
                         cs.vertex_shader_code = c;
                     } else {
                         panic!("Multiple Vertex Shader code is not allowed");
                     }
                 }
-                ToplevelBlock::ShaderCode(br::ShaderStage::FRAGMENT, c) => {
+                ToplevelBlock::ShaderCode(br::ShaderStage::Fragment, c) => {
                     if cs.fragment_shader_code.is_none() {
                         cs.fragment_shader_code = Some(c);
                     } else {
@@ -660,7 +660,7 @@ impl<'s> CombinedShader<'s> {
                     }
                 }
                 ToplevelBlock::ShaderCode(ss, _) => {
-                    panic!("Unsupported Shader Stage: {:08b}", ss.0)
+                    panic!("Unsupported Shader Stage: {:?}", ss)
                 }
                 ToplevelBlock::Varying(src, dst, vars) => {
                     cs.varyings_between_shaders.push((src, dst, vars))
@@ -774,7 +774,7 @@ impl<'s> CombinedShader<'s> {
         for (n, ovar) in self
             .varyings_between_shaders
             .iter()
-            .filter(|&&(src, _, _)| src == br::ShaderStage::VERTEX)
+            .filter(|&&(src, _, _)| src == br::ShaderStage::Vertex)
             .flat_map(|&(_, _, ref v)| v)
             .enumerate()
         {
@@ -792,7 +792,7 @@ impl<'s> CombinedShader<'s> {
             code += "out gl_PerVertex { out vec4 gl_Position; };\n";
         }
         // 定数(uniformとspecconstantとpushconstant)
-        if let Some(cons) = self.spec_constants_per_stage.get(&br::ShaderStage::VERTEX) {
+        if let Some(cons) = self.spec_constants_per_stage.get(&br::ShaderStage::Vertex) {
             for (id, &(name, ty, init)) in cons.iter() {
                 code += &format!(
                     "layout(constant_id = {}) const {} {} = {};\n",
@@ -800,13 +800,13 @@ impl<'s> CombinedShader<'s> {
                 );
             }
         }
-        self.emit_resource_bindings(&mut code, br::ShaderStage::VERTEX);
-        if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::VERTEX) {
+        self.emit_resource_bindings(&mut code, br::ShaderStage::Vertex);
+        if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::Vertex) {
             code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
         }
         code += "\n";
         // header
-        if let Some(cs) = self.header_codes.get(&br::ShaderStage::VERTEX) {
+        if let Some(cs) = self.header_codes.get(&br::ShaderStage::Vertex) {
             for c in cs {
                 code += c;
             }
@@ -827,7 +827,7 @@ impl<'s> CombinedShader<'s> {
         for (n, ivar) in self
             .varyings_between_shaders
             .iter()
-            .filter(|&&(_, dst, _)| dst == br::ShaderStage::FRAGMENT)
+            .filter(|&&(_, dst, _)| dst == br::ShaderStage::Fragment)
             .flat_map(|&(_, _, ref v)| v)
             .enumerate()
         {
@@ -867,7 +867,7 @@ impl<'s> CombinedShader<'s> {
         // 定数(uniformとspecconstant)
         if let Some(cons) = self
             .spec_constants_per_stage
-            .get(&br::ShaderStage::FRAGMENT)
+            .get(&br::ShaderStage::Fragment)
         {
             for (id, &(name, ty, init)) in cons.iter() {
                 code += &format!(
@@ -876,13 +876,13 @@ impl<'s> CombinedShader<'s> {
                 );
             }
         }
-        self.emit_resource_bindings(&mut code, br::ShaderStage::FRAGMENT);
-        if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::FRAGMENT) {
+        self.emit_resource_bindings(&mut code, br::ShaderStage::Fragment);
+        if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::Fragment) {
             code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
         }
         code += "\n";
         // header
-        if let Some(cs) = self.header_codes.get(&br::ShaderStage::FRAGMENT) {
+        if let Some(cs) = self.header_codes.get(&br::ShaderStage::Fragment) {
             for c in cs {
                 code += c;
             }
