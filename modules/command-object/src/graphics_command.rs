@@ -1,4 +1,4 @@
-use bedrock as br;
+use bedrock::{self as br, VkHandle};
 use br::vk::VkCommandBuffer;
 
 use crate::{
@@ -689,7 +689,7 @@ impl<M: Mesh, Device: br::Device + ?Sized> GraphicsCommand<Device> for PreConfig
             .iter()
             .map(|rb| {
                 (
-                    br::BufferObjectRef::new(&rb.0),
+                    rb.0.as_transparent_ref(),
                     rb.1.start as br::vk::VkDeviceSize,
                 )
             })
@@ -713,7 +713,7 @@ impl<M: IndexedMesh, Device: br::Device + ?Sized> GraphicsCommand<Device>
             .iter()
             .map(|rb| {
                 (
-                    br::BufferObjectRef::new(&rb.0),
+                    rb.0.as_transparent_ref(),
                     rb.1.start as br::vk::VkDeviceSize,
                 )
             })

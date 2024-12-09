@@ -1,4 +1,4 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::{
     Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch,
 };
@@ -74,34 +74,36 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .collect::<Result<_, _>>()
         .expect("Failed to create Framebuffer");
 
-    let smp = br::SamplerBuilder::default()
-        .create(e.graphics().device().clone())
+    let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Failed to create sampler");
-    let dsl = br::DescriptorSetLayoutBuilder::new(&[br::DescriptorType::UniformBuffer
-        .make_binding(0, 1)
-        .only_for_vertex()])
-    .create(e.graphics().device().clone())
-    .expect("Failed to create DescriptorSetLayout");
-    let dsl2 = br::DescriptorSetLayoutBuilder::new(&[br::DescriptorType::CombinedImageSampler
-        .make_binding(0, 1)
-        .only_for_fragment()
-        .with_immutable_samplers(&[br::SamplerObjectRef::new(&smp)])])
-    .create(e.graphics().device().clone())
-    .expect("Failed to create DescriptorSetLayout for FragmentShader");
-    let mut dp = br::DescriptorPoolBuilder::new(
-        2,
-        &[
-            br::DescriptorType::UniformBuffer.make_size(1),
-            br::DescriptorType::CombinedImageSampler.make_size(1),
-        ],
+    let dsl = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::UniformBuffer
+            .make_binding(0, 1)
+            .only_for_vertex()]),
     )
-    .create(e.graphics().device().clone())
+    .expect("Failed to create DescriptorSetLayout");
+    let dsl2 = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::CombinedImageSampler
+            .make_binding(0, 1)
+            .only_for_fragment()
+            .with_immutable_samplers(&[smp.as_transparent_ref()])]),
+    )
+    .expect("Failed to create DescriptorSetLayout for FragmentShader");
+    let mut dp = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
+            2,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(1),
+                br::DescriptorType::CombinedImageSampler.make_size(1),
+            ],
+        ),
+    )
     .expect("Failed to create DescriptorPool");
     let [descriptor_obj, descriptor_tex] = dp
-        .alloc_array(&[
-            br::DescriptorSetLayoutObjectRef::new(&dsl),
-            br::DescriptorSetLayoutObjectRef::new(&dsl2),
-        ])
+        .alloc_array(&[dsl.as_transparent_ref(), dsl2.as_transparent_ref()])
         .expect("Failed to alloc Required Descriptors");
 
     let shaders: PvpContainer = e.load("shaders.blit").expect("Failed to load blit shader");
@@ -113,14 +115,13 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .pipeline_fragment_shader_stage()
             .expect("no fsh?"),
     ];
-    let pl = br::PipelineLayoutBuilder::new(
-        &[
-            br::DescriptorSetLayoutObjectRef::new(&dsl),
-            br::DescriptorSetLayoutObjectRef::new(&dsl2),
-        ],
-        &[],
+    let pl = br::PipelineLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::PipelineLayoutCreateInfo::new(
+            &[dsl.as_transparent_ref(), dsl2.as_transparent_ref()],
+            &[],
+        ),
     )
-    .create(e.graphics().device().clone())
     .expect("Failed to create PipelineLayout");
 
     let scissors = [bb_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
@@ -273,7 +274,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 ]),
             ),
             br::DescriptorPointer::new(descriptor_tex.into(), 0).write(
-                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageRef::new(
+                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
                     &main_image_view,
                     br::ImageLayout::ShaderReadOnlyOpt,
                 )]),

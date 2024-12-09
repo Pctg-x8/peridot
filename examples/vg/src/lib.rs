@@ -1,4 +1,4 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, DescriptorSetLayout, RenderPass};
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::{
     Buffer, Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice,
     SubmissionBatch,
@@ -266,20 +266,23 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .collect::<Result<Vec<_>, _>>()
         .expect("Framebuffer Creation");
 
-    let dsl = br::DescriptorSetLayoutBuilder::new(&[br::DescriptorType::UniformTexelBuffer
-        .make_binding(0, 1)
-        .only_for_vertex()])
-    .create(e.graphics().device().clone())
+    let dsl = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::UniformTexelBuffer
+            .make_binding(0, 1)
+            .only_for_vertex()]),
+    )
     .expect("DescriptorSetLayout Creation");
-    let mut dp =
-        br::DescriptorPoolBuilder::new(2, &[br::DescriptorType::UniformTexelBuffer.make_size(2)])
-            .create(e.graphics().device().clone())
-            .expect("DescriptorPool Creation");
+    let mut dp = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
+            2,
+            &[br::DescriptorType::UniformTexelBuffer.make_size(2)],
+        ),
+    )
+    .expect("DescriptorPool Creation");
     let [desc_interior, desc_curve] = dp
-        .alloc_array(&[
-            br::DescriptorSetLayoutObjectRef::new(&dsl),
-            br::DescriptorSetLayoutObjectRef::new(&dsl),
-        ])
+        .alloc_array(&[dsl.as_transparent_ref(), dsl.as_transparent_ref()])
         .expect("DescriptorSet Allocation");
 
     e.graphics().device().update_descriptor_sets(
@@ -312,14 +315,16 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
     let vp = [sc[0].make_viewport(0.0..1.0)];
     let pl = SharedRef::new(
-        br::PipelineLayoutBuilder::new(
-            &[dsl.as_transparent_ref()],
-            &[br::vk::VkPushConstantRange::new(
-                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                0..4 * 4,
-            )],
+        br::PipelineLayoutObject::new(
+            e.graphics().device().clone(),
+            &br::PipelineLayoutCreateInfo::new(
+                &[dsl.as_transparent_ref()],
+                &[br::vk::VkPushConstantRange::new(
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                    0..4 * 4,
+                )],
+            ),
         )
-        .create(e.graphics().device().clone())
         .expect("Create PipelineLayout"),
     );
     let spc_map = &[

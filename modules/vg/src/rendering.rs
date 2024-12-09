@@ -257,7 +257,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
             )
             .bind_vertex_buffers(
                 0,
-                &[br::BufferObjectRef::new(buffer)],
+                &[buffer.as_transparent_ref()],
                 &[self.buffer_offsets.interior_positions as _],
             )
             .bind_index_buffer(
@@ -292,10 +292,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
         cmd.bind_graphics_pipeline(extras.curve_pipeline.pipeline())
             .bind_vertex_buffers(
                 0,
-                &[
-                    br::BufferObjectRef::new(buffer),
-                    br::BufferObjectRef::new(buffer),
-                ],
+                &[buffer.as_transparent_ref(), buffer.as_transparent_ref()],
                 &[
                     self.buffer_offsets.curve_positions as _,
                     self.buffer_offsets.curve_helper_coords as _,

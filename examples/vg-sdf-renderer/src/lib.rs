@@ -255,9 +255,11 @@ impl TwoPassStencilSDFRenderer {
         let outline_shader_modules = PvpShaderModules::new(e.graphics().device(), &outline_shader)
             .expect("Failed to create outline_disdtance shader modules");
         let empty_pl = SharedRef::new(
-            br::PipelineLayoutBuilder::EMPTY
-                .create(e.graphics().device().clone())
-                .expect("Failed to create empty pipeline layout"),
+            br::PipelineLayoutObject::new(
+                e.graphics().device().clone(),
+                &br::PipelineLayoutCreateInfo::new(&[], &[]),
+            )
+            .expect("Failed to create empty pipeline layout"),
         );
 
         let stencil_triangle_vsh_parameters =

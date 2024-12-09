@@ -1,4 +1,4 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::{resources::Image, SubmissionBatch};
 use br::{Device, GraphicsPipelineBuilder, ImageChild, ImageSubresourceSlice};
 use log::*;
@@ -252,35 +252,37 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .collect::<Result<Vec<_>, _>>()
         .expect("Bind Framebuffer");
 
-    let smp = br::SamplerBuilder::default()
-        .create(e.graphics().device().clone())
+    let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Creating Sampler");
-    let descriptor_layout = br::DescriptorSetLayoutBuilder::new(&[
-        br::DescriptorType::UniformBuffer
-            .make_binding(0, 1)
-            .only_for_vertex(),
-        br::DescriptorType::CombinedImageSampler
-            .make_binding(1, 1)
-            .only_for_fragment()
-            .with_immutable_samplers(&[br::SamplerObjectRef::new(&smp)]),
-    ])
-    .create(e.graphics().device().clone())
-    .expect("Create DescriptorSetLayout");
-    let mut descriptor_pool = br::DescriptorPoolBuilder::new(
-        1,
-        &[
-            br::DescriptorType::UniformBuffer.make_size(1),
-            br::DescriptorType::CombinedImageSampler.make_size(1),
-        ],
+    let descriptor_layout = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[
+            br::DescriptorType::UniformBuffer
+                .make_binding(0, 1)
+                .only_for_vertex(),
+            br::DescriptorType::CombinedImageSampler
+                .make_binding(1, 1)
+                .only_for_fragment()
+                .with_immutable_samplers(&[smp.as_transparent_ref()]),
+        ]),
     )
-    .create(e.graphics().device().clone())
+    .expect("Create DescriptorSetLayout");
+    let mut descriptor_pool = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
+            1,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(1),
+                br::DescriptorType::CombinedImageSampler.make_size(1),
+            ],
+        ),
+    )
     .expect("Create DescriptorPool");
 
-    let pl = br::PipelineLayoutBuilder::new(
-        &[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)],
-        &[],
+    let pl = br::PipelineLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::PipelineLayoutCreateInfo::new(&[descriptor_layout.as_transparent_ref()], &[]),
     )
-    .create(e.graphics().device().clone())
     .expect("Create PipelineLayout");
     let gp = {
         let shader = e
@@ -328,7 +330,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .create()
         .expect("Failed to create main image view");
     let [descriptor_main] = descriptor_pool
-        .alloc_array(&[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)])
+        .alloc_array(&[descriptor_layout.as_transparent_ref()])
         .expect("Create main Descriptor");
     {
         let mut descriptor_writes = Vec::with_capacity(2);
@@ -337,7 +339,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 br::DescriptorContents::UniformBuffer(vec![
                     uniform_buffer.make_descriptor_buffer_ref()
                 ]),
-                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageRef::new(
+                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
                     &image_view,
                     br::ImageLayout::ShaderReadOnlyOpt,
                 )]),
