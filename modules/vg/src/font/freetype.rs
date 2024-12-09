@@ -6,7 +6,7 @@ use freetype2::*;
 use lyon_path::builder::{FlatPathBuilder, PathBuilder};
 use std::cell::{Cell, Ref, RefCell};
 use std::ffi::{CStr, CString};
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 use crate::{Font, GlyphLoadingError};
 
@@ -62,16 +62,20 @@ impl Font for FreetypeFont {
 
 #[repr(transparent)]
 pub struct UniqueSystem(FT_Library);
+unsafe impl Sync for UniqueSystem {}
+unsafe impl Send for UniqueSystem {}
 impl UniqueSystem {
+    #[inline(always)]
     pub fn new() -> Self {
         let mut obj = core::mem::MaybeUninit::uninit();
         unsafe {
             FT_Init_FreeType(obj.as_mut_ptr());
-            UniqueSystem(obj.assume_init())
+            Self(obj.assume_init())
         }
     }
 }
 impl Drop for UniqueSystem {
+    #[inline(always)]
     fn drop(&mut self) {
         unsafe {
             FT_Done_FreeType(self.0);
@@ -81,17 +85,18 @@ impl Drop for UniqueSystem {
 
 #[repr(transparent)]
 #[derive(Clone)]
-pub struct System(Rc<UniqueSystem>);
+pub struct System(Arc<RwLock<UniqueSystem>>);
 impl System {
+    #[inline(always)]
     pub fn new() -> Self {
-        System(UniqueSystem::new().into())
+        Self(Arc::new(RwLock::new(UniqueSystem::new())))
     }
 }
 
 pub enum FaceGroupEntry {
     Unloaded(CString, FT_Long),
     Loaded(Face),
-    LoadedMem(Face, Rc<Vec<u8>>),
+    LoadedMem(Face, Arc<Vec<u8>>),
 }
 impl FaceGroupEntry {
     pub fn unloaded(path: &CStr, index: FT_Long) -> Self {
@@ -176,9 +181,11 @@ pub struct Face {
 }
 impl System {
     pub fn new_face(&self, path: *const u8, face_index: FT_Long) -> Face {
+        let us = self.0.write().expect("poisoned");
+
         let mut ptr = core::mem::MaybeUninit::uninit();
         unsafe {
-            FT_New_Face(self.0 .0, path as _, face_index, ptr.as_mut_ptr());
+            FT_New_Face(us.0, path as _, face_index, ptr.as_mut_ptr());
             Face {
                 _parent: self.clone(),
                 ptr: ptr.assume_init(),
@@ -187,10 +194,12 @@ impl System {
     }
 
     pub fn new_face_from_mem(&self, mem: &[u8], face_index: FT_Long) -> Result<Face, FT_Error> {
+        let us = self.0.write().expect("poisoned");
+
         let mut ptr = core::mem::MaybeUninit::uninit();
         unsafe {
             let r = FT_New_Memory_Face(
-                self.0 .0,
+                us.0,
                 mem.as_ptr(),
                 mem.len() as _,
                 face_index,
@@ -209,6 +218,8 @@ impl System {
 }
 impl Drop for Face {
     fn drop(&mut self) {
+        let _us_lock = self._parent.0.write().expect("poisoned");
+
         unsafe {
             FT_Done_Face(self.ptr);
         }
