@@ -249,13 +249,16 @@ impl InteropBackbufferResource {
         )
         .expect("Failed to create Interop Image");
         let image_mreq = image.requirements();
-        let handle_import_props = unsafe {
-            vk_shared_handle
-                .properties(
-                    g.device(),
-                    br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
-                )
-                .expect("Failed to query Handle Memory Properties")
+        let handle_import_props = {
+            let mut sink = br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink();
+
+            unsafe {
+                g.device()
+                    .memory_win32_handle_properties(&vk_shared_handle, &mut sink)
+                    .expect("Failed to query Handle Memory Properties");
+
+                sink.assume_init()
+            }
         };
         let memory_type_index = g
             .memory_type_manager
@@ -263,8 +266,7 @@ impl InteropBackbufferResource {
             .expect("Failed to find matching memory type for importing")
             .index();
         let memory = SharedRef::new(
-            vk_shared_handle
-                .into_import_request(memory_type_index, Some(&hname))
+            br::DeviceMemoryRequest::import(memory_type_index, vk_shared_handle, Some(&hname))
                 .execute(g.device().clone())
                 .expect("Failed to import memory")
                 .into(),
@@ -473,12 +475,13 @@ impl Presenter {
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence")
         });
-        present_order
-            .import(
-                br::ExternalSemaphoreHandleTypeWin32::D3DFence
+        g.device()
+            .import_semaphore_win32_handle(&br::ImportSemaphoreWin32HandleInfo::new(
+                &present_order,
+                br::ExternalSemaphoreHandleTYpeWin32::D3DFence
                     .with_handle(render_completion_fence_handle.handle()),
                 &render_completion_fence_name,
-            )
+            ))
             .expect("Failed to import Render Completion Fence");
         let present_completion_event =
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
@@ -566,10 +569,7 @@ impl peridot::PlatformPresenter for Presenter {
         update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
         let signal_counters = [self.render_completion_counter + 1];
-        let signal_info = br::vk::VkD3D12FenceSubmitInfoKHR::from(br::D3D12FenceSubmitInfo::new(
-            &[],
-            &signal_counters,
-        ));
+        let signal_info = br::D3D12FenceSubmitInfo::new(&[], &signal_counters);
         if let Some(cs) = update_submission {
             // copy -> render
             let update_signals = [&self.buffer_ready_order];
@@ -585,7 +585,7 @@ impl peridot::PlatformPresenter for Presenter {
                 .with_signal_semaphores(&render_signals);
 
             let render_submission = br::vk::VkSubmitInfo {
-                pNext: &signal_info as *const _ as _,
+                pNext: signal_info.as_generic() as *const _ as _,
                 ..render_submission.make_info_struct()
             };
             let update_submission = update_submission.make_info_struct();
@@ -602,7 +602,7 @@ impl peridot::PlatformPresenter for Presenter {
             let render_submission = render_submission.with_signal_semaphores(&render_signals);
 
             let render_submission = br::vk::VkSubmitInfo {
-                pNext: &signal_info as *const _ as _,
+                pNext: signal_info.as_generic() as *const _ as _,
                 ..render_submission.make_info_struct()
             };
 
