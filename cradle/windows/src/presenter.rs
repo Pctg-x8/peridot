@@ -568,6 +568,8 @@ impl peridot::PlatformPresenter for Presenter {
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
+        use br::VulkanStructureAsRef;
+
         let signal_counters = [self.render_completion_counter + 1];
         let signal_info = br::D3D12FenceSubmitInfo::new(&[], &signal_counters);
         if let Some(cs) = update_submission {
