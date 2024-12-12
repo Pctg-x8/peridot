@@ -149,7 +149,10 @@ impl Graphics {
         ) {
             Ok(x) => Some(x),
             Err(e) => {
-                tracing::error!({ cause = ?e }, "Failed to create vk debug instance. Vulkan debug logs will be unavailable.");
+                tracing::error!(
+                    { cause = ?e },
+                    "Failed to create vk debug instance. Vulkan debug logs will be unavailable."
+                );
                 None
             }
         };
