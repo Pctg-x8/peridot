@@ -51,7 +51,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
     let renderpass = br::RenderPassObject::new(
         e.graphics().device().clone(),
-        &br::RenderPassBuilder::new(
+        &br::RenderPassCreateInfo::new(
             &[e.back_buffer_attachment_desc()
                 .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
             &[br::SubpassDescription::new().color_attachments(

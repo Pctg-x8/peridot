@@ -1,7 +1,6 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::{
-    Buffer, Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice,
-    SubmissionBatch,
+    Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch,
 };
 use log::*;
 use peridot::math::Vector2;
@@ -160,22 +159,24 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         })
         .expect("StgMem Initialization");
 
-    let bufview = buffer
-        .0
-        .clone()
-        .create_view(
+    let bufview = br::BufferViewObject::new(
+        buffer.0.clone(),
+        &br::BufferViewCreateInfo::new(
+            &buffer.0,
             br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
             vg_renderer_params.transforms_byterange(),
-        )
-        .expect("Creating Transform BufferView");
-    let bufview2 = buffer
-        .0
-        .clone()
-        .create_view(
+        ),
+    )
+    .expect("Creating Transform BufferView");
+    let bufview2 = br::BufferViewObject::new(
+        buffer.0.clone(),
+        &br::BufferViewCreateInfo::new(
+            &buffer.0,
             br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
             vg_renderer_params2.transforms_byterange(),
-        )
-        .expect("Creating Transform BufferView 2");
+        ),
+    )
+    .expect("Creating Transform BufferView 2");
 
     {
         let copy = buffer.byref_mirror_from(&stg_buffer);
@@ -245,7 +246,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     };
     let render_pass = br::RenderPassObject::new(
         e.graphics().device().clone(),
-        &br::RenderPassBuilder::new(
+        &br::RenderPassCreateInfo::new(
             &attachments,
             &[color_subpass],
             &[color_subpass_enter_dep, color_subpass_leave_dep],

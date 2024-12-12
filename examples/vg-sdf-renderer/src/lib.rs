@@ -218,7 +218,7 @@ impl TwoPassStencilSDFRenderer {
         };
         let render_pass = br::RenderPassObject::new(
             e.graphics().device().clone(),
-            &br::RenderPassBuilder::new(&attachments, &subpasses, &[spdep_color, spdep_stencil]),
+            &br::RenderPassCreateInfo::new(&attachments, &subpasses, &[spdep_color, spdep_stencil]),
         )
         .expect("Failed to create RenderPass");
 

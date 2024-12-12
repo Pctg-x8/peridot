@@ -236,7 +236,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let color_render_subpass = br::SubpassDescription::new().color_attachments(&color_outputs, &[]);
     let renderpass = br::RenderPassObject::new(
         e.graphics().device().clone(),
-        &br::RenderPassBuilder::new(
+        &br::RenderPassCreateInfo::new(
             &[back_buffer_attachment],
             &[color_render_subpass],
             &[SubpassDependencyTemplates::to_color_attachment_in(
