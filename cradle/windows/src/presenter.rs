@@ -237,9 +237,7 @@ impl InteropBackbufferResource {
         });
         let vk_shared_handle =
             br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
-        let exportable = br::vk::VkExternalMemoryImageCreateInfoKHR::new(
-            br::ExternalMemoryHandleTypes::from(vk_shared_handle.0).0,
-        );
+        let exportable = br::vk::VkExternalMemoryImageCreateInfoKHR::new(vk_shared_handle.0 as _);
         let image = br::ImageObject::new(
             g.device().clone(),
             &br::ImageCreateInfo::new(size, format)
@@ -478,7 +476,7 @@ impl Presenter {
         g.device()
             .import_semaphore_win32_handle(&br::ImportSemaphoreWin32HandleInfo::new(
                 &present_order,
-                br::ExternalSemaphoreHandleTYpeWin32::D3DFence
+                br::ExternalSemaphoreHandleTypeWin32::D3DFence
                     .with_handle(render_completion_fence_handle.handle()),
                 &render_completion_fence_name,
             ))
