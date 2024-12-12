@@ -36,7 +36,8 @@ const unsafe fn as_u8_slice<T>(slice: &[T]) -> &[u8] {
 }
 
 pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
-    let font_provider = pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
+    let mut font_provider =
+        pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
     let font = font_provider
         .best_match("sans-serif", &pvg::FontProperties::default(), 18.0)
         .expect("No Fonts");
@@ -328,145 +329,150 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         )
         .expect("Create PipelineLayout"),
     );
-    let spc_map = &[
-        br::vk::VkSpecializationMapEntry {
-            constantID: 0,
-            offset: 0,
-            size: 4,
-        },
-        br::vk::VkSpecializationMapEntry {
-            constantID: 1,
-            offset: 4,
-            size: 4,
-        },
-    ];
-    let vsh_parameters = br::SpecializationInfo::from_binary(spc_map, unsafe {
-        as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..])
-    });
 
-    let color1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
-        r: 1.0,
-        g: 0.5,
-        b: 0.0,
-        a: 1.0,
-    });
-    let shader_stages = [
-        shader_modules
-            .pipeline_vertex_shader_stage()
-            .with_specialization_info(&vsh_parameters),
-        shader_modules
-            .pipeline_fragment_shader_stage()
-            .expect("no fsh?")
-            .with_specialization_info(&color1_fsh_parameters),
-    ];
-    let curve_shader_stages = [
-        curve_shader_modules
-            .pipeline_vertex_shader_stage()
-            .with_specialization_info(&vsh_parameters),
-        curve_shader_modules
-            .pipeline_fragment_shader_stage()
-            .expect("no fsh?")
-            .with_specialization_info(&color1_fsh_parameters),
-    ];
-    let interior_vertex_processing = br::VertexProcessingStages::new(
-        &shader_stages,
-        &shader.vertex_bindings,
-        &shader.vertex_attributes,
-        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-    );
-    let curve_vertex_processing = br::VertexProcessingStages::new(
-        &curve_shader_stages,
-        &curve_shader.vertex_bindings,
-        &curve_shader.vertex_attributes,
-        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-    );
+    let (gp, gp_curve);
+    let (gp2, gp2_curve);
+    {
+        let spc_map = &[
+            br::vk::VkSpecializationMapEntry {
+                constantID: 0,
+                offset: 0,
+                size: 4,
+            },
+            br::vk::VkSpecializationMapEntry {
+                constantID: 1,
+                offset: 4,
+                size: 4,
+            },
+        ];
+        let vsh_parameters = br::SpecializationInfo::from_binary(spc_map, unsafe {
+            as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..])
+        });
 
-    let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
-    let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(
-        &pl,
-        render_pass.subpass(0),
-        interior_vertex_processing,
-    );
-    gpb.multisample_state(Some({
-        let mut state = br::MultisampleState::new();
-        state.rasterization_samples(msaa_count as _);
+        let color1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
+            r: 1.0,
+            g: 0.5,
+            b: 0.0,
+            a: 1.0,
+        });
+        let shader_stages = [
+            shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&color1_fsh_parameters),
+        ];
+        let curve_shader_stages = [
+            curve_shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            curve_shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&color1_fsh_parameters),
+        ];
+        let interior_vertex_processing = br::VertexProcessingStages::new(
+            &shader_stages,
+            &shader.vertex_bindings,
+            &shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
+        let curve_vertex_processing = br::VertexProcessingStages::new(
+            &curve_shader_stages,
+            &curve_shader.vertex_bindings,
+            &curve_shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
 
-        state
-    }))
-    .viewport_state(br::ViewportState::new(&vp, &sc))
-    .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-    let gp = LayoutedPipeline::combine(
-        gpb.create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Create GraphicsPipeline"),
-        pl.clone(),
-    );
-    gpb.vertex_processing(curve_vertex_processing);
-    let gp_curve = LayoutedPipeline::combine(
-        gpb.create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Create GraphicsPipeline of CurveRender"),
-        pl.clone(),
-    );
+        let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
+        let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(
+            &pl,
+            render_pass.subpass(0),
+            interior_vertex_processing,
+        );
+        gpb.multisample_state(Some({
+            let mut state = br::MultisampleState::new();
+            state.rasterization_samples(msaa_count as _);
 
-    let fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
-        r: 0.0,
-        g: 0.5,
-        b: 1.0,
-        a: 1.0,
-    });
-    let shader_stages = [
-        shader_modules
-            .pipeline_vertex_shader_stage()
-            .with_specialization_info(&vsh_parameters),
-        shader_modules
-            .pipeline_fragment_shader_stage()
-            .expect("no fsh?")
-            .with_specialization_info(&fsh_parameters),
-    ];
-    let curve_shader_stages = [
-        curve_shader_modules
-            .pipeline_vertex_shader_stage()
-            .with_specialization_info(&vsh_parameters),
-        curve_shader_modules
-            .pipeline_fragment_shader_stage()
-            .expect("no fsh?")
-            .with_specialization_info(&fsh_parameters),
-    ];
-    let interior_vertex_processing = br::VertexProcessingStages::new(
-        &shader_stages,
-        &shader.vertex_bindings,
-        &shader.vertex_attributes,
-        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-    );
-    let curve_vertex_processing = br::VertexProcessingStages::new(
-        &curve_shader_stages,
-        &curve_shader.vertex_bindings,
-        &curve_shader.vertex_attributes,
-        br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-    );
-    gpb.vertex_processing(interior_vertex_processing);
-    let gp2 = LayoutedPipeline::combine(
-        gpb.create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Creating GraphicsPipeline2"),
-        pl.clone(),
-    );
-    gpb.vertex_processing(curve_vertex_processing);
-    let gp2_curve = LayoutedPipeline::combine(
-        gpb.create(
-            e.graphics().device().clone(),
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Creating GraphicsPipeline2 for CurveRender"),
-        pl.clone(),
-    );
+            state
+        }))
+        .viewport_state(br::ViewportState::new(&vp, &sc))
+        .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
+        gp = LayoutedPipeline::combine(
+            gpb.create(
+                e.graphics().device().clone(),
+                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+            )
+            .expect("Create GraphicsPipeline"),
+            pl.clone(),
+        );
+        gpb.vertex_processing(curve_vertex_processing);
+        gp_curve = LayoutedPipeline::combine(
+            gpb.create(
+                e.graphics().device().clone(),
+                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+            )
+            .expect("Create GraphicsPipeline of CurveRender"),
+            pl.clone(),
+        );
+
+        let fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
+            r: 0.0,
+            g: 0.5,
+            b: 1.0,
+            a: 1.0,
+        });
+        let shader_stages = [
+            shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&fsh_parameters),
+        ];
+        let curve_shader_stages = [
+            curve_shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            curve_shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&fsh_parameters),
+        ];
+        let interior_vertex_processing = br::VertexProcessingStages::new(
+            &shader_stages,
+            &shader.vertex_bindings,
+            &shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
+        let curve_vertex_processing = br::VertexProcessingStages::new(
+            &curve_shader_stages,
+            &curve_shader.vertex_bindings,
+            &curve_shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
+        gpb.vertex_processing(interior_vertex_processing);
+        gp2 = LayoutedPipeline::combine(
+            gpb.create(
+                e.graphics().device().clone(),
+                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+            )
+            .expect("Creating GraphicsPipeline2"),
+            pl.clone(),
+        );
+        gpb.vertex_processing(curve_vertex_processing);
+        gp2_curve = LayoutedPipeline::combine(
+            gpb.create(
+                e.graphics().device().clone(),
+                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+            )
+            .expect("Creating GraphicsPipeline2 for CurveRender"),
+            pl.clone(),
+        );
+    }
 
     let render_vg = RenderVG {
         params: vg_renderer_params,
