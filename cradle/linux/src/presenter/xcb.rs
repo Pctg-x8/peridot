@@ -243,17 +243,22 @@ impl Presenter {
     fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &Arc<RwLock<X11>>) -> Self {
         let wlock = w.read();
 
-        if !g.adapter().xcb_presentation_support(
-            renderer_queue_family,
-            wlock.con.get_raw_conn(),
-            wlock.vis,
-        ) {
+        if !unsafe {
+            g.adapter().xcb_presentation_support(
+                renderer_queue_family,
+                wlock.con.get_raw_conn(),
+                wlock.vis,
+            )
+        } {
             panic!("Vulkan Presentation is not supported!");
         }
-        let so = g
-            .adapter()
-            .new_surface_xcb(wlock.con.get_raw_conn(), wlock.mainwnd_id)
-            .expect("Failed to create Surface object");
+        let so = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkXcbSurfaceCreateInfoKHR::new(wlock.con.get_raw_conn(), wlock.mainwnd_id),
+            )
+            .expect("Failed to create Surface object")
+        };
         if !g
             .adapter()
             .surface_support(renderer_queue_family, &so)

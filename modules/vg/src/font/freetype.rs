@@ -4,9 +4,12 @@ use euclid::Rect;
 use freetype2::outline::*;
 use freetype2::*;
 use lyon_path::builder::{FlatPathBuilder, PathBuilder};
-use std::cell::{Cell, Ref, RefCell};
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
+use std::cell::Cell;
 use std::ffi::{CStr, CString};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::{Font, GlyphLoadingError};
 
@@ -33,12 +36,12 @@ impl Font for FreetypeFont {
         self.0.char_index(c)
     }
     fn advance_h(&self, glyph: &Self::GlyphID) -> Result<f32, GlyphLoadingError> {
-        self.0.get(glyph.0).load_glyph(glyph.1)?;
+        self.0.get_mut(glyph.0).load_glyph(glyph.1)?;
 
         Ok(self.0.get(glyph.0).glyph_advance().x as f32 / 64.0)
     }
     fn bounds(&self, glyph: &Self::GlyphID) -> Result<Rect<f32>, GlyphLoadingError> {
-        let fnt = self.0.get(glyph.0);
+        let mut fnt = self.0.get_mut(glyph.0);
         fnt.load_glyph(glyph.1)?;
         let m = fnt.glyph_metrics();
 
@@ -53,8 +56,10 @@ impl Font for FreetypeFont {
         transform: &euclid::Transform2D<f32>,
         builder: &mut impl PathBuilder,
     ) -> Result<(), GlyphLoadingError> {
-        self.0.get(glyph.0).load_glyph(glyph.1)?;
-        self.0.get(glyph.0).decompose_outline(transform, builder);
+        self.0.get_mut(glyph.0).load_glyph(glyph.1)?;
+        self.0
+            .get_mut(glyph.0)
+            .decompose_outline(transform, builder);
 
         Ok(())
     }
@@ -62,16 +67,20 @@ impl Font for FreetypeFont {
 
 #[repr(transparent)]
 pub struct UniqueSystem(FT_Library);
+unsafe impl Sync for UniqueSystem {}
+unsafe impl Send for UniqueSystem {}
 impl UniqueSystem {
+    #[inline(always)]
     pub fn new() -> Self {
         let mut obj = core::mem::MaybeUninit::uninit();
         unsafe {
             FT_Init_FreeType(obj.as_mut_ptr());
-            UniqueSystem(obj.assume_init())
+            Self(obj.assume_init())
         }
     }
 }
 impl Drop for UniqueSystem {
+    #[inline(always)]
     fn drop(&mut self) {
         unsafe {
             FT_Done_FreeType(self.0);
@@ -81,17 +90,18 @@ impl Drop for UniqueSystem {
 
 #[repr(transparent)]
 #[derive(Clone)]
-pub struct System(Rc<UniqueSystem>);
+pub struct System(Arc<RwLock<UniqueSystem>>);
 impl System {
+    #[inline(always)]
     pub fn new() -> Self {
-        System(UniqueSystem::new().into())
+        Self(Arc::new(RwLock::new(UniqueSystem::new())))
     }
 }
 
 pub enum FaceGroupEntry {
     Unloaded(CString, FT_Long),
     Loaded(Face),
-    LoadedMem(Face, Rc<Vec<u8>>),
+    LoadedMem(Face, Arc<Vec<u8>>),
 }
 impl FaceGroupEntry {
     pub fn unloaded(path: &CStr, index: FT_Long) -> Self {
@@ -107,7 +117,7 @@ impl FaceGroupEntry {
 }
 pub struct FaceGroup {
     parent: System,
-    faces: Vec<RefCell<FaceGroupEntry>>,
+    faces: Vec<RwLock<FaceGroupEntry>>,
     current_size: Cell<f32>,
 }
 impl System {
@@ -121,18 +131,18 @@ impl System {
     }
 }
 impl FaceGroup {
-    pub fn get(&self, index: usize) -> Ref<Face> {
-        if !self.faces[index].borrow().is_loaded() {
-            let new_face = match &*self.faces[index].borrow() {
+    pub fn get(&self, index: usize) -> MappedRwLockReadGuard<Face> {
+        if !self.faces[index].read().is_loaded() {
+            let mut new_face = match &*self.faces[index].read() {
                 FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
                 _ => unreachable!(),
             };
+
             new_face.set_size(self.current_size.get());
-            let bm = &self.faces[index];
-            *bm.borrow_mut() = FaceGroupEntry::Loaded(new_face);
+            *self.faces[index].write() = FaceGroupEntry::Loaded(new_face);
         }
 
-        Ref::map(self.faces[index].borrow(), |f| {
+        RwLockReadGuard::map(self.faces[index].read(), |f| {
             if let FaceGroupEntry::Loaded(f) | FaceGroupEntry::LoadedMem(f, _) = f {
                 f
             } else {
@@ -141,11 +151,28 @@ impl FaceGroup {
         })
     }
 
+    pub fn get_mut(&self, index: usize) -> MappedRwLockWriteGuard<Face> {
+        if !self.faces[index].read().is_loaded() {
+            let mut new_face = match &*self.faces[index].read() {
+                FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
+                _ => unreachable!(),
+            };
+
+            new_face.set_size(self.current_size.get());
+            *self.faces[index].write() = FaceGroupEntry::Loaded(new_face);
+        }
+
+        RwLockWriteGuard::map(self.faces[index].write(), |f| match f {
+            FaceGroupEntry::Loaded(f) | FaceGroupEntry::LoadedMem(f, _) => f,
+            _ => unreachable!(),
+        })
+    }
+
     pub fn set_size(&self, size: f32) {
         self.current_size.set(size);
         for e in &self.faces {
-            let eb = e.borrow();
-            if let &FaceGroupEntry::Loaded(ref f) | &FaceGroupEntry::LoadedMem(ref f, _) = &*eb {
+            let mut eb = e.write();
+            if let FaceGroupEntry::Loaded(f) | FaceGroupEntry::LoadedMem(f, _) = &mut *eb {
                 f.set_size(size);
             }
         }
@@ -176,9 +203,11 @@ pub struct Face {
 }
 impl System {
     pub fn new_face(&self, path: *const u8, face_index: FT_Long) -> Face {
+        let us = self.0.write();
+
         let mut ptr = core::mem::MaybeUninit::uninit();
         unsafe {
-            FT_New_Face(self.0 .0, path as _, face_index, ptr.as_mut_ptr());
+            FT_New_Face(us.0, path as _, face_index, ptr.as_mut_ptr());
             Face {
                 _parent: self.clone(),
                 ptr: ptr.assume_init(),
@@ -187,10 +216,12 @@ impl System {
     }
 
     pub fn new_face_from_mem(&self, mem: &[u8], face_index: FT_Long) -> Result<Face, FT_Error> {
+        let us = self.0.write();
+
         let mut ptr = core::mem::MaybeUninit::uninit();
         unsafe {
             let r = FT_New_Memory_Face(
-                self.0 .0,
+                us.0,
                 mem.as_ptr(),
                 mem.len() as _,
                 face_index,
@@ -209,18 +240,22 @@ impl System {
 }
 impl Drop for Face {
     fn drop(&mut self) {
+        let _us_lock = self._parent.0.write();
+
         unsafe {
             FT_Done_Face(self.ptr);
         }
     }
 }
+unsafe impl Sync for Face {}
+unsafe impl Send for Face {}
 
 impl Face {
-    pub fn select_unicode(&self) {
+    pub fn select_unicode(&mut self) {
         unsafe { FT_Select_Charmap(self.ptr, FT_ENCODING_UNICODE) };
     }
 
-    pub fn set_size(&self, size: f32) {
+    pub fn set_size(&mut self, size: f32) {
         unsafe { FT_Set_Char_Size(self.ptr, (size * 64.0) as _, (size * 64.0) as _, 100, 100) };
     }
 
@@ -236,7 +271,7 @@ impl Face {
         unsafe { FT_Get_Char_Index(self.ptr, c as _) }
     }
 
-    pub fn load_glyph(&self, g: u32) -> Result<(), FT_Error> {
+    pub fn load_glyph(&mut self, g: u32) -> Result<(), FT_Error> {
         let r = unsafe { FT_Load_Glyph(self.ptr, g, FT_LOAD_DEFAULT) };
         if r != 0 {
             Err(r)
@@ -254,7 +289,7 @@ impl Face {
     }
 
     pub fn decompose_outline<B: PathBuilder>(
-        &self,
+        &mut self,
         transform: &euclid::Transform2D<f32>,
         builder: &mut B,
     ) {

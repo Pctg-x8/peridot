@@ -30,6 +30,10 @@ impl<
     pub fn format(&self) -> super::PixelFormat {
         unsafe { std::mem::transmute(self.0.format()) }
     }
+
+    pub const fn offset_on_memory(&self) -> u64 {
+        self.2
+    }
 }
 impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> Image<Backend, DeviceMemory> {
     /// Reference to a memory object bound with this object.
