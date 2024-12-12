@@ -17,7 +17,7 @@ pub trait FontProvider {
 
     /// Create a best-matching font for family name and provided properties
     fn best_match(
-        &self,
+        &mut self,
         family_name: &str,
         properties: &FontProperties,
         size: f32,
