@@ -198,10 +198,13 @@ unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
 impl Presenter {
     fn new(layer_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
-        let obj = g
-            .adapter()
-            .new_surface_metal(layer_ptr as *const _)
-            .expect("Failed to create Surface");
+        let obj = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkMetalSurfaceCreateInfoEXT::new(layer_ptr as *const _)
+            )
+            .expect("Failed to create Surface")
+        };
         let support = g
             .adapter()
             .surface_support(g.graphics_queue_family_index(), &obj)

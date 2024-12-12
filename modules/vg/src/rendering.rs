@@ -239,13 +239,13 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
             .bind_graphics_pipeline(extras.interior_pipeline.pipeline())
             .push_constant(
                 extras.interior_pipeline.layout(),
-                br::ShaderStage::VERTEX,
+                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                 0,
                 &renderscale,
             )
             .push_constant(
                 extras.interior_pipeline.layout(),
-                br::ShaderStage::VERTEX,
+                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                 4 * 3,
                 &0u32,
             )
@@ -257,7 +257,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
             )
             .bind_vertex_buffers(
                 0,
-                &[br::BufferObjectRef::new(buffer)],
+                &[buffer.as_transparent_ref()],
                 &[self.buffer_offsets.interior_positions as _],
             )
             .bind_index_buffer(
@@ -275,7 +275,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                     .fold(r, |r, (n, ir)| {
                         r.push_constant(
                             extras.interior_pipeline.layout(),
-                            br::ShaderStage::VERTEX,
+                            br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                             4 * 2,
                             &(n as u32),
                         )
@@ -292,10 +292,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
         cmd.bind_graphics_pipeline(extras.curve_pipeline.pipeline())
             .bind_vertex_buffers(
                 0,
-                &[
-                    br::BufferObjectRef::new(buffer),
-                    br::BufferObjectRef::new(buffer),
-                ],
+                &[buffer.as_transparent_ref(), buffer.as_transparent_ref()],
                 &[
                     self.buffer_offsets.curve_positions as _,
                     self.buffer_offsets.curve_helper_coords as _,
@@ -315,7 +312,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                     .fold(r, |r, (n, ir)| {
                         r.push_constant(
                             extras.curve_pipeline.layout(),
-                            br::ShaderStage::VERTEX,
+                            br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                             4 * 2,
                             &(n as u32),
                         )

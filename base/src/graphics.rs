@@ -56,13 +56,13 @@ pub struct Graphics {
     #[cfg(feature = "mt")]
     fence_reactor: FenceReactorThread<DeviceObject>,
     #[cfg(feature = "debug")]
-    _debug_instance: br::DebugUtilsMessengerObject<InstanceObject>,
+    _debug_instance: Option<br::DebugUtilsMessengerObject<InstanceObject>>,
 }
 impl Graphics {
     pub(crate) fn new(
         app_name: &str,
         app_version: (u16, u16, u16),
-        instance_extensions: Vec<&CStr>,
+        #[allow(unused_mut)] mut instance_extensions: Vec<&CStr>,
         device_extensions: Vec<&CStr>,
         features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
@@ -110,26 +110,52 @@ impl Graphics {
         let app_name = CString::new(app_name).expect("invalid sequence in app name");
         let app =
             br::ApplicationInfo::new(&app_name, app_version, c"Interluse2:Peridot", (0, 1, 0));
-        let mut ib = br::InstanceBuilder::new(&app);
-        ib.add_extensions(instance_extensions.iter().copied());
+
+        #[allow(unused_mut)]
+        let mut instance_layers = Vec::new();
         #[cfg(feature = "debug")]
         {
-            ib.add_extension(c"VK_EXT_debug_report");
-            ib.add_extension(c"VK_EXT_debug_utils");
+            instance_extensions.extend([c"VK_EXT_debug_report", c"VK_EXT_debug_utils"]);
             if validation_layer_available {
-                ib.add_layer(c"VK_LAYER_KHRONOS_validation");
+                instance_layers.push(c"VK_LAYER_KHRONOS_validation".into());
             }
 
-            log::debug!("Debug reporting activated");
+            tracing::debug!("Debug reporting activated!");
         }
-        let instance = SharedRef::new(ib.create().expect("Failed to create vk instance"));
+
+        let instance = SharedRef::new(
+            br::InstanceObject::new(&br::InstanceCreateInfo::new(
+                &app,
+                &instance_layers,
+                &instance_extensions
+                    .iter()
+                    .map(|&x| x.into())
+                    .collect::<Vec<_>>(),
+            ))
+            .expect("Failed to create vk instance"),
+        );
 
         #[cfg(feature = "debug")]
-        let _debug_instance =
-            br::DebugUtilsMessengerCreateInfo::new(crate::debug::debug_utils_callback)
-                .filter_severity(br::DebugUtilsMessageSeverityFlags::ERROR.and_warning())
-                .create(instance.clone())
-                .expect("Failed to create vk debug instance");
+        let _debug_instance = match br::DebugUtilsMessengerObject::new(
+            instance.clone(),
+            &br::DebugUtilsMessengerCreateInfo::new(
+                br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+                    | br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
+                br::vk::VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+                    | br::vk::VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                    | br::vk::VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+                crate::debug::debug_utils_callback,
+            ),
+        ) {
+            Ok(x) => Some(x),
+            Err(e) => {
+                tracing::error!(
+                    { cause = ?e },
+                    "Failed to create vk debug instance. Vulkan debug logs will be unavailable."
+                );
+                None
+            }
+        };
 
         let Some(adapter) = instance
             .iter_physical_devices()
@@ -189,21 +215,29 @@ impl Graphics {
             log::error!("No suitable queue(graphics) found on device");
             panic!("Engine unrecoverable");
         };
-        let device = {
-            let mut db = br::DeviceBuilder::new(&adapter);
-            db.add_extensions(device_extensions.iter().copied())
-                .add_extensions(auto_device_extensions.iter().map(|x| x as _))
-                .add_queue(br::DeviceQueueCreateInfo::new(gqf_index, &[0.0]));
-            if validation_layer_available {
-                db.add_layer(c"VK_LAYER_KHRONOS_validation");
-            }
-            *db.mod_features() = features;
-            SharedRef::new(
-                db.create()
-                    .expect("Failed to create vk device")
-                    .clone_parent(),
+
+        let mut device_layers = Vec::new();
+        if validation_layer_available {
+            device_layers.push(c"VK_LAYER_KHRONOS_validation".into());
+        }
+
+        let device = SharedRef::new(
+            br::DeviceObject::new(
+                &adapter,
+                &br::DeviceCreateInfo::new(
+                    &[br::DeviceQueueCreateInfo::new(gqf_index, &[0.0])],
+                    &device_layers,
+                    &device_extensions
+                        .iter()
+                        .map(|&x| x.into())
+                        .chain(auto_device_extensions.iter().map(|x| (x as &CStr).into()))
+                        .collect::<Vec<_>>(),
+                )
+                .with_features(&features),
             )
-        };
+            .expect("Failed to create vk device")
+            .clone_parent(),
+        );
 
         Self {
             cp_onetime_submit: br::CommandPoolBuilder::new(gqf_index)
@@ -261,7 +295,7 @@ impl Graphics {
         self.graphics_queue
             .q
             .get_mut()
-            .submit(batches, Some(fence.as_transparent_mut_ref()))
+            .submit(batches, Some(fence.as_transparent_ref_mut()))
     }
     pub fn submit_buffered_commands_raw(
         &mut self,
@@ -272,7 +306,7 @@ impl Graphics {
             self.graphics_queue
                 .q
                 .get_mut()
-                .submit_raw(batches, Some(fence.as_transparent_mut_ref()))
+                .submit_raw(batches, Some(fence.as_transparent_ref_mut()))
         }
     }
 
@@ -287,9 +321,12 @@ impl Graphics {
         )
             -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
-        use bedrock::FenceMut;
+        use bedrock::VkHandleMut;
 
-        let mut fence = std::sync::Arc::new(br::FenceBuilder::new().create(self.device.clone())?);
+        let mut fence = std::sync::Arc::new(br::FenceObject::new(
+            self.device().clone(),
+            &br::FenceCreateInfo::new(0),
+        )?);
 
         let mut pool = br::CommandPoolBuilder::new(self.graphics_queue_family_index())
             .transient()
@@ -301,7 +338,7 @@ impl Graphics {
             Some(unsafe {
                 std::sync::Arc::get_mut(&mut fence)
                     .unwrap_unchecked()
-                    .as_transparent_mut_ref()
+                    .as_transparent_ref_mut()
             }),
         )?;
 

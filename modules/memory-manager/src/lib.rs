@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use bedrock as br;
-use br::{Device, MemoryBound, StructureChainQuery, VkHandle, VulkanStructure};
+use bedrock::{self as br, SinkStructureChainQuery};
+use br::{Device, MemoryBound, VkHandle, VulkanStructure};
 use num_integer::Integer;
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;
@@ -376,10 +376,10 @@ impl MemoryManager {
     pub fn allocate_device_local_buffer(
         &mut self,
         e: &peridot::Graphics,
-        desc: br::BufferDesc,
+        desc: br::BufferCreateInfo,
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = br::BufferObject::new(e.device().clone(), &desc)?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
@@ -431,7 +431,7 @@ impl MemoryManager {
     pub fn allocate_multiple_device_local_buffers<'r>(
         &mut self,
         e: &peridot::Graphics,
-        descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
+        descs: impl IntoIterator<Item = br::BufferCreateInfo<'r>>,
     ) -> br::Result<Vec<Buffer>> {
         let descs = descs.into_iter();
         let (s, _) = descs.size_hint();
@@ -442,7 +442,7 @@ impl MemoryManager {
         );
         for d in descs {
             exact_sizes.push(d.size());
-            let object = d.create(e.device().clone())?;
+            let object = br::BufferObject::new(e.device().clone(), &d)?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
@@ -597,7 +597,7 @@ impl MemoryManager {
     pub fn allocate_device_local_buffer_array<const N: usize>(
         &mut self,
         e: &peridot::Graphics,
-        descs: [br::BufferDesc; N],
+        descs: [br::BufferCreateInfo; N],
     ) -> br::Result<[Buffer; N]> {
         self.allocate_multiple_device_local_buffers(e, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
@@ -667,10 +667,10 @@ impl MemoryManager {
     pub fn allocate_upload_buffer(
         &mut self,
         e: &peridot::Graphics,
-        desc: br::BufferDesc,
+        desc: br::BufferCreateInfo,
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = br::BufferObject::new(e.device().clone(), &desc)?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
@@ -723,7 +723,7 @@ impl MemoryManager {
     pub fn allocate_multiple_upload_buffers<'r>(
         &mut self,
         e: &peridot::Graphics,
-        descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
+        descs: impl IntoIterator<Item = br::BufferCreateInfo<'r>>,
     ) -> br::Result<Vec<Buffer>> {
         let descs = descs.into_iter();
         let (s, _) = descs.size_hint();
@@ -734,7 +734,7 @@ impl MemoryManager {
         );
         for d in descs {
             exact_sizes.push(d.size());
-            let object = d.create(e.device().clone())?;
+            let object = br::BufferObject::new(e.device().clone(), &d)?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
@@ -884,7 +884,7 @@ impl MemoryManager {
     pub fn allocate_upload_buffer_array<const N: usize>(
         &mut self,
         e: &peridot::Graphics,
-        descs: [br::BufferDesc; N],
+        descs: [br::BufferCreateInfo; N],
     ) -> br::Result<[Buffer; N]> {
         self.allocate_multiple_upload_buffers(e, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
@@ -930,7 +930,7 @@ impl MemoryManager {
         let (byte_length, _alignment, row_texels) =
             self.compute_optimal_linear_image_buffer_layout(width, height, format);
         let object =
-            self.allocate_upload_buffer(e, br::BufferDesc::new(byte_length as _, usage))?;
+            self.allocate_upload_buffer(e, br::BufferCreateInfo::new(byte_length as _, usage))?;
 
         Ok(LinearImageBuffer {
             inner: object,
@@ -964,9 +964,9 @@ impl MemoryManager {
     pub fn allocate_device_local_image(
         &mut self,
         e: &peridot::Graphics,
-        desc: br::ImageDesc,
+        desc: br::ImageCreateInfo,
     ) -> br::Result<Image> {
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = br::ImageObject::new(e.device().clone(), &desc)?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
@@ -1017,13 +1017,13 @@ impl MemoryManager {
     pub fn allocate_multiple_device_local_images<'r>(
         &mut self,
         e: &peridot::Graphics,
-        descriptions: impl IntoIterator<Item = br::ImageDesc<'r>>,
+        descriptions: impl IntoIterator<Item = br::ImageCreateInfo<'r>>,
     ) -> br::Result<Vec<Image>> {
         let descs = descriptions.into_iter();
         let (s, _) = descs.size_hint();
         let (mut objects, mut requirements) = (Vec::with_capacity(s), Vec::with_capacity(s));
         for d in descs {
-            let object = d.create(e.device().clone())?;
+            let object = br::ImageObject::new(e.device().clone(), &d)?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
@@ -1168,7 +1168,7 @@ impl MemoryManager {
     pub fn allocate_device_local_image_array<const N: usize>(
         &mut self,
         e: &peridot::Graphics,
-        descs: [br::ImageDesc; N],
+        descs: [br::ImageCreateInfo; N],
     ) -> br::Result<[Image; N]> {
         self.allocate_multiple_device_local_images(e, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
