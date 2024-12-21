@@ -334,10 +334,10 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.presenter.requesting_back_buffer_layout()
     }
-    pub fn back_buffer_attachment_desc(&self) -> br::AttachmentDescription {
+    pub fn back_buffer_attachment_desc(&self) -> br::vk::VkAttachmentDescription {
         let (ol, _) = self.requesting_back_buffer_layout();
 
-        br::AttachmentDescription::new(self.back_buffer_format(), ol, ol)
+        br::vk::VkAttachmentDescription::new(self.back_buffer_format(), ol, ol)
     }
 
     pub fn input(&self) -> &InputProcess {

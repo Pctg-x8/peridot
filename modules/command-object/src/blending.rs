@@ -1,12 +1,16 @@
 use bedrock as br;
 
 pub struct Blending {
-    pub src_factor: br::BlendFactor,
-    pub dst_factor: br::BlendFactor,
-    pub op: br::BlendOp,
+    pub src_factor: br::vk::VkBlendFactor,
+    pub dst_factor: br::vk::VkBlendFactor,
+    pub op: br::vk::VkBlendOp,
 }
 impl Blending {
-    pub const fn new(src: br::BlendFactor, op: br::BlendOp, dst: br::BlendFactor) -> Self {
+    pub const fn new(
+        src: br::vk::VkBlendFactor,
+        op: br::vk::VkBlendOp,
+        dst: br::vk::VkBlendFactor,
+    ) -> Self {
         Self {
             src_factor: src,
             dst_factor: dst,
@@ -15,35 +19,43 @@ impl Blending {
     }
 
     /// src * factor + dest * 0
-    pub const fn source_only(factor: br::BlendFactor) -> Self {
-        Self::new(factor, br::BlendOp::Add, br::BlendFactor::Zero)
+    pub const fn source_only(factor: br::vk::VkBlendFactor) -> Self {
+        Self::new(
+            factor,
+            br::vk::VK_BLEND_OP_ADD,
+            br::vk::VK_BLEND_FACTOR_ZERO,
+        )
     }
 
     /// src * 0 + dest * factor
-    pub const fn dest_only(factor: br::BlendFactor) -> Self {
-        Self::new(br::BlendFactor::Zero, br::BlendOp::Add, factor)
+    pub const fn dest_only(factor: br::vk::VkBlendFactor) -> Self {
+        Self::new(
+            br::vk::VK_BLEND_FACTOR_ZERO,
+            br::vk::VK_BLEND_OP_ADD,
+            factor,
+        )
     }
 
     /// no factors applied: src * 1 op dest * 1
-    pub const fn pure_color_op(op: br::BlendOp) -> Self {
-        Self::new(br::BlendFactor::One, op, br::BlendFactor::One)
+    pub const fn pure_color_op(op: br::vk::VkBlendOp) -> Self {
+        Self::new(br::vk::VK_BLEND_FACTOR_ONE, op, br::vk::VK_BLEND_FACTOR_ONE)
     }
 
     /// no factors applied: src * 1 op dest * 1
-    pub const fn pure_alpha_op(op: br::BlendOp) -> Self {
-        Self::new(br::BlendFactor::One, op, br::BlendFactor::One)
+    pub const fn pure_alpha_op(op: br::vk::VkBlendOp) -> Self {
+        Self::new(br::vk::VK_BLEND_FACTOR_ONE, op, br::vk::VK_BLEND_FACTOR_ONE)
     }
 
-    pub const STRAIGHT_SOURCE: Self = Self::source_only(br::BlendFactor::One);
-    pub const STRAIGHT_DEST: Self = Self::dest_only(br::BlendFactor::One);
-    pub const MAX_COLOR: Self = Self::pure_color_op(br::BlendOp::Max);
-    pub const MAX_ALPHA: Self = Self::pure_alpha_op(br::BlendOp::Max);
-    pub const MIN_COLOR: Self = Self::pure_color_op(br::BlendOp::Min);
-    pub const MIN_ALPHA: Self = Self::pure_color_op(br::BlendOp::Min);
+    pub const STRAIGHT_SOURCE: Self = Self::source_only(br::vk::VK_BLEND_FACTOR_ONE);
+    pub const STRAIGHT_DEST: Self = Self::dest_only(br::vk::VK_BLEND_FACTOR_ONE);
+    pub const MAX_COLOR: Self = Self::pure_color_op(br::vk::VK_BLEND_OP_MAX);
+    pub const MAX_ALPHA: Self = Self::pure_alpha_op(br::vk::VK_BLEND_OP_MAX);
+    pub const MIN_COLOR: Self = Self::pure_color_op(br::vk::VK_BLEND_OP_MIN);
+    pub const MIN_ALPHA: Self = Self::pure_color_op(br::vk::VK_BLEND_OP_MIN);
     pub const FOR_PREMULTIPLIED_ALPHA: Self = Self::new(
-        br::BlendFactor::One,
-        br::BlendOp::Add,
-        br::BlendFactor::OneMinusSourceAlpha,
+        br::vk::VK_BLEND_FACTOR_ONE,
+        br::vk::VK_BLEND_OP_ADD,
+        br::vk::VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
     );
 }
 
@@ -89,12 +101,12 @@ impl ColorAttachmentBlending {
         match self {
             Self::Disabled => br::vk::VkPipelineColorBlendAttachmentState {
                 blendEnable: false as _,
-                srcColorBlendFactor: br::BlendFactor::One as _,
-                dstColorBlendFactor: br::BlendFactor::One as _,
-                colorBlendOp: br::BlendOp::Add as _,
-                srcAlphaBlendFactor: br::BlendFactor::One as _,
-                dstAlphaBlendFactor: br::BlendFactor::One as _,
-                alphaBlendOp: br::BlendOp::Add as _,
+                srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                colorBlendOp: br::vk::VK_BLEND_OP_ADD as _,
+                srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                alphaBlendOp: br::vk::VK_BLEND_OP_ADD as _,
                 colorWriteMask: br::vk::VK_COLOR_COMPONENT_A_BIT
                     | br::vk::VK_COLOR_COMPONENT_B_BIT
                     | br::vk::VK_COLOR_COMPONENT_G_BIT

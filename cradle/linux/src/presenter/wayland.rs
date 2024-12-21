@@ -292,19 +292,24 @@ impl Presenter {
     fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &Arc<RwLock<Wayland>>) -> Self {
         let wlock = w.read();
 
-        if !g.adapter().wayland_presentation_support(
-            renderer_queue_family,
-            wlock.con.display().id().as_ptr() as _,
-        ) {
+        if !unsafe {
+            g.adapter().wayland_presentation_support(
+                renderer_queue_family,
+                wlock.con.display().id().as_ptr() as _,
+            )
+        } {
             panic!("Vulkan Presentation is not supported!");
         }
-        let so = g
-            .adapter()
-            .new_surface_wayland(
-                wlock.con.display().id().as_ptr() as _,
-                wlock.surface.id().as_ptr() as _,
+        let so = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkWaylandSurfaceCreateInfoKHR::new(
+                    wlock.con.display().id().as_ptr() as _,
+                    wlock.surface.id().as_ptr() as _,
+                ),
             )
-            .expect("Failed to create Surface object");
+            .expect("Failed to create Surface object")
+        };
         if !g
             .adapter()
             .surface_support(renderer_queue_family, &so)
