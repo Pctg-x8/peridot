@@ -126,7 +126,7 @@ async fn process(
 }
 
 enum CompilationResult {
-    Successful(Vec<u8>),
+    Successful(Vec<u32>),
     Failed,
 }
 
@@ -161,7 +161,7 @@ async fn compile_glsl(
     Ok(CompilationResult::Successful(parse_num_output(output_str)))
 }
 
-fn parse_num_output(cout: &str) -> Vec<u8> {
+fn parse_num_output(cout: &str) -> Vec<u32> {
     let mut bytes = Vec::new();
     let elements = cout.split("\r\n").flat_map(|line| line.split(","));
     for nums in elements
@@ -175,7 +175,7 @@ fn parse_num_output(cout: &str) -> Vec<u8> {
             panic!("invalid hexstr output: {nums:?}");
         };
 
-        bytes.extend_from_slice(&n.to_le_bytes());
+        bytes.push(n);
     }
 
     bytes
