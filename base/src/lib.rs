@@ -1,6 +1,5 @@
 use async_std::stream::StreamExt;
 use futures_util::FutureExt;
-use log::*;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 
@@ -16,7 +15,7 @@ use std::time::{Duration, Instant as InstantTimer};
 mod graphics;
 pub use self::graphics::{
     CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
-    MemoryTypeManager,
+    MemoryTypeManager, VulkanExtension,
 };
 mod state_track;
 use self::state_track::StateFence;
@@ -241,7 +240,7 @@ pub struct Engine<NL: NativeLinker> {
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
         name: &str,
-        version: (u16, u16, u16),
+        version: br::Version,
         native_link: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
         engine_events_bus: (
@@ -280,7 +279,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 
     pub fn post_init(&mut self) {
-        trace!("PostInit BaseEngine...");
+        tracing::trace!("PostInit BaseEngine...");
     }
 }
 impl<NL: NativeLinker> Engine<NL> {
@@ -290,7 +289,7 @@ impl<NL: NativeLinker> Engine<NL> {
 
     pub async fn quit(&self) {
         if let Err(e) = self.engine_events_sender.send(EngineEvent::Shutdown).await {
-            warn!("Engine has already shutting down: {e:?}");
+            tracing::warn!(cause = ?e, "Engine has already shutting down");
         }
     }
 
