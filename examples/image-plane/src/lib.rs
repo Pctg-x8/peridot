@@ -248,7 +248,17 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
     let mut framebuffers = backbuffer_resources
         .iter()
-        .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b).create())
+        .map(|b| {
+            br::FramebufferObject::new(
+                e.graphics_device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &renderpass,
+                    &[b.as_transparent_ref()],
+                    screen_size.width,
+                    screen_size.height,
+                ),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()
         .expect("Bind Framebuffer");
 
@@ -370,15 +380,16 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     #[allow(unused_variables)]
     for (n, (cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
         #[cfg(feature = "debug")]
-        br::DebugUtilsObjectNameInfo::new(
-            cb,
-            Some(
-                &std::ffi::CString::new(format!("Primary Render Commands #{}", n))
-                    .expect("invalid sequence?"),
-            ),
-        )
-        .apply(e.graphics().device())
-        .expect("Failed to set render cb name");
+        e.graphics()
+            .device()
+            .set_object_name(&br::DebugUtilsObjectNameInfo::new(
+                cb,
+                Some(
+                    &std::ffi::CString::new(format!("Primary Render Commands #{n}"))
+                        .expect("invalid sequence?"),
+                ),
+            ))
+            .expect("Failed to set render cb name");
 
         let begin_main_rp = BeginRenderPass::new(
             &renderpass,
@@ -428,7 +439,15 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         framebuffers = backbuffer_resources
                             .iter()
                             .map(|b| {
-                                br::FramebufferBuilder::new_with_attachment(&renderpass, b).create()
+                                br::FramebufferObject::new(
+                                    e.graphics_device().clone(),
+                                    &br::FramebufferCreateInfo::new(
+                                        &renderpass,
+                                        &[b.as_transparent_ref()],
+                                        new_size.0,
+                                        new_size.1,
+                                    ),
+                                )
                             })
                             .collect::<Result<Vec<_>, _>>()
                             .expect("Bind Framebuffers");
@@ -489,7 +508,17 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 backbuffer_resources = e.iter_back_buffers().cloned().collect();
                 framebuffers = backbuffer_resources
                     .iter()
-                    .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b).create())
+                    .map(|b| {
+                        br::FramebufferObject::new(
+                            e.graphics_device().clone(),
+                            &br::FramebufferCreateInfo::new(
+                                &renderpass,
+                                &[b.as_transparent_ref()],
+                                new_size.0,
+                                new_size.1,
+                            ),
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()
                     .expect("Bind Framebuffers");
 
