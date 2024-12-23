@@ -4,7 +4,7 @@ extern crate bedrock;
 extern crate peridot_serialization_utils;
 use peridot_serialization_utils::*;
 
-use bedrock::{self as br, ShaderModule};
+use bedrock as br;
 use std::fs::File;
 #[cfg(feature = "with-loader-impl")]
 use std::io::Read;
@@ -118,6 +118,8 @@ impl<Device: br::Device + Clone> PvpShaderModules<Device> {
     }
 
     pub fn pipeline_vertex_shader_stage<'d, 's>(&'d self) -> br::PipelineShaderStage<'d, 's> {
+        use br::ShaderModule;
+
         self.vertex
             .with_entry_point(c"main")
             .on_stage(br::ShaderStage::Vertex)
@@ -126,6 +128,8 @@ impl<Device: br::Device + Clone> PvpShaderModules<Device> {
     pub fn pipeline_fragment_shader_stage<'d, 's>(
         &'d self,
     ) -> Option<br::PipelineShaderStage<'d, 's>> {
+        use br::ShaderModule;
+
         self.fragment.as_ref().map(|x| {
             x.with_entry_point(c"main")
                 .on_stage(br::ShaderStage::Fragment)
@@ -543,13 +547,14 @@ impl SpvBinary {
 
 impl BinarySerializeVkStructures for SpvBinary {
     fn binary_serialize<W: Write>(&self, sink: &mut W) -> IOResult<usize> {
-        VariableUInt(self.0.len() as _).write(sink).and_then(|w0| {
-            sink.write_all(unsafe {
-                core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
-            })
-            .map(move |_| self.0.len() + w0)
-        })
+        let w0 = VariableUInt(self.0.len() as _).write(sink)?;
+        sink.write_all(unsafe {
+            core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
+        })?;
+
+        Ok(w0 + self.0.len() << 2)
     }
+
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>
     where
         Self: Sized,
