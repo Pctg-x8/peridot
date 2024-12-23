@@ -117,7 +117,7 @@ where
             .device_local_index(self.memory_type_bitmask)
             .expect("No device-local memory")
             .index();
-        log::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
+        tracing::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt, self.memory_type_bitmask);
         let mem = SharedRef::new(DynamicMut::new(
             br::DeviceMemoryRequest::allocate(self.total_size as _, mt)
@@ -153,9 +153,11 @@ where
             )
             .expect("No host-visible memory");
         if !mt.is_host_coherent() {
-            log::warn!("ENGINE TODO: non-coherent memory requires explicit flushing operations");
+            tracing::warn!(
+                "ENGINE TODO: non-coherent memory requires explicit flushing operations"
+            );
         }
-        log::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
+        tracing::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt.index(), self.memory_type_bitmask);
         let mem = SharedRef::new(DynamicMut::new(
             br::DeviceMemoryRequest::allocate(self.total_size as _, mt.index())

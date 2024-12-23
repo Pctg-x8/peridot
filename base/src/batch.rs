@@ -4,7 +4,6 @@ use crate::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use bedrock::{self as br, ImageSubresourceSlice};
 use br::vk::VkBufferCopy;
 use br::{VkHandle, VulkanStructure};
-use log::*;
 use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -437,10 +436,11 @@ impl<Device: br::Device> TransferBatch<Device> {
         dst: crate::DeviceBufferView<SharedRef<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
         bytes: br::vk::VkDeviceSize,
     ) {
-        trace!(
-            "Registering COPYING-BUFFER: ({}, {}) -> {bytes} bytes",
-            src.offset,
-            dst.offset
+        tracing::trace!(
+            offset.src = src.offset,
+            offset.dst = dst.offset,
+            bytes,
+            "Registering COPYING-BUFFER",
         );
 
         Self::update_barrier_range_for(
@@ -614,7 +614,7 @@ impl<Device: br::Device> TransferBatch<Device> {
         })
         .inject(|r| {
             self.init_images.iter().fold(r, |r, (d, (dex, s, so))| {
-                trace!("Copying Image: extent={dex:?}");
+                tracing::trace!(extent = ?dex, "Copying Image");
 
                 r.copy_buffer_to_image(
                     &s,
