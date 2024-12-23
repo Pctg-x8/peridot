@@ -1,4 +1,4 @@
-use bedrock::{self as br, CommandBufferMut, Device, RenderPass};
+use bedrock::{self as br, CommandBufferMut, Device, RenderPass, VkHandle};
 use br::{GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
@@ -838,10 +838,18 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut fb = backbuffer_resources
         .iter()
         .map(|bb| {
-            br::FramebufferBuilder::new(&sdf_renderer.render_pass)
-                .with_attachment(bb)
-                .with_attachment(&stencil_buffer_view)
-                .create()
+            br::FramebufferObject::new(
+                e.graphics_device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &sdf_renderer.render_pass,
+                    &[
+                        bb.as_transparent_ref(),
+                        stencil_buffer_view.as_transparent_ref(),
+                    ],
+                    back_buffer_size.width,
+                    back_buffer_size.height,
+                ),
+            )
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("Failed to create Framebuffers");
@@ -1016,10 +1024,18 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 fb = backbuffer_resources
                     .iter()
                     .map(|bb| {
-                        br::FramebufferBuilder::new(&sdf_renderer.render_pass)
-                            .with_attachment(bb)
-                            .with_attachment(&stencil_buffer_view)
-                            .create()
+                        br::FramebufferObject::new(
+                            e.graphics_device().clone(),
+                            &br::FramebufferCreateInfo::new(
+                                &sdf_renderer.render_pass,
+                                &[
+                                    bb.as_transparent_ref(),
+                                    stencil_buffer_view.as_transparent_ref(),
+                                ],
+                                new_size.0,
+                                new_size.1,
+                            ),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .expect("Failed to create Framebuffers");
