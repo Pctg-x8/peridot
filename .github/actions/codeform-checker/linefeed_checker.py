@@ -5,7 +5,7 @@ for fpath in target_sources():
     with open(fpath, "rb") as fp:
         buf = bytearray(64 * 1024)
         while fp.readinto1(buf):
-            if b'r' in buf:
+            if b'\r' in buf:
                 incorrect_line_feeds.append(fpath)
                 break
 
