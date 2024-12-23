@@ -1,13 +1,17 @@
 from testutil import target_sources, annotate_error
+from io import BufferedIOBase
+from typing import Iterator
+
+def chunked_read(stream: BufferedIOBase, buf_size: int) -> Iterator[bytes]:
+    buf = bytearray(buf_size)
+    while stream.readinto1(buf):
+        yield buf
 
 incorrect_line_feeds = []
 for fpath in target_sources():
     with open(fpath, "rb") as fp:
-        buf = bytearray(64 * 1024)
-        while fp.readinto1(buf):
-            if b'\r' in buf:
-                incorrect_line_feeds.append(fpath)
-                break
+        if any(b'\r' in buf for buf in chunked_read(fp, 64 * 1024)):
+            incorrect_line_feeds.append(fpath)
 
 if not incorrect_line_feeds:
     print("All files are terminated with LF")
