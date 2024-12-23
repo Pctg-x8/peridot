@@ -1,7 +1,6 @@
 use crate::mthelper::SharedRef;
 use bedrock::{self as br, CommandBufferMut, QueueMut};
 use br::{Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch};
-use log::info;
 use std::{
     collections::HashSet,
     ffi::{CStr, CString},
@@ -253,6 +252,8 @@ impl Graphics {
             tracing::debug!("Debug reporting activated!");
         }
 
+        tracing::debug!(?instance_layers, ?instance_extensions, "VkInstance setup");
+
         let instance = SharedRef::new(
             br::InstanceObject::new(&br::InstanceCreateInfo::new(
                 &app,
@@ -337,6 +338,8 @@ impl Graphics {
         if validation_layer_available {
             device_layers.push(c"VK_LAYER_KHRONOS_validation".into());
         }
+
+        tracing::debug!(?device_layers, ?device_extensions, "VkDevice setup");
 
         enum Features<'r> {
             Standard(br::vk::VkPhysicalDeviceFeatures),

@@ -1,6 +1,5 @@
 use async_std::stream::StreamExt;
 use futures_util::FutureExt;
-use log::*;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 
@@ -280,7 +279,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 
     pub fn post_init(&mut self) {
-        trace!("PostInit BaseEngine...");
+        tracing::trace!("PostInit BaseEngine...");
     }
 }
 impl<NL: NativeLinker> Engine<NL> {
@@ -290,7 +289,7 @@ impl<NL: NativeLinker> Engine<NL> {
 
     pub async fn quit(&self) {
         if let Err(e) = self.engine_events_sender.send(EngineEvent::Shutdown).await {
-            warn!("Engine has already shutting down: {e:?}");
+            tracing::warn!(cause = ?e, "Engine has already shutting down");
         }
     }
 

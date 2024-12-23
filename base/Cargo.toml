@@ -12,7 +12,6 @@ mt = []
 
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
-log = "*"
 libc = "*"
 rayon = "1.0"
 num_cpus = "1.0"

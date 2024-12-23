@@ -212,7 +212,7 @@ impl TexturePreallocatedGroup<br::ImageObject<DeviceObject>> {
 impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
     /// Copy texture pixels into a staging buffer.
     pub fn stage_data(&self, mr: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>) {
-        trace!("Staging Texture Data...");
+        tracing::trace!("Staging Texture Data...");
         for &(ref pd, offs) in &self.0 {
             let s = unsafe {
                 mr.slice_mut(
