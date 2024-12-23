@@ -383,7 +383,7 @@ impl MemoryManager {
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -401,7 +401,7 @@ impl MemoryManager {
             .index;
 
         let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
-            if e.dedicated_allocation_available() {
+            if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                 tracing::info!("using dedicated allocation");
 
                 unsafe { r.for_dedicated_buffer_allocation(&o) }
@@ -446,7 +446,7 @@ impl MemoryManager {
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -516,7 +516,8 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    {
                         memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
                     }
                     let memory = memory_req.execute(e.device().clone())?;
@@ -674,7 +675,7 @@ impl MemoryManager {
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -693,7 +694,7 @@ impl MemoryManager {
 
         let (memory, offset) =
             self.allocate_internal(e.device(), &req, memory_type.index, |r| {
-                if e.dedicated_allocation_available() {
+                if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                     tracing::info!("using dedicated allocation");
 
                     unsafe { r.for_dedicated_buffer_allocation(&o) }
@@ -738,7 +739,7 @@ impl MemoryManager {
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -803,7 +804,8 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_type.index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    {
                         memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
                     }
                     let memory = memory_req.execute(e.device().clone())?;
@@ -970,7 +972,7 @@ impl MemoryManager {
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -988,7 +990,7 @@ impl MemoryManager {
             .index;
 
         let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
-            if e.dedicated_allocation_available() {
+            if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                 tracing::info!("using dedicated allocation");
 
                 unsafe { r.for_dedicated_image_allocation(&o) }
@@ -1027,7 +1029,7 @@ impl MemoryManager {
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -1091,7 +1093,8 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    {
                         memory_req = unsafe { memory_req.for_dedicated_image_allocation(&object) };
                     }
                     let memory = memory_req.execute(e.device().clone())?;
@@ -1223,7 +1226,7 @@ fn bind_buffers(
     e: &peridot::Graphics,
     binds: &[br::vk::VkBindBufferMemoryInfoKHR],
 ) -> br::Result<()> {
-    if e.extended_memory_binding_available() {
+    if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
 
         e.device().bind_buffers(&binds)?;
@@ -1243,7 +1246,7 @@ fn bind_images(
     e: &peridot::Graphics,
     binds: &[br::vk::VkBindImageMemoryInfoKHR],
 ) -> br::Result<()> {
-    if e.extended_memory_binding_available() {
+    if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
 
         e.device().bind_images(&binds)?;
