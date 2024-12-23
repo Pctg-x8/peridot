@@ -260,10 +260,15 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut framebuffers = backbuffer_resources
         .iter()
         .map(|bb| {
-            br::FramebufferBuilder::new(&render_pass)
-                .with_attachment(bb)
-                .with_attachment(&msaa_texture)
-                .create()
+            br::FramebufferObject::new(
+                e.graphics_device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &render_pass,
+                    &[bb.as_transparent_ref(), msaa_texture.as_transparent_ref()],
+                    screen_size.width,
+                    screen_size.height,
+                ),
+            )
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("Framebuffer Creation");
@@ -583,10 +588,15 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 framebuffers = backbuffer_resources
                     .iter()
                     .map(|bb| {
-                        br::FramebufferBuilder::new(&render_pass)
-                            .with_attachment(bb)
-                            .with_attachment(&msaa_texture)
-                            .create()
+                        br::FramebufferObject::new(
+                            e.graphics_device().clone(),
+                            &br::FramebufferCreateInfo::new(
+                                &render_pass,
+                                &[bb.as_transparent_ref(), msaa_texture.as_transparent_ref()],
+                                new_size.0,
+                                new_size.1,
+                            ),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .expect("Bind Framebuffer");

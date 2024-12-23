@@ -1,5 +1,5 @@
 use crate::mthelper::SharedRef;
-use bedrock::{self as br, CommandBufferMut, CommandPoolMut, QueueMut};
+use bedrock::{self as br, CommandBufferMut, QueueMut};
 use br::{Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch};
 use log::{info, warn};
 use std::{
@@ -240,10 +240,11 @@ impl Graphics {
         );
 
         Self {
-            cp_onetime_submit: br::CommandPoolBuilder::new(gqf_index)
-                .transient()
-                .create(device.clone())
-                .expect("Failed to create onetime submit command pool"),
+            cp_onetime_submit: br::CommandPoolObject::new(
+                device.clone(),
+                &br::CommandPoolCreateInfo::new(gqf_index).transient(),
+            )
+            .expect("Failed to create onetime submit command pool"),
             graphics_queue: QueueSet {
                 q: parking_lot::Mutex::new(device.clone().queue(gqf_index, 0)),
                 family: gqf_index,
@@ -277,7 +278,14 @@ impl Graphics {
             -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
     ) -> br::Result<()> {
         let mut cb = LocalCommandBundle(
-            self.cp_onetime_submit.alloc(1, true)?,
+            br::CommandBufferObject::alloc(
+                self.device.clone(),
+                &br::CommandBufferAllocateInfo::new(
+                    &mut self.cp_onetime_submit,
+                    1,
+                    br::CommandBufferLevel::Primary,
+                ),
+            )?,
             &mut self.cp_onetime_submit,
         );
         generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
@@ -328,10 +336,17 @@ impl Graphics {
             &br::FenceCreateInfo::new(0),
         )?);
 
-        let mut pool = br::CommandPoolBuilder::new(self.graphics_queue_family_index())
-            .transient()
-            .create(self.device.clone())?;
-        let mut cb = CommandBundle(pool.alloc(1, true)?, pool);
+        let mut pool = br::CommandPoolObject::new(
+            self.device.clone(),
+            &br::CommandPoolCreateInfo::new(self.graphics_queue_family_index()).transient(),
+        )?;
+        let mut cb = CommandBundle(
+            br::CommandBufferObject::alloc(
+                self.device.clone(),
+                &br::CommandBufferAllocateInfo::new(&mut pool, 1, br::CommandBufferLevel::Primary),
+            )?,
+            pool,
+        );
         generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
         self.graphics_queue.q.lock().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],

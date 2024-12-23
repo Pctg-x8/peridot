@@ -70,7 +70,17 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
     let framebuffers: Vec<_> = backbuffer_resources
         .iter()
-        .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b).create())
+        .map(|b| {
+            br::FramebufferObject::new(
+                e.graphics_device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &renderpass,
+                    &[b.as_transparent_ref()],
+                    bb_size.width,
+                    bb_size.height,
+                ),
+            )
+        })
         .collect::<Result<_, _>>()
         .expect("Failed to create Framebuffer");
 

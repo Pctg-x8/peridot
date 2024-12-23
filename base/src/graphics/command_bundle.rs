@@ -38,9 +38,20 @@ impl CommandBundle<DeviceObject> {
             CBSubmissionType::Graphics => g.graphics_queue.family,
             CBSubmissionType::Transfer => g.graphics_queue.family,
         };
-        let mut cp = br::CommandPoolBuilder::new(qf).create(g.device.clone())?;
+        let mut cp =
+            br::CommandPoolObject::new(g.device.clone(), &br::CommandPoolCreateInfo::new(qf))?;
 
-        Ok(Self(cp.alloc(count as _, true)?, cp))
+        Ok(Self(
+            br::CommandBufferObject::alloc(
+                g.device.clone(),
+                &br::CommandBufferAllocateInfo::new(
+                    &mut cp,
+                    count as _,
+                    br::CommandBufferLevel::Primary,
+                ),
+            )?,
+            cp,
+        ))
     }
 }
 impl<Device: br::Device> CommandBundle<Device> {
