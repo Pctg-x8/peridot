@@ -80,15 +80,23 @@ async fn process(
     let mut tok = Tokenizer::new(&content);
     let comsh = CombinedShader::from_parsed_blocks(tok.toplevel_blocks());
 
-    let compilation_results =
-        futures_util::try_join!(compile_glsl("vertex", comsh.emit_vertex_shader()), async {
-            if comsh.is_provided_fsh() {
-                compile_glsl("fragment", comsh.emit_fragment_shader()).await
-            } else {
-                Ok(CompilationResult::Successful(Vec::new()))
-            }
-        })
-        .map_err(ProcessError::CompilerProcessIOError)?;
+    let c1 = compile_glsl("vertex", comsh.emit_vertex_shader()).await.map_err(ProcessError::CompilerProcessIOError)?;
+    let c2 = if comsh.is_provided_fsh() {
+        compile_glsl("fragment", comsh.emit_fragment_shader()).await.map_err(ProcessError::CompilerProcessIOError)?
+    } else {
+        CompilationResult::Successful(Vec::new())
+    };
+
+    // let compilation_results =
+    //     futures_util::try_join!(compile_glsl("vertex", comsh.emit_vertex_shader()), async {
+    //         if comsh.is_provided_fsh() {
+    //             compile_glsl("fragment", comsh.emit_fragment_shader()).await
+    //         } else {
+    //             Ok(CompilationResult::Successful(Vec::new()))
+    //         }
+    //     })
+    //     .map_err(ProcessError::CompilerProcessIOError)?;
+    let compilation_results = (c1, c2);
     let (vertex_shader, fragment_shader) = match compilation_results {
         (CompilationResult::Successful(vs), CompilationResult::Successful(fs)) => (vs, fs),
         (CompilationResult::Failed, CompilationResult::Successful(_)) => {
@@ -142,11 +150,9 @@ async fn compile_glsl(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()?;
-    p.stdin
-        .as_mut()
-        .expect("No stdin for compiler process?")
-        .write_all(stdin_bytes.as_bytes())
-        .await?;
+    let stdin = p.stdin.as_mut().expect("No stdin for compiler process?");
+    stdin.write_all(stdin_bytes.as_bytes()).await?;
+    stdin.flush().await?;
     let o = p.output().await?;
 
     if !o.status.success() {
