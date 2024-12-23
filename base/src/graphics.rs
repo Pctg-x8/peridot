@@ -61,6 +61,10 @@ impl<'s> VulkanExtension<'s> {
         self
     }
 
+    pub const DEBUG_REPORT_EXT: Self = Self::new(c"VK_EXT_debug_report");
+    pub const DEBUG_UTILS_EXT: Self = Self::new(c"VK_EXT_debug_utils");
+    pub const GET_PHYSICAL_DEVICE_PROPERTIES2_KHR: Self =
+        Self::new(c"VK_KHR_get_physical_device_properties2").promoted(br::Version::new(1, 1, 0));
     pub const DEDICATED_ALLOCATION_KHR: Self =
         Self::new(c"VK_KHR_dedicated_allocation").promoted(br::Version::new(1, 1, 0));
     pub const GET_MEMORY_REQUIREMENTS2_KHR: Self =
@@ -96,21 +100,41 @@ impl Graphics {
     pub(crate) fn new(
         app_name: &str,
         app_version: br::Version,
-        #[allow(unused_mut)] mut instance_extensions: Vec<&CStr>,
-        device_extensions: Vec<&CStr>,
+        mut instance_extensions: Vec<&CStr>,
+        mut device_extensions: Vec<&CStr>,
         features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
         let vk_version = br::instance_version().expect("Failed to get vulkan version");
         tracing::info!("System Vulkan Version: v{vk_version}");
 
-        let mut instance_auto_extensions = Vec::new();
+        let mut optional_instance_extensions = Vec::new();
+        let mut optional_device_extensions = Vec::new();
+
         #[cfg(feature = "debug")]
-        instance_auto_extensions.extend([c"VK_EXT_debug_utils", c"VK_EXT_debug_report"]);
+        optional_instance_extensions.extend([
+            VulkanExtension::DEBUG_UTILS_EXT.name,
+            VulkanExtension::DEBUG_REPORT_EXT.name,
+        ]);
+
         if vk_version < br::Version::new(1, 1, 0) {
-            // Prerequisites for VK_KHR_synchronization2
-            instance_auto_extensions.push(c"VK_KHR_get_physical_device_properties2");
+            optional_instance_extensions
+                .extend([VulkanExtension::GET_PHYSICAL_DEVICE_PROPERTIES2_KHR.name]);
+            optional_device_extensions.extend([
+                VulkanExtension::MULTIVIEW_KHR.name,
+                VulkanExtension::MAINTENANCE2_KHR.name,
+                VulkanExtension::DEDICATED_ALLOCATION_KHR.name,
+                VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR.name,
+                VulkanExtension::BIND_MEMORY2_KHR.name,
+            ]);
         }
-        instance_auto_extensions.sort();
+        if vk_version < br::Version::new(1, 2, 0) {
+            optional_device_extensions.push(VulkanExtension::CREATE_RENDERPASS2_KHR.name);
+        }
+        if vk_version < br::Version::new(1, 3, 0) {
+            optional_device_extensions.push(VulkanExtension::SYNCHRONIZATION2_KHR.name);
+        }
+        optional_instance_extensions.sort();
+        optional_device_extensions.sort();
 
         let mut validation_layer_available = false;
         match br::enumerate_extension_properties_cstr(None) {
@@ -124,9 +148,13 @@ impl Graphics {
                         }
                     };
 
-                    if let Ok(n) = instance_auto_extensions.binary_search(&name_cstr) {
+                    tracing::info!(target: "Peridot DeviceDiag", name = ?name_cstr, version = x.specVersion, "Vk Instance Extension");
+                    let _span = tracing::info_span!(target: "Peridot DeviceDiag", "Vk Instance Extension", name = ?name_cstr, version = x.specVersion);
+                    let _span = _span.enter();
+
+                    if let Ok(n) = optional_instance_extensions.binary_search(&name_cstr) {
                         // available
-                        instance_extensions.push(instance_auto_extensions[n]);
+                        instance_extensions.push(optional_instance_extensions[n]);
                     }
                 }
             }
@@ -137,8 +165,6 @@ impl Graphics {
 
         match br::enumerate_layer_properties() {
             Ok(xs) => {
-                info!("Supported Layers: ");
-
                 for l in xs {
                     let name_cstr = match l.layerName.as_cstr() {
                         Ok(x) => x,
@@ -147,46 +173,53 @@ impl Graphics {
                             continue;
                         }
                     };
-                    let name_str = match name_cstr.to_str() {
-                        Ok(x) => x,
-                        Err(e) => {
-                            tracing::warn!("invalid sequence in layer name: {e:?}");
-                            continue;
-                        }
-                    };
 
-                    tracing::info!(
-                        "* {name_str} :: {}/{}",
-                        l.specVersion,
-                        l.implementationVersion
+                    tracing::info!(target: "Peridot DeviceDiag", name = ?name_cstr, spec_version = l.specVersion, impl_version = l.implementationVersion, "Vk Instance Layer");
+                    let _span = tracing::info_span!(
+                        target: "Peridot DeviceDiag",
+                        "Vk Instance Layer",
+                        name = ?name_cstr,
+                        spec_version = l.specVersion,
+                        impl_version = l.implementationVersion
                     );
+                    let _span = _span.enter();
 
                     #[cfg(debug_assertions)]
-                    if name_str == "VK_LAYER_KHRONOS_validation" {
+                    if name_cstr == c"VK_LAYER_KHRONOS_validation" {
                         validation_layer_available = true;
+                    }
 
-                        match br::enumerate_extension_properties_cstr(Some(name_cstr)) {
-                            Ok(xs) => {
-                                for x in xs {
-                                    let name_cstr = match x.extensionName.as_cstr() {
-                                        Ok(x) => x,
-                                        Err(e) => {
-                                            tracing::warn!({ cause = ?e }, "invalid extension name?");
-                                            continue;
-                                        }
-                                    };
-
-                                    if let Ok(n) =
-                                        instance_auto_extensions.binary_search(&name_cstr)
-                                    {
-                                        // available
-                                        instance_extensions.push(instance_auto_extensions[n]);
+                    match br::enumerate_extension_properties_cstr(Some(name_cstr)) {
+                        Ok(xs) => {
+                            for x in xs {
+                                let ext_name_cstr = match x.extensionName.as_cstr() {
+                                    Ok(x) => x,
+                                    Err(e) => {
+                                        tracing::warn!({ cause = ?e }, "invalid extension name?");
+                                        continue;
                                     }
+                                };
+
+                                tracing::info!(target: "Peridot DeviceDiag", name = ?ext_name_cstr, version = x.specVersion, "Vk Instance Layer Extension");
+                                let _span = tracing::info_span!(
+                                    target: "Peridot DeviceDiag",
+                                    "Vk Instance Layer Extension",
+                                    layer_name = ?name_cstr,
+                                    name = ?ext_name_cstr,
+                                    version = x.specVersion
+                                );
+                                let _span = _span.enter();
+
+                                if let Ok(n) =
+                                    optional_instance_extensions.binary_search(&ext_name_cstr)
+                                {
+                                    // available
+                                    instance_extensions.push(optional_instance_extensions[n]);
                                 }
                             }
-                            Err(e) => {
-                                tracing::warn!({ cause = ?e }, "Failed to enumerate vk instance extensions");
-                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!({ cause = ?e }, "Failed to enumerate vk instance extensions");
                         }
                     }
                 }
@@ -213,7 +246,6 @@ impl Graphics {
         let mut instance_layers = Vec::new();
         #[cfg(feature = "debug")]
         {
-            instance_extensions.extend([c"VK_EXT_debug_report", c"VK_EXT_debug_utils"]);
             if validation_layer_available {
                 instance_layers.push(c"VK_LAYER_KHRONOS_validation".into());
             }
@@ -264,30 +296,8 @@ impl Graphics {
             panic!("Engine unrecoverable");
         };
 
-        let mut optional_device_features = vec![
-            c"VK_KHR_dedicated_allocation",
-            c"VK_KHR_get_memory_requirements2",
-            c"VK_KHR_bind_memory2",
-        ];
-        if vk_version < br::Version::new(1, 1, 0) {
-            // non-promoted, but optionally available extensions
-            optional_device_features.extend([c"VK_KHR_multiview", c"VK_KHR_maintenance2"]);
-        }
-        if vk_version < br::Version::new(1, 2, 0) {
-            // non-promoted, but optionally available extensions
-            optional_device_features.push(c"VK_KHR_create_renderpass2");
-        }
-        if vk_version < br::Version::new(1, 3, 0) {
-            // non-promoted, but optionally available extensions
-            optional_device_features.push(c"VK_KHR_synchronization2");
-        }
-        optional_device_features.sort();
-
-        let mut auto_device_extensions = Vec::new();
         match adapter.enumerate_extension_properties(None) {
             Ok(xs) => {
-                info!("Device Extensions: ");
-
                 for d in xs {
                     let name_cstr = match d.extensionName.as_cstr() {
                         Ok(x) => x,
@@ -296,19 +306,14 @@ impl Graphics {
                             continue;
                         }
                     };
-                    let name = match name_cstr.to_str() {
-                        Ok(x) => x,
-                        Err(e) => {
-                            tracing::warn!({ cause = ?e }, "invalid sequence in extension name");
-                            continue;
-                        }
-                    };
 
-                    tracing::info!("* {name}: {}", d.specVersion);
+                    tracing::info!(target: "Peridot DeviceDiag", name = ?name_cstr, version = d.specVersion, "Vk Device Extension");
+                    let _span = tracing::info_span!(target: "Peridot DeviceDiag", "Vk Device Extension", name = ?name_cstr, version = d.specVersion);
+                    let _span = _span.enter();
 
-                    if let Ok(n) = optional_device_features.binary_search(&name_cstr) {
+                    if let Ok(n) = optional_device_extensions.binary_search(&name_cstr) {
                         // available!
-                        auto_device_extensions.push(optional_device_features[n]);
+                        device_extensions.push(optional_device_extensions[n]);
                     }
                 }
             }
@@ -338,14 +343,15 @@ impl Graphics {
             Extendable(br::PhysicalDeviceFeatures2<'r>),
         }
         let mut sync2 = if vk_version >= br::Version::new(1, 3, 0)
-            || device_extensions.contains(&c"VK_KHR_synchronization2")
+            || device_extensions.contains(&VulkanExtension::SYNCHRONIZATION2_KHR.name)
         {
             Some(br::PhysicalDeviceSynchronization2Features::new(true))
         } else {
             None
         };
         let features = if vk_version >= br::Version::new(1, 1, 0)
-            || instance_extensions.contains(&c"VK_KHR_get_physical_device_properties2")
+            || instance_extensions
+                .contains(&VulkanExtension::GET_PHYSICAL_DEVICE_PROPERTIES2_KHR.name)
         {
             // use extendable
             let ext_base = br::PhysicalDeviceFeatures2::new(features);
@@ -365,7 +371,6 @@ impl Graphics {
         let device_cinfo_extensions = device_extensions
             .iter()
             .map(|&x| x.into())
-            .chain(auto_device_extensions.iter().copied().map(From::from))
             .collect::<Vec<_>>();
         let device_cinfo =
             br::DeviceCreateInfo::new(&device_queues, &device_layers, &device_cinfo_extensions);
@@ -394,15 +399,10 @@ impl Graphics {
             device,
             adapter_properties: CachedAdapterProperties::new(),
             vk_version,
-            enabled_vk_extensions: auto_device_extensions
+            enabled_vk_extensions: instance_extensions
                 .into_iter()
+                .chain(device_extensions.into_iter())
                 .map(ToOwned::to_owned)
-                .chain(
-                    instance_extensions
-                        .into_iter()
-                        .chain(device_extensions.into_iter())
-                        .map(ToOwned::to_owned),
-                )
                 .collect(),
             memory_type_manager,
             #[cfg(feature = "mt")]
@@ -707,7 +707,6 @@ impl MemoryTypeManager {
     }
 
     fn diagnose_heaps(p: &impl br::PhysicalDevice) {
-        info!("Memory Heaps: ");
         for (n, h) in p.memory_properties().heaps().iter().enumerate() {
             let (mut nb, mut unit) = (h.size as f32, "bytes");
             if nb >= 10000.0 {
@@ -722,27 +721,27 @@ impl MemoryTypeManager {
                 nb /= 1024.0;
                 unit = "GB";
             }
+            if nb >= 10000.0 {
+                nb /= 1024.0;
+                unit = "TB";
+            }
             let is_device_local = (h.flags & br::vk::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
 
-            info!(
-                "  #{n}: {nb} {unit} {}",
-                if is_device_local {
-                    "[DEVICE_LOCAL]"
-                } else {
-                    ""
-                }
+            tracing::info!(
+                target: "Peridot MemDiag (Heap)",
+                index = n,
+                is_device_local,
+                "{nb} {unit}",
             );
         }
     }
 
     fn diagnose_types(&self) {
-        info!("Device Memory Types: ");
         for mt in &self.device_memory_types {
-            info!("  {:?}", mt);
+            tracing::info!(target: "Peridot MemDiag (Type)", ?mt, "Device Memory Type");
         }
-        info!("Host Visible Memory Types: ");
         for mt in &self.host_memory_types {
-            info!("  {:?}", mt);
+            tracing::info!(target: "Peridot MemDiag (Type)", ?mt, "Host Visible Memory Type");
         }
     }
 }
