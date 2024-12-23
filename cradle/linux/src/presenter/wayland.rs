@@ -198,11 +198,9 @@ impl Wayland {
         xdg_surface.set_window_geometry(0, 0, 640, 480);
         xdg_toplevel.set_app_id(String::from(crate::userlib::APP_IDENTIFIER));
         xdg_toplevel.set_title(format!(
-            "{} v{}.{}.{}",
+            "{} v{}",
             crate::userlib::APP_TITLE,
-            crate::userlib::APP_VERSION.0,
-            crate::userlib::APP_VERSION.1,
-            crate::userlib::APP_VERSION.2
+            crate::userlib::APP_VERSION,
         ));
         let xdg_decoration_manager: ZxdgDecorationManagerV1 = interfaces
             .bind_interface(&registry, &event_queue.handle(), ())
