@@ -147,8 +147,18 @@ impl Graphics {
                         }
                     };
 
-                    tracing::info!(target: "Peridot DeviceDiag", name = ?name_cstr, version = x.specVersion, "Vk Instance Extension");
-                    let _span = tracing::info_span!(target: "Peridot DeviceDiag", "Vk Instance Extension", name = ?name_cstr, version = x.specVersion);
+                    tracing::info!(
+                        target: "Peridot DeviceDiag",
+                        name = ?name_cstr,
+                        version = x.specVersion,
+                        "Vk Instance Extension"
+                    );
+                    let _span = tracing::info_span!(
+                        target: "Peridot DeviceDiag",
+                        "Vk Instance Extension",
+                        name = ?name_cstr,
+                        version = x.specVersion
+                    );
                     let _span = _span.enter();
 
                     if let Ok(n) = optional_instance_extensions.binary_search(&name_cstr) {
@@ -173,7 +183,13 @@ impl Graphics {
                         }
                     };
 
-                    tracing::info!(target: "Peridot DeviceDiag", name = ?name_cstr, spec_version = l.specVersion, impl_version = l.implementationVersion, "Vk Instance Layer");
+                    tracing::info!(
+                        target: "Peridot DeviceDiag",
+                        name = ?name_cstr,
+                        spec_version = l.specVersion,
+                        impl_version = l.implementationVersion,
+                        "Vk Instance Layer"
+                    );
                     let _span = tracing::info_span!(
                         target: "Peridot DeviceDiag",
                         "Vk Instance Layer",
@@ -199,7 +215,12 @@ impl Graphics {
                                     }
                                 };
 
-                                tracing::info!(target: "Peridot DeviceDiag", name = ?ext_name_cstr, version = x.specVersion, "Vk Instance Layer Extension");
+                                tracing::info!(
+                                    target: "Peridot DeviceDiag",
+                                    name = ?ext_name_cstr,
+                                    version = x.specVersion,
+                                    "Vk Instance Layer Extension"
+                                );
                                 let _span = tracing::info_span!(
                                     target: "Peridot DeviceDiag",
                                     "Vk Instance Layer Extension",
@@ -308,8 +329,18 @@ impl Graphics {
                         }
                     };
 
-                    tracing::info!(target: "Peridot DeviceDiag", name = ?name_cstr, version = d.specVersion, "Vk Device Extension");
-                    let _span = tracing::info_span!(target: "Peridot DeviceDiag", "Vk Device Extension", name = ?name_cstr, version = d.specVersion);
+                    tracing::info!(
+                        target: "Peridot DeviceDiag",
+                        name = ?name_cstr,
+                        version = d.specVersion,
+                        "Vk Device Extension"
+                    );
+                    let _span = tracing::info_span!(
+                        target: "Peridot DeviceDiag",
+                        "Vk Device Extension",
+                        name = ?name_cstr,
+                        version = d.specVersion
+                    );
                     let _span = _span.enter();
 
                     if let Ok(n) = optional_device_extensions.binary_search(&name_cstr) {
