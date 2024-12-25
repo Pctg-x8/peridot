@@ -1,18 +1,167 @@
 //! peridot-cradle for android platform
 
 use br::PhysicalDevice;
+use jni::objects::GlobalRef;
 use log::*;
 
 mod userlib;
 
+use android::{
+    AAsset, AAssetManager, AAssetManager_fromJava, AAssetManager_open, AAsset_close, AAsset_read,
+    AAsset_seek, AAsset_seek64, ANativeWindow, ANativeWindow_acquire, ANativeWindow_fromSurface,
+    ANativeWindow_getHeight, ANativeWindow_getWidth, ANativeWindow_release, AASSET_MODE_RANDOM,
+    AASSET_MODE_STREAMING,
+};
 use bedrock as br;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
-use peridot::{EngineEvents, FeatureRequests};
 use std::ffi::CStr;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+#[repr(transparent)]
+pub struct AndroidNativeWindow(core::ptr::NonNull<ANativeWindow>);
+unsafe impl Sync for AndroidNativeWindow {}
+unsafe impl Send for AndroidNativeWindow {}
+impl AndroidNativeWindow {
+    #[inline]
+    pub fn from_surface(env: &JNIEnv, surface_ref: &JObject) -> Option<Self> {
+        let ptr = core::ptr::NonNull::new(unsafe {
+            ANativeWindow_fromSurface(env.get_raw(), surface_ref.as_raw())
+        })?;
+
+        Some(Self(ptr))
+    }
+
+    pub const fn as_ptr(&self) -> *mut ANativeWindow {
+        self.0.as_ptr()
+    }
+
+    #[inline(always)]
+    pub fn width(&self) -> i32 {
+        unsafe { ANativeWindow_getWidth(self.0.as_ptr()) }
+    }
+
+    #[inline(always)]
+    pub fn height(&self) -> i32 {
+        unsafe { ANativeWindow_getHeight(self.0.as_ptr()) }
+    }
+}
+impl Clone for AndroidNativeWindow {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        unsafe {
+            ANativeWindow_acquire(self.0.as_ptr());
+        }
+
+        Self(self.0)
+    }
+}
+impl Drop for AndroidNativeWindow {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            ANativeWindow_release(self.0.as_ptr());
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AndroidAssetManagerCreateError {
+    #[error(transparent)]
+    JNI(#[from] jni::errors::Error),
+    #[error("No corresponding AssetManager object associated to the JObject ref")]
+    NoCorrespondingObject,
+}
+
+pub struct AndroidAssetManager(
+    core::ptr::NonNull<AAssetManager>,
+    #[allow(dead_code)] GlobalRef,
+);
+unsafe impl Sync for AndroidAssetManager {}
+unsafe impl Send for AndroidAssetManager {}
+impl AndroidAssetManager {
+    pub fn from_java(
+        env: &JNIEnv,
+        obj_ref: &JObject,
+    ) -> Result<Self, AndroidAssetManagerCreateError> {
+        let gref = env.new_global_ref(obj_ref)?;
+        let ptr = core::ptr::NonNull::new(unsafe {
+            AAssetManager_fromJava(env.get_raw(), gref.as_raw())
+        })
+        .ok_or(AndroidAssetManagerCreateError::NoCorrespondingObject)?;
+
+        Ok(Self(ptr, gref))
+    }
+
+    #[inline]
+    pub fn open(
+        &mut self,
+        filename: &core::ffi::CStr,
+        mode: core::ffi::c_int,
+    ) -> Option<AndroidAsset> {
+        let ptr = core::ptr::NonNull::new(unsafe {
+            AAssetManager_open(self.0.as_ptr(), filename.as_ptr(), mode)
+        })?;
+
+        Some(AndroidAsset(ptr))
+    }
+}
+
+#[repr(transparent)]
+pub struct AndroidAsset(core::ptr::NonNull<AAsset>);
+unsafe impl Sync for AndroidAsset {}
+unsafe impl Send for AndroidAsset {}
+impl Drop for AndroidAsset {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            AAsset_close(self.0.as_ptr());
+        }
+    }
+}
+impl std::io::Read for AndroidAsset {
+    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
+        let read_len = unsafe { AAsset_read(self.0.as_ptr(), buf.as_mut_ptr() as _, buf.len()) };
+
+        if read_len < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(read_len as _)
+        }
+    }
+}
+impl std::io::Seek for AndroidAsset {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> IOResult<u64> {
+        let new_pos = match pos {
+            std::io::SeekFrom::Current(o) => unsafe {
+                AAsset_seek64(self.0.as_ptr(), o, libc::SEEK_CUR)
+            },
+            std::io::SeekFrom::Start(o) => unsafe {
+                AAsset_seek64(
+                    self.0.as_ptr(),
+                    o.try_into().map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "too large offset for seeking",
+                        )
+                    })?,
+                    libc::SEEK_SET,
+                )
+            },
+            std::io::SeekFrom::End(o) => unsafe {
+                AAsset_seek64(self.0.as_ptr(), o, libc::SEEK_END)
+            },
+        };
+
+        if new_pos < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(new_pos as _)
+        }
+    }
+}
 
 struct Game {
     engine_input: peridot::InputProcess,
@@ -24,7 +173,7 @@ struct Game {
     usercode_thread: async_std::task::JoinHandle<()>,
 }
 impl Game {
-    fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
+    fn new(asset_manager: AndroidAssetManager, window: AndroidNativeWindow) -> Self {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
 
@@ -65,7 +214,7 @@ impl Game {
 }
 
 struct Presenter {
-    window: *mut android::ANativeWindow,
+    window: AndroidNativeWindow,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 unsafe impl Sync for Presenter {}
@@ -74,12 +223,12 @@ impl Presenter {
     pub fn new(
         g: &peridot::Graphics,
         render_queue_family_index: u32,
-        window: *mut android::ANativeWindow,
+        window: AndroidNativeWindow,
     ) -> Self {
         let obj = unsafe {
             br::SurfaceObject::new(
                 g.adapter(),
-                &br::vk::VkAndroidSurfaceCreateInfoKHR::new(window),
+                &br::vk::VkAndroidSurfaceCreateInfoKHR::new(window.as_ptr()),
             )
             .expect("Failed to create Surface")
         };
@@ -92,10 +241,12 @@ impl Presenter {
         }
 
         Self {
+            sc: peridot::IntegratedSwapchain::new(
+                g,
+                obj,
+                peridot::math::Vector2(window.width() as _, window.height() as _),
+            ),
             window,
-            sc: peridot::IntegratedSwapchain::new(g, obj, unsafe {
-                peridot::math::Vector2((*window).width() as _, (*window).height() as _)
-            }),
         }
     }
 }
@@ -159,51 +310,57 @@ impl peridot::PlatformPresenter for Presenter {
         true
     }
 
+    #[inline(always)]
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
-        unsafe { peridot::math::Vector2((*self.window).width() as _, (*self.window).height() as _) }
+        peridot::math::Vector2(self.window.width() as _, self.window.height() as _)
     }
 }
 
-use android::{Asset, AssetManager, AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
 use std::ffi::CString;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 struct PlatformAssetLoader {
-    amgr: AssetManager,
+    amgr: RwLock<AndroidAssetManager>,
 }
 unsafe impl Sync for PlatformAssetLoader {}
 unsafe impl Send for PlatformAssetLoader {}
 impl PlatformAssetLoader {
-    fn new(amgr: AssetManager) -> Self {
-        PlatformAssetLoader { amgr }
+    fn new(amgr: AndroidAssetManager) -> Self {
+        PlatformAssetLoader {
+            amgr: RwLock::new(amgr),
+        }
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset = Asset;
-    type StreamingAsset = Asset;
+    type Asset = AndroidAsset;
+    type StreamingAsset = AndroidAsset;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Asset> {
+    fn get(&self, path: &str, ext: &str) -> IOResult<AndroidAsset> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
-            .open(path_str.as_ptr(), AASSET_MODE_RANDOM)
+            .write()
+            .expect("poisoned")
+            .open(&path_str, AASSET_MODE_RANDOM)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset> {
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<AndroidAsset> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
-            .open(path_str.as_ptr(), AASSET_MODE_STREAMING)
+            .write()
+            .expect("poisoned")
+            .open(&path_str, AASSET_MODE_STREAMING)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
 }
 
 struct NativeLink {
     al: PlatformAssetLoader,
-    w: *mut android::ANativeWindow,
+    w: AndroidNativeWindow,
 }
 unsafe impl Sync for NativeLink {}
 unsafe impl Send for NativeLink {}
@@ -221,7 +378,7 @@ impl peridot::NativeLinker for NativeLink {
         &self.al
     }
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
-        Presenter::new(g, g.graphics_queue_family_index(), self.w)
+        Presenter::new(g, g.graphics_queue_family_index(), self.w.clone())
     }
 }
 
@@ -260,7 +417,7 @@ use jni::{
 
 #[no_mangle]
 pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
-    env: JNIEnv<'e>,
+    mut env: JNIEnv<'e>,
     _: JClass,
     surface: JObject,
     asset_manager: JObject,
@@ -268,7 +425,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
     // android_logger::init_once(android_logger::Filter::default().with_min_level(log::Level::Trace));
 
     std::panic::set_hook(Box::new(|p| {
-        log::error!("Panicking in app! {}", p);
+        log::error!("Panicking in app! {p}");
     }));
 
     tracing_subscriber::registry()
@@ -279,17 +436,20 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
     tracing::info!("Initializing NativeGameEngine...");
 
     std::panic::set_hook(Box::new(|p| {
-        tracing::error!("Panicking in app! {}", p);
+        tracing::error!("Panicking in app! {p}");
     }));
 
-    let window = unsafe { android::ANativeWindow_fromSurface(env.clone(), surface) };
-    let am =
-        unsafe { AssetManager::from_java(env.clone(), asset_manager).expect("null assetmanager") };
+    let window = AndroidNativeWindow::from_surface(&env, &surface)
+        .expect("No native window associated to the surface");
+    let am = AndroidAssetManager::from_java(&env, &asset_manager)
+        .expect("Failed to get AndroidAssetManager native object");
     let e = Game::new(am, window);
 
     let ptr = Box::into_raw(Box::new(e));
-    env.new_direct_byte_buffer(unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, 0) })
-        .expect("Creating DirectByteBuffer failed")
+    unsafe {
+        env.new_direct_byte_buffer(ptr as *mut u8, core::mem::size_of::<Game>())
+            .expect("Creating DirectByteBuffer failed")
+    }
 }
 #[no_mangle]
 pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(
@@ -299,9 +459,9 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(
 ) {
     info!("Finalizing NativeGameEngine...");
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let e = unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) };
+    let e = unsafe { Box::from_raw(bytes as *mut Game) };
 
     async_std::task::block_on(async move {
         if e.event_sender
@@ -320,9 +480,9 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(
     obj: JByteBuffer,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let e = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     match e.frame_timing_sender.try_send(()) {
         Ok(_) => (),
@@ -419,9 +579,9 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
     id: jint,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     gd.engine_input
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
@@ -434,9 +594,9 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
     id: jint,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     gd.engine_input
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
@@ -451,9 +611,9 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolut
     y: jfloat,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     gd.pos_cache.borrow_mut().set(id as _, x, y);
     gd.engine_input
