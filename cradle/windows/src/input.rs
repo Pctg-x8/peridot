@@ -1,8 +1,7 @@
-use log::*;
 use parking_lot::RwLock;
 use peridot::{NativeAnalogInput, NativeButtonInput};
 use std::sync::Arc;
-use windows::Win32::Foundation::{ERROR_DEVICE_NOT_CONNECTED, HWND, LPARAM, POINT};
+use windows::Win32::Foundation::{ERROR_DEVICE_NOT_CONNECTED, HWND, POINT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyA, MAPVK_VK_TO_CHAR, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F1,
     VK_F24, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD9,
@@ -51,15 +50,19 @@ impl RawInputHandler {
         RawInputHandler {}
     }
 
-    pub fn handle_wm_input(&mut self, p: &mut peridot::InputProcess, lp: LPARAM) {
+    pub fn handle_wm_input(
+        &mut self,
+        dispatcher: &peridot::InputEventDispatcher,
+        handle: HRAWINPUT,
+    ) {
         let mut buffer_size = 0;
         unsafe {
             GetRawInputData(
-                std::mem::transmute::<_, HRAWINPUT>(lp),
+                handle,
                 RID_INPUT,
                 None,
                 &mut buffer_size,
-                std::mem::size_of::<RAWINPUTHEADER>() as _,
+                core::mem::size_of::<RAWINPUTHEADER>() as _,
             )
         };
         if buffer_size == 0 {
@@ -68,11 +71,11 @@ impl RawInputHandler {
         let mut buffer = vec![0u8; buffer_size as usize];
         unsafe {
             GetRawInputData(
-                std::mem::transmute::<_, HRAWINPUT>(lp),
+                handle,
                 RID_INPUT,
                 Some(buffer.as_mut_ptr() as *mut _),
                 &mut buffer_size,
-                std::mem::size_of::<RAWINPUTHEADER>() as _,
+                core::mem::size_of::<RAWINPUTHEADER>() as _,
             )
         };
         let rinput = unsafe { &*(buffer.as_ptr() as *const RAWINPUT) };
@@ -80,15 +83,15 @@ impl RawInputHandler {
         match rinput.header.dwType {
             t if t == RIM_TYPEKEYBOARD.0 => {
                 let kd = unsafe { &rinput.data.keyboard };
-                /*debug!(
-                    "Keyboard Message! make={} flags={} reserved={} extinfo={} message={} vkey={}",
-                    kd.MakeCode,
-                    kd.Flags,
-                    kd.Reserved,
-                    kd.ExtraInformation,
-                    kd.Message,
-                    kd.VKey
-                );*/
+                tracing::trace!(
+                    target: "Win32RawInput::Keyboard",
+                    make = kd.MakeCode,
+                    flags = kd.Flags,
+                    extinfo = kd.ExtraInformation,
+                    message = kd.Message,
+                    vkey = kd.VKey,
+                );
+
                 let is_press = (kd.Flags as u32 & RI_KEY_BREAK) == 0;
                 let ty = match kd.VKey as i32 {
                     v if v == VK_BACK.0 as _ => NativeButtonInput::Backspace,
@@ -125,64 +128,94 @@ impl RawInputHandler {
                     }
                     // multi emu
                     v if v == VK_SHIFT.0 as _ => {
-                        p.dispatch_button_event(NativeButtonInput::LeftShift, is_press);
-                        p.dispatch_button_event(NativeButtonInput::RightShift, is_press);
+                        if is_press {
+                            let _ = dispatcher.button_down(NativeButtonInput::LeftShift);
+                            let _ = dispatcher.button_down(NativeButtonInput::RightShift);
+                        } else {
+                            let _ = dispatcher.button_up(NativeButtonInput::LeftShift);
+                            let _ = dispatcher.button_up(NativeButtonInput::RightShift);
+                        }
+
                         return;
                     }
                     v if v == VK_CONTROL.0 as _ => {
-                        p.dispatch_button_event(NativeButtonInput::LeftControl, is_press);
-                        p.dispatch_button_event(NativeButtonInput::RightControl, is_press);
+                        if is_press {
+                            let _ = dispatcher.button_down(NativeButtonInput::LeftControl);
+                            let _ = dispatcher.button_down(NativeButtonInput::RightControl);
+                        } else {
+                            let _ = dispatcher.button_up(NativeButtonInput::LeftControl);
+                            let _ = dispatcher.button_up(NativeButtonInput::RightControl);
+                        }
+
                         return;
                     }
                     v if v == VK_MENU.0 as _ => {
-                        p.dispatch_button_event(NativeButtonInput::LeftAlt, is_press);
-                        p.dispatch_button_event(NativeButtonInput::RightAlt, is_press);
+                        if is_press {
+                            let _ = dispatcher.button_down(NativeButtonInput::LeftAlt);
+                            let _ = dispatcher.button_down(NativeButtonInput::RightAlt);
+                        } else {
+                            let _ = dispatcher.button_up(NativeButtonInput::LeftAlt);
+                            let _ = dispatcher.button_up(NativeButtonInput::RightAlt);
+                        }
+
                         return;
                     }
                     // others
                     _ => {
                         let c = unsafe { MapVirtualKeyA(kd.VKey as _, MAPVK_VK_TO_CHAR) };
-                        if c != 0 {
-                            NativeButtonInput::Character((c as u8 as char).to_ascii_uppercase())
-                        } else {
-                            debug!("Unhandled key input: {}", kd.VKey);
+                        if c == 0 {
+                            tracing::debug!(vkey = kd.VKey, "Unhandled key input");
                             return;
                         }
+
+                        NativeButtonInput::Character((c as u8 as char).to_ascii_uppercase())
                     }
                 };
-                p.dispatch_button_event(ty, is_press);
+
+                if is_press {
+                    let _ = dispatcher.button_down(ty);
+                } else {
+                    let _ = dispatcher.button_up(ty);
+                }
             }
             t if t == RIM_TYPEMOUSE.0 => {
                 let md = unsafe { &rinput.data.mouse };
-                /*debug!(
-                    "Mouse Message! flags={} btnFlags={} btnData={} rawButtons={} lastX={} lastY={} extinfo={}",
-                    md.usFlags,
-                    md.usButtonFlags,
-                    md.usButtonData,
-                    md.ulRawButtons,
-                    md.lLastX,
-                    md.lLastY,
-                    md.ulExtraInformation
-                );*/
+                tracing::trace!(
+                    target: "Win32RawInput::Mouse",
+                    flags = md.usFlags,
+                    btnFlags = unsafe { md.Anonymous.Anonymous.usButtonFlags },
+                    btnData = unsafe { md.Anonymous.Anonymous.usButtonData },
+                    rawButtons = md.ulRawButtons,
+                    lastX = md.lLastX,
+                    lastY = md.lLastY,
+                    extinfo = md.ulExtraInformation,
+                );
+
                 for x in 0..8 {
                     if (unsafe { md.Anonymous.Anonymous.usButtonFlags } & (1 << (x * 2 + 0))) != 0 {
                         // Mouse Button Down
-                        p.dispatch_button_event(NativeButtonInput::Mouse(x), true);
+                        let _ = dispatcher.button_down(NativeButtonInput::Mouse(x));
                     }
                     if (unsafe { md.Anonymous.Anonymous.usButtonFlags } & (1 << (x * 2 + 1))) != 0 {
                         // Mouse Button Up
-                        p.dispatch_button_event(NativeButtonInput::Mouse(x), false);
+                        let _ = dispatcher.button_up(NativeButtonInput::Mouse(x));
                     }
                 }
                 if md.lLastX != 0 {
-                    p.dispatch_analog_event(NativeAnalogInput::MouseX, md.lLastX as _, false);
+                    let _ = dispatcher.analog(
+                        NativeAnalogInput::MouseX,
+                        peridot::AnalogValue::Relative(md.lLastX as _),
+                    );
                 }
                 if md.lLastY != 0 {
-                    p.dispatch_analog_event(NativeAnalogInput::MouseY, md.lLastY as _, false);
+                    let _ = dispatcher.analog(
+                        NativeAnalogInput::MouseY,
+                        peridot::AnalogValue::Relative(md.lLastY as _),
+                    );
                 }
             }
             ut => {
-                debug!("Unknown input: {ut}");
+                tracing::debug!(type = ut, "Unknown input");
             }
         }
     }
@@ -214,8 +247,8 @@ impl peridot::NativeInput for NativeInputHandler {
         Some((p0[0].x as _, p0[0].y as _))
     }
 
-    fn pull(&mut self, p: peridot::NativeEventReceiver) {
-        self.xi_handler.write().process_state_changes(p);
+    fn pull2(&mut self, dispatcher: &peridot::InputEventDispatcher) {
+        self.xi_handler.get_mut().process_state_changes(dispatcher);
     }
 }
 
@@ -235,7 +268,7 @@ impl XInputHandler {
         }
     }
 
-    pub fn process_state_changes(&mut self, mut p: peridot::NativeEventReceiver) {
+    pub fn process_state_changes(&mut self, dispatcher: &peridot::InputEventDispatcher) {
         for n in 0..Self::MAX_CONTROLLERS {
             let mut new_state = std::mem::MaybeUninit::<XINPUT_STATE>::uninit();
             let r = unsafe { XInputGetState(n as _, new_state.as_mut_ptr()) };
@@ -245,34 +278,34 @@ impl XInputHandler {
             if let Some(old_state) = self.current_state[n].take() {
                 if !connected {
                     // disconnected controller
-                    info!("Disconnected XInput Controller from #{}", n);
+                    tracing::info!("Disconnected XInput Controller from #{n}");
                     Self::dispatch_diff(
                         &old_state,
                         unsafe { &std::mem::MaybeUninit::zeroed().assume_init() },
-                        &mut p,
+                        dispatcher,
                     );
                 } else if old_state.dwPacketNumber != new_state.dwPacketNumber {
                     // has changes
-                    Self::dispatch_diff(&old_state, &new_state, &mut p);
+                    Self::dispatch_diff(&old_state, &new_state, dispatcher);
                 }
             } else if connected {
                 // new connected controller
-                info!("Connected XInput Controller at #{}", n);
+                tracing::info!("Connected XInput Controller at #{n}");
                 Self::dispatch_diff(
                     unsafe { &std::mem::MaybeUninit::zeroed().assume_init() },
                     &new_state,
-                    &mut p,
+                    dispatcher,
                 );
             }
 
-            self.current_state[n] = if connected { Some(new_state) } else { None };
+            self.current_state[n] = connected.then_some(new_state);
         }
     }
 
     fn dispatch_diff(
         old_state: &XINPUT_STATE,
         new_state: &XINPUT_STATE,
-        p: &mut peridot::NativeEventReceiver,
+        dispatcher: &peridot::InputEventDispatcher,
     ) {
         let button_diff_bits = new_state.Gamepad.wButtons.0 ^ old_state.Gamepad.wButtons.0;
         for &(bit, ity) in &[
@@ -292,57 +325,54 @@ impl XInputHandler {
             (XINPUT_GAMEPAD_RIGHT_SHOULDER, NativeButtonInput::ButtonR),
         ] {
             if (button_diff_bits & bit.0) != 0 {
-                p.dispatch_button_event(ity, (new_state.Gamepad.wButtons.0 & bit.0) != 0);
+                if (new_state.Gamepad.wButtons.0 & bit.0) != 0 {
+                    let _ = dispatcher.button_down(ity);
+                } else {
+                    let _ = dispatcher.button_up(ity);
+                }
             }
         }
 
         if new_state.Gamepad.bLeftTrigger != old_state.Gamepad.bLeftTrigger {
-            p.dispatch_analog_event(
+            let _ = dispatcher.analog(
                 NativeAnalogInput::LeftTrigger,
-                new_state.Gamepad.bLeftTrigger as f32 / 255.0,
-                true,
+                peridot::AnalogValue::Absolute(new_state.Gamepad.bLeftTrigger as f32 / 255.0),
             );
         }
         if new_state.Gamepad.bRightTrigger != old_state.Gamepad.bRightTrigger {
-            p.dispatch_analog_event(
+            let _ = dispatcher.analog(
                 NativeAnalogInput::RightTrigger,
-                new_state.Gamepad.bRightTrigger as f32 / 255.0,
-                true,
+                peridot::AnalogValue::Absolute(new_state.Gamepad.bRightTrigger as f32 / 255.0),
             );
         }
         if new_state.Gamepad.sThumbLX != old_state.Gamepad.sThumbLX {
-            p.dispatch_analog_event(
+            let _ = dispatcher.analog(
                 NativeAnalogInput::StickX(0),
-                normalize_short(new_state.Gamepad.sThumbLX),
-                true,
+                peridot::AnalogValue::Absolute(normalize_short(new_state.Gamepad.sThumbLX)),
             );
         }
         if new_state.Gamepad.sThumbLY != old_state.Gamepad.sThumbLY {
-            p.dispatch_analog_event(
+            let _ = dispatcher.analog(
                 NativeAnalogInput::StickY(0),
-                normalize_short(new_state.Gamepad.sThumbLY),
-                true,
+                peridot::AnalogValue::Absolute(normalize_short(new_state.Gamepad.sThumbLY)),
             );
         }
         if new_state.Gamepad.sThumbRX != old_state.Gamepad.sThumbRX {
-            p.dispatch_analog_event(
+            let _ = dispatcher.analog(
                 NativeAnalogInput::StickX(1),
-                normalize_short(new_state.Gamepad.sThumbRX),
-                true,
+                peridot::AnalogValue::Absolute(normalize_short(new_state.Gamepad.sThumbRX)),
             );
         }
         if new_state.Gamepad.sThumbRY != old_state.Gamepad.sThumbRY {
-            p.dispatch_analog_event(
+            let _ = dispatcher.analog(
                 NativeAnalogInput::StickY(1),
-                normalize_short(new_state.Gamepad.sThumbRY),
-                true,
+                peridot::AnalogValue::Absolute(normalize_short(new_state.Gamepad.sThumbRY)),
             );
         }
     }
 }
 
-#[inline]
-fn normalize_short(x: i16) -> f32 {
+const fn normalize_short(x: i16) -> f32 {
     if x > 0 {
         x as f32 / 32767.0
     } else {

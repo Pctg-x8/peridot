@@ -2,6 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 
+use crate::EngineEvent;
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 /// Digital(Buttons) Input
 pub enum NativeButtonInput {
@@ -80,6 +82,63 @@ pub enum NativeAnalogInput {
     TouchMoveY(u32),
 }
 
+/// Analog input value
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AnalogValue {
+    Absolute(f32),
+    Relative(f32),
+}
+
+#[derive(Clone)]
+pub struct InputEventDispatcher(pub(crate) async_std::channel::Sender<EngineEvent>);
+impl InputEventDispatcher {
+    #[inline(always)]
+    pub fn button_down(
+        &self,
+        b: NativeButtonInput,
+    ) -> Result<(), async_std::channel::SendError<EngineEvent>> {
+        self.0
+            .try_send(EngineEvent::InputButtonDown(b))
+            .map_err(|e| match e {
+                async_std::channel::TrySendError::Full(_) => {
+                    unreachable!("input event bus never be full")
+                }
+                async_std::channel::TrySendError::Closed(e) => async_std::channel::SendError(e),
+            })
+    }
+
+    #[inline(always)]
+    pub fn button_up(
+        &self,
+        b: NativeButtonInput,
+    ) -> Result<(), async_std::channel::SendError<EngineEvent>> {
+        self.0
+            .try_send(EngineEvent::InputButtonUp(b))
+            .map_err(|e| match e {
+                async_std::channel::TrySendError::Full(_) => {
+                    unreachable!("input event bus never be full")
+                }
+                async_std::channel::TrySendError::Closed(e) => async_std::channel::SendError(e),
+            })
+    }
+
+    #[inline(always)]
+    pub fn analog(
+        &self,
+        x: NativeAnalogInput,
+        value: AnalogValue,
+    ) -> Result<(), async_std::channel::SendError<EngineEvent>> {
+        self.0
+            .try_send(EngineEvent::InputAnalog(x, value))
+            .map_err(|e| match e {
+                async_std::channel::TrySendError::Full(_) => {
+                    unreachable!("input event bus never be full")
+                }
+                async_std::channel::TrySendError::Closed(e) => async_std::channel::SendError(e),
+            })
+    }
+}
+
 pub trait MappableNativeInputType {
     type ID;
 
@@ -142,6 +201,9 @@ pub trait NativeInput {
 
     #[allow(unused_variables)]
     fn pull(&mut self, p: NativeEventReceiver) {}
+
+    #[allow(unused_variables)]
+    fn pull2(&mut self, dispatcher: &InputEventDispatcher) {}
 }
 
 pub struct NativeEventReceiver<'s> {
@@ -242,12 +304,17 @@ impl InputProcessSharedState {
             .dispatch_analog_event(ty, value, is_absolute)
     }
 
-    pub(crate) fn prepare_for_frame(&mut self, delta_time: std::time::Duration) {
+    pub(crate) fn prepare_for_frame(
+        &mut self,
+        delta_time: std::time::Duration,
+        dispatcher: &InputEventDispatcher,
+    ) {
         if let Some(ref mut p) = self.nativelink {
             p.pull(NativeEventReceiver {
                 collect_data: &mut self.collected,
                 input_map: &self.input_map,
             });
+            p.pull2(dispatcher);
         }
 
         // Adjust slot size
@@ -375,8 +442,12 @@ impl InputProcess {
             .dispatch_analog_event(ty, value, is_absolute);
     }
 
-    pub(crate) fn prepare_for_frame(&self, delta_time: std::time::Duration) {
-        self.state.write().prepare_for_frame(delta_time);
+    pub(crate) fn prepare_for_frame(
+        &self,
+        delta_time: std::time::Duration,
+        dispatcher: &InputEventDispatcher,
+    ) {
+        self.state.write().prepare_for_frame(delta_time, dispatcher);
     }
 
     /// Map native input event with id

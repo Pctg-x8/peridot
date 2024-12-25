@@ -11,17 +11,23 @@ use std::ffi::CStr;
 use std::sync::Arc;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows::Win32::System::Threading::{
+    AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsA, Sleep,
+};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
-    GetWindowLongPtrA, LoadCursorW, PeekMessageA, PostQuitMessage, RegisterClassExA,
-    SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW,
-    PM_REMOVE, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE,
-    WNDCLASSEXA, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+    GetWindowLongPtrA, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageA, PostQuitMessage,
+    RegisterClassExA, SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT,
+    GWLP_USERDATA, IDC_ARROW, MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS, PM_REMOVE, QS_ALLINPUT,
+    SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA,
+    WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
 };
 
 mod presenter;
@@ -29,11 +35,9 @@ use self::presenter::Presenter;
 
 const LPSZCLASSNAME: &'static str = "mainWindow\0";
 
-#[inline]
 const fn loword(dw: usize) -> u16 {
     (dw & 0xffff) as _
 }
-#[inline]
 const fn hiword(dw: usize) -> u16 {
     ((dw >> 16) & 0xffff) as _
 }
@@ -87,6 +91,27 @@ pub struct GameDriver {
     current_size: peridot::math::Vector2<u32>,
     ri_handler: self::input::RawInputHandler,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
+}
+
+// non-sendable
+pub struct AvrtHandle(HANDLE, core::marker::PhantomData<*mut u8>);
+impl AvrtHandle {
+    pub fn set_mm_thread_characteristics(
+        name: windows::core::PCSTR,
+        task_index: Option<u32>,
+    ) -> windows::core::Result<Self> {
+        let mut ti = task_index.unwrap_or(0);
+        let h = unsafe { AvSetMmThreadCharacteristicsA(name, &mut ti)? };
+
+        Ok(Self(h, core::marker::PhantomData))
+    }
+}
+impl Drop for AvrtHandle {
+    fn drop(&mut self) {
+        if let Err(e) = unsafe { AvRevertMmThreadCharacteristics(self.0) } {
+            tracing::warn!(cause = ?e, "Failed to revert mm-thread characteristics");
+        }
+    }
 }
 
 #[async_std::main]
@@ -198,16 +223,85 @@ async fn main() {
         userlib::game_main(&mut driver.base).await;
     });
 
-    while process_message_all() {
-        match frame_timing_sender.try_send(()) {
-            Ok(_) => (),
-            Err(async_std::channel::TrySendError::Full(_)) => (),
-            Err(async_std::channel::TrySendError::Closed(_)) => {
-                // events bus gone
-                break;
+    let _task_handle = match AvrtHandle::set_mm_thread_characteristics(
+        windows::core::s!("Games"),
+        None,
+    ) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            tracing::warn!(cause = ?e, "Failed to set mm-thread characteristics (performance will be degraded)");
+            None
+        }
+    };
+
+    let mut msg = MaybeUninit::uninit();
+    let mut nextframe_deadline = std::time::Instant::now();
+    'app: loop {
+        let r = unsafe {
+            MsgWaitForMultipleObjectsEx(
+                None,
+                // 精度がミリ秒までしかないので、1ms早めに切り上げて残りはスピンで時間を合わせる
+                nextframe_deadline
+                    .duration_since(std::time::Instant::now())
+                    .as_millis()
+                    .saturating_sub(1) as _,
+                QS_ALLINPUT,
+                MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS(0),
+            )
+        };
+
+        if r == WAIT_TIMEOUT {
+            // timeout
+            while std::time::Instant::now() < nextframe_deadline {
+                // ミリ秒以下の残りを待つ
+                let r = unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).as_bool() };
+                if !r {
+                    continue;
+                }
+
+                if unsafe { (*msg.as_ptr()).message } == WM_QUIT {
+                    break 'app;
+                }
+
+                unsafe {
+                    TranslateMessage(msg.as_ptr());
+                    DispatchMessageA(msg.as_ptr());
+                }
+            }
+
+            match frame_timing_sender.try_send(()) {
+                Ok(_) => (),
+                // frame drop
+                Err(async_std::channel::TrySendError::Full(_)) => (),
+                Err(async_std::channel::TrySendError::Closed(_)) => {
+                    // events bus gone
+                    break;
+                }
+            }
+
+            nextframe_deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs_f64(1.0 / 60.0);
+        } else if r == WAIT_OBJECT_0 {
+            // message
+            while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).as_bool() } {
+                if unsafe { (*msg.as_ptr()).message } == WM_QUIT {
+                    break 'app;
+                }
+
+                unsafe {
+                    TranslateMessage(msg.as_ptr());
+                    DispatchMessageA(msg.as_ptr());
+                }
+            }
+        } else {
+            // yield to system
+            unsafe {
+                Sleep(0);
             }
         }
     }
+
+    drop(_task_handle);
 
     if events_sender
         .send(peridot::EngineEvent::Shutdown)
@@ -247,28 +341,15 @@ extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LP
         if let Some(driver) = unsafe { p.as_mut() } {
             driver
                 .ri_handler
-                .handle_wm_input(driver.base.input_mut(), lparam);
+                .handle_wm_input(driver.base.input_event_dispatcher(), unsafe {
+                    core::mem::transmute(lparam)
+                });
         }
 
         return LRESULT(0);
     }
 
     unsafe { DefWindowProcA(w, msg, wparam, lparam) }
-}
-
-fn process_message_all() -> bool {
-    let mut msg = MaybeUninit::uninit();
-    while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).as_bool() } {
-        if unsafe { (*msg.as_ptr()).message } == WM_QUIT {
-            return false;
-        }
-        unsafe {
-            TranslateMessage(msg.as_ptr());
-            DispatchMessageA(msg.as_ptr());
-        }
-    }
-
-    true
 }
 
 use std::path::PathBuf;

@@ -540,6 +540,9 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         .expect("Failed to record render commands");
                 }
             }
+            peridot::Event::InputButtonDown(_)
+            | peridot::Event::InputButtonUp(_)
+            | peridot::Event::InputAnalog(_, _) => (),
         }
     }
 

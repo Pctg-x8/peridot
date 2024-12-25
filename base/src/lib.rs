@@ -3,7 +3,7 @@ use futures_util::FutureExt;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 
-use bedrock as br;
+use bedrock::{self as br};
 use br::Device;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
@@ -187,6 +187,9 @@ pub trait FeatureRequests {
 pub enum EngineEvent {
     Shutdown,
     Resize(math::Vector2<u32>),
+    InputButtonDown(NativeButtonInput),
+    InputButtonUp(NativeButtonInput),
+    InputAnalog(NativeAnalogInput, AnalogValue),
 }
 
 pub struct FrameData {
@@ -198,6 +201,9 @@ pub enum Event {
     NextFrame,
     Shutdown,
     Resize(math::Vector2<u32>),
+    InputButtonDown(NativeButtonInput),
+    InputButtonUp(NativeButtonInput),
+    InputAnalog(NativeAnalogInput, AnalogValue),
 }
 
 #[derive(Debug)]
@@ -208,19 +214,31 @@ pub enum PrepareFrameError {
 pub struct EngineEventReceiver {
     frame_timing_receiver: async_std::channel::Receiver<()>,
     other_events_receiver: async_std::channel::Receiver<EngineEvent>,
+    #[allow(dead_code)]
+    /// デバッグ調査用
+    last_wait: std::time::Instant,
 }
 impl EngineEventReceiver {
     pub async fn wait_for_event(&mut self) -> Option<Event> {
+        // println!(
+        //     "o {} dt {:?}",
+        //     self.other_events_receiver.len(),
+        //     self.last_wait.elapsed()
+        // );
+        // self.last_wait = std::time::Instant::now();
         futures_util::select! {
+            e = self.other_events_receiver.next().fuse() => match e {
+                Some(EngineEvent::Shutdown) => Some(Event::Shutdown),
+                Some(EngineEvent::Resize(ns)) => Some(Event::Resize(ns)),
+                Some(EngineEvent::InputButtonDown(b)) => Some(Event::InputButtonDown(b)),
+                Some(EngineEvent::InputButtonUp(b)) => Some(Event::InputButtonUp(b)),
+                Some(EngineEvent::InputAnalog(x, v)) => Some(Event::InputAnalog(x, v)),
+                None => None,
+            },
             e = self.frame_timing_receiver.next().fuse() => match e {
                 Some(()) => Some(Event::NextFrame),
                 None => None,
             },
-            e = self.other_events_receiver.next().fuse() => match e {
-                Some(EngineEvent::Shutdown) => Some(Event::Shutdown),
-                Some(EngineEvent::Resize(ns)) => Some(Event::Resize(ns)),
-                None => None,
-            }
         }
     }
 }
@@ -235,6 +253,7 @@ pub struct Engine<NL: NativeLinker> {
     audio_mixer: Arc<RwLock<audio::Mixer>>,
     request_resize: bool,
     engine_events_sender: async_std::channel::Sender<EngineEvent>,
+    input_event_dispatcher: InputEventDispatcher,
     receivers: core::cell::UnsafeCell<EngineEventReceiver>,
 }
 impl<PL: NativeLinker> Engine<PL> {
@@ -270,10 +289,12 @@ impl<PL: NativeLinker> Engine<PL> {
             g,
             presenter,
             request_resize: false,
+            input_event_dispatcher: InputEventDispatcher(engine_events_bus.0.clone()),
             engine_events_sender: engine_events_bus.0,
             receivers: core::cell::UnsafeCell::new(EngineEventReceiver {
                 frame_timing_receiver,
                 other_events_receiver: engine_events_bus.1,
+                last_wait: std::time::Instant::now(),
             }),
         }
     }
@@ -287,8 +308,21 @@ impl<NL: NativeLinker> Engine<NL> {
         unsafe { &mut *self.receivers.get() }
     }
 
+    #[inline]
+    pub fn input_event_dispatcher(&self) -> &InputEventDispatcher {
+        &self.input_event_dispatcher
+    }
+
+    #[inline(always)]
+    pub(crate) async fn dispatch_event(
+        &self,
+        e: EngineEvent,
+    ) -> Result<(), async_std::channel::SendError<EngineEvent>> {
+        self.engine_events_sender.send(e).await
+    }
+
     pub async fn quit(&self) {
-        if let Err(e) = self.engine_events_sender.send(EngineEvent::Shutdown).await {
+        if let Err(e) = self.dispatch_event(EngineEvent::Shutdown).await {
             tracing::warn!(cause = ?e, "Engine has already shutting down");
         }
     }
@@ -401,8 +435,7 @@ impl<PL: NativeLinker> Engine<PL> {
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
-        StateFence::wait(&mut self.last_rendering_completion)
-            .expect("Waiting last command completion");
+        self.wait_for_last_rendering_completion();
 
         let dt = self.game_timer.delta_time();
         let backbuffer_index = match self.presenter.next_back_buffer_index() {
@@ -412,7 +445,7 @@ impl<PL: NativeLinker> Engine<PL> {
             e => e.expect("Acquiring available back-buffer index failed"),
         };
 
-        self.ip.prepare_for_frame(dt);
+        self.ip.prepare_for_frame(dt, &self.input_event_dispatcher);
 
         Ok(FrameData {
             delta_time: dt,

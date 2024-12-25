@@ -18,7 +18,7 @@ impl<Fence: br::FenceMut> StateFence<Fence> {
     ///
     /// # Safety
     /// Internal state must be coherent with background API
-    pub unsafe fn signal(&mut self) {
+    pub const unsafe fn signal(&mut self) {
         let obj = core::ptr::read(match self {
             StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _,
         });
@@ -29,7 +29,7 @@ impl<Fence: br::FenceMut> StateFence<Fence> {
     ///
     /// # Safety
     /// must be coherent with background API
-    unsafe fn unsignal(&mut self) {
+    pub const unsafe fn unsignal(&mut self) {
         let obj = core::ptr::read(match self {
             StateFence::Signaled(f) | StateFence::Unsignaled(f) => f as *const _,
         });
@@ -47,11 +47,12 @@ impl<Fence: br::FenceMut> StateFence<Fence> {
         unsafe {
             self.unsignal();
         }
-        return Ok(());
+
+        Ok(())
     }
 
     /// Return internal fence object
-    pub fn inner_mut(&mut self) -> &mut Fence {
+    pub const fn inner_mut(&mut self) -> &mut Fence {
         match self {
             Self::Signaled(f) | Self::Unsignaled(f) => f,
         }
