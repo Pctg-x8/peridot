@@ -18,7 +18,7 @@ final class NativeLibLink {
     external fun setTouchPositionAbsolute(o: ByteBuffer, id: Int, x: Float, y: Float)
 
     init {
-        System.loadLibrary("ntv")
+        System.loadLibrary("pegamelib")
     }
 }
 

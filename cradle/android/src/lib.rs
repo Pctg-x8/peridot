@@ -8,7 +8,7 @@ mod userlib;
 
 use android::{
     AAsset, AAssetManager, AAssetManager_fromJava, AAssetManager_open, AAsset_close, AAsset_read,
-    AAsset_seek, AAsset_seek64, ANativeWindow, ANativeWindow_acquire, ANativeWindow_fromSurface,
+    AAsset_seek64, ANativeWindow, ANativeWindow_acquire, ANativeWindow_fromSurface,
     ANativeWindow_getHeight, ANativeWindow_getWidth, ANativeWindow_release, AASSET_MODE_RANDOM,
     AASSET_MODE_STREAMING,
 };

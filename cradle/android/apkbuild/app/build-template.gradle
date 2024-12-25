@@ -20,7 +20,6 @@ android {
         minifyEnabled false
         proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
     }
-    externalNativeBuild.cmake.path 'src/main/CMakeLists.txt'
     sourceSets.main {
         java.srcDirs = ["src/main"]
         jniLibs.srcDir System.getenv("NDK_HOME") + '/sources/third_party/vulkan/src/build-android/jniLibs'
