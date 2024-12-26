@@ -293,7 +293,7 @@ use jni::{
 };
 
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_init<'e>(
     mut env: JNIEnv<'e>,
     _: JClass,
     surface: JObject,
@@ -315,7 +315,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
     }
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_fin(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
@@ -337,7 +337,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(
     });
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_update(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
@@ -435,7 +435,7 @@ impl Drop for NativeAudioEngine {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchDownEvent(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
@@ -450,7 +450,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchUpEvent(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
@@ -465,7 +465,7 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,

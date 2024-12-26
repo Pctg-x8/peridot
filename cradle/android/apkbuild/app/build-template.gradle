@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace **APKAPPID**
-    compileSdkVersion = 28
+    compileSdkVersion = 34
     
     defaultConfig {
         applicationId = **APKAPPID**
@@ -27,15 +27,13 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
-    kotlinOptions.jvmTarget = JavaVersion.VERSION_1_8
 }
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation libs.android.appcompat.v7
-    implementation libs.android.support.constraintLayout
-    implementation libs.kotlin.stdlib
+    implementation libs.androidx.appcompat
+    implementation libs.androidx.lifecycle.viewmodel
 }
