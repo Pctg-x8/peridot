@@ -1,4 +1,5 @@
 use appkit::{CocoaObject, NSString};
+use audio::NativeAudioEngine;
 use libc::c_void;
 use log::*;
 use objc::{msg_send, sel, sel_impl};
@@ -6,13 +7,13 @@ use objc::{msg_send, sel, sel_impl};
 use bedrock as br;
 use br::PhysicalDevice;
 use peridot::mthelper::SharedRef;
-use peridot::{EngineEvents, FeatureRequests};
 use std::ffi::CStr;
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
-use std::sync::{Arc, RwLock};
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::{Layer, Registry};
+
+mod audio;
 
 struct NativeLogStream;
 impl std::io::Write for &'_ NativeLogStream {
@@ -201,7 +202,7 @@ impl Presenter {
         let obj = unsafe {
             br::SurfaceObject::new(
                 g.adapter(),
-                &br::vk::VkMetalSurfaceCreateInfoEXT::new(layer_ptr as *const _)
+                &br::vk::VkMetalSurfaceCreateInfoEXT::new(layer_ptr as *const _),
             )
             .expect("Failed to create Surface")
         };
@@ -434,145 +435,6 @@ pub extern "C" fn captionbar_text() -> *mut c_void {
     NSString::from_str(userlib::APP_TITLE)
         .expect("CaptionbarText NSString Allocation")
         .into_id() as *mut _
-}
-
-pub struct OutputAU(appkit::AudioUnit);
-impl OutputAU {
-    fn new() -> Option<Self> {
-        unsafe {
-            let d = appkit::AudioComponentDescription {
-                component_type: appkit::kAudioUnitType_Output,
-                component_subtype: appkit::kAudioUnitSubType_DefaultOutput,
-                component_manufacturer: appkit::kAudioUnitManufacturer_Apple,
-                component_flags: 0,
-                component_flags_mask: 0,
-            };
-
-            let c = appkit::AudioComponentFindNext(std::ptr::null_mut(), &d);
-            if c.is_null() {
-                warn!("No output audio component found");
-                return None;
-            }
-            let mut au = std::mem::MaybeUninit::uninit();
-            if appkit::AudioComponentInstanceNew(c, au.as_mut_ptr()) != 0 {
-                panic!("AudioComponentInstanceNew failed");
-            }
-            let au = au.assume_init();
-            appkit::AudioUnitInitialize(au);
-
-            Some(OutputAU(au))
-        }
-    }
-
-    fn set_stream_format(&self, format: &appkit::AudioStreamBasicDescription) {
-        unsafe {
-            let r = appkit::AudioUnitSetProperty(
-                self.0,
-                appkit::kAudioUnitProperty_StreamFormat,
-                appkit::kAudioUnitScope_Input,
-                0,
-                format as *const _ as *const _,
-                std::mem::size_of::<appkit::AudioStreamBasicDescription>() as _,
-            );
-            if r != 0 {
-                panic!("Setting StreamFormat Failed: {}", r);
-            }
-        }
-    }
-    fn set_render_callback(&self, callback: appkit::AURenderCallback, context: *mut c_void) {
-        let cb = appkit::AURenderCallbackStruct {
-            input_proc: callback,
-            input_proc_ref_con: context,
-        };
-
-        unsafe {
-            appkit::AudioUnitSetProperty(
-                self.0,
-                appkit::kAudioUnitProperty_SetRenderCallback,
-                appkit::kAudioUnitScope_Input,
-                0,
-                &cb as *const _ as *const _,
-                std::mem::size_of::<appkit::AURenderCallbackStruct>() as _,
-            );
-        }
-    }
-    fn start(&self) {
-        unsafe {
-            appkit::AudioOutputUnitStart(self.0);
-        }
-    }
-}
-impl Drop for OutputAU {
-    fn drop(&mut self) {
-        unsafe {
-            appkit::AudioComponentInstanceDispose(self.0);
-        }
-    }
-}
-
-pub struct NativeAudioEngine {
-    output: Option<OutputAU>,
-    amixer: Option<Box<Arc<RwLock<peridot::audio::Mixer>>>>,
-}
-impl NativeAudioEngine {
-    fn init() -> Self {
-        let Some(output) = OutputAU::new() else {
-            return Self {
-                output: None,
-                amixer: None,
-            };
-        };
-
-        let af = appkit::AudioStreamBasicDescription {
-            sample_rate: 44100.0,
-            format_id: appkit::kAudioFormatLinearPCM,
-            format_flags: appkit::kAudioFormatFlagIsFloat,
-            bits_per_channel: 32,
-            channels_per_frame: 2,
-            bytes_per_frame: 2 * 4,
-            frames_per_packet: 1,
-            bytes_per_packet: 2 * 4 * 1,
-            _reserved: 0,
-        };
-        output.set_stream_format(&af);
-
-        NativeAudioEngine {
-            output: Some(output),
-            amixer: None,
-        }
-    }
-    fn start(&mut self, mixer: Arc<RwLock<peridot::audio::Mixer>>) {
-        if let Some(ref o) = self.output {
-            let mut mixer = Box::new(mixer);
-            o.set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
-            o.start();
-            mixer.write().start();
-            self.amixer = Some(mixer);
-        }
-    }
-
-    extern "C" fn render(
-        in_ref_con: *mut c_void,
-        _io_action_flags: *mut appkit::AudioUnitRenderActionFlags,
-        _in_time_stamp: *const appkit::AudioTimeStamp,
-        _in_bus_number: u32,
-        in_number_frames: u32,
-        io_data: *mut appkit::AudioBufferList,
-    ) -> appkit::OSStatus {
-        let ctx = unsafe { &mut *(in_ref_con as *mut Arc<RwLock<peridot::audio::Mixer>>) };
-        let bufptr = unsafe {
-            std::slice::from_raw_parts_mut(
-                (*io_data).buffers[0].data as *mut f32,
-                (*io_data).buffers[0].number_channels as usize * in_number_frames as usize,
-            )
-        };
-        for v in bufptr.iter_mut() {
-            *v = 0.0;
-        }
-        ctx.write().process(bufptr);
-        // trace!("render callback! {:?} {}", unsafe { &(*io_data).buffers[0] }, in_number_frames);
-        0
-    }
 }
 
 #[no_mangle]
