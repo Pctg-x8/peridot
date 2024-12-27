@@ -1,6 +1,6 @@
 use appkit::{CocoaObject, NSString};
+use audio::NativeAudioEngine;
 use libc::c_void;
-use log::*;
 use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
@@ -9,57 +9,15 @@ use peridot::mthelper::SharedRef;
 use std::ffi::CStr;
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
-use std::sync::{Arc, RwLock};
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
-use tracing_subscriber::{Layer, Registry};
+use tracing_subscriber::util::SubscriberInitExt;
 
-struct NativeLogStream;
-impl std::io::Write for &'_ NativeLogStream {
-    fn write(&mut self, buf: &[u8]) -> IOResult<usize> {
-        unsafe {
-            let mut fmt =
-                NSString::from_str(core::str::from_utf8_unchecked(buf)).expect("NSString");
-            NSLog(&mut *fmt);
-            Ok(buf.len())
-        }
-    }
-
-    fn flush(&mut self) -> IOResult<()> {
-        std::io::stderr().flush()
-    }
-}
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for NativeLogStream {
-    type Writer = &'a Self;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self
-    }
-}
-
-struct NSLogger;
-impl log::Log for NSLogger {
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            unsafe {
-                let mut fmt =
-                    NSString::from_str(&format!("[{}] {}", record.level(), record.args()))
-                        .expect("NSString");
-                NSLog(&mut *fmt);
-            }
-        }
-    }
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
-    }
-    fn flush(&self) {}
-}
-static LOGGER: NSLogger = NSLogger;
-extern "C" {
-    fn NSLog(format: *mut NSString, ...);
-}
+mod audio;
+mod logging;
 
 use std::io::prelude::{Read, Seek};
 use std::io::SeekFrom;
+
 /// View of a Readable Element
 pub struct ReaderView<R: Read + Seek> {
     inner: R,
@@ -69,28 +27,28 @@ pub struct ReaderView<R: Read + Seek> {
 impl<R: Read + Seek> ReaderView<R> {
     pub fn new(mut reader: R, offset: u64, length: u64) -> IOResult<Self> {
         reader.seek(SeekFrom::Start(offset))?;
-        return Ok(ReaderView {
+
+        Ok(Self {
             inner: reader,
             offset,
             length,
-        });
+        })
     }
+
     fn current(&mut self) -> IOResult<u64> {
-        self.inner
-            .seek(SeekFrom::Current(0))
-            .map(|x| x - self.offset)
+        Ok(self.inner.seek(SeekFrom::Current(0))? - self.offset)
     }
+
     fn left(&mut self) -> IOResult<u64> {
-        self.current().map(|c| self.length - c)
+        Ok(self.length - self.current()?)
     }
 }
 impl<R: Read + Seek> Read for ReaderView<R> {
-    fn read(&mut self, mut buf: &mut [u8]) -> IOResult<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
         let left = self.left()?;
-        if buf.len() as u64 > left {
-            buf = &mut buf[..left as usize];
-        }
-        return self.inner.read(buf);
+        let avail_read_len = (buf.len() as u64).min(left) as usize;
+
+        self.inner.read(&mut buf[..avail_read_len])
     }
 }
 impl<R: Read + Seek> Seek for ReaderView<R> {
@@ -100,7 +58,8 @@ impl<R: Read + Seek> Seek for ReaderView<R> {
             SeekFrom::Start(x) => SeekFrom::Start(self.offset + x.min(self.length)),
             SeekFrom::Current(x) => SeekFrom::Current(x.min(self.left()? as i64)),
         };
-        return self.inner.seek(pos_translated);
+
+        self.inner.seek(pos_translated)
     }
 }
 pub struct PlatformAssetLoader {
@@ -128,20 +87,20 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             .map_err(|e| match e {
                 peridot::archive::ArchiveReadError::IO(e) => e,
                 peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
-                    error!("PrimaryArchive integrity check failed!");
+                    tracing::error!("PrimaryArchive integrity check failed!");
                     IOError::new(ErrorKind::Other, "PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::SignatureMismatch => {
-                    error!("PrimaryArchive signature mismatch!");
+                    tracing::error!("PrimaryArchive signature mismatch!");
                     IOError::new(ErrorKind::Other, "PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
-                    error!("lz4 decompress error: {:?}", e);
+                    tracing::error!(cause = ?e, "lz4 decompress error");
                     IOError::new(ErrorKind::Other, "PrimaryArchive read error")
                 }
                 _ => IOError::new(ErrorKind::Other, "PrimaryArchive read error"),
             })?;
-        let b = arc.read_bin(&format!("{}.{}", path.replace(".", "/"), ext))?;
+        let b = arc.read_bin(&format!("{}.{ext}", path.replace(".", "/")))?;
         match b {
             None => Err(IOError::new(
                 ErrorKind::NotFound,
@@ -159,21 +118,21 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             |e| match e {
                 peridot::archive::ArchiveReadError::IO(e) => e,
                 peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
-                    error!("PrimaryArchive integrity check failed!");
+                    tracing::error!("PrimaryArchive integrity check failed!");
                     IOError::new(ErrorKind::Other, "PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::SignatureMismatch => {
-                    error!("PrimaryArchive signature mismatch!");
+                    tracing::error!("PrimaryArchive signature mismatch!");
                     IOError::new(ErrorKind::Other, "PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
-                    error!("lz4 decompress error: {:?}", e);
+                    tracing::error!(cause = ?e, "lz4 decompress error");
                     IOError::new(ErrorKind::Other, "PrimaryArchive read error")
                 }
                 _ => IOError::new(ErrorKind::Other, "PrimaryArchive read error"),
             },
         )?;
-        let e = arc.find(&format!("{}.{}", path.replace(".", "/"), ext));
+        let e = arc.find(&format!("{}.{ext}", path.replace(".", "/")));
         match e {
             None => Err(IOError::new(
                 ErrorKind::NotFound,
@@ -183,12 +142,14 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         }
     }
 }
+
 fn acquire_layer_size(layer: *mut c_void) -> peridot::math::Vector2<u32> {
     let cr: appkit::CGRect =
         unsafe { msg_send![layer as *mut objc::runtime::Object, contentsRect] };
 
     peridot::math::Vector2(cr.size.width as _, cr.size.height as _)
 }
+
 pub struct Presenter {
     layer_ptr: *mut c_void,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<SharedRef<br::InstanceObject>>>,
@@ -378,16 +339,14 @@ pub extern "C" fn launch_game(
     l: *mut core::ffi::c_void,
     v: *mut core::ffi::c_void,
 ) -> *mut GameDriver {
-    log::set_logger(&LOGGER).expect("Failed to set logger");
-    log::set_max_level(log::LevelFilter::Trace);
-
-    let subscriber = Registry::default().with(
-        tracing_subscriber::fmt::layer()
-            .pretty()
-            .with_writer(NativeLogStream)
-            .with_filter(tracing_subscriber::filter::EnvFilter::from_default_env()),
-    );
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set log subscriber");
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .pretty()
+                .with_writer(logging::NativeLogStream),
+        )
+        .with(tracing_subscriber::filter::EnvFilter::from_default_env())
+        .init();
 
     Box::into_raw(Box::new(GameDriver::new(l, v)))
 }
@@ -417,7 +376,7 @@ pub extern "C" fn update_game(g: *mut GameDriver) {
             Ok(_) => (),
             Err(async_std::channel::TrySendError::Full(_)) => (),
             Err(async_std::channel::TrySendError::Closed(_)) => {
-                warn!("Frame timing channel was closed");
+                tracing::warn!("Frame timing channel was closed");
             }
         }
     }
@@ -438,148 +397,11 @@ pub extern "C" fn captionbar_text() -> *mut c_void {
         .into_id() as *mut _
 }
 
-pub struct OutputAU(appkit::AudioUnit);
-impl OutputAU {
-    fn new() -> Option<Self> {
-        unsafe {
-            let d = appkit::AudioComponentDescription {
-                component_type: appkit::kAudioUnitType_Output,
-                component_subtype: appkit::kAudioUnitSubType_DefaultOutput,
-                component_manufacturer: appkit::kAudioUnitManufacturer_Apple,
-                component_flags: 0,
-                component_flags_mask: 0,
-            };
-
-            let c = appkit::AudioComponentFindNext(std::ptr::null_mut(), &d);
-            if c.is_null() {
-                warn!("No output audio component found");
-                return None;
-            }
-            let mut au = std::mem::MaybeUninit::uninit();
-            if appkit::AudioComponentInstanceNew(c, au.as_mut_ptr()) != 0 {
-                panic!("AudioComponentInstanceNew failed");
-            }
-            let au = au.assume_init();
-            appkit::AudioUnitInitialize(au);
-
-            Some(OutputAU(au))
-        }
-    }
-
-    fn set_stream_format(&self, format: &appkit::AudioStreamBasicDescription) {
-        unsafe {
-            let r = appkit::AudioUnitSetProperty(
-                self.0,
-                appkit::kAudioUnitProperty_StreamFormat,
-                appkit::kAudioUnitScope_Input,
-                0,
-                format as *const _ as *const _,
-                std::mem::size_of::<appkit::AudioStreamBasicDescription>() as _,
-            );
-            if r != 0 {
-                panic!("Setting StreamFormat Failed: {}", r);
-            }
-        }
-    }
-    fn set_render_callback(&self, callback: appkit::AURenderCallback, context: *mut c_void) {
-        let cb = appkit::AURenderCallbackStruct {
-            input_proc: callback,
-            input_proc_ref_con: context,
-        };
-
-        unsafe {
-            appkit::AudioUnitSetProperty(
-                self.0,
-                appkit::kAudioUnitProperty_SetRenderCallback,
-                appkit::kAudioUnitScope_Input,
-                0,
-                &cb as *const _ as *const _,
-                std::mem::size_of::<appkit::AURenderCallbackStruct>() as _,
-            );
-        }
-    }
-    fn start(&self) {
-        unsafe {
-            appkit::AudioOutputUnitStart(self.0);
-        }
-    }
-}
-impl Drop for OutputAU {
-    fn drop(&mut self) {
-        unsafe {
-            appkit::AudioComponentInstanceDispose(self.0);
-        }
-    }
-}
-
-pub struct NativeAudioEngine {
-    output: Option<OutputAU>,
-    amixer: Option<Box<Arc<RwLock<peridot::audio::Mixer>>>>,
-}
-impl NativeAudioEngine {
-    fn init() -> Self {
-        let Some(output) = OutputAU::new() else {
-            return Self {
-                output: None,
-                amixer: None,
-            };
-        };
-
-        let af = appkit::AudioStreamBasicDescription {
-            sample_rate: 44100.0,
-            format_id: appkit::kAudioFormatLinearPCM,
-            format_flags: appkit::kAudioFormatFlagIsFloat,
-            bits_per_channel: 32,
-            channels_per_frame: 2,
-            bytes_per_frame: 2 * 4,
-            frames_per_packet: 1,
-            bytes_per_packet: 2 * 4 * 1,
-            _reserved: 0,
-        };
-        output.set_stream_format(&af);
-
-        NativeAudioEngine {
-            output: Some(output),
-            amixer: None,
-        }
-    }
-    fn start(&mut self, mixer: Arc<RwLock<peridot::audio::Mixer>>) {
-        if let Some(ref o) = self.output {
-            let mut mixer = Box::new(mixer);
-            o.set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
-            o.start();
-            mixer.write().expect("Poisoned Audio").start();
-            self.amixer = Some(mixer);
-        }
-    }
-
-    extern "C" fn render(
-        in_ref_con: *mut c_void,
-        _io_action_flags: *mut appkit::AudioUnitRenderActionFlags,
-        _in_time_stamp: *const appkit::AudioTimeStamp,
-        _in_bus_number: u32,
-        in_number_frames: u32,
-        io_data: *mut appkit::AudioBufferList,
-    ) -> appkit::OSStatus {
-        let ctx = unsafe { &mut *(in_ref_con as *mut Arc<RwLock<peridot::audio::Mixer>>) };
-        let bufptr = unsafe {
-            std::slice::from_raw_parts_mut(
-                (*io_data).buffers[0].data as *mut f32,
-                (*io_data).buffers[0].number_channels as usize * in_number_frames as usize,
-            )
-        };
-        for v in bufptr.iter_mut() {
-            *v = 0.0;
-        }
-        ctx.write().expect("Processing WriteLock").process(bufptr);
-        // trace!("render callback! {:?} {}", unsafe { &(*io_data).buffers[0] }, in_number_frames);
-        0
-    }
-}
-
 #[no_mangle]
+#[tracing::instrument]
 pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
-    trace!("Dispatching Character Down Event: {}", character);
+    tracing::trace!("Dispatching Character Down Event");
+
     unsafe {
         let _ = (*g)
             .ex_input
@@ -589,8 +411,10 @@ pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
     }
 }
 #[no_mangle]
+#[tracing::instrument]
 pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
-    trace!("Dispatching Character Up Event: {}", character);
+    tracing::trace!("Dispatching Character Up Event");
+
     unsafe {
         let _ = (*g)
             .ex_input
@@ -605,9 +429,12 @@ const KEYMOD_OPTION: u8 = 2;
 const KEYMOD_CONTROL: u8 = 3;
 const KEYMOD_COMMAND: u8 = 4;
 const KEYMOD_CAPSLOCK: u8 = 5;
+
 #[no_mangle]
+#[tracing::instrument]
 pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
-    trace!("Dispatching Keymod Down Event: {}", code);
+    tracing::trace!("Dispatching Keymod Down Event");
+
     let code_to_bty = match code {
         KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
         KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
@@ -616,13 +443,17 @@ pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
         KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
         _ => return,
     };
+
     unsafe {
         let _ = (*g).ex_input.button_down(code_to_bty);
     }
 }
+
 #[no_mangle]
+#[tracing::instrument]
 pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
-    trace!("Dispatching Keymod Up Event: {}", code);
+    tracing::trace!("Dispatching Keymod Up Event");
+
     let code_to_bty = match code {
         KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
         KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
@@ -631,6 +462,7 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
         KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
         _ => return,
     };
+
     unsafe {
         let _ = (*g).ex_input.button_up(code_to_bty);
     }
@@ -669,6 +501,7 @@ pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
             .button_down(peridot::NativeButtonInput::Mouse(index as _));
     }
 }
+
 #[no_mangle]
 pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
     unsafe {
