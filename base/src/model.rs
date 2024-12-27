@@ -11,7 +11,7 @@ pub trait ModelData {
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
         offsets: Self::PreallocOffsetType,
     ) -> Self::RendererParams;
 }
@@ -44,7 +44,7 @@ impl<VT: Clone> ModelData for Primitive<VT> {
     }
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
         vo: u64,
     ) {
         unsafe {
@@ -70,7 +70,7 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
     }
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
+        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
         (vo, io): (u64, u64),
     ) {
         unsafe {

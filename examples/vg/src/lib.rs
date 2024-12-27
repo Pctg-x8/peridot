@@ -1,7 +1,6 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::{
-    Buffer, Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice,
-    SubmissionBatch,
+    Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch,
 };
 use log::*;
 use peridot::math::Vector2;
@@ -15,12 +14,10 @@ use peridot_command_object::{
     GraphicsCommandCombiner, GraphicsCommandSubmission, PipelineBarrier, RangedBuffer, RangedImage,
 };
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
-use peridot_vertex_processing_pack::PvpShaderModules;
+use peridot_vertex_processing_pack::{PvpContainer, PvpShaderModules};
 use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
 use pvg::{FontProvider, FontProviderConstruct, RenderVG};
-use std::borrow::Cow;
-use std::marker::PhantomData;
 
 #[derive(SpecConstantStorage)]
 #[repr(C)]
@@ -38,314 +35,309 @@ const unsafe fn as_u8_slice<T>(slice: &[T]) -> &[u8] {
     )
 }
 
-pub struct Game<PL: peridot::NativeLinker> {
-    memory_manager: MemoryManager,
-    render_pass: br::RenderPassObject<peridot::DeviceObject>,
-    framebuffers: Vec<br::FramebufferObject<'static, peridot::DeviceObject>>,
-    render_cb: CommandBundle<peridot::DeviceObject>,
-    _bufview: br::BufferViewObject<SharedRef<peridot_memory_manager::Buffer>>,
-    _bufview2: br::BufferViewObject<SharedRef<peridot_memory_manager::Buffer>>,
-    _descriptors: (
-        br::DescriptorSetLayoutObject<peridot::DeviceObject>,
-        br::DescriptorPoolObject<peridot::DeviceObject>,
-    ),
-    render_vgs:
-        [pvg::RenderVG<peridot::DeviceObject, SharedRef<peridot_memory_manager::Buffer>>; 2],
-    target_size: peridot::math::Vector2F32,
-    ph: PhantomData<*const PL>,
-}
-impl<PL: peridot::NativeLinker> peridot::FeatureRequests for Game<PL> {}
-impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
-    fn init(e: &mut peridot::Engine<PL>) -> Self {
-        let font_provider =
-            pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
-        let font = font_provider
-            .best_match("sans-serif", &pvg::FontProperties::default(), 18.0)
-            .expect("No Fonts");
-        let mut ctx = pvg::Context::new(1.0);
-        ctx.text(&font, "Hello, World!|Opaque")
-            .expect("Text Rendering failed");
-        {
-            let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
-            f0.move_to(Vector2(10.0, -10.0).into());
-            f0.quadratic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -100.0).into());
-            f0.end();
-        }
-        /*{
-            let mut f = ctx.begin_figure(pvg::FillRule::Winding);
-            f.move_to(Vector2(200.0, -200.0 - 10.0).into());
-            f.line_to(Vector2(200.0, -200.0 - 90.0).into());
-            f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
-            f.line_to(Vector2(340.0, -300.0).into());
-            f.quadratic_bezier_to(Vector2(350.0, -300.0).into(), Vector2(350.0, -290.0).into());
-            f.line_to(Vector2(350.0, -210.0).into());
-            f.quadratic_bezier_to(Vector2(350.0, -200.0).into(), Vector2(340.0, -200.0).into());
-            f.line_to(Vector2(210.0, -200.0).into());
-            f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
-            f.close(); f.end();
-        }*/
-        let mut ctx2 = pvg::Context::new(1.0);
-        /*{
-            let mut f0 = ctx2.begin_figure(pvg::FillRule::Winding);
-            f0.move_to(Vector2(10.0, -10.0).into());
-            /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
-                Vector2(100.0, -100.0).into());*/
-            f0.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
-            // f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
-            // f0.stroke_outline(20.0);
-            // f0.close();
-            f0.end();
-        }*/
-        /*{
-            let mut sp = pvg::StrokePathBuilder::new(1.0);
-            sp.move_to(Vector2(200.0, -200.0 - 10.0).into());
-            sp.line_to(Vector2(200.0, -200.0 - 90.0).into());
-            sp.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
-            sp.line_to(Vector2(340.0, -300.0).into());
-            sp.quadratic_bezier_to(Vector2(350.0, -300.0).into(), Vector2(350.0, -290.0).into());
-            sp.line_to(Vector2(350.0, -210.0).into());
-            sp.quadratic_bezier_to(Vector2(350.0, -200.0).into(), Vector2(340.0, -200.0).into());
-            sp.line_to(Vector2(210.0, -200.0).into());
-            sp.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
-            sp.close();
-            let mut f = ctx2.begin_figure(vg::FillRule::EvenOdd);
-            sp.sink_widened(&mut f);
-            f.end();
-        }*/
-        {
-            let mut f = ctx2.begin_figure(pvg::FillRule::Winding);
-            f.move_to(Vector2(200.0, -200.0 - 10.0).into());
-            f.line_to(Vector2(200.0, -200.0 - 90.0).into());
-            f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
-            f.line_to(Vector2(340.0, -300.0).into());
-            f.quadratic_bezier_to(Vector2(350.0, -300.0).into(), Vector2(350.0, -290.0).into());
-            f.line_to(Vector2(350.0, -210.0).into());
-            f.quadratic_bezier_to(Vector2(350.0, -200.0).into(), Vector2(340.0, -200.0).into());
-            f.line_to(Vector2(210.0, -200.0).into());
-            f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
-            f.close();
-            f.end();
-        }
+pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+    let mut font_provider =
+        pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
+    let font = font_provider
+        .best_match("sans-serif", &pvg::FontProperties::default(), 18.0)
+        .expect("No Fonts");
+    let mut ctx = pvg::Context::new(1.0);
+    ctx.text(&font, "Hello, World!|Opaque")
+        .expect("Text Rendering failed");
+    {
+        let mut f0 = ctx.begin_figure(pvg::FillRule::Winding);
+        f0.move_to(Vector2(10.0, -10.0).into());
+        f0.quadratic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(100.0, -100.0).into());
+        f0.end();
+    }
+    /*{
+        let mut f = ctx.begin_figure(pvg::FillRule::Winding);
+        f.move_to(Vector2(200.0, -200.0 - 10.0).into());
+        f.line_to(Vector2(200.0, -200.0 - 90.0).into());
+        f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
+        f.line_to(Vector2(340.0, -300.0).into());
+        f.quadratic_bezier_to(Vector2(350.0, -300.0).into(), Vector2(350.0, -290.0).into());
+        f.line_to(Vector2(350.0, -210.0).into());
+        f.quadratic_bezier_to(Vector2(350.0, -200.0).into(), Vector2(340.0, -200.0).into());
+        f.line_to(Vector2(210.0, -200.0).into());
+        f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
+        f.close(); f.end();
+    }*/
+    let mut ctx2 = pvg::Context::new(1.0);
+    /*{
+        let mut f0 = ctx2.begin_figure(pvg::FillRule::Winding);
+        f0.move_to(Vector2(10.0, -10.0).into());
+        /*f0.cubic_bezier_to(Vector2(100.0, -35.0).into(), Vector2(35.0, -80.0).into(),
+            Vector2(100.0, -100.0).into());*/
+        f0.quadratic_bezier_to(Vector2(100.0, -30.0).into(), Vector2(30.0, -100.0).into());
+        // f0.quadratic_bezier_to(Vector2(200.0, -100.0).into(), Vector2(80.0, -60.0).into());
+        // f0.stroke_outline(20.0);
+        // f0.close();
+        f0.end();
+    }*/
+    /*{
+        let mut sp = pvg::StrokePathBuilder::new(1.0);
+        sp.move_to(Vector2(200.0, -200.0 - 10.0).into());
+        sp.line_to(Vector2(200.0, -200.0 - 90.0).into());
+        sp.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
+        sp.line_to(Vector2(340.0, -300.0).into());
+        sp.quadratic_bezier_to(Vector2(350.0, -300.0).into(), Vector2(350.0, -290.0).into());
+        sp.line_to(Vector2(350.0, -210.0).into());
+        sp.quadratic_bezier_to(Vector2(350.0, -200.0).into(), Vector2(340.0, -200.0).into());
+        sp.line_to(Vector2(210.0, -200.0).into());
+        sp.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
+        sp.close();
+        let mut f = ctx2.begin_figure(vg::FillRule::EvenOdd);
+        sp.sink_widened(&mut f);
+        f.end();
+    }*/
+    {
+        let mut f = ctx2.begin_figure(pvg::FillRule::Winding);
+        f.move_to(Vector2(200.0, -200.0 - 10.0).into());
+        f.line_to(Vector2(200.0, -200.0 - 90.0).into());
+        f.quadratic_bezier_to(Vector2(200.0, -300.0).into(), Vector2(210.0, -300.0).into());
+        f.line_to(Vector2(340.0, -300.0).into());
+        f.quadratic_bezier_to(Vector2(350.0, -300.0).into(), Vector2(350.0, -290.0).into());
+        f.line_to(Vector2(350.0, -210.0).into());
+        f.quadratic_bezier_to(Vector2(350.0, -200.0).into(), Vector2(340.0, -200.0).into());
+        f.line_to(Vector2(210.0, -200.0).into());
+        f.quadratic_bezier_to(Vector2(200.0, -200.0).into(), Vector2(200.0, -210.0).into());
+        f.close();
+        f.end();
+    }
 
-        let mut bp = BufferPrealloc::new(&e.graphics());
-        let vg_offs = ctx.prealloc(&mut bp);
-        let vg_offs2 = ctx.prealloc(&mut bp);
+    let mut bp = BufferPrealloc::new(&e.graphics());
+    let vg_offs = ctx.prealloc(&mut bp);
+    let vg_offs2 = ctx.prealloc(&mut bp);
 
-        let mut memory_manager = MemoryManager::new(e.graphics());
-        let buffer = memory_manager
-            .allocate_device_local_buffer(
-                e.graphics(),
-                bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
-            )
-            .expect("Buffer Allocation");
-        let buf_length = buffer.byte_length();
-        let buffer = RangedBuffer::from_offset_length(SharedRef::new(buffer), 0, buf_length);
-        let mut stg_buffer: RangedBuffer<_> = memory_manager
-            .allocate_upload_buffer(
-                e.graphics(),
-                bp.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC),
-            )
-            .expect("StgBuffer Allocation")
-            .into();
+    let mut memory_manager = MemoryManager::new(e.graphics());
+    let buffer = memory_manager
+        .allocate_device_local_buffer(
+            e.graphics(),
+            bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
+        )
+        .expect("Buffer Allocation");
+    let buf_length = buffer.byte_length();
+    let buffer = RangedBuffer::from_offset_length(SharedRef::new(buffer), 0, buf_length);
+    let mut stg_buffer: RangedBuffer<_> = memory_manager
+        .allocate_upload_buffer(
+            e.graphics(),
+            bp.build_desc_custom_usage(br::BufferUsage::TRANSFER_SRC),
+        )
+        .expect("StgBuffer Allocation")
+        .into();
 
-        let rt_size = e
-            .back_buffer(0)
-            .expect("no back-buffers?")
-            .image()
-            .size()
-            .wh();
-        let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
-        let msaa_texture = memory_manager
-            .allocate_device_local_image(
-                e.graphics(),
-                br::ImageDesc::new(rt_size.clone(), e.back_buffer_format())
-                    .as_color_attachment()
-                    .as_transient_attachment()
-                    .sample_counts(msaa_count),
-            )
-            .expect("Failed to create msaa render target");
-        let msaa_texture = SharedRef::new(
-            msaa_texture
-                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                .view_builder()
-                .create()
-                .expect("Failed to create msaa render target view"),
+    let rt_size = e
+        .back_buffer(0)
+        .expect("no back-buffers?")
+        .image()
+        .size()
+        .wh();
+    let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
+    let msaa_texture = memory_manager
+        .allocate_device_local_image(
+            e.graphics(),
+            br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
+                .as_color_attachment()
+                .as_transient_attachment()
+                .sample_counts(msaa_count),
+        )
+        .expect("Failed to create msaa render target");
+    let mut msaa_texture = SharedRef::new(
+        msaa_texture
+            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+            .view_builder()
+            .create()
+            .expect("Failed to create msaa render target view"),
+    );
+
+    let (vg_renderer_params, vg_renderer_params2) = stg_buffer
+        .0
+        .guard_map(BufferMapMode::Write, |m| unsafe {
+            let p0 = ctx.write_data_into(m.ptr().as_ptr(), vg_offs);
+            let p1 = ctx2.write_data_into(m.ptr().as_ptr(), vg_offs2);
+            return (p0, p1);
+        })
+        .expect("StgMem Initialization");
+
+    let bufview = br::BufferViewObject::new(
+        buffer.0.clone(),
+        &br::BufferViewCreateInfo::new(
+            &buffer.0,
+            br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+            vg_renderer_params.transforms_byterange(),
+        ),
+    )
+    .expect("Creating Transform BufferView");
+    let bufview2 = br::BufferViewObject::new(
+        buffer.0.clone(),
+        &br::BufferViewCreateInfo::new(
+            &buffer.0,
+            br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+            vg_renderer_params2.transforms_byterange(),
+        ),
+    )
+    .expect("Creating Transform BufferView 2");
+
+    {
+        let copy = buffer.byref_mirror_from(&stg_buffer);
+
+        let [all_buffer_in_barrier, all_buffer_out_barrier] = buffer.make_ref().usage_barrier3(
+            BufferUsage::UNUSED,
+            BufferUsage::TRANSFER_DST,
+            BufferUsage::VERTEX_BUFFER | BufferUsage::INDEX_BUFFER | BufferUsage::VERTEX_STORAGE_RO,
         );
-
-        let (vg_renderer_params, vg_renderer_params2) = stg_buffer
-            .0
-            .guard_map(BufferMapMode::Write, |m| unsafe {
-                let p0 = ctx.write_data_into(m.ptr().as_ptr(), vg_offs);
-                let p1 = ctx2.write_data_into(m.ptr().as_ptr(), vg_offs2);
-                return (p0, p1);
-            })
-            .expect("StgMem Initialization");
-
-        let bufview = buffer
-            .0
-            .clone()
-            .create_view(
-                br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                vg_renderer_params.transforms_byterange(),
+        let in_barrier = PipelineBarrier::new()
+            .with_barrier(
+                stg_buffer
+                    .make_ref()
+                    .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
             )
-            .expect("Creating Transform BufferView");
-        let bufview2 = buffer
-            .0
-            .clone()
-            .create_view(
-                br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                vg_renderer_params2.transforms_byterange(),
-            )
-            .expect("Creating Transform BufferView 2");
-
-        {
-            let copy = buffer.byref_mirror_from(&stg_buffer);
-
-            let [all_buffer_in_barrier, all_buffer_out_barrier] = buffer.make_ref().usage_barrier3(
-                BufferUsage::UNUSED,
-                BufferUsage::TRANSFER_DST,
-                BufferUsage::VERTEX_BUFFER
-                    | BufferUsage::INDEX_BUFFER
-                    | BufferUsage::VERTEX_STORAGE_RO,
+            .with_barrier(all_buffer_in_barrier);
+        let out_barrier = PipelineBarrier::new()
+            .with_barrier(all_buffer_out_barrier)
+            .with_barrier(
+                RangedImage::single_color_plane(msaa_texture.image())
+                    .barrier(br::ImageLayout::ColorAttachmentOpt.from_undefined()),
             );
-            let in_barrier = PipelineBarrier::new()
-                .with_barrier(
-                    stg_buffer
-                        .make_ref()
-                        .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
-                )
-                .with_barrier(all_buffer_in_barrier);
-            let out_barrier = PipelineBarrier::new()
-                .with_barrier(all_buffer_out_barrier)
-                .with_barrier(
-                    RangedImage::single_color_plane(msaa_texture.image())
-                        .barrier(br::ImageLayout::ColorAttachmentOpt.from_undefined()),
-                );
 
-            copy.between(in_barrier, out_barrier)
-                .submit(e)
-                .expect("ImmResource Initialization");
-        }
+        copy.between(in_barrier, out_barrier)
+            .submit(e)
+            .expect("ImmResource Initialization");
+    }
 
-        let attachments = [
-            e.back_buffer_attachment_desc()
-                .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
-            br::AttachmentDescription::new(
-                e.back_buffer_format(),
-                br::ImageLayout::ColorAttachmentOpt,
-                br::ImageLayout::ColorAttachmentOpt,
-            )
-            .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
-            .samples(msaa_count),
-        ];
-        let color_outputs = [br::AttachmentReference::new(
-            1,
+    let attachments = [
+        e.back_buffer_attachment_desc()
+            .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
+        br::vk::VkAttachmentDescription::new(
+            e.back_buffer_format(),
             br::ImageLayout::ColorAttachmentOpt,
-        )];
-        let color_resolves = [br::AttachmentReference::new(
-            0,
             br::ImageLayout::ColorAttachmentOpt,
-        )];
-        let color_subpass =
-            br::SubpassDescription::new().color_attachments(&color_outputs, &color_resolves);
-        let color_subpass_enter_dep = br::vk::VkSubpassDependency {
-            srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
-            dstSubpass: 0,
-            srcStageMask: br::PipelineStageFlags::BOTTOM_OF_PIPE.0,
-            dstStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
-            srcAccessMask: br::AccessFlags::MEMORY.read,
-            dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
-            dependencyFlags: 0,
-        };
-        let color_subpass_leave_dep = br::vk::VkSubpassDependency {
-            srcSubpass: 0,
-            dstSubpass: br::vk::VK_SUBPASS_EXTERNAL,
-            srcStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
-            dstStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
-            srcAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
-            dstAccessMask: br::AccessFlags::MEMORY.read,
-            dependencyFlags: 0,
-        };
-        let render_pass = br::RenderPassBuilder::new(
+        )
+        .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
+        .samples(msaa_count),
+    ];
+    let color_outputs = [br::vk::VkAttachmentReference::new(
+        1,
+        br::ImageLayout::ColorAttachmentOpt,
+    )];
+    let color_resolves = [br::vk::VkAttachmentReference::new(
+        0,
+        br::ImageLayout::ColorAttachmentOpt,
+    )];
+    let color_subpass =
+        br::SubpassDescription::new().color_attachments(&color_outputs, &color_resolves);
+    let color_subpass_enter_dep = br::vk::VkSubpassDependency {
+        srcSubpass: br::vk::VK_SUBPASS_EXTERNAL,
+        dstSubpass: 0,
+        srcStageMask: br::PipelineStageFlags::BOTTOM_OF_PIPE.0,
+        dstStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
+        srcAccessMask: br::AccessFlags::MEMORY.read,
+        dstAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
+        dependencyFlags: 0,
+    };
+    let color_subpass_leave_dep = br::vk::VkSubpassDependency {
+        srcSubpass: 0,
+        dstSubpass: br::vk::VK_SUBPASS_EXTERNAL,
+        srcStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
+        dstStageMask: br::PipelineStageFlags::TOP_OF_PIPE.0,
+        srcAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
+        dstAccessMask: br::AccessFlags::MEMORY.read,
+        dependencyFlags: 0,
+    };
+    let render_pass = br::RenderPassObject::new(
+        e.graphics().device().clone(),
+        &br::RenderPassCreateInfo::new(
             &attachments,
             &[color_subpass],
             &[color_subpass_enter_dep, color_subpass_leave_dep],
-        )
-        .create(e.graphics_device().clone())
-        .expect("Failed to create render pass");
+        ),
+    )
+    .expect("Failed to create render pass");
 
-        let screen_size = e.back_buffer(0).expect("no backbuffer").image().size().wh();
-        let framebuffers = e
-            .iter_back_buffers()
-            .map(|bb| {
-                br::FramebufferBuilder::new(&render_pass)
-                    .with_attachment(bb.clone())
-                    .with_attachment(msaa_texture.clone())
-                    .create()
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .expect("Framebuffer Creation");
+    let screen_size = e.back_buffer(0).expect("no backbuffer").image().size().wh();
+    let mut backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+    let mut framebuffers = backbuffer_resources
+        .iter()
+        .map(|bb| {
+            br::FramebufferObject::new(
+                e.graphics_device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &render_pass,
+                    &[bb.as_transparent_ref(), msaa_texture.as_transparent_ref()],
+                    screen_size.width,
+                    screen_size.height,
+                ),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Framebuffer Creation");
 
-        let dsl = br::DescriptorSetLayoutBuilder::new(&[br::DescriptorType::UniformTexelBuffer
+    let dsl = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::UniformTexelBuffer
             .make_binding(0, 1)
-            .only_for_vertex()])
-        .create(e.graphics().device().clone())
-        .expect("DescriptorSetLayout Creation");
-        let mut dp = br::DescriptorPoolBuilder::new(
+            .only_for_vertex()]),
+    )
+    .expect("DescriptorSetLayout Creation");
+    let mut dp = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
             2,
             &[br::DescriptorType::UniformTexelBuffer.make_size(2)],
-        )
-        .create(e.graphics().device().clone())
-        .expect("DescriptorPool Creation");
-        let [desc_interior, desc_curve] = dp
-            .alloc_array(&[
-                br::DescriptorSetLayoutObjectRef::new(&dsl),
-                br::DescriptorSetLayoutObjectRef::new(&dsl),
-            ])
-            .expect("DescriptorSet Allocation");
+        ),
+    )
+    .expect("DescriptorPool Creation");
+    let [desc_interior, desc_curve] = dp
+        .alloc_array(&[dsl.as_transparent_ref(), dsl.as_transparent_ref()])
+        .expect("DescriptorSet Allocation");
 
-        e.graphics().device().update_descriptor_sets(
-            &[
-                desc_interior
-                    .binding_at(0)
-                    .write(br::DescriptorContents::UniformTexelBuffer(vec![
-                        br::VkHandleRef::new(&bufview),
-                    ])),
-                desc_curve
-                    .binding_at(1)
-                    .write(br::DescriptorContents::UniformTexelBuffer(vec![
-                        br::VkHandleRef::new(&bufview2),
-                    ])),
-            ],
-            &[],
-        );
+    e.graphics().device().update_descriptor_sets(
+        &[
+            desc_interior
+                .binding_at(0)
+                .write(br::DescriptorContents::UniformTexelBuffer(vec![
+                    br::VkHandleRef::new(&bufview),
+                ])),
+            desc_curve
+                .binding_at(1)
+                .write(br::DescriptorContents::UniformTexelBuffer(vec![
+                    br::VkHandleRef::new(&bufview2),
+                ])),
+        ],
+        &[],
+    );
 
-        let mut shader = PvpShaderModules::new(
-            e.graphics().device(),
-            e.load("shaders.interiorColorFixed")
-                .expect("Loading PvpContainer"),
-        )
-        .expect("Creating Shader");
-        let mut curve_shader = PvpShaderModules::new(
-            e.graphics().device(),
-            e.load("shaders.curveColorFixed")
-                .expect("Loading CurveShader"),
-        )
-        .expect("Creating CurveShader");
-        debug!("ScreenSize: {screen_size:?}");
-        let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
-        let vp = [sc[0].make_viewport(0.0..1.0)];
-        let pl = SharedRef::new(
-            br::PipelineLayoutBuilder::new(
-                &[br::DescriptorSetLayoutObjectRef::new(&dsl)],
-                &[br::PushConstantRange::new(
-                    br::ShaderStage::VERTEX,
+    let shader: PvpContainer = e
+        .load("shaders.interiorColorFixed")
+        .expect("Loading PvpContainer");
+    let shader_modules =
+        PvpShaderModules::new(e.graphics().device(), &shader).expect("Creating Shader");
+    let curve_shader: PvpContainer = e
+        .load("shaders.curveColorFixed")
+        .expect("Loading CurveShader");
+    let curve_shader_modules =
+        PvpShaderModules::new(e.graphics().device(), &curve_shader).expect("Creating CurveShader");
+    debug!("ScreenSize: {screen_size:?}");
+    let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
+    let vp = [sc[0].make_viewport(0.0..1.0)];
+    let pl = SharedRef::new(
+        br::PipelineLayoutObject::new(
+            e.graphics().device().clone(),
+            &br::PipelineLayoutCreateInfo::new(
+                &[dsl.as_transparent_ref()],
+                &[br::vk::VkPushConstantRange::new(
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                     0..4 * 4,
                 )],
-            )
-            .create(e.graphics().device().clone())
-            .expect("Create PipelineLayout"),
-        );
+            ),
+        )
+        .expect("Create PipelineLayout"),
+    );
+
+    let (gp, gp_curve);
+    let (gp2, gp2_curve);
+    {
         let spc_map = &[
             br::vk::VkSpecializationMapEntry {
                 constantID: 0,
@@ -358,30 +350,48 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
                 size: 4,
             },
         ];
-        shader.set_vertex_spec_constants(
-            Cow::Borrowed(spc_map),
-            Cow::Borrowed(unsafe { as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]) }),
-        );
-        curve_shader.set_vertex_spec_constants(
-            Cow::Borrowed(spc_map),
-            Cow::Borrowed(unsafe { as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]) }),
-        );
+        let vsh_parameters = br::SpecializationInfo::from_binary(spc_map, unsafe {
+            as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..])
+        });
 
-        let (color1_emap, color1_values) = VgRendererFragmentFixedColor {
+        let color1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
             r: 1.0,
             g: 0.5,
             b: 0.0,
             a: 1.0,
-        }
-        .as_pair();
-        // TODO: このcloneなんとかしたい
-        shader.set_fragment_spec_constants(color1_emap.clone(), color1_values.clone());
-        curve_shader.set_fragment_spec_constants(color1_emap, color1_values);
-        let interior_vertex_processing =
-            shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        let curve_vertex_processing =
-            curve_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        });
+        let shader_stages = [
+            shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&color1_fsh_parameters),
+        ];
+        let curve_shader_stages = [
+            curve_shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            curve_shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&color1_fsh_parameters),
+        ];
+        let interior_vertex_processing = br::VertexProcessingStages::new(
+            &shader_stages,
+            &shader.vertex_bindings,
+            &shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
+        let curve_vertex_processing = br::VertexProcessingStages::new(
+            &curve_shader_stages,
+            &curve_shader.vertex_bindings,
+            &curve_shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
 
+        let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
         let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(
             &pl,
             render_pass.subpass(0),
@@ -393,12 +403,9 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
 
             state
         }))
-        .viewport_scissors(
-            br::DynamicArrayState::Static(&vp),
-            br::DynamicArrayState::Static(&sc),
-        )
-        .set_attachment_blends(vec![ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()]);
-        let gp = LayoutedPipeline::combine(
+        .viewport_state(br::ViewportState::new(&vp, &sc))
+        .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
+        gp = LayoutedPipeline::combine(
             gpb.create(
                 e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
@@ -406,18 +413,54 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Create GraphicsPipeline"),
             pl.clone(),
         );
+        gpb.vertex_processing(curve_vertex_processing);
+        gp_curve = LayoutedPipeline::combine(
+            gpb.create(
+                e.graphics().device().clone(),
+                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+            )
+            .expect("Create GraphicsPipeline of CurveRender"),
+            pl.clone(),
+        );
 
-        let (color2_layout, color2_values) = VgRendererFragmentFixedColor {
+        let fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
             r: 0.0,
             g: 0.5,
             b: 1.0,
             a: 1.0,
-        }
-        .as_pair();
-        gpb.vertex_processing_mut()
-            .shader_stages_mut()
-            .set_fragment_spec_constants(color2_layout.as_ref(), &color2_values);
-        let gp2 = LayoutedPipeline::combine(
+        });
+        let shader_stages = [
+            shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&fsh_parameters),
+        ];
+        let curve_shader_stages = [
+            curve_shader_modules
+                .pipeline_vertex_shader_stage()
+                .with_specialization_info(&vsh_parameters),
+            curve_shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?")
+                .with_specialization_info(&fsh_parameters),
+        ];
+        let interior_vertex_processing = br::VertexProcessingStages::new(
+            &shader_stages,
+            &shader.vertex_bindings,
+            &shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
+        let curve_vertex_processing = br::VertexProcessingStages::new(
+            &curve_shader_stages,
+            &curve_shader.vertex_bindings,
+            &curve_shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        );
+        gpb.vertex_processing(interior_vertex_processing);
+        gp2 = LayoutedPipeline::combine(
             gpb.create(
                 e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
@@ -426,18 +469,7 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             pl.clone(),
         );
         gpb.vertex_processing(curve_vertex_processing);
-        let gp_curve = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Create GraphicsPipeline of CurveRender"),
-            pl.clone(),
-        );
-        gpb.vertex_processing_mut()
-            .shader_stages_mut()
-            .set_fragment_spec_constants(&*color2_layout, &color2_values);
-        let gp2_curve = LayoutedPipeline::combine(
+        gp2_curve = LayoutedPipeline::combine(
             gpb.create(
                 e.graphics().device().clone(),
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
@@ -445,147 +477,159 @@ impl<PL: peridot::NativeLinker> peridot::EngineEvents<PL> for Game<PL> {
             .expect("Creating GraphicsPipeline2 for CurveRender"),
             pl.clone(),
         );
-
-        let render_vg = RenderVG {
-            params: vg_renderer_params,
-            buffer: buffer.0.clone(),
-            interior_pipeline: gp,
-            curve_pipeline: gp_curve,
-            transform_buffer_descriptor_set: desc_interior,
-            target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-            rendering_precision: e.rendering_precision(),
-        };
-        let render_vg2 = RenderVG {
-            params: vg_renderer_params2,
-            buffer: buffer.0,
-            interior_pipeline: gp2,
-            curve_pipeline: gp2_curve,
-            transform_buffer_descriptor_set: desc_curve,
-            target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-
-            rendering_precision: e.rendering_precision(),
-        };
-        let color_renders = [render_vg2, render_vg];
-
-        let mut render_cb = CommandBundle::new(
-            &e.graphics(),
-            CBSubmissionType::Graphics,
-            framebuffers.len(),
-        )
-        .expect("Creating RenderCB");
-        for (r, f) in render_cb.iter_mut().zip(&framebuffers) {
-            let rp =
-                BeginRenderPass::for_entire_framebuffer(&render_pass, f).with_clear_values(vec![
-                    br::ClearValue::color([1.0; 4]),
-                    br::ClearValue::color([1.0; 4]),
-                ]);
-
-            (&color_renders[..])
-                .between(rp, EndRenderPass)
-                .execute_and_finish(unsafe {
-                    r.begin(e.graphics_device())
-                        .expect("Failed to begin render command recording")
-                        .as_dyn_ref()
-                })
-                .expect("Failed to finish render commands");
-        }
-
-        Self {
-            ph: PhantomData,
-            memory_manager,
-            render_pass,
-            framebuffers,
-            _bufview: bufview,
-            _bufview2: bufview2,
-            _descriptors: (dsl, dp),
-            render_cb,
-            render_vgs: color_renders,
-            target_size: peridot::math::Vector2(screen_size.width as _, screen_size.height as _),
-        }
     }
 
-    fn update(
-        &mut self,
-        e: &mut peridot::Engine<PL>,
-        on_back_buffer_of: u32,
-        _dt: std::time::Duration,
-    ) {
-        e.do_render(
-            on_back_buffer_of,
-            None::<br::EmptySubmissionBatch>,
-            br::EmptySubmissionBatch.with_command_buffers(
-                &self.render_cb[on_back_buffer_of as usize..=on_back_buffer_of as usize],
-            ),
+    let render_vg = RenderVG {
+        params: vg_renderer_params,
+        buffer: buffer.0.clone(),
+        interior_pipeline: gp,
+        curve_pipeline: gp_curve,
+        transform_buffer_descriptor_set: desc_interior,
+        target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+        rendering_precision: e.rendering_precision(),
+    };
+    let render_vg2 = RenderVG {
+        params: vg_renderer_params2,
+        buffer: buffer.0,
+        interior_pipeline: gp2,
+        curve_pipeline: gp2_curve,
+        transform_buffer_descriptor_set: desc_curve,
+        target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+
+        rendering_precision: e.rendering_precision(),
+    };
+    let mut color_renders = [render_vg2, render_vg];
+
+    let mut render_cb = CommandBundle::new(
+        &e.graphics(),
+        CBSubmissionType::Graphics,
+        framebuffers.len(),
+    )
+    .expect("Creating RenderCB");
+    for (r, f) in render_cb.iter_mut().zip(&framebuffers) {
+        let rp = BeginRenderPass::new(
+            &render_pass,
+            f,
+            screen_size.into_rect(br::vk::VkOffset2D::ZERO),
         )
-        .expect("Failed to present");
-    }
+        .with_clear_values(vec![
+            br::ClearValue::color([1.0; 4]),
+            br::ClearValue::color([1.0; 4]),
+        ]);
 
-    fn discard_back_buffer_resources(&mut self) {
-        self.render_cb.reset().expect("Resetting RenderCB");
-        self.framebuffers.clear();
-    }
-    fn on_resize(&mut self, e: &mut peridot::Engine<PL>, new_size: Vector2<usize>) {
-        let rt_size = br::vk::VkExtent2D {
-            width: new_size.0 as _,
-            height: new_size.1 as _,
-        };
-
-        let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
-        let msaa_texture = self
-            .memory_manager
-            .allocate_device_local_image(
-                e.graphics(),
-                br::ImageDesc::new(rt_size.clone(), e.back_buffer_format())
-                    .as_color_attachment()
-                    .as_transient_attachment()
-                    .sample_counts(msaa_count),
-            )
-            .expect("Failed to create msaa render target");
-        let msaa_texture = SharedRef::new(
-            msaa_texture
-                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                .view_builder()
-                .create()
-                .expect("Failed to create msaa render target view"),
-        );
-
-        PipelineBarrier::from(
-            RangedImage::single_color_plane(msaa_texture.image())
-                .barrier(br::ImageLayout::Undefined.to(br::ImageLayout::ColorAttachmentOpt)),
-        )
-        .submit(e)
-        .expect("Failed to initialize msaa rt");
-
-        self.framebuffers = e
-            .iter_back_buffers()
-            .map(|bb| {
-                br::FramebufferBuilder::new(&self.render_pass)
-                    .with_attachment(bb.clone())
-                    .with_attachment(msaa_texture.clone())
-                    .create()
+        (&color_renders[..])
+            .between(rp, EndRenderPass)
+            .execute_and_finish(unsafe {
+                r.begin(e.graphics_device())
+                    .expect("Failed to begin render command recording")
+                    .as_dyn_ref()
             })
-            .collect::<Result<Vec<_>, _>>()
-            .expect("Bind Framebuffer");
+            .expect("Failed to finish render commands");
+    }
 
-        for r in self.render_vgs.iter_mut() {
-            r.set_target_pixels(self.target_size.clone());
+    let target_size = peridot::math::Vector2(screen_size.width as _, screen_size.height as _);
+
+    while let Some(ev) = e.event_receivers().wait_for_event().await {
+        match ev {
+            peridot::Event::Shutdown => break,
+            peridot::Event::NextFrame => {
+                let fd = e.prepare_frame().expect("Failed to prepare frame");
+
+                e.do_render(
+                    fd.backbuffer_index,
+                    None::<br::EmptySubmissionBatch>,
+                    br::EmptySubmissionBatch.with_command_buffers(
+                        &render_cb[fd.backbuffer_index as usize..=fd.backbuffer_index as usize],
+                    ),
+                )
+                .expect("Failed to present");
+            }
+            peridot::Event::Resize(new_size) => {
+                e.wait_for_last_rendering_completion();
+
+                unsafe { render_cb.reset().expect("Resetting RenderCB") };
+                drop(framebuffers);
+                drop(backbuffer_resources);
+
+                e.resize_presenter_backbuffers(new_size);
+
+                let rt_size = br::vk::VkExtent2D {
+                    width: new_size.0 as _,
+                    height: new_size.1 as _,
+                };
+
+                let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
+                let msaa_texture_res = memory_manager
+                    .allocate_device_local_image(
+                        e.graphics(),
+                        br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
+                            .as_color_attachment()
+                            .as_transient_attachment()
+                            .sample_counts(msaa_count),
+                    )
+                    .expect("Failed to create msaa render target");
+                msaa_texture = SharedRef::new(
+                    msaa_texture_res
+                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
+                        .view_builder()
+                        .create()
+                        .expect("Failed to create msaa render target view"),
+                );
+
+                PipelineBarrier::from(
+                    RangedImage::single_color_plane(msaa_texture.image()).barrier(
+                        br::ImageLayout::Undefined.to(br::ImageLayout::ColorAttachmentOpt),
+                    ),
+                )
+                .submit(e)
+                .expect("Failed to initialize msaa rt");
+
+                backbuffer_resources = e.iter_back_buffers().cloned().collect();
+                framebuffers = backbuffer_resources
+                    .iter()
+                    .map(|bb| {
+                        br::FramebufferObject::new(
+                            e.graphics_device().clone(),
+                            &br::FramebufferCreateInfo::new(
+                                &render_pass,
+                                &[bb.as_transparent_ref(), msaa_texture.as_transparent_ref()],
+                                new_size.0,
+                                new_size.1,
+                            ),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("Bind Framebuffer");
+
+                for r in color_renders.iter_mut() {
+                    r.set_target_pixels(target_size.clone());
+                }
+
+                for (r, f) in render_cb.iter_mut().zip(&framebuffers) {
+                    let rp = BeginRenderPass::new(
+                        &render_pass,
+                        f,
+                        br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO),
+                    )
+                    .with_clear_values(vec![
+                        br::ClearValue::color([1.0; 4]),
+                        br::ClearValue::color([1.0; 4]),
+                    ]);
+
+                    (&color_renders[..])
+                        .between(rp, EndRenderPass)
+                        .execute_and_finish(unsafe {
+                            r.begin(e.graphics_device())
+                                .expect("Start Recording CB")
+                                .as_dyn_ref()
+                        })
+                        .expect("Failed to finish render commands");
+                }
+            }
         }
+    }
 
-        for (r, f) in self.render_cb.iter_mut().zip(&self.framebuffers) {
-            let rp = BeginRenderPass::for_entire_framebuffer(&self.render_pass, f)
-                .with_clear_values(vec![
-                    br::ClearValue::color([1.0; 4]),
-                    br::ClearValue::color([1.0; 4]),
-                ]);
-
-            (&self.render_vgs[..])
-                .between(rp, EndRenderPass)
-                .execute_and_finish(unsafe {
-                    r.begin(e.graphics_device())
-                        .expect("Start Recording CB")
-                        .as_dyn_ref()
-                })
-                .expect("Failed to finish render commands");
-        }
+    unsafe {
+        e.graphics().device().wait().expect("Failed to wait works");
     }
 }

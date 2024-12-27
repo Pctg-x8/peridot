@@ -16,7 +16,7 @@ impl FontProvider for FreetypeOnlyFontProvider {
     type Font = FreetypeFont;
 
     fn best_match(
-        &self,
+        &mut self,
         _family_name: &str,
         _properties: &crate::FontProperties,
         _size: f32,

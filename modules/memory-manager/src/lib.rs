@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use bedrock as br;
-use br::{Device, MemoryBound, StructureChainQuery, VkHandle, VulkanStructure};
+use bedrock::{self as br, SinkStructureChainQuery};
+use br::{Device, MemoryBound, VkHandle, VulkanStructure};
 use num_integer::Integer;
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;
@@ -288,7 +288,7 @@ impl MemoryManager {
     }
 
     fn device_local_memory_type(&self, index_mask: u32) -> Option<&MemoryType> {
-        let mut target_types = self
+        let target_types = self
             .device_local_memory_types
             .iter()
             .find(|t| (index_mask & t.index_mask()) != 0);
@@ -376,14 +376,14 @@ impl MemoryManager {
     pub fn allocate_device_local_buffer(
         &mut self,
         e: &peridot::Graphics,
-        desc: br::BufferDesc,
+        desc: br::BufferCreateInfo,
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = br::BufferObject::new(e.device().clone(), &desc)?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -401,7 +401,7 @@ impl MemoryManager {
             .index;
 
         let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
-            if e.dedicated_allocation_available() {
+            if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                 tracing::info!("using dedicated allocation");
 
                 unsafe { r.for_dedicated_buffer_allocation(&o) }
@@ -431,7 +431,7 @@ impl MemoryManager {
     pub fn allocate_multiple_device_local_buffers<'r>(
         &mut self,
         e: &peridot::Graphics,
-        descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
+        descs: impl IntoIterator<Item = br::BufferCreateInfo<'r>>,
     ) -> br::Result<Vec<Buffer>> {
         let descs = descs.into_iter();
         let (s, _) = descs.size_hint();
@@ -442,11 +442,11 @@ impl MemoryManager {
         );
         for d in descs {
             exact_sizes.push(d.size());
-            let object = d.create(e.device().clone())?;
+            let object = br::BufferObject::new(e.device().clone(), &d)?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -516,7 +516,8 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    {
                         memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
                     }
                     let memory = memory_req.execute(e.device().clone())?;
@@ -597,7 +598,7 @@ impl MemoryManager {
     pub fn allocate_device_local_buffer_array<const N: usize>(
         &mut self,
         e: &peridot::Graphics,
-        descs: [br::BufferDesc; N],
+        descs: [br::BufferCreateInfo; N],
     ) -> br::Result<[Buffer; N]> {
         self.allocate_multiple_device_local_buffers(e, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
@@ -667,14 +668,14 @@ impl MemoryManager {
     pub fn allocate_upload_buffer(
         &mut self,
         e: &peridot::Graphics,
-        desc: br::BufferDesc,
+        desc: br::BufferCreateInfo,
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = br::BufferObject::new(e.device().clone(), &desc)?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -693,7 +694,7 @@ impl MemoryManager {
 
         let (memory, offset) =
             self.allocate_internal(e.device(), &req, memory_type.index, |r| {
-                if e.dedicated_allocation_available() {
+                if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                     tracing::info!("using dedicated allocation");
 
                     unsafe { r.for_dedicated_buffer_allocation(&o) }
@@ -723,7 +724,7 @@ impl MemoryManager {
     pub fn allocate_multiple_upload_buffers<'r>(
         &mut self,
         e: &peridot::Graphics,
-        descs: impl IntoIterator<Item = br::BufferDesc<'r>>,
+        descs: impl IntoIterator<Item = br::BufferCreateInfo<'r>>,
     ) -> br::Result<Vec<Buffer>> {
         let descs = descs.into_iter();
         let (s, _) = descs.size_hint();
@@ -734,11 +735,11 @@ impl MemoryManager {
         );
         for d in descs {
             exact_sizes.push(d.size());
-            let object = d.create(e.device().clone())?;
+            let object = br::BufferObject::new(e.device().clone(), &d)?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -803,7 +804,8 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_type.index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    {
                         memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
                     }
                     let memory = memory_req.execute(e.device().clone())?;
@@ -884,7 +886,7 @@ impl MemoryManager {
     pub fn allocate_upload_buffer_array<const N: usize>(
         &mut self,
         e: &peridot::Graphics,
-        descs: [br::BufferDesc; N],
+        descs: [br::BufferCreateInfo; N],
     ) -> br::Result<[Buffer; N]> {
         self.allocate_multiple_upload_buffers(e, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
@@ -930,7 +932,7 @@ impl MemoryManager {
         let (byte_length, _alignment, row_texels) =
             self.compute_optimal_linear_image_buffer_layout(width, height, format);
         let object =
-            self.allocate_upload_buffer(e, br::BufferDesc::new(byte_length as _, usage))?;
+            self.allocate_upload_buffer(e, br::BufferCreateInfo::new(byte_length as _, usage))?;
 
         Ok(LinearImageBuffer {
             inner: object,
@@ -964,13 +966,13 @@ impl MemoryManager {
     pub fn allocate_device_local_image(
         &mut self,
         e: &peridot::Graphics,
-        desc: br::ImageDesc,
+        desc: br::ImageCreateInfo,
     ) -> br::Result<Image> {
-        let mut o = desc.create(e.device().clone())?;
+        let mut o = br::ImageObject::new(e.device().clone(), &desc)?;
 
         let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
         let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-        if e.can_request_extended_memory_requirements() {
+        if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
             unsafe {
                 (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
             }
@@ -988,7 +990,7 @@ impl MemoryManager {
             .index;
 
         let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
-            if e.dedicated_allocation_available() {
+            if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                 tracing::info!("using dedicated allocation");
 
                 unsafe { r.for_dedicated_image_allocation(&o) }
@@ -1017,17 +1019,17 @@ impl MemoryManager {
     pub fn allocate_multiple_device_local_images<'r>(
         &mut self,
         e: &peridot::Graphics,
-        descriptions: impl IntoIterator<Item = br::ImageDesc<'r>>,
+        descriptions: impl IntoIterator<Item = br::ImageCreateInfo<'r>>,
     ) -> br::Result<Vec<Image>> {
         let descs = descriptions.into_iter();
         let (s, _) = descs.size_hint();
         let (mut objects, mut requirements) = (Vec::with_capacity(s), Vec::with_capacity(s));
         for d in descs {
-            let object = d.create(e.device().clone())?;
+            let object = br::ImageObject::new(e.device().clone(), &d)?;
 
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
-            if e.can_request_extended_memory_requirements() {
+            if e.is_extension_available(&peridot::VulkanExtension::GET_MEMORY_REQUIREMENTS2_KHR) {
                 unsafe {
                     (*req.as_mut_ptr()).pNext = sink_dedicated_alloc.as_mut_ptr() as _;
                 }
@@ -1091,7 +1093,8 @@ impl MemoryManager {
                         req.memoryRequirements.size as _,
                         memory_index,
                     );
-                    if e.dedicated_allocation_available() {
+                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    {
                         memory_req = unsafe { memory_req.for_dedicated_image_allocation(&object) };
                     }
                     let memory = memory_req.execute(e.device().clone())?;
@@ -1168,7 +1171,7 @@ impl MemoryManager {
     pub fn allocate_device_local_image_array<const N: usize>(
         &mut self,
         e: &peridot::Graphics,
-        descs: [br::ImageDesc; N],
+        descs: [br::ImageCreateInfo; N],
     ) -> br::Result<[Image; N]> {
         self.allocate_multiple_device_local_images(e, descs)
             .map(|x| unsafe { x.try_into().unwrap_unchecked() })
@@ -1223,7 +1226,7 @@ fn bind_buffers(
     e: &peridot::Graphics,
     binds: &[br::vk::VkBindBufferMemoryInfoKHR],
 ) -> br::Result<()> {
-    if e.extended_memory_binding_available() {
+    if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
 
         e.device().bind_buffers(&binds)?;
@@ -1243,7 +1246,7 @@ fn bind_images(
     e: &peridot::Graphics,
     binds: &[br::vk::VkBindImageMemoryInfoKHR],
 ) -> br::Result<()> {
-    if e.extended_memory_binding_available() {
+    if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
 
         e.device().bind_images(&binds)?;

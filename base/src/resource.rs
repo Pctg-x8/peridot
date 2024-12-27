@@ -65,7 +65,7 @@ impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
         format: PixelFormat,
         prealloc: &mut BufferPrealloc,
     ) -> br::Result<(br::ImageObject<Device>, u64)> {
-        let idesc = br::ImageDesc::new(size.clone(), format as _)
+        let idesc = br::ImageCreateInfo::new(size.clone(), format as _)
             .sampled()
             .transfer_dest()
             .init_layout(br::ImageLayout::Preinitialized);
@@ -75,7 +75,7 @@ impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
             bytes_per_pixel,
         ));
 
-        idesc.create(g).map(|o| (o, pixels_stg))
+        br::ImageObject::new(g, &idesc).map(|o| (o, pixels_stg))
     }
 }
 impl<Image: br::Image> Texture2D<Image> {
@@ -88,20 +88,20 @@ impl<Image: br::Image> Texture2D<Image> {
         let view_builder = match pf {
             PixelFormat::RGB24 => view_builder
                 .with_format_mutation(PixelFormat::RGBA32 as _)
-                .with_mapping(br::ComponentMapping(
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::One,
-                )),
+                .with_mapping(br::vk::VkComponentMapping {
+                    r: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    g: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    b: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    a: br::vk::VK_COMPONENT_SWIZZLE_ONE,
+                }),
             PixelFormat::BGR24 => view_builder
                 .with_format_mutation(PixelFormat::BGRA32 as _)
-                .with_mapping(br::ComponentMapping(
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::Identity,
-                    br::ComponentSwizzle::One,
-                )),
+                .with_mapping(br::vk::VkComponentMapping {
+                    r: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    g: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    b: br::vk::VK_COMPONENT_SWIZZLE_IDENTITY,
+                    a: br::vk::VK_COMPONENT_SWIZZLE_ONE,
+                }),
             _ => view_builder,
         };
 
@@ -211,11 +211,8 @@ impl TexturePreallocatedGroup<br::ImageObject<DeviceObject>> {
 }
 impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
     /// Copy texture pixels into a staging buffer.
-    pub fn stage_data(
-        &self,
-        mr: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
-    ) {
-        trace!("Staging Texture Data...");
+    pub fn stage_data(&self, mr: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>) {
+        tracing::trace!("Staging Texture Data...");
         for &(ref pd, offs) in &self.0 {
             let s = unsafe {
                 mr.slice_mut(
@@ -406,9 +403,9 @@ pub struct DeviceWorkingTexture3DRef(usize);
 pub struct DeviceWorkingCubeTextureRef(usize);
 /// DeviceWorkingTexture Management Arena
 pub struct DeviceWorkingTextureAllocator<'d> {
-    planes: Vec<br::ImageDesc<'d>>,
-    volumes: Vec<br::ImageDesc<'d>>,
-    cube: Vec<br::ImageDesc<'d>>,
+    planes: Vec<br::ImageCreateInfo<'d>>,
+    volumes: Vec<br::ImageCreateInfo<'d>>,
+    cube: Vec<br::ImageCreateInfo<'d>>,
 }
 impl DeviceWorkingTextureAllocator<'_> {
     /// Initializes the allocator
@@ -428,7 +425,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture2DRef {
         self.planes.push(
-            br::ImageDesc::new(size, format as _)
+            br::ImageCreateInfo::new(size, format as _)
                 .usage_with(usage)
                 .init_layout(br::ImageLayout::Preinitialized),
         );
@@ -443,7 +440,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingTexture3DRef {
         self.volumes.push(
-            br::ImageDesc::new(size, format as _)
+            br::ImageCreateInfo::new(size, format as _)
                 .usage_with(usage)
                 .init_layout(br::ImageLayout::Preinitialized),
         );
@@ -457,7 +454,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         format: PixelFormat,
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingCubeTextureRef {
-        let id = br::ImageDesc::new(size, format as _)
+        let id = br::ImageCreateInfo::new(size, format as _)
             .usage_with(usage)
             .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
@@ -475,7 +472,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsageFlags,
         mipmaps: u32,
     ) -> DeviceWorkingCubeTextureRef {
-        let id = br::ImageDesc::new(size, format as _)
+        let id = br::ImageCreateInfo::new(size, format as _)
             .usage_with(usage)
             .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
@@ -498,9 +495,18 @@ impl DeviceWorkingTextureAllocator<'_> {
         let plane_count = self.planes.len();
         let cube_count = self.cube.len();
 
-        let images2 = self.planes.into_iter().map(|d| d.create(g.device.clone()));
-        let images_cube = self.cube.into_iter().map(|d| d.create(g.device.clone()));
-        let images3 = self.volumes.into_iter().map(|d| d.create(g.device.clone()));
+        let images2 = self
+            .planes
+            .into_iter()
+            .map(|d| br::ImageObject::new(g.device().clone(), &d));
+        let images_cube = self
+            .cube
+            .into_iter()
+            .map(|d| br::ImageObject::new(g.device.clone(), &d));
+        let images3 = self
+            .volumes
+            .into_iter()
+            .map(|d| br::ImageObject::new(g.device.clone(), &d));
         let images: Vec<_> = images2
             .chain(images_cube)
             .chain(images3)
@@ -626,10 +632,7 @@ impl<Object> BufferWithLength<Object> {
 /// Describing the type that can be used as initializer of `FixedBuffer`s
 pub trait FixedBufferInitializer {
     /// Setup memory data in staging buffer
-    fn stage_data(
-        &mut self,
-        m: &br::MappedMemoryRange<impl br::DeviceMemory + br::VkHandleMut + ?Sized>,
-    );
+    fn stage_data(&mut self, m: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>);
     fn buffer_graphics_ready<Device: br::Device + 'static>(
         &self,
         tfb: &mut TransferBatch,

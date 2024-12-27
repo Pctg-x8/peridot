@@ -1,4 +1,4 @@
-use bedrock as br;
+use bedrock::{self as br, VkHandle};
 use br::vk::VkCommandBuffer;
 
 use crate::{
@@ -402,25 +402,6 @@ impl<R: br::RenderPass, F: br::Framebuffer> BeginRenderPass<R, F> {
         }
     }
 }
-impl<'f, R, D> BeginRenderPass<R, &'f br::FramebufferObject<'f, D>>
-where
-    R: br::RenderPass + br::DeviceChild<ConcreteDevice = D>,
-    D: br::Device,
-{
-    pub fn for_entire_framebuffer(
-        render_pass: R,
-        framebuffer: &'f br::FramebufferObject<'f, D>,
-    ) -> Self {
-        Self::new(
-            render_pass,
-            framebuffer,
-            framebuffer
-                .size()
-                .clone()
-                .into_rect(br::vk::VkOffset2D::ZERO),
-        )
-    }
-}
 impl<
         R: br::RenderPass + br::DeviceChild<ConcreteDevice = Device>,
         F: br::Framebuffer + br::DeviceChild<ConcreteDevice = Device>,
@@ -575,7 +556,7 @@ where
     PipelineLayout: br::PipelineLayout,
 {
     pub layout: PipelineLayout,
-    pub shader_stage: br::ShaderStage,
+    pub shader_stage: br::vk::VkShaderStageFlags,
     pub offset: u32,
     pub value: T,
 }
@@ -586,7 +567,7 @@ where
     pub const fn for_fragment(layout: PipelineLayout, offset: u32, value: T) -> Self {
         Self {
             layout,
-            shader_stage: br::ShaderStage::FRAGMENT,
+            shader_stage: br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
             offset,
             value,
         }
@@ -595,7 +576,7 @@ where
     pub const fn for_vertex(layout: PipelineLayout, offset: u32, value: T) -> Self {
         Self {
             layout,
-            shader_stage: br::ShaderStage::VERTEX,
+            shader_stage: br::vk::VK_SHADER_STAGE_VERTEX_BIT,
             offset,
             value,
         }
@@ -708,7 +689,7 @@ impl<M: Mesh, Device: br::Device + ?Sized> GraphicsCommand<Device> for PreConfig
             .iter()
             .map(|rb| {
                 (
-                    br::BufferObjectRef::new(&rb.0),
+                    rb.0.as_transparent_ref(),
                     rb.1.start as br::vk::VkDeviceSize,
                 )
             })
@@ -732,7 +713,7 @@ impl<M: IndexedMesh, Device: br::Device + ?Sized> GraphicsCommand<Device>
             .iter()
             .map(|rb| {
                 (
-                    br::BufferObjectRef::new(&rb.0),
+                    rb.0.as_transparent_ref(),
                     rb.1.start as br::vk::VkDeviceSize,
                 )
             })

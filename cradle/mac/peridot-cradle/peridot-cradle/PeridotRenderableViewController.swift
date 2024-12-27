@@ -73,7 +73,7 @@ final class PeridotRenderableViewController : NSViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.enginePointer = NativeGameEngine(forView: &self.view)
+        self.enginePointer = NativeGameEngine(forLayer: self.view.layer! as! CAMetalLayer)
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
         initDispatchers()
         

@@ -1,4 +1,4 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass};
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::{resources::Image, SubmissionBatch};
 use br::{Device, GraphicsPipelineBuilder, ImageChild, ImageSubresourceSlice};
 use log::*;
@@ -68,11 +68,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .allocate_device_local_buffer_array(
             e.graphics(),
             [
-                br::BufferDesc::new(
+                br::BufferCreateInfo::new(
                     plane_mesh.byte_length(),
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
-                br::BufferDesc::new_for_type::<Uniform>(
+                br::BufferCreateInfo::new_for_type::<Uniform>(
                     br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
                 ),
             ],
@@ -95,11 +95,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .allocate_upload_buffer_array(
             e.graphics(),
             [
-                br::BufferDesc::new(
+                br::BufferCreateInfo::new(
                     vertex_buffer.byte_length() as _,
                     br::BufferUsage::TRANSFER_SRC,
                 ),
-                br::BufferDesc::new(
+                br::BufferCreateInfo::new(
                     uniform_buffer.byte_length() as _,
                     br::BufferUsage::TRANSFER_SRC,
                 ),
@@ -123,7 +123,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let image = memory_manager
         .allocate_device_local_image(
             e.graphics(),
-            br::ImageDesc::new(image_data.0.size, image_data.0.format as _)
+            br::ImageCreateInfo::new(image_data.0.size, image_data.0.format as _)
                 .sampled()
                 .transfer_dest()
                 .init_layout(br::ImageLayout::Preinitialized),
@@ -232,72 +232,96 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let back_buffer_attachment = e
         .back_buffer_attachment_desc()
         .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store);
-    let color_outputs = [br::AttachmentReference::new(
+    let color_outputs = [br::vk::VkAttachmentReference::new(
         0,
         br::ImageLayout::ColorAttachmentOpt,
     )];
     let color_render_subpass = br::SubpassDescription::new().color_attachments(&color_outputs, &[]);
-    let renderpass = br::RenderPassBuilder::new(
-        &[back_buffer_attachment],
-        &[color_render_subpass],
-        &[SubpassDependencyTemplates::to_color_attachment_in(
-            None, 0, true,
-        )],
+    let renderpass = br::RenderPassObject::new(
+        e.graphics().device().clone(),
+        &br::RenderPassCreateInfo::new(
+            &[back_buffer_attachment],
+            &[color_render_subpass],
+            &[SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            )],
+        ),
     )
-    .create(e.graphics().device().clone())
     .expect("Create RenderPass");
-    let mut framebuffers = e
-        .iter_back_buffers()
-        .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create())
+    let mut backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+    let mut framebuffers = backbuffer_resources
+        .iter()
+        .map(|b| {
+            br::FramebufferObject::new(
+                e.graphics_device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &renderpass,
+                    &[b.as_transparent_ref()],
+                    screen_size.width,
+                    screen_size.height,
+                ),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()
         .expect("Bind Framebuffer");
 
-    let smp = br::SamplerBuilder::default()
-        .create(e.graphics().device().clone())
+    let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Creating Sampler");
-    let descriptor_layout = br::DescriptorSetLayoutBuilder::new(&[
-        br::DescriptorType::UniformBuffer
-            .make_binding(0, 1)
-            .only_for_vertex(),
-        br::DescriptorType::CombinedImageSampler
-            .make_binding(1, 1)
-            .only_for_fragment()
-            .with_immutable_samplers(&[br::SamplerObjectRef::new(&smp)]),
-    ])
-    .create(e.graphics().device().clone())
-    .expect("Create DescriptorSetLayout");
-    let mut descriptor_pool = br::DescriptorPoolBuilder::new(
-        1,
-        &[
-            br::DescriptorType::UniformBuffer.make_size(1),
-            br::DescriptorType::CombinedImageSampler.make_size(1),
-        ],
+    let descriptor_layout = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[
+            br::DescriptorType::UniformBuffer
+                .make_binding(0, 1)
+                .only_for_vertex(),
+            br::DescriptorType::CombinedImageSampler
+                .make_binding(1, 1)
+                .only_for_fragment()
+                .with_immutable_samplers(&[smp.as_transparent_ref()]),
+        ]),
     )
-    .create(e.graphics().device().clone())
+    .expect("Create DescriptorSetLayout");
+    let mut descriptor_pool = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
+            1,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(1),
+                br::DescriptorType::CombinedImageSampler.make_size(1),
+            ],
+        ),
+    )
     .expect("Create DescriptorPool");
 
-    let pl = br::PipelineLayoutBuilder::new(
-        &[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)],
-        &[],
+    let pl = br::PipelineLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::PipelineLayoutCreateInfo::new(&[descriptor_layout.as_transparent_ref()], &[]),
     )
-    .create(e.graphics().device().clone())
     .expect("Create PipelineLayout");
     let gp = {
         let shader = e
             .load("builtin.shaders.unlit_image")
             .expect("Loading shader");
-        let shader =
-            PvpShaderModules::new(e.graphics().device(), shader).expect("Create ShaderModules");
+        let shader_modules =
+            PvpShaderModules::new(e.graphics().device(), &shader).expect("Create ShaderModules");
+        let shader_stages = [
+            shader_modules.pipeline_vertex_shader_stage(),
+            shader_modules
+                .pipeline_fragment_shader_stage()
+                .expect("no fsh?"),
+        ];
         let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
         let vp = [sc[0].make_viewport(0.0..1.0)];
-        let vps = shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+        let vps = br::VertexProcessingStages::new(
+            &shader_stages,
+            &shader.vertex_bindings,
+            &shader.vertex_attributes,
+            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+        );
         let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(&pl, renderpass.subpass(0), vps);
-        gpb.viewport_scissors(
-            br::DynamicArrayState::Static(&vp),
-            br::DynamicArrayState::Static(&sc),
-        )
-        .multisample_state(br::MultisampleState::new().into())
-        .set_attachment_blends(vec![ColorAttachmentBlending::Disabled.into_vk()]);
+        let color_blends = [ColorAttachmentBlending::Disabled.into_vk()];
+        gpb.viewport_state(br::ViewportState::new(&vp, &sc))
+            .multisample_state(br::MultisampleState::new().into())
+            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
 
         gpb.create(
             e.graphics().device().clone(),
@@ -319,7 +343,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .create()
         .expect("Failed to create main image view");
     let [descriptor_main] = descriptor_pool
-        .alloc_array(&[br::DescriptorSetLayoutObjectRef::new(&descriptor_layout)])
+        .alloc_array(&[descriptor_layout.as_transparent_ref()])
         .expect("Create main Descriptor");
     {
         let mut descriptor_writes = Vec::with_capacity(2);
@@ -328,7 +352,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 br::DescriptorContents::UniformBuffer(vec![
                     uniform_buffer.make_descriptor_buffer_ref()
                 ]),
-                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageRef::new(
+                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
                     &image_view,
                     br::ImageLayout::ShaderReadOnlyOpt,
                 )]),
@@ -359,18 +383,23 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     #[allow(unused_variables)]
     for (n, (cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
         #[cfg(feature = "debug")]
-        br::DebugUtilsObjectNameInfo::new(
-            cb,
-            Some(
-                &std::ffi::CString::new(format!("Primary Render Commands #{}", n))
-                    .expect("invalid sequence?"),
-            ),
-        )
-        .apply(e.graphics().device())
-        .expect("Failed to set render cb name");
+        e.graphics()
+            .device()
+            .set_object_name(&br::DebugUtilsObjectNameInfo::new(
+                cb,
+                Some(
+                    &std::ffi::CString::new(format!("Primary Render Commands #{n}"))
+                        .expect("invalid sequence?"),
+                ),
+            ))
+            .expect("Failed to set render cb name");
 
-        let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
-            .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+        let begin_main_rp = BeginRenderPass::new(
+            &renderpass,
+            fb,
+            screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO),
+        )
+        .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
         (&color_renders)
             .between(begin_main_rp, EndRenderPass)
@@ -403,24 +432,37 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
                         e.wait_for_last_rendering_completion();
 
-                        render_cb.reset().expect("Resetting RenderCB");
-                        framebuffers.clear();
+                        unsafe { render_cb.reset().expect("Resetting RenderCB") };
+                        drop(framebuffers);
+                        drop(backbuffer_resources);
 
                         e.resize_presenter_backbuffers(new_size);
 
-                        framebuffers = e
-                            .iter_back_buffers()
+                        backbuffer_resources = e.iter_back_buffers().cloned().collect();
+                        framebuffers = backbuffer_resources
+                            .iter()
                             .map(|b| {
-                                br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone())
-                                    .create()
+                                br::FramebufferObject::new(
+                                    e.graphics_device().clone(),
+                                    &br::FramebufferCreateInfo::new(
+                                        &renderpass,
+                                        &[b.as_transparent_ref()],
+                                        new_size.0,
+                                        new_size.1,
+                                    ),
+                                )
                             })
                             .collect::<Result<Vec<_>, _>>()
                             .expect("Bind Framebuffers");
 
                         for (cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
-                            let begin_main_rp =
-                                BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
-                                    .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+                            let begin_main_rp = BeginRenderPass::new(
+                                &renderpass,
+                                fb,
+                                br::vk::VkExtent2D::from(new_size)
+                                    .into_rect(br::vk::VkOffset2D::ZERO),
+                            )
+                            .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
                             (&color_renders)
                                 .between(begin_main_rp, EndRenderPass)
@@ -460,22 +502,36 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             peridot::Event::Resize(new_size) => {
                 e.wait_for_last_rendering_completion();
 
-                render_cb.reset().expect("Resetting RenderCB");
-                framebuffers.clear();
+                unsafe { render_cb.reset().expect("Resetting RenderCB") };
+                drop(framebuffers);
+                drop(backbuffer_resources);
 
                 e.resize_presenter_backbuffers(new_size);
 
-                framebuffers = e
-                    .iter_back_buffers()
+                backbuffer_resources = e.iter_back_buffers().cloned().collect();
+                framebuffers = backbuffer_resources
+                    .iter()
                     .map(|b| {
-                        br::FramebufferBuilder::new_with_attachment(&renderpass, b.clone()).create()
+                        br::FramebufferObject::new(
+                            e.graphics_device().clone(),
+                            &br::FramebufferCreateInfo::new(
+                                &renderpass,
+                                &[b.as_transparent_ref()],
+                                new_size.0,
+                                new_size.1,
+                            ),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .expect("Bind Framebuffers");
 
                 for (cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
-                    let begin_main_rp = BeginRenderPass::for_entire_framebuffer(&renderpass, fb)
-                        .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+                    let begin_main_rp = BeginRenderPass::new(
+                        &renderpass,
+                        fb,
+                        br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO),
+                    )
+                    .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
                     (&color_renders)
                         .between(begin_main_rp, EndRenderPass)

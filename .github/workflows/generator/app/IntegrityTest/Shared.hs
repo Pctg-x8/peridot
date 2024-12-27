@@ -70,7 +70,9 @@ checkFormats precondition =
                   GHA.namedAs "Running Check - Debugging Weaks" $
                     CodeFormCheckerAction.step CodeFormCheckerAction.ScriptVulnerabilitiesEliminator,
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
-                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptTrailingNewlineChecker
+                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptTrailingNewlineChecker,
+                  GHA.namedAs "Running Check - Enforce Line Feed to LF only" $
+                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptLineFeedChecker
                 ]
         )
 

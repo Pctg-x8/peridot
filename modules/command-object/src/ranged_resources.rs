@@ -31,8 +31,8 @@ impl<B: br::Buffer> RangedBuffer<B> {
         RangedBuffer(&self.0, self.1.clone())
     }
 
-    pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferRef {
-        br::DescriptorBufferRef::new(&self.0, self.1.clone())
+    pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferInfo {
+        br::DescriptorBufferInfo::new(&self.0, self.1.clone())
     }
 
     pub fn subslice(self, range: Range<u64>) -> Self {
@@ -190,8 +190,8 @@ impl<'b, B: br::Buffer + 'b> RangedBuffer<&'b B> {
         RangedBuffer(self.0.clone(), self.1.clone())
     }
 
-    pub fn into_descriptor_buffer_ref(self) -> br::DescriptorBufferRef<'b> {
-        br::DescriptorBufferRef::new(self.0, self.1)
+    pub fn into_descriptor_buffer_ref(self) -> br::DescriptorBufferInfo<'b> {
+        br::DescriptorBufferInfo::new(self.0, self.1)
     }
 }
 impl<B: br::Buffer + peridot::TransferrableBufferResource + 'static> RangedBuffer<B> {
@@ -236,7 +236,7 @@ impl<B: br::Buffer + peridot::TransferrableBufferResource + 'static> RangedBuffe
         );
     }
 }
-impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemory + br::VkHandleMut>
+impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemoryMut>
     RangedBuffer<peridot::Buffer<B, M>>
 {
     pub fn guard_map<R>(

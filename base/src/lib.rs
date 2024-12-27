@@ -1,6 +1,5 @@
 use async_std::stream::StreamExt;
 use futures_util::FutureExt;
-use log::*;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 
@@ -19,7 +18,7 @@ use std::time::{Duration, Instant as InstantTimer};
 mod graphics;
 pub use self::graphics::{
     CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
-    MemoryTypeManager,
+    MemoryTypeManager, VulkanExtension,
 };
 mod state_track;
 use self::state_track::StateFence;
@@ -204,6 +203,7 @@ pub enum Event {
     Resize(math::Vector2<u32>),
 }
 
+#[derive(Debug)]
 pub enum PrepareFrameError {
     FramebufferOutOfDate,
 }
@@ -243,7 +243,7 @@ pub struct Engine<NL: NativeLinker> {
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
         name: &str,
-        version: (u16, u16, u16),
+        version: br::Version,
         native_link: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
         engine_events_bus: (
@@ -282,7 +282,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 
     pub fn post_init(&mut self) {
-        trace!("PostInit BaseEngine...");
+        tracing::trace!("PostInit BaseEngine...");
     }
 }
 impl<NL: NativeLinker> Engine<NL> {
@@ -292,7 +292,7 @@ impl<NL: NativeLinker> Engine<NL> {
 
     pub async fn quit(&self) {
         if let Err(e) = self.engine_events_sender.send(EngineEvent::Shutdown).await {
-            warn!("Engine has already shutting down: {e:?}");
+            tracing::warn!(cause = ?e, "Engine has already shutting down");
         }
     }
 
@@ -323,12 +323,12 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn back_buffer(
         &self,
         index: usize,
-    ) -> Option<SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> {
+    ) -> Option<&SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> {
         self.presenter.back_buffer(index)
     }
     pub fn iter_back_buffers<'s>(
         &'s self,
-    ) -> impl Iterator<Item = SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> + 's
+    ) -> impl Iterator<Item = &'s SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> + 's
     {
         (0..self.back_buffer_count())
             .map(move |x| self.back_buffer(x).expect("unreachable while iteration"))
@@ -336,10 +336,10 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.presenter.requesting_back_buffer_layout()
     }
-    pub fn back_buffer_attachment_desc(&self) -> br::AttachmentDescription {
+    pub fn back_buffer_attachment_desc(&self) -> br::vk::VkAttachmentDescription {
         let (ol, _) = self.requesting_back_buffer_layout();
 
-        br::AttachmentDescription::new(self.back_buffer_format(), ol, ol)
+        br::vk::VkAttachmentDescription::new(self.back_buffer_format(), ol, ol)
     }
 
     pub fn input(&self) -> &InputProcess {
@@ -404,6 +404,9 @@ impl<PL: NativeLinker> Engine<PL> {
 }
 impl<PL: NativeLinker> Engine<PL> {
     pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
+        StateFence::wait(&mut self.last_rendering_completion)
+            .expect("Waiting last command completion");
+
         let dt = self.game_timer.delta_time();
         let backbuffer_index = match self.presenter.next_back_buffer_index() {
             Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
@@ -411,9 +414,6 @@ impl<PL: NativeLinker> Engine<PL> {
             }
             e => e.expect("Acquiring available back-buffer index failed"),
         };
-
-        StateFence::wait(&mut self.last_rendering_completion)
-            .expect("Waiting last command completion");
 
         self.ip.prepare_for_frame(dt);
 
@@ -536,6 +536,43 @@ impl<T> LateInit<T> {
     }
     pub fn get(&self) -> Ref<T> {
         Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
+    }
+}
+
+pub struct Discardable1<T>(Option<T>);
+impl<T> Discardable1<T> {
+    pub const fn new() -> Self {
+        Self(None)
+    }
+
+    pub fn set(&mut self, v: T) {
+        self.0 = Some(v);
+    }
+
+    pub fn get<'v>(&'v self) -> &'v T {
+        self.0.as_ref().expect("value unset")
+    }
+
+    pub fn get_mut<'v>(&'v mut self) -> &'v mut T {
+        self.0.as_mut().expect("value unset")
+    }
+
+    pub fn discard(&mut self) {
+        self.0 = None;
+    }
+
+    pub fn take(&mut self) -> Option<T> {
+        self.0.take()
+    }
+
+    pub const fn is_available(&self) -> bool {
+        self.0.is_some()
+    }
+}
+impl<T> From<T> for Discardable1<T> {
+    #[inline(always)]
+    fn from(value: T) -> Self {
+        Self(Some(value))
     }
 }
 

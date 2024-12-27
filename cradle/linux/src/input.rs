@@ -1,6 +1,7 @@
 //! Input Handlers
 
 use crate::{epoll::Epoll, kernel_input, udev};
+use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef, SharedWeakRef};
 
 pub trait PointerPositionProvider {
@@ -8,7 +9,7 @@ pub trait PointerPositionProvider {
     fn query_input_focus(&self) -> bool;
     fn query_input_focus_and_pointer_entered(&self) -> (bool, bool);
 }
-impl<T: PointerPositionProvider> PointerPositionProvider for SharedWeakRef<T> {
+impl<T: PointerPositionProvider> PointerPositionProvider for Weak<T> {
     fn get_pointer_position(&self) -> Option<(f32, f32)> {
         self.upgrade().and_then(|x| x.get_pointer_position())
     }
@@ -23,7 +24,7 @@ impl<T: PointerPositionProvider> PointerPositionProvider for SharedWeakRef<T> {
         })
     }
 }
-impl<T: PointerPositionProvider> PointerPositionProvider for SharedRef<T> {
+impl<T: PointerPositionProvider> PointerPositionProvider for Arc<T> {
     fn get_pointer_position(&self) -> Option<(f32, f32)> {
         T::get_pointer_position(&*self)
     }
@@ -36,17 +37,17 @@ impl<T: PointerPositionProvider> PointerPositionProvider for SharedRef<T> {
         T::query_input_focus_and_pointer_entered(&*self)
     }
 }
-impl<T: PointerPositionProvider> PointerPositionProvider for DynamicMut<T> {
+impl<T: PointerPositionProvider> PointerPositionProvider for RwLock<T> {
     fn get_pointer_position(&self) -> Option<(f32, f32)> {
-        self.borrow().get_pointer_position()
+        self.read().get_pointer_position()
     }
 
     fn query_input_focus(&self) -> bool {
-        self.borrow().query_input_focus()
+        self.read().query_input_focus()
     }
 
     fn query_input_focus_and_pointer_entered(&self) -> (bool, bool) {
-        self.borrow().query_input_focus_and_pointer_entered()
+        self.read().query_input_focus_and_pointer_entered()
     }
 }
 
@@ -126,7 +127,10 @@ fn diag_device(d: &udev::Device) {
     }
 }
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::{Arc, Weak},
+};
 
 pub struct EventDevice {
     fd: libc::c_int,

@@ -82,10 +82,13 @@ impl Presenter {
         render_queue_family_index: u32,
         window: *mut android::ANativeWindow,
     ) -> Self {
-        let obj = g
-            .adapter()
-            .new_surface_android(window)
-            .expect("Failed to create Surface");
+        let obj = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkAndroidSurfaceCreateInfoKHR::new(window),
+            )
+            .expect("Failed to create Surface")
+        };
         let supported = g
             .adapter()
             .surface_support(render_queue_family_index, &obj)
@@ -120,7 +123,7 @@ impl peridot::PlatformPresenter for Presenter {
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<SharedRef<Self::BackBuffer>> {
+    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
         self.sc.back_buffer(index)
     }
 
@@ -167,6 +170,9 @@ impl peridot::PlatformPresenter for Presenter {
     }
 }
 
+use android::{Asset, AssetManager, AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
+use std::ffi::CString;
+use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 struct PlatformAssetLoader {
     amgr: AssetManager,
 }
@@ -195,7 +201,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
-
         self.amgr
             .open(path_str.as_ptr(), AASSET_MODE_STREAMING)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))

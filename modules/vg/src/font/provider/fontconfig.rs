@@ -26,7 +26,7 @@ impl FontProvider for FontconfigFontProvider {
     type Font = FreetypeFont;
 
     fn best_match(
-        &self,
+        &mut self,
         family_name: &str,
         properties: &crate::FontProperties,
         size: f32,
@@ -92,6 +92,8 @@ impl FontProvider for FontconfigFontProvider {
 
 #[repr(transparent)]
 struct Config(core::ptr::NonNull<FcConfig>);
+unsafe impl Sync for Config {}
+unsafe impl Send for Config {}
 impl Config {
     fn init() -> Self {
         unsafe {
@@ -101,13 +103,13 @@ impl Config {
         }
     }
 
-    fn substitute_pattern(&self, pat: &mut Pattern) {
+    fn substitute_pattern(&mut self, pat: &mut Pattern) {
         unsafe {
             FcConfigSubstitute(self.0.as_ptr(), pat.0.as_ptr(), FcMatchPattern);
         }
     }
 
-    fn sort_fonts(&self, pat: &Pattern) -> Option<FontSet> {
+    fn sort_fonts(&mut self, pat: &Pattern) -> Option<FontSet> {
         let mut _res = 0;
         let ptr = unsafe {
             FcFontSort(
@@ -125,6 +127,8 @@ impl Config {
 
 #[repr(transparent)]
 struct PatternRef(core::ptr::NonNull<FcPattern>);
+unsafe impl Sync for PatternRef {}
+unsafe impl Send for PatternRef {}
 impl PatternRef {
     fn get_filepath(&self) -> Option<&core::ffi::CStr> {
         let mut file = core::mem::MaybeUninit::uninit();
@@ -157,6 +161,8 @@ impl PatternRef {
 }
 
 struct Pattern(core::ptr::NonNull<FcPattern>);
+unsafe impl Sync for Pattern {}
+unsafe impl Send for Pattern {}
 impl Pattern {
     /*pub fn parse_name(name: *const u8) -> Option<Self>
     {
@@ -172,7 +178,7 @@ impl Pattern {
         let size_range = Range::new_double(size as _, size as _).expect("Range creation failed");
         let ptr = unsafe {
             FcPatternBuild(
-                std::ptr::null_mut(),
+                core::ptr::null_mut(),
                 FC_FAMILY.as_ptr(),
                 FcTypeString,
                 name,
@@ -185,7 +191,7 @@ impl Pattern {
                 FC_SIZE.as_ptr(),
                 FcTypeRange,
                 size_range.0.as_ptr(),
-                std::ptr::null::<FcChar8>(),
+                core::ptr::null::<FcChar8>(),
             )
         };
 
@@ -221,6 +227,8 @@ impl std::ops::Deref for Pattern {
 
 #[repr(transparent)]
 struct FontSet(core::ptr::NonNull<FcFontSet>);
+unsafe impl Sync for FontSet {}
+unsafe impl Send for FontSet {}
 impl FontSet {
     #[allow(dead_code)]
     fn dump(&self) {
@@ -249,6 +257,8 @@ impl Drop for FontSet {
 
 #[repr(transparent)]
 struct Range(std::ptr::NonNull<FcRange>);
+unsafe impl Sync for Range {}
+unsafe impl Send for Range {}
 impl Range {
     fn new_double(begin: f64, end: f64) -> Option<Self> {
         std::ptr::NonNull::new(unsafe { FcRangeCreateDouble(begin as _, end as _) }).map(Self)

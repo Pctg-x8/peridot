@@ -1,5 +1,5 @@
-use bedrock as br;
-use br::{Device, DeviceChild, DeviceMemory, VkHandle, VulkanStructure};
+use bedrock::{self as br, DeviceMemoryMut};
+use br::{Device, DeviceChild, VkHandle, VulkanStructure};
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;
 use peridot::mthelper::SharedMutableRef;

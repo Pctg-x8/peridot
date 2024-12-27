@@ -106,11 +106,12 @@ pub struct GameDriver {
     usercode_thread: async_std::task::JoinHandle<()>,
 }
 impl GameDriver {
-    fn new<PP>(pp: SharedMutableRef<PP>) -> Self
+    fn new<PP>(pp: Arc<RwLock<PP>>) -> Self
     where
-        SharedMutableRef<PP>: PresenterProvider + PointerPositionProvider + 'static,
-        PP: Send + Sync,
-        <SharedMutableRef<PP> as PresenterProvider>::Presenter: Sync + Send,
+        PP: PointerPositionProvider + Send + Sync + 'static,
+        Arc<RwLock<PP>>: PresenterProvider,
+        <Arc<RwLock<PP>> as PresenterProvider>::Presenter: Sync + Send,
+        <<Arc<RwLock<PP>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer: Sync + Send
     {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
@@ -128,19 +129,20 @@ impl GameDriver {
             frame_timing_receiver,
         );
         engine
-            .input_mut()
+            .input()
             .set_nativelink(Box::new(input::InputNativeLink::new(pp)));
         engine.post_init();
-        let _snd = if sound_backend::pipewire::NativeAudioEngine::is_available() {
-            Box::new(sound_backend::pipewire::NativeAudioEngine::new(
-                engine.audio_mixer(),
-            )) as Box<dyn SoundBackend>
-        } else {
-            // fallback
-            Box::new(sound_backend::pa::NativeAudioEngine::new(
-                engine.audio_mixer(),
-            ))
-        };
+        let _snd: Box<dyn SoundBackend> =
+            if sound_backend::pipewire::NativeAudioEngine::is_available() {
+                Box::new(sound_backend::pipewire::NativeAudioEngine::new(
+                    engine.audio_mixer(),
+                ))
+            } else {
+                // fallback
+                Box::new(sound_backend::pa::NativeAudioEngine::new(
+                    engine.audio_mixer(),
+                ))
+            };
 
         let engine_input = engine.input().clone();
         let engine_audio = engine.audio_mixer().clone();
@@ -182,22 +184,24 @@ impl Drop for EpollTemporaryAddFd<'_> {
     }
 }
 
-async fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
+async fn run_with_window_backend<W>(window_backend: Arc<RwLock<W>>)
 where
     W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
-    SharedMutableRef<W>: PresenterProvider + PointerPositionProvider,
-    <SharedMutableRef<W> as PresenterProvider>::Presenter: Sync + Send,
+    Arc<RwLock<W>>: PresenterProvider,
+    <Arc<RwLock<W>> as PresenterProvider>::Presenter: Sync + Send,
+    <<Arc<RwLock<W>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer:
+        Sync + Send,
 {
     let gd = GameDriver::new(window_backend.clone());
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
-    window_backend.borrow_mut().show();
+    window_backend.write().show();
     gd.engine_audio.write().start();
     let mut events = Vec::new();
-    let mut last_drawn_geometry = window_backend.borrow().geometry();
-    while !window_backend.borrow().has_close_requested() {
+    let mut last_drawn_geometry = window_backend.read().geometry();
+    while !window_backend.read().has_close_requested() {
         if events.len() != 2 + input.managed_devices_count() {
             // resize
             events.resize(2 + input.managed_devices_count(), unsafe {
@@ -205,7 +209,7 @@ where
             });
         }
 
-        let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
+        let window_backend_readiness_guard = window_backend.write().readiness_guard();
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
             window_backend_readiness_guard.borrow_fd().as_raw_fd(),
@@ -221,8 +225,9 @@ where
         // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 {
             drop(window_backend_readiness_guard);
-            if last_drawn_geometry != window_backend.borrow().geometry() {
-                last_drawn_geometry = window_backend.borrow().geometry();
+            let current_geometry = window_backend.read().geometry();
+            if last_drawn_geometry != current_geometry {
+                last_drawn_geometry = current_geometry;
                 if let Err(e) = gd
                     .event_sender
                     .send(peridot::EngineEvent::Resize(last_drawn_geometry))
@@ -246,7 +251,7 @@ where
         for e in &events[..count as usize] {
             if e.u64 == 0 {
                 window_backend
-                    .borrow_mut()
+                    .write()
                     .process_all_events(rg.take().expect("window events signaled twice"));
             } else if e.u64 == 1 {
                 input.process_monitor_event(&ep);
@@ -255,7 +260,7 @@ where
                 input.process_device_event(
                     &mut input_lock.make_event_receiver(),
                     e.u64,
-                    &*window_backend.borrow(),
+                    &*window_backend.read(),
                 );
             }
         }
@@ -285,16 +290,16 @@ async fn main() {
 
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
-            run_with_window_backend(make_shared_mutable_ref(
+            run_with_window_backend(Arc::new(RwLock::new(
                 Wayland::try_init().expect("Failed to initialize wayland backend"),
-            ))
+            )))
             .await;
             return;
         }
         if backend_name == "xcb" {
-            run_with_window_backend(make_shared_mutable_ref(
+            run_with_window_backend(Arc::new(RwLock::new(
                 X11::try_init().expect("Failed to initialize xcb backend"),
-            ))
+            )))
             .await;
             return;
         }
@@ -306,11 +311,11 @@ async fn main() {
     }
 
     if let Some(x) = Wayland::try_init() {
-        run_with_window_backend(make_shared_mutable_ref(x)).await;
+        run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }
     if let Some(x) = X11::try_init() {
-        run_with_window_backend(make_shared_mutable_ref(x)).await;
+        run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }
 

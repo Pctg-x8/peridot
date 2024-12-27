@@ -242,8 +242,8 @@ impl NativeAudioEngine {
                         wBitsPerSample: bits_per_sample,
                         nBlockAlign: (bits_per_sample >> 3) * 2,
                         nAvgBytesPerSec: samples_per_sec * 2 * (bits_per_sample >> 3) as u32,
-                        cbSize: (std::mem::size_of::<WAVEFORMATEXTENSIBLE>()
-                            - std::mem::size_of::<WAVEFORMATEX>())
+                        cbSize: (core::mem::size_of::<WAVEFORMATEXTENSIBLE>()
+                            - core::mem::size_of::<WAVEFORMATEX>())
                             as _,
                     },
                     Samples: WAVEFORMATEXTENSIBLE_0 {
@@ -257,7 +257,7 @@ impl NativeAudioEngine {
                     .expect("initialize");
 
                 let process_frames = aclient.buffer_size().expect("Getting BufferSize") as u32;
-                log::info!("Processing Buffer Size: {process_frames}");
+                tracing::info!("Processing Buffer Size: {process_frames}");
                 let sleep_duration = Duration::from_micros(
                     (500_000.0 * process_frames as f64 / wfx.Format.nSamplesPerSec as f64) as _,
                 );
