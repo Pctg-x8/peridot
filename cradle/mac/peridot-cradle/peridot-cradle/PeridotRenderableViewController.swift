@@ -10,41 +10,6 @@ import Foundation
 import Cocoa
 import Carbon
 
-final class CurrentKeyboardLayoutCodeConverter {
-    static let MAX_CHAR_LENGTH: Int = 4
-    private var keyboardLayout: UnsafePointer<UCKeyboardLayout>
-    
-    init() {
-        var isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
-        if isource == nil {
-            // 日本語レイアウトだと上記だとうまくいかないらしい
-            // https://github.com/microsoft/node-native-keymap/blob/4bb080c3e83abca10942aa4fb81e2f7a81bf64db/src/keyboard_mac.mm#L89
-            isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardLayoutInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
-        }
-        let isourceRef = unsafeBitCast(isource, to: CFData.self)
-        let isourceBytes = CFDataGetBytePtr(isourceRef)
-        self.keyboardLayout = unsafeBitCast(isourceBytes, to: UnsafePointer<UCKeyboardLayout>.self)
-    }
-    
-    func translate(_ code: UInt16) -> Optional<UnsafeMutablePointer<UniChar>> {
-        var deadKeyMask: UInt32 = 0
-        var charLength = 0
-        let charName = UnsafeMutablePointer<UniChar>.allocate(capacity: Self.MAX_CHAR_LENGTH)
-        charName.initialize(repeating: 0, count: Self.MAX_CHAR_LENGTH)
-        let r = UCKeyTranslate(
-            self.keyboardLayout,
-            code,
-            UInt16(kUCKeyActionDown),
-            0,
-            UInt32(LMGetKbdType()),
-            UInt32(kUCKeyTranslateNoDeadKeysMask),
-            &deadKeyMask,
-            Self.MAX_CHAR_LENGTH, &charLength, charName
-        )
-        if r == noErr { return charName } else { return nil }
-    }
-}
-
 final class PeridotRenderableViewController : NSViewController {
     var dplink: CVDisplayLink? = nil
     var enginePointer: NativeGameEngine? = nil
@@ -73,7 +38,7 @@ final class PeridotRenderableViewController : NSViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.enginePointer = NativeGameEngine(forLayer: self.view.layer! as! CAMetalLayer)
+        self.enginePointer = NativeGameEngine(forLayer: self.view.layer! as! CAMetalLayer, forView: self.view)
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
         initDispatchers()
         
@@ -198,5 +163,40 @@ final class PeridotRenderableViewController : NSViewController {
             NSLog("Stopped Timer with %d", rv)
         }
         if let d = self.workDispatcher { d.cancel() }
+    }
+}
+
+final class CurrentKeyboardLayoutCodeConverter {
+    static let MAX_CHAR_LENGTH: Int = 4
+    private var keyboardLayout: UnsafePointer<UCKeyboardLayout>
+    
+    init() {
+        var isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
+        if isource == nil {
+            // 日本語レイアウトだと上記だとうまくいかないらしい
+            // https://github.com/microsoft/node-native-keymap/blob/4bb080c3e83abca10942aa4fb81e2f7a81bf64db/src/keyboard_mac.mm#L89
+            isource = TISGetInputSourceProperty(TISCopyCurrentKeyboardLayoutInputSource().takeRetainedValue(), kTISPropertyUnicodeKeyLayoutData)
+        }
+        let isourceRef = unsafeBitCast(isource, to: CFData.self)
+        let isourceBytes = CFDataGetBytePtr(isourceRef)
+        self.keyboardLayout = unsafeBitCast(isourceBytes, to: UnsafePointer<UCKeyboardLayout>.self)
+    }
+    
+    func translate(_ code: UInt16) -> Optional<UnsafeMutablePointer<UniChar>> {
+        var deadKeyMask: UInt32 = 0
+        var charLength = 0
+        let charName = UnsafeMutablePointer<UniChar>.allocate(capacity: Self.MAX_CHAR_LENGTH)
+        charName.initialize(repeating: 0, count: Self.MAX_CHAR_LENGTH)
+        let r = UCKeyTranslate(
+            self.keyboardLayout,
+            code,
+            UInt16(kUCKeyActionDown),
+            0,
+            UInt32(LMGetKbdType()),
+            UInt32(kUCKeyTranslateNoDeadKeysMask),
+            &deadKeyMask,
+            Self.MAX_CHAR_LENGTH, &charLength, charName
+        )
+        if r == noErr { return charName } else { return nil }
     }
 }

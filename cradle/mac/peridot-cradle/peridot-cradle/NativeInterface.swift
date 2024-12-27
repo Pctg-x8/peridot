@@ -12,8 +12,8 @@ import Cocoa
 final class NativeGameEngine {
     private var p: OpaquePointer
     
-    init(forLayer layer: CAMetalLayer) {
-        self.p = launch_game(unsafeBitCast(layer, to: UnsafeMutablePointer.self))
+    init(forLayer layer: CAMetalLayer, forView view: NSView) {
+        self.p = launch_game(unsafeBitCast(layer, to: UnsafeMutablePointer.self), unsafeBitCast(view, to: UnsafeMutablePointer.self))
     }
     deinit {
         NSLog("GameEngine Terminating")
@@ -72,13 +72,16 @@ func obtain_mouse_pointer_position(
     x: UnsafeMutablePointer<Float32>,
     y: UnsafeMutablePointer<Float32>
 ) {
-    let v = unsafeBitCast(viewptr, to: PeridotRenderableView.self)
-    if let p = v.window?.mouseLocationOutsideOfEventStream {
-        let h = v.frame.height
-        var pl = v.convert(p, from: nil)
-        // Note: MacBook Pro 16inch 2019だとなぜかpの時点で5.0だけずれてる
-        pl.y += 5.0
-        x.pointee = Float32(pl.x) * nsscreen_backing_scale_factor()
-        y.pointee = Float32(h - pl.y) * nsscreen_backing_scale_factor()
-    }
+    let v = unsafeBitCast(viewptr, to: NSView.self)
+    guard let w = v.window else {
+        // not window bound view?
+        return;
+    };
+    
+    var p = w.mouseLocationOutsideOfEventStream
+    p = w.convertPointToBacking(p)
+    
+    x.pointee = Float32(p.x)
+    // Note: MacBook Pro 14inch 2023だとなぜか10.0だけずれてる
+    y.pointee = Float32(v.frame.height * w.backingScaleFactor - p.y - 10.0)
 }

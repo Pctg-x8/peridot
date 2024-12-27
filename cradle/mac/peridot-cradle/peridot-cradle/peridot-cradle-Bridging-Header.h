@@ -19,7 +19,7 @@ const uint8_t KEYMOD_CONTROL = 3;
 const uint8_t KEYMOD_COMMAND = 4;
 const uint8_t KEYMOD_CAPSLOCK = 5;
 
-GameRun* launch_game(void* viewptr);
+GameRun* launch_game(void* layerptr, void* viewptr);
 void terminate_game(GameRun* engineptr);
 void update_game(GameRun* engineptr);
 void resize_game(GameRun* engineptr, uint32_t w, uint32_t h);

@@ -68,7 +68,7 @@
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "RUST_LOG"
-            value = "trace"
+            value = "trace,async_io=error"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>

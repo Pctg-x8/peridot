@@ -6,7 +6,6 @@ use objc::{msg_send, sel, sel_impl};
 use bedrock as br;
 use br::PhysicalDevice;
 use peridot::mthelper::SharedRef;
-use peridot::{EngineEvents, FeatureRequests};
 use std::ffi::CStr;
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
@@ -201,7 +200,7 @@ impl Presenter {
         let obj = unsafe {
             br::SurfaceObject::new(
                 g.adapter(),
-                &br::vk::VkMetalSurfaceCreateInfoEXT::new(layer_ptr as *const _)
+                &br::vk::VkMetalSurfaceCreateInfoEXT::new(layer_ptr as *const _),
             )
             .expect("Failed to create Surface")
         };
@@ -322,18 +321,18 @@ mod userlib;
 type Engine = peridot::Engine<NativeLink>;
 
 pub struct GameDriver {
-    ex_input: peridot::InputProcess,
+    ex_input: peridot::InputEventDispatcher,
     frame_timing_sender: async_std::channel::Sender<()>,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
     usercode_thread: async_std::task::JoinHandle<()>,
 }
 impl GameDriver {
-    pub fn new(rt_view: *mut libc::c_void) -> Self {
+    pub fn new(rt_layer: *mut core::ffi::c_void, rt_view: *mut core::ffi::c_void) -> Self {
         let (event_sender, event_receiver) =
             async_std::channel::unbounded::<peridot::EngineEvent>();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
 
-        let nl = NativeLink::new(rt_view);
+        let nl = NativeLink::new(rt_layer);
         let mut engine = Engine::new(
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
@@ -347,7 +346,7 @@ impl GameDriver {
         let mut nae = NativeAudioEngine::init();
         nae.start(engine.audio_mixer().clone());
         engine.post_init();
-        let ex_input = engine.input().clone();
+        let ex_input = engine.input_event_dispatcher().clone();
 
         let usercode_thread = async_std::task::spawn(async move {
             userlib::game_main(&mut engine).await;
@@ -371,11 +370,14 @@ extern "C" {
         oftype: *mut NSString,
     ) -> *mut objc::runtime::Object;
     fn nsscreen_backing_scale_factor() -> f32;
-    fn obtain_mouse_pointer_position(rt_view: *mut libc::c_void, x: *mut f32, y: *mut f32);
+    fn obtain_mouse_pointer_position(view_ptr: *mut core::ffi::c_void, x: *mut f32, y: *mut f32);
 }
 
 #[no_mangle]
-pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameDriver {
+pub extern "C" fn launch_game(
+    l: *mut core::ffi::c_void,
+    v: *mut core::ffi::c_void,
+) -> *mut GameDriver {
     log::set_logger(&LOGGER).expect("Failed to set logger");
     log::set_max_level(log::LevelFilter::Trace);
 
@@ -387,7 +389,7 @@ pub extern "C" fn launch_game(v: *mut libc::c_void) -> *mut GameDriver {
     );
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set log subscriber");
 
-    Box::into_raw(Box::new(GameDriver::new(v)))
+    Box::into_raw(Box::new(GameDriver::new(l, v)))
 }
 #[no_mangle]
 pub extern "C" fn terminate_game(g: *mut GameDriver) {
@@ -579,20 +581,22 @@ impl NativeAudioEngine {
 pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Down Event: {}", character);
     unsafe {
-        (*g).ex_input.dispatch_button_event(
-            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
-            true,
-        );
+        let _ = (*g)
+            .ex_input
+            .button_down(peridot::NativeButtonInput::Character(
+                (character as char).to_ascii_uppercase(),
+            ));
     }
 }
 #[no_mangle]
 pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
     trace!("Dispatching Character Up Event: {}", character);
     unsafe {
-        (*g).ex_input.dispatch_button_event(
-            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
-            false,
-        );
+        let _ = (*g)
+            .ex_input
+            .button_up(peridot::NativeButtonInput::Character(
+                (character as char).to_ascii_uppercase(),
+            ));
     }
 }
 
@@ -613,7 +617,7 @@ pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
         _ => return,
     };
     unsafe {
-        (*g).ex_input.dispatch_button_event(code_to_bty, true);
+        let _ = (*g).ex_input.button_down(code_to_bty);
     }
 }
 #[no_mangle]
@@ -628,18 +632,18 @@ pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
         _ => return,
     };
     unsafe {
-        (*g).ex_input.dispatch_button_event(code_to_bty, false);
+        let _ = (*g).ex_input.button_up(code_to_bty);
     }
 }
 
 struct NativeInputHandler {
-    rt_view: *mut libc::c_void,
+    rt_view: *mut core::ffi::c_void,
 }
 unsafe impl Sync for NativeInputHandler {}
 unsafe impl Send for NativeInputHandler {}
 impl NativeInputHandler {
-    fn new(rt_view: *mut libc::c_void) -> Self {
-        NativeInputHandler { rt_view }
+    fn new(rt_view: *mut core::ffi::c_void) -> Self {
+        Self { rt_view }
     }
 }
 impl peridot::NativeInput for NativeInputHandler {
@@ -660,15 +664,17 @@ impl peridot::NativeInput for NativeInputHandler {
 #[no_mangle]
 pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
     unsafe {
-        (*g).ex_input
-            .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), true);
+        let _ = (*g)
+            .ex_input
+            .button_down(peridot::NativeButtonInput::Mouse(index as _));
     }
 }
 #[no_mangle]
 pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
     unsafe {
-        (*g).ex_input
-            .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false);
+        let _ = (*g)
+            .ex_input
+            .button_up(peridot::NativeButtonInput::Mouse(index as _));
     }
 }
 
@@ -676,9 +682,13 @@ pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
 pub extern "C" fn report_mouse_move_abs(g: *mut GameDriver, x: f32, y: f32) {
     unsafe {
         let scale = nsscreen_backing_scale_factor();
-        (*g).ex_input
-            .dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x * scale, true);
-        (*g).ex_input
-            .dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
+        let _ = (*g).ex_input.analog(
+            peridot::NativeAnalogInput::MouseX,
+            peridot::AnalogValue::Absolute(x * scale),
+        );
+        let _ = (*g).ex_input.analog(
+            peridot::NativeAnalogInput::MouseY,
+            peridot::AnalogValue::Absolute(y * scale),
+        );
     }
 }
