@@ -119,12 +119,6 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let shaders: PvpContainer = e.load("shaders.blit").expect("Failed to load blit shader");
     let shader_modules = PvpShaderModules::new(e.graphics().device(), &shaders)
         .expect("Failed to generate ShaderModules");
-    let shader_stages = [
-        shader_modules.pipeline_vertex_shader_stage(),
-        shader_modules
-            .pipeline_fragment_shader_stage()
-            .expect("no fsh?"),
-    ];
     let pl = br::PipelineLayoutObject::new(
         e.graphics().device().clone(),
         &br::PipelineLayoutCreateInfo::new(
@@ -141,7 +135,12 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         &pl,
         renderpass.subpass(0),
         br::VertexProcessingStages::new(
-            &shader_stages,
+            &[
+                shader_modules.pipeline_vertex_shader_stage(),
+                shader_modules
+                    .pipeline_fragment_shader_stage()
+                    .expect("no fsh?"),
+            ],
             &shaders.vertex_bindings,
             &shaders.vertex_attributes,
             br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
