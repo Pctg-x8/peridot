@@ -1,6 +1,5 @@
 //! peridot-cradle for android platform
 
-use async_std::sync::Mutex;
 use br::PhysicalDevice;
 use log::*;
 
@@ -220,7 +219,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
             .write()
-            .expect("poisoned")
             .open(&path_str, AASSET_MODE_RANDOM)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
@@ -231,7 +229,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
             .write()
-            .expect("poisoned")
             .open(&path_str, AASSET_MODE_STREAMING)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
