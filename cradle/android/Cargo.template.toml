@@ -20,15 +20,18 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "VK_KHR_android_surface",
     "DynamicLoaded",
 ] }
-android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
+android = { git = "https://github.com/Pctg-x8/android-defs-rs", features = [
+    "autolink-libandroid",
+] }
 log = "0.4"
 libc = "0.2"
 android_logger = "0.5"
 libloading = "0.5"
 oboe = "0.4"
-jni = "0.15"
+jni = "0.21"
 parking_lot = "0.12"
 async-std = "1.13.0"
 tracing-android = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["registry"] }
 tracing = "0.1.40"
+thiserror = "2.0"
