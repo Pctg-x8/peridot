@@ -15,7 +15,7 @@ where
 
 pub trait PlatformAssetLoader {
     type Asset: Read + Seek + 'static;
-    type StreamingAsset: InputStream + 'static;
+    type StreamingAsset: InputStream + Sync + Send + 'static;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
@@ -41,7 +41,9 @@ pub trait FromAsset: LogicalAssetData {
 }
 pub trait FromStreamingAsset: LogicalAssetData {
     type Error: From<IOError>;
-    fn from_asset<Asset: InputStream + 'static>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: InputStream + Sync + Send + 'static>(
+        asset: Asset,
+    ) -> Result<Self, Self::Error>;
 }
 
 // Shader Blob //

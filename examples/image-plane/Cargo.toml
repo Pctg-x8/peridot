@@ -18,5 +18,6 @@ peridot-command-object = { path = "../../modules/command-object", features = [
 ] }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
 async-std = "1.7"
+parking_lot = "0.12"
 
 log = "0.4"

@@ -9,10 +9,11 @@ mod userlib;
 
 use android::{AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
 use bedrock as br;
+use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use std::ffi::CStr;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -218,7 +219,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
             .write()
-            .expect("poisoned")
             .open(&path_str, AASSET_MODE_RANDOM)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
@@ -229,7 +229,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
             .write()
-            .expect("poisoned")
             .open(&path_str, AASSET_MODE_STREAMING)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
@@ -370,10 +369,7 @@ impl audio_backend::aaudio::DataCallback for Generator {
         for b in bufslice.iter_mut() {
             *b = 0.0;
         }
-        self.0
-            .write()
-            .expect("Mixer Write Failed!")
-            .process(bufslice);
+        self.0.write().process(bufslice);
 
         audio_backend::aaudio::CallbackResult::Continue
     }
@@ -401,17 +397,13 @@ impl NativeAudioEngine {
         stream
             .request_start()
             .expect("Failed to start playback stream");
-        generator.0.write().expect("AudioEngine Poisoned").start();
+        generator.0.write().start();
 
         NativeAudioEngine { stream, generator }
     }
 
     pub fn pause(&mut self) {
-        self.generator
-            .0
-            .write()
-            .expect("AudioEngine Poisoning")
-            .stop();
+        self.generator.0.write().stop();
         self.stream.request_pause().expect("Failed to pause stream");
         let mut st = self.stream.state();
         while st != audio_backend::aaudio::native::AAUDIO_STREAM_STATE_PAUSED {
@@ -424,11 +416,7 @@ impl NativeAudioEngine {
 }
 impl Drop for NativeAudioEngine {
     fn drop(&mut self) {
-        self.generator
-            .0
-            .write()
-            .expect("AudioEngine Poisoning")
-            .stop();
+        self.generator.0.write().stop();
         self.stream.request_stop();
         trace!("NativeAudioEngine end");
     }

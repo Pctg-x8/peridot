@@ -29,6 +29,7 @@ android_logger = "0.5"
 libloading = "0.5"
 oboe = "0.4"
 jni = "0.21"
+parking_lot = "0.12"
 async-std = "1.13.0"
 tracing-android = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["registry"] }

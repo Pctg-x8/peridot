@@ -2,14 +2,23 @@ use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHan
 use br::{resources::Image, SubmissionBatch};
 use br::{Device, GraphicsPipelineBuilder, ImageChild, ImageSubresourceSlice};
 use log::*;
-use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
+use parking_lot::RwLock;
+use peridot::math::{
+    Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector2, Vector3, Vector3F32,
+};
+use peridot::mthelper::{DynamicMutabilityProvider, SharedRef};
 use peridot::{
     audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, SubpassDependencyTemplates,
 };
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_vertex_processing_pack::PvpShaderModules;
-use std::sync::{Arc, RwLock};
+use std::convert::TryInto;
+use std::marker::PhantomData;
+use std::mem::{align_of, size_of};
+use std::ops::Range;
+use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(feature = "debug")]
 use br::VkObject;
@@ -39,14 +48,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         e.streaming::<StreamingPlayableWav>("bgm")
             .expect("Loading BGM"),
     ));
-    e.audio_mixer()
-        .write()
-        .expect("Adding AudioProcess")
-        .add_process(bgm.clone());
-    e.audio_mixer()
-        .write()
-        .expect("Setting MasterVolume")
-        .set_master_volume(0.5);
+    e.audio_mixer().write().add_process(bgm.clone());
+    e.audio_mixer().write().set_master_volume(0.5);
 
     let mut memory_manager = MemoryManager::new(e.graphics());
 
@@ -408,7 +411,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .expect("Failed to record render commands");
     }
 
-    bgm.write().expect("Starting BGM").play();
+    bgm.write().play();
 
     let mut rot = 0.0f32;
     while let Some(ev) = e.event_receivers().wait_for_event().await {
