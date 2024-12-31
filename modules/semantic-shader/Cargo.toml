@@ -1,0 +1,14 @@
+[package]
+name = "peridot-semantic-shader"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["with-loader-impl"]
+with-loader-impl = ["dep:peridot"]
+
+[dependencies]
+bedrock.workspace = true
+peridot-serialization-utils = { path = "../serialization-utils" }
+thiserror = "2.0"
+peridot = { path = "../../base", optional = true }
