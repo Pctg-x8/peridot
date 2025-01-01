@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 peridot-semantic-shader = { path = "../../modules/semantic-shader", default-features = false }
-bedrock = { workspace = true, default-features = false }
+bedrock = { workspace = true }
 thiserror = "2.0"

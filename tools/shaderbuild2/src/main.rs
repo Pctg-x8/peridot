@@ -1,36 +1,78 @@
-use std::{collections::HashMap, io::Write};
+use std::{collections::HashMap, path::Path};
 
 use bedrock as br;
 
 fn main() {
-    let content = std::fs::read_to_string(std::env::args_os().nth(1).expect("no input files"))
-        .expect("Failed to read input");
+    for a in std::env::args().skip(1) {
+        // <input_path>[=<output_path>]の形式で指定
+
+        let mut splitted = a.splitn(2, '=');
+        let input_path = std::path::PathBuf::from(splitted.next().expect("empty input"));
+        let output_path = match splitted.next() {
+            Some(x) => std::path::PathBuf::from(x),
+            // 指定がない場合は入力パスの拡張子を変えたものにする
+            None => input_path.with_extension("pss"),
+        };
+
+        run(input_path, output_path);
+    }
+}
+
+fn run(input_path: impl AsRef<Path>, output_path: impl AsRef<Path>) {
+    let content = std::fs::read_to_string(input_path.as_ref()).expect("Failed to read input");
     let mut tokenizer = Tokenizer::new(&content);
     let mut gc = CombinedShaderGenContext::new();
     while !tokenizer.source.is_empty() {
         let toplevel = ToplevelBlock::parse(&mut tokenizer).expect("parse error");
-        println!("toplevel: {toplevel:#?}");
+        // println!("toplevel: {toplevel:#?}");
         gc.process(toplevel).expect("genctx error");
 
         tokenizer.strip_ignores();
     }
-    for (f, (t, _)) in gc.vertex_input_semantic_to_location_number.iter() {
-        println!("semantic {f:?} -> {t}");
-    }
 
-    let mut vsh_code = Vec::new();
-    gc.emit_vertex_shader_code(&mut vsh_code)
-        .expect("Failed to emit vertex shader code");
-    let vsh_code = unsafe { String::from_utf8_unchecked(vsh_code) };
-    println!("{vsh_code}");
-    let vsh_spv = compile_glsl("vertex", &vsh_code).expect("Failed to compile glsl");
-    let fsh_code = gc.gen_fragment_shader_code();
-    println!("{fsh_code}");
-    let fsh_spv = compile_glsl("frag", &fsh_code).expect("Failed to compile glsl");
+    println!(
+        "{}: Compiling Generated GLSL......",
+        input_path.as_ref().display()
+    );
+
+    let vsh_compiler = {
+        let mut compiler =
+            GLSLCompiler::new("vertex").expect("Failed to spawn vertex shader compiler");
+        gc.emit_vertex_shader_code(&mut compiler)
+            .expect("Failed to emit vertex shader code");
+        compiler.terminate_input();
+        compiler
+    };
+    let fsh_compiler = if gc.has_fragment_shader() {
+        let mut compiler =
+            GLSLCompiler::new("frag").expect("Failed to spawn fragment shader compiler");
+        gc.emit_fragment_shader_code(&mut compiler)
+            .expect("Failed to emit fragment shader code");
+        compiler.terminate_input();
+        Some(compiler)
+    } else {
+        None
+    };
+
+    let vsh_spv = match vsh_compiler
+        .wait_for_completion()
+        .expect("io error in compile vsh")
+    {
+        CompilationResult::Succeeded(x) => x,
+        CompilationResult::Failed(s) => panic!("vsh compilation failed! {s:?}"),
+    };
+    let fsh_spv = if let Some(c) = fsh_compiler {
+        match c.wait_for_completion().expect("io error in compile fsh") {
+            CompilationResult::Succeeded(x) => Some(x),
+            CompilationResult::Failed(s) => panic!("fsh compilation failed! {s:?}"),
+        }
+    } else {
+        None
+    };
 
     let asset = peridot_semantic_shader::ShaderPackAsset {
         vertex_shader_code: vsh_spv,
-        fragment_shader_code: Some(fsh_spv),
+        fragment_shader_code: fsh_spv,
         input_semantic_location_map: gc
             .vertex_input_semantic_to_location_number
             .into_iter()
@@ -42,57 +84,101 @@ fn main() {
             &mut std::fs::File::options()
                 .create(true)
                 .write(true)
-                .open("test.pss")
+                .truncate(true)
+                .open(output_path)
                 .expect("Failed to open dest file"),
         )
         .expect("Failed to write asset");
 }
 
-pub fn compile_glsl(stage: &str, src: &str) -> std::io::Result<Vec<u32>> {
-    let mut p = std::process::Command::new("glslc")
-        .arg(&format!("-fshader-stage={stage}"))
-        .args(["-o", "-", "-mfmt=num", "-"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()?;
-    let mut stdin = p.stdin.take().expect("no stdin?");
-    stdin.write_all(src.as_bytes())?;
-    stdin.flush()?;
-    drop(stdin);
-    let output = p.wait_with_output()?;
-    if !output.status.success() {
-        panic!("glsl compilation failed!");
+pub enum CompilationResult {
+    Succeeded(Vec<u32>),
+    Failed(std::process::ExitStatus),
+}
+
+pub struct GLSLCompiler(std::process::Child);
+impl GLSLCompiler {
+    pub fn new(stage: &str) -> std::io::Result<Self> {
+        let p = std::process::Command::new("glslc")
+            .arg(&format!("-fshader-stage={stage}"))
+            .args(["-o", "-", "-mfmt=num", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()?;
+
+        Ok(Self(p))
     }
 
-    let sout_str = unsafe { core::str::from_utf8_unchecked(&output.stdout) };
-    let spv_binary = sout_str
-        .split(',')
-        .map(|x| match x.trim().as_bytes() {
-            &[b'0', b'x', a, b, c, d, e, f, g, h] => {
-                const fn cn(c: u8) -> u32 {
-                    match c {
-                        b'0'..=b'9' => (c - b'0') as _,
-                        b'a'..=b'f' => ((c - b'a') + 0x0a) as _,
-                        b'A'..=b'F' => ((c - b'A') + 0x0a) as _,
-                        _ => unreachable!(),
+    pub fn terminate_input(&mut self) {
+        drop(self.0.stdin.take());
+    }
+
+    pub fn wait_for_completion(self) -> std::io::Result<CompilationResult> {
+        let r = self.0.wait_with_output()?;
+
+        if !r.status.success() {
+            return Ok(CompilationResult::Failed(r.status));
+        }
+
+        let spv_binary = unsafe { core::str::from_utf8_unchecked(&r.stdout) }
+            .split(',')
+            .map(|x| match x.trim().as_bytes() {
+                &[b'0', b'x', a, b, c, d, e, f, g, h] => {
+                    const fn cn(c: u8) -> u32 {
+                        match c {
+                            b'0'..=b'9' => (c - b'0') as _,
+                            b'a'..=b'f' => ((c - b'a') + 0x0a) as _,
+                            b'A'..=b'F' => ((c - b'A') + 0x0a) as _,
+                            _ => unreachable!(),
+                        }
                     }
+
+                    cn(a) << 28
+                        | cn(b) << 24
+                        | cn(c) << 20
+                        | cn(d) << 16
+                        | cn(e) << 12
+                        | cn(f) << 8
+                        | cn(g) << 4
+                        | cn(h)
                 }
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
 
-                cn(a) << 28
-                    | cn(b) << 24
-                    | cn(c) << 20
-                    | cn(d) << 16
-                    | cn(e) << 12
-                    | cn(f) << 8
-                    | cn(g) << 4
-                    | cn(h)
-            }
-            _ => unreachable!(),
-        })
-        .collect::<Vec<_>>();
+        Ok(CompilationResult::Succeeded(spv_binary))
+    }
+}
+impl std::io::Write for GLSLCompiler {
+    #[inline(always)]
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.stdin.as_mut().expect("no stdin?").write(buf)
+    }
 
-    Ok(spv_binary)
+    #[inline(always)]
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.0.stdin.as_mut().expect("no stdin?").write_all(buf)
+    }
+
+    #[inline(always)]
+    fn write_fmt(&mut self, fmt: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        self.0.stdin.as_mut().expect("no stdin?").write_fmt(fmt)
+    }
+
+    #[inline(always)]
+    fn write_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> std::io::Result<usize> {
+        self.0
+            .stdin
+            .as_mut()
+            .expect("no stdin?")
+            .write_vectored(bufs)
+    }
+
+    #[inline(always)]
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.stdin.as_mut().expect("no stdin?").flush()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1030,11 +1116,16 @@ impl<'s> CombinedShaderGenContext<'s> {
         Ok(())
     }
 
+    #[inline(always)]
+    pub fn has_fragment_shader(&self) -> bool {
+        !self.fragment_shader_main_ordered.is_empty()
+    }
+
     pub fn emit_vertex_shader_code(
         &self,
         sink: &mut (impl std::io::Write + ?Sized),
     ) -> std::io::Result<()> {
-        writeln!(sink, "#version 450\n")?;
+        sink.write_all(b"#version 450\n\n")?;
 
         // define inputs
         for (ln, (n, t)) in self.vertex_inputs_ordered.iter().enumerate() {
@@ -1069,97 +1160,121 @@ impl<'s> CombinedShaderGenContext<'s> {
         }
 
         // expand header code blocks
-        for x in self.vertex_shader_header_ordered.iter() {
-            sink.write_all(
-                x.slice
-                    .strip_prefix('{')
-                    .unwrap_or(x.slice)
-                    .strip_suffix('}')
-                    .unwrap_or(x.slice)
-                    .as_bytes(),
-            )?;
-        }
+        sink.write_vectored(
+            &self
+                .vertex_shader_header_ordered
+                .iter()
+                .map(|x| {
+                    std::io::IoSlice::new(
+                        x.slice
+                            .strip_prefix('{')
+                            .unwrap_or(x.slice)
+                            .strip_suffix('}')
+                            .unwrap_or(x.slice)
+                            .as_bytes(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )?;
 
         // expand main code blocks
         sink.write_all(b"void main() {\n")?;
-        for x in self.vertex_shader_main_ordered.iter() {
-            sink.write_all(
-                x.slice
-                    .strip_prefix('{')
-                    .unwrap_or(x.slice)
-                    .strip_suffix('}')
-                    .unwrap_or(x.slice)
-                    .as_bytes(),
-            )?;
-        }
+        sink.write_vectored(
+            &self
+                .vertex_shader_main_ordered
+                .iter()
+                .map(|x| {
+                    std::io::IoSlice::new(
+                        x.slice
+                            .strip_prefix('{')
+                            .unwrap_or(x.slice)
+                            .strip_suffix('}')
+                            .unwrap_or(x.slice)
+                            .as_bytes(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )?;
         sink.write_all(b"}\n")?;
 
         Ok(())
     }
 
-    pub fn gen_fragment_shader_code(&self) -> String {
-        use std::fmt::Write;
-
-        let mut code = String::from("#version 450\n\n");
+    pub fn emit_fragment_shader_code(
+        &self,
+        sink: &mut (impl std::io::Write + ?Sized),
+    ) -> std::io::Result<()> {
+        sink.write_all(b"#version 450\n\n")?;
 
         // define inputs
         for (ln, (n, t)) in self.fragment_inputs_ordered.iter().enumerate() {
             writeln!(
-                code,
+                sink,
                 "layout(location = {ln}) in {} {};",
                 t.0.slice, n.slice
-            )
-            .unwrap();
+            )?;
         }
 
         // define outputs
         for (ln, (n, t)) in self.fragment_outputs_ordered.iter().enumerate() {
             writeln!(
-                code,
+                sink,
                 "layout(location = {ln}) out {} {};",
                 t.0.slice, n.slice
-            )
-            .unwrap();
+            )?;
         }
 
         // define data blocks
         for b in self.fragment_uniform_blocks.iter() {
             writeln!(
-                code,
+                sink,
                 "layout(set = {}, binding = {}) uniform {} {{",
                 b.set_index.slice, b.binding_index.slice, b.block_name.slice
-            )
-            .unwrap();
+            )?;
             for e in b.entries.iter() {
-                writeln!(code, "    {} {};", e.r#type.0.slice, e.name.slice).unwrap();
+                writeln!(sink, "    {} {};", e.r#type.0.slice, e.name.slice)?;
             }
-            writeln!(code, "}};").unwrap();
+            sink.write_all(b"};\n")?;
         }
 
         // expand header code blocks
-        for x in self.fragment_shader_header_ordered.iter() {
-            code.push_str(
-                x.slice
-                    .strip_prefix('{')
-                    .unwrap_or(x.slice)
-                    .strip_suffix('}')
-                    .unwrap_or(x.slice),
-            );
-        }
+        sink.write_vectored(
+            &self
+                .fragment_shader_header_ordered
+                .iter()
+                .map(|x| {
+                    std::io::IoSlice::new(
+                        x.slice
+                            .strip_prefix('{')
+                            .unwrap_or(x.slice)
+                            .strip_suffix('}')
+                            .unwrap_or(x.slice)
+                            .as_bytes(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )?;
 
         // expand main code blocks
-        code.push_str("void main() {\n");
-        for x in self.fragment_shader_main_ordered.iter() {
-            code.push_str(
-                x.slice
-                    .strip_prefix('{')
-                    .unwrap_or(x.slice)
-                    .strip_suffix('}')
-                    .unwrap_or(x.slice),
-            );
-        }
-        code.push_str("}\n");
+        sink.write_all(b"void main() {\n")?;
+        sink.write_vectored(
+            &self
+                .fragment_shader_main_ordered
+                .iter()
+                .map(|x| {
+                    std::io::IoSlice::new(
+                        x.slice
+                            .strip_prefix('{')
+                            .unwrap_or(x.slice)
+                            .strip_suffix('}')
+                            .unwrap_or(x.slice)
+                            .as_bytes(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        sink.write_all(b"}\n")?;
 
-        code
+        Ok(())
     }
 }
