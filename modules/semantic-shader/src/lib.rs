@@ -149,6 +149,7 @@ impl ShaderPackAsset {
         })
     }
 
+    #[cfg(feature = "bedrock-implements")]
     pub fn instantiate<Device: br::Device + Clone>(
         self,
         device: Device,
