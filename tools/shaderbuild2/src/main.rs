@@ -886,6 +886,54 @@ impl<'s> UniformDataBlock<'s> {
 }
 
 #[derive(Debug, Clone)]
+pub struct Sampler2DDefinition<'s> {
+    pub shader_stage: Option<ShaderStageBits>,
+    pub set_index: SourceRef<'s>,
+    pub binding_index: SourceRef<'s>,
+    pub name: SourceRef<'s>,
+}
+impl<'s> Sampler2DDefinition<'s> {
+    pub fn parse_after_head_ident(tokenizer: &mut Tokenizer<'s>) -> Result<Self, ParseError> {
+        let shader_stage = if tokenizer.try_strip_bracket_start().is_ok() {
+            let x = ShaderStageBits::parse(tokenizer)?;
+            tokenizer
+                .try_strip_bracket_end()
+                .map_err(ParseError::closing_bracket_expected)?;
+
+            Some(x)
+        } else {
+            None
+        };
+
+        tokenizer
+            .try_strip_paren_start()
+            .map_err(ParseError::paren_start_expected)?;
+        let set_index = tokenizer.try_strip_int().map_err(ParseError::IntExpected)?;
+        tokenizer
+            .try_strip_comma()
+            .map_err(ParseError::comma_expected)?;
+        let binding_index = tokenizer.try_strip_int().map_err(ParseError::IntExpected)?;
+        tokenizer
+            .try_strip_paren_end()
+            .map_err(ParseError::paren_end_expected)?;
+
+        let name = tokenizer
+            .try_strip_ident()
+            .map_err(ParseError::IdentExpected)?;
+        tokenizer
+            .try_strip_semicolon()
+            .map_err(ParseError::semicolon_expected)?;
+
+        Ok(Self {
+            shader_stage,
+            set_index,
+            binding_index,
+            name,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct VaryingEntry<'s> {
     pub name: SourceRef<'s>,
     pub r#type: TypeSyntax<'s>,
@@ -941,6 +989,7 @@ impl<'s> VaryingBlock<'s> {
 pub enum ToplevelBlock<'s> {
     VertexInput(VertexInputBlock<'s>),
     UniformData(UniformDataBlock<'s>),
+    Sampler2D(Sampler2DDefinition<'s>),
     Varying(VaryingBlock<'s>),
     Header((ShaderStage, Location), SourceRef<'s>),
     VertexShader(SourceRef<'s>),
@@ -960,6 +1009,9 @@ impl<'s> ToplevelBlock<'s> {
             "Uniform" => Ok(Self::UniformData(UniformDataBlock::parse_after_head_ident(
                 tokenizer,
             )?)),
+            "Sampler2D" => Ok(Self::Sampler2D(
+                Sampler2DDefinition::parse_after_head_ident(tokenizer)?,
+            )),
             "Varyings" => Ok(Self::Varying(VaryingBlock::parse_after_head_ident(
                 tokenizer,
             )?)),
@@ -1011,11 +1063,13 @@ pub struct CombinedShaderGenContext<'s> {
         HashMap<peridot_semantic_shader::VertexInputSemantic, (u32, Location)>,
     vertex_outputs_ordered: Vec<(SourceRef<'s>, TypeSyntax<'s>)>,
     vertex_uniform_blocks: Vec<UniformDataBlock<'s>>,
+    vertex_sampler2d_defs: Vec<Sampler2DDefinition<'s>>,
     vertex_shader_header_ordered: Vec<SourceRef<'s>>,
     vertex_shader_main_ordered: Vec<SourceRef<'s>>,
     fragment_inputs_ordered: Vec<(SourceRef<'s>, TypeSyntax<'s>)>,
     fragment_outputs_ordered: Vec<(SourceRef<'s>, TypeSyntax<'s>)>,
     fragment_uniform_blocks: Vec<UniformDataBlock<'s>>,
+    fragment_sampler2d_defs: Vec<Sampler2DDefinition<'s>>,
     fragment_shader_header_ordered: Vec<SourceRef<'s>>,
     fragment_shader_main_ordered: Vec<SourceRef<'s>>,
 }
@@ -1026,11 +1080,13 @@ impl<'s> CombinedShaderGenContext<'s> {
             vertex_input_semantic_to_location_number: HashMap::new(),
             vertex_outputs_ordered: Vec::new(),
             vertex_uniform_blocks: Vec::new(),
+            vertex_sampler2d_defs: Vec::new(),
             vertex_shader_header_ordered: Vec::new(),
             vertex_shader_main_ordered: Vec::new(),
             fragment_inputs_ordered: Vec::new(),
             fragment_outputs_ordered: Vec::new(),
             fragment_uniform_blocks: Vec::new(),
+            fragment_sampler2d_defs: Vec::new(),
             fragment_shader_header_ordered: Vec::new(),
             fragment_shader_main_ordered: Vec::new(),
         }
@@ -1070,6 +1126,20 @@ impl<'s> CombinedShaderGenContext<'s> {
 
                 if (bits & br::vk::VK_SHADER_STAGE_FRAGMENT_BIT) != 0 {
                     self.fragment_uniform_blocks.push(u.clone());
+                }
+            }
+            ToplevelBlock::Sampler2D(s) => {
+                let bits = match s.shader_stage {
+                    Some(ref x) => x.bits(),
+                    None => br::vk::VK_SHADER_STAGE_ALL,
+                };
+
+                if (bits & br::vk::VK_SHADER_STAGE_VERTEX_BIT) != 0 {
+                    self.vertex_sampler2d_defs.push(s.clone());
+                }
+
+                if (bits & br::vk::VK_SHADER_STAGE_FRAGMENT_BIT) != 0 {
+                    self.fragment_sampler2d_defs.push(s.clone());
                 }
             }
             ToplevelBlock::Varying(v) => {
@@ -1158,6 +1228,13 @@ impl<'s> CombinedShaderGenContext<'s> {
             }
             sink.write_all(b"};\n")?;
         }
+        for b in self.vertex_sampler2d_defs.iter() {
+            writeln!(
+                sink,
+                "layout(set = {}, binding = {}) uniform sampler2D {};",
+                b.set_index.slice, b.binding_index.slice, b.name.slice
+            )?;
+        }
 
         // expand header code blocks
         sink.write_vectored(
@@ -1235,6 +1312,13 @@ impl<'s> CombinedShaderGenContext<'s> {
                 writeln!(sink, "    {} {};", e.r#type.0.slice, e.name.slice)?;
             }
             sink.write_all(b"};\n")?;
+        }
+        for b in self.fragment_sampler2d_defs.iter() {
+            writeln!(
+                sink,
+                "layout(set = {}, binding = {}) uniform sampler2D {};",
+                b.set_index.slice, b.binding_index.slice, b.name.slice
+            )?;
         }
 
         // expand header code blocks

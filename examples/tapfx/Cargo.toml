@@ -11,6 +11,7 @@ edition = "2018"
 peridot = { path = "../../base", features = ["mt"] }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
+peridot-semantic-shader.path = "../../modules/semantic-shader"
 peridot-image = { path = "../../modules/image" }
 peridot-command-object = { path = "../../modules/command-object", features = [
     "memory-manager-interop",

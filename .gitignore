@@ -5,6 +5,7 @@ target/
 .zed/
 android-build/
 **/*.pvp
+**/*.pss
 **/*.spv
 
 ## other artifacts

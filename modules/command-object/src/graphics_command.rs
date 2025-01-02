@@ -125,6 +125,46 @@ impl<
     }
 }
 /// consecutive exec
+impl<
+        A: GraphicsCommand<Device>,
+        B: GraphicsCommand<Device>,
+        C: GraphicsCommand<Device>,
+        D: GraphicsCommand<Device>,
+        Device: br::Device,
+    > GraphicsCommand<Device> for (A, B, C, D)
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        let cb = self.0.execute(cb);
+        let cb = self.1.execute(cb);
+        let cb = self.2.execute(cb);
+        self.3.execute(cb)
+    }
+}
+/// consecutive exec
+impl<
+        A: GraphicsCommand<Device>,
+        B: GraphicsCommand<Device>,
+        C: GraphicsCommand<Device>,
+        D: GraphicsCommand<Device>,
+        E: GraphicsCommand<Device>,
+        Device: br::Device,
+    > GraphicsCommand<Device> for (A, B, C, D, E)
+{
+    fn execute<'r>(
+        &self,
+        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
+    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
+        let cb = self.0.execute(cb);
+        let cb = self.1.execute(cb);
+        let cb = self.2.execute(cb);
+        let cb = self.3.execute(cb);
+        self.4.execute(cb)
+    }
+}
+/// consecutive exec
 impl<T: GraphicsCommand<Device>, Device: br::Device + ?Sized> GraphicsCommand<Device> for Vec<T> {
     fn execute<'r>(
         &self,

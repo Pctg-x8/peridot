@@ -10,7 +10,7 @@ use peridot_command_object::{
     PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
 };
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
-use peridot_vertex_processing_pack::{PvpContainer, PvpShaderModules};
+use peridot_semantic_shader::{ShaderPackAsset, VertexInputSemantic};
 
 #[repr(C)]
 #[derive(Clone)]
@@ -116,9 +116,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .alloc_array(&[dsl.as_transparent_ref(), dsl2.as_transparent_ref()])
         .expect("Failed to alloc Required Descriptors");
 
-    let shaders: PvpContainer = e.load("shaders.blit").expect("Failed to load blit shader");
-    let shader_modules = PvpShaderModules::new(e.graphics().device(), &shaders)
-        .expect("Failed to generate ShaderModules");
+    let shaders = e
+        .load::<ShaderPackAsset>("shaders.blit")
+        .expect("Failed to load blit shader asset")
+        .instantiate(e.graphics().device().clone())
+        .expect("Failed to instantiate blit shader");
     let pl = br::PipelineLayoutObject::new(
         e.graphics().device().clone(),
         &br::PipelineLayoutCreateInfo::new(
@@ -136,13 +138,30 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         renderpass.subpass(0),
         br::VertexProcessingStages::new(
             &[
-                shader_modules.pipeline_vertex_shader_stage(),
-                shader_modules
-                    .pipeline_fragment_shader_stage()
-                    .expect("no fsh?"),
+                shaders.pipeline_vertex_shader(),
+                shaders.pipeline_fragment_shader().expect("no fsh?"),
             ],
-            &shaders.vertex_bindings,
-            &shaders.vertex_attributes,
+            &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
+                peridot::VertexUV2D,
+            >(0)],
+            &[
+                br::vk::VkVertexInputAttributeDescription {
+                    binding: 0,
+                    location: shaders
+                        .resolve_input_semantic_location(VertexInputSemantic::Position(0))
+                        .expect("no position input?"),
+                    format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                    offset: core::mem::offset_of!(peridot::VertexUV2D, pos) as _,
+                },
+                br::vk::VkVertexInputAttributeDescription {
+                    binding: 0,
+                    location: shaders
+                        .resolve_input_semantic_location(VertexInputSemantic::Texcoord(0))
+                        .expect("no texcoord input?"),
+                    format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                    offset: core::mem::offset_of!(peridot::VertexUV2D, uv) as _,
+                },
+            ],
             br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
         ),
     )
