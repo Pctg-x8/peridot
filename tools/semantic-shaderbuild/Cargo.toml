@@ -1,9 +1,9 @@
 [package]
-name = "peridot-shaderbuild2"
+name = "peridot-semantic-shaderbuild"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 peridot-semantic-shader = { path = "../../modules/semantic-shader", default-features = false }
-bedrock = { workspace = true }
+bedrock.workspace = true
 thiserror = "2.0"

@@ -5,4 +5,4 @@ TARGETS = $(patsubst %.csh,%.pss,$(wildcard *.csh))
 .PHONY: all
 all: $(TARGETS)
 .csh.pss:
-	../../tools/target/release/peridot-shaderbuild2 $<
+	../../tools/target/release/peridot-semantic-shaderbuild $<
