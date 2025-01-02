@@ -3,18 +3,29 @@ use std::collections::HashMap;
 use bedrock::{self as br, ShaderModule};
 use peridot_serialization_utils::VariableUInt;
 
+/// Represents the semantic of a vertex shader input.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VertexInputSemantic {
+    /// Position input
     Position(u8),
+    /// Normal input
     Normal(u8),
+    /// Tangent input
     Tangent(u8),
+    /// Binormal input
     Binormal(u8),
+    /// Texture coordinate(UV) input
     Texcoord(u8),
+    /// Color input
     Color(u8),
+    /// Miscellaneous(Application-defined) input
     Misc(u8),
 }
 impl VertexInputSemantic {
-    pub fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
+    pub(crate) fn write(
+        &self,
+        writer: &mut (impl std::io::Write + ?Sized),
+    ) -> std::io::Result<usize> {
         match self {
             &Self::Misc(n) => writer.write_all(&[0, n]).map(|_| 2),
             &Self::Position(n) => writer.write_all(&[1, n]).map(|_| 2),
@@ -26,7 +37,7 @@ impl VertexInputSemantic {
         }
     }
 
-    pub fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
+    pub(crate) fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
         let mut buf = [0u8; 2];
         reader.read_exact(&mut buf)?;
 
@@ -46,18 +57,21 @@ impl VertexInputSemantic {
     }
 }
 
+/// API-Native Shader Module Package
 pub struct ShaderPack<Device: br::Device> {
     vertex_module: br::ShaderModuleObject<Device>,
     fragment_module: Option<br::ShaderModuleObject<Device>>,
     input_semantic_location_map: HashMap<VertexInputSemantic, u32>,
 }
 impl<Device: br::Device> ShaderPack<Device> {
+    /// Creates a wrapper object for GraphicsPipeline's shader stage.
     pub fn pipeline_vertex_shader(&self) -> br::PipelineShaderStage {
         self.vertex_module
             .with_entry_point(c"main")
             .on_stage(br::ShaderStage::Vertex)
     }
 
+    /// Creates a wrapper object for GraphicsPipeline's shader stage.
     pub fn pipeline_fragment_shader(&self) -> Option<br::PipelineShaderStage> {
         self.fragment_module.as_ref().map(|m| {
             m.with_entry_point(c"main")
@@ -65,25 +79,31 @@ impl<Device: br::Device> ShaderPack<Device> {
         })
     }
 
+    /// Resolves the location of shader input variable for the semantic.
     pub fn resolve_input_semantic_location(&self, semantic: VertexInputSemantic) -> Option<u32> {
         self.input_semantic_location_map.get(&semantic).copied()
     }
 }
 
+/// Error occured in loading a ShaderPack asset.
 #[derive(Debug, thiserror::Error)]
 pub enum AssetReadError {
+    /// IO Error
     #[error(transparent)]
     IO(#[from] std::io::Error),
+    /// The reader cannot recognize the valid signature in the asset.
     #[error("invalid siganture")]
     InvalidSignature,
 }
 
+/// An asset representation of the `ShaderPack` object.
 pub struct ShaderPackAsset {
     pub vertex_shader_code: Vec<u32>,
     pub fragment_shader_code: Option<Vec<u32>>,
     pub input_semantic_location_map: HashMap<VertexInputSemantic, u32>,
 }
 impl ShaderPackAsset {
+    /// Writes an asset's binary representation to the stream.
     pub fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         // signature(PSS+version)
         writer.write_all(b"PSS\x01")?;
@@ -111,6 +131,7 @@ impl ShaderPackAsset {
         Ok(())
     }
 
+    /// Reads an asset from the stream.
     pub fn read(
         reader: &mut (impl std::io::BufRead + std::io::Seek + ?Sized),
     ) -> Result<Self, AssetReadError> {
@@ -152,6 +173,7 @@ impl ShaderPackAsset {
         })
     }
 
+    /// Instantiates the native-api objects in this asset.
     #[cfg(feature = "bedrock-implements")]
     pub fn instantiate<Device: br::Device + Clone>(
         self,
@@ -190,13 +212,13 @@ impl peridot::FromAsset for ShaderPackAsset {
 }
 
 #[repr(transparent)]
-pub struct SpirvBinary(pub Vec<u32>);
+struct SpirvBinary(pub Vec<u32>);
 impl SpirvBinary {
     const fn from_ref(r: &Vec<u32>) -> &Self {
         unsafe { core::mem::transmute(r) }
     }
 
-    pub fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
+    fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
         let blen = VariableUInt(self.0.len() as _).write(writer)?;
         writer.write_all(unsafe {
             core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
@@ -205,7 +227,7 @@ impl SpirvBinary {
         Ok(blen + self.0.len() << 2)
     }
 
-    pub fn read(reader: &mut (impl std::io::BufRead + ?Sized)) -> std::io::Result<Self> {
+    fn read(reader: &mut (impl std::io::BufRead + ?Sized)) -> std::io::Result<Self> {
         let VariableUInt(len) = VariableUInt::read(reader)?;
         let mut buf = Vec::with_capacity(len as _);
         unsafe {
@@ -220,13 +242,13 @@ impl SpirvBinary {
 }
 
 #[repr(transparent)]
-pub struct InputSemanticMap(pub HashMap<VertexInputSemantic, u32>);
+struct InputSemanticMap(pub HashMap<VertexInputSemantic, u32>);
 impl InputSemanticMap {
     const fn from_ref(r: &HashMap<VertexInputSemantic, u32>) -> &Self {
         unsafe { core::mem::transmute(r) }
     }
 
-    pub fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
+    fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
         let mut wlen = VariableUInt(self.0.len() as _).write(writer)?;
         for (k, v) in self.0.iter() {
             wlen += k.write(writer)?;
@@ -236,7 +258,7 @@ impl InputSemanticMap {
         Ok(wlen)
     }
 
-    pub fn read(reader: &mut (impl std::io::BufRead + ?Sized)) -> std::io::Result<Self> {
+    fn read(reader: &mut (impl std::io::BufRead + ?Sized)) -> std::io::Result<Self> {
         let VariableUInt(clen) = VariableUInt::read(reader)?;
         let mut sink = HashMap::with_capacity(clen as _);
         for _ in 0..clen {
