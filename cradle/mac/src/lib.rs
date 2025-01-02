@@ -56,8 +56,9 @@ impl log::Log for NSLogger {
     fn flush(&self) {}
 }
 static LOGGER: NSLogger = NSLogger;
-extern "C" {
-    fn NSLog(format: *mut NSString, ...);
+unsafe extern "C" {
+    #[allow(improper_ctypes)]
+    unsafe fn NSLog(format: *mut NSString, ...);
 }
 
 use std::io::prelude::{Read, Seek};
@@ -113,7 +114,7 @@ impl PlatformAssetLoader {
         let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
         let mut pathext = NSString::from_str("par").expect("NSString for ext");
         let par_path = unsafe {
-            CocoaObject::from_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext))
+            CocoaObject::from_retained_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext))
                 .expect("No Primary Asset")
         };
 
@@ -367,6 +368,7 @@ impl GameDriver {
 
 extern "C" {
     fn nsapp_reply_should_terminate();
+    #[allow(improper_ctypes)]
     fn nsbundle_path_for_resource(
         name: *mut NSString,
         oftype: *mut NSString,
