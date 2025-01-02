@@ -123,7 +123,7 @@ impl ShaderPackAsset {
         let mut data_flags = [0u8; 1];
         reader.read_exact(&mut data_flags)?;
         let [data_flags] = data_flags;
-        let has_fragment_shader = (data_flags & (1 << 1)) != 0;
+        let has_fragment_shader = (data_flags & (1 << 0)) != 0;
 
         let VariableUInt(vertex_shader_offset) = VariableUInt::read(reader)?;
         let fragment_shader_offset = if has_fragment_shader {
@@ -131,12 +131,15 @@ impl ShaderPackAsset {
         } else {
             None
         };
+        let data_base_offset = reader.seek(std::io::SeekFrom::Current(0))?;
 
         let InputSemanticMap(input_semantic_location_map) = InputSemanticMap::read(reader)?;
-        reader.seek(std::io::SeekFrom::Start(vertex_shader_offset as _))?;
+        reader.seek(std::io::SeekFrom::Start(
+            data_base_offset + vertex_shader_offset as u64,
+        ))?;
         let SpirvBinary(vertex_shader_code) = SpirvBinary::read(reader)?;
         let fragment_shader_code = if let Some(o) = fragment_shader_offset {
-            reader.seek(std::io::SeekFrom::Start(o as _))?;
+            reader.seek(std::io::SeekFrom::Start(data_base_offset + o as u64))?;
             Some(SpirvBinary::read(reader)?.0)
         } else {
             None
