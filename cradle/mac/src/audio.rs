@@ -135,7 +135,7 @@ impl NativeAudioEngine {
     pub fn start(&mut self, mixer: Arc<RwLock<peridot::audio::Mixer>>) {
         if let Some(ref o) = self.output {
             let mut mixer = Box::new(mixer);
-            o.set_render_callback(Self::render as _, mixer.as_mut() as *mut _ as _);
+            o.set_render_callback(Some(Self::render), mixer.as_mut() as *mut _ as _);
             o.start();
             mixer.write().start();
             self.amixer = Some(mixer);
