@@ -235,9 +235,9 @@ impl InteropBackbufferResource {
                 )
                 .expect("Failed to create SharedHandle from D3D12")
         });
-        let vk_shared_handle =
-            br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
-        let exportable = br::vk::VkExternalMemoryImageCreateInfoKHR::new(vk_shared_handle.0 as _);
+        let exportable = br::vk::VkExternalMemoryImageCreateInfoKHR::new(
+            br::ExternalMemoryHandleTypeWin32::D3D12Resource as _,
+        );
         let image = br::ImageObject::new(
             g.device().clone(),
             &br::ImageCreateInfo::new(size, format)
@@ -252,7 +252,11 @@ impl InteropBackbufferResource {
 
             unsafe {
                 g.device()
-                    .memory_win32_handle_properties(&vk_shared_handle, &mut sink)
+                    .memory_win32_handle_properties(
+                        br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                        shared_handle.handle(),
+                        &mut sink,
+                    )
                     .expect("Failed to query Handle Memory Properties");
 
                 sink.assume_init()
@@ -264,10 +268,18 @@ impl InteropBackbufferResource {
             .expect("Failed to find matching memory type for importing")
             .index();
         let memory = SharedRef::new(
-            br::DeviceMemoryRequest::import(memory_type_index, vk_shared_handle, Some(&hname))
-                .execute(g.device().clone())
-                .expect("Failed to import memory")
-                .into(),
+            br::DeviceMemoryObject::new(
+                g.device().clone(),
+                &br::MemoryAllocateInfo::new(1, memory_type_index).with_next(
+                    &br::ImportMemoryWin32HandleInfo::new(
+                        br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                        shared_handle.handle(),
+                        Some(&hname),
+                    ),
+                ),
+            )
+            .expect("Failed to import memory")
+            .into(),
         );
         let image =
             peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
@@ -543,7 +555,7 @@ impl peridot::PlatformPresenter for Presenter {
         recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::TOP_OF_PIPE,
-            true,
+            br::vk::VK_DEPENDENCY_BY_REGION_BIT,
             &[],
             &[],
             &barriers,

@@ -270,7 +270,11 @@ impl<R: br::Image> RangedImage<R> {
     }
 
     pub fn single_depth_stencil_plane(resource: R) -> Self {
-        Self(resource.subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1))
+        Self(resource.subresource_range(
+            br::AspectMask::DEPTH | br::AspectMask::STENCIL,
+            0..1,
+            0..1,
+        ))
     }
 
     pub fn single_stencil_plane(resource: R) -> Self {

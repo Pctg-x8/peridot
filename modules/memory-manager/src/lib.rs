@@ -303,15 +303,13 @@ impl MemoryManager {
         })
     }
 
-    #[tracing::instrument(skip(self, device, dedicated_allocate_additional_ops))]
-    fn allocate_internal(
+    #[tracing::instrument(skip(self, device, dedicated_allocate_info))]
+    fn allocate_internal<'d>(
         &mut self,
         device: &peridot::DeviceObject,
         memory_requirements: &br::vk::VkMemoryRequirements2KHR,
         memory_index: u32,
-        dedicated_allocate_additional_ops: impl FnOnce(
-            br::DeviceMemoryRequest,
-        ) -> br::DeviceMemoryRequest,
+        dedicated_allocate_info: impl FnOnce() -> Option<br::MemoryDedicatedAllocateInfo<'d>>,
     ) -> br::Result<(BackingMemory, u64)> {
         let (require_dedicated, prefer_dedicated) = memory_requirements
             .query_structure::<br::vk::VkMemoryDedicatedRequirementsKHR>()
@@ -327,12 +325,20 @@ impl MemoryManager {
         {
             tracing::trace!("requested resource is enough big for 1:1 allocation");
 
-            let memory = dedicated_allocate_additional_ops(br::DeviceMemoryRequest::allocate(
-                memory_requirements.memoryRequirements.size as _,
+            let mut memory = br::MemoryAllocateInfo::new(
+                memory_requirements.memoryRequirements.size,
                 memory_index,
-            ))
-            .execute(device.clone())?;
-            return Ok((BackingMemory::Native(memory), 0));
+            );
+            let dedicated_allocate_info = dedicated_allocate_info();
+
+            if let Some(ref x) = dedicated_allocate_info {
+                memory = memory.with_next(x);
+            }
+
+            return Ok((
+                BackingMemory::Native(br::DeviceMemoryObject::new(device.clone(), &memory)?),
+                0,
+            ));
         }
 
         let blocks = self
@@ -356,8 +362,10 @@ impl MemoryManager {
             Self::NEW_MANAGED_ALLOCATION_SIZE
         );
         let mut new_block = MemoryBlock::new(
-            br::DeviceMemoryRequest::allocate(Self::NEW_MANAGED_ALLOCATION_SIZE as _, memory_index)
-                .execute(device.clone())?,
+            br::DeviceMemoryObject::new(
+                device.clone(),
+                &br::MemoryAllocateInfo::new(Self::NEW_MANAGED_ALLOCATION_SIZE, memory_index),
+            )?,
             Self::NEW_MANAGED_ALLOCATION_SIZE,
         );
         // 絶対確保できるはず
@@ -400,13 +408,13 @@ impl MemoryManager {
             .expect("no memory type index")
             .index;
 
-        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
+        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, || {
             if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                 tracing::info!("using dedicated allocation");
 
-                unsafe { r.for_dedicated_buffer_allocation(&o) }
+                Some(br::MemoryDedicatedAllocateInfo::for_buffer(&o))
             } else {
-                r
+                None
             }
         })?;
         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -485,10 +493,10 @@ impl MemoryManager {
                 "multiple request is enough big to sharing one native memory"
             );
 
-            Some(make_shared_mutable_ref(
-                br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
-                    .execute(e.device().clone())?,
-            ))
+            Some(make_shared_mutable_ref(br::DeviceMemoryObject::new(
+                e.device().clone(),
+                &br::MemoryAllocateInfo::new(alloc_info.total_size, memory_index),
+            )?))
         } else {
             None
         };
@@ -512,15 +520,21 @@ impl MemoryManager {
                         .expect("no memory type")
                         .index;
 
-                    let mut memory_req = br::DeviceMemoryRequest::allocate(
-                        req.memoryRequirements.size as _,
-                        memory_index,
-                    );
-                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    let mut memory_req =
+                        br::MemoryAllocateInfo::new(req.memoryRequirements.size, memory_index);
+                    let dedicated_allocate_info = if e
+                        .is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
                     {
-                        memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
+                        Some(br::MemoryDedicatedAllocateInfo::for_buffer(&object))
+                    } else {
+                        None
+                    };
+
+                    if let Some(ref x) = dedicated_allocate_info {
+                        memory_req = memory_req.with_next(x);
                     }
-                    let memory = memory_req.execute(e.device().clone())?;
+
+                    let memory = br::DeviceMemoryObject::new(e.device().clone(), &memory_req)?;
 
                     binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
                         sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
@@ -560,7 +574,7 @@ impl MemoryManager {
                     } else {
                         // normal small allocation
                         let (memory, offset) =
-                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                            self.allocate_internal(e.device(), &req, memory_index, || {
                                 unreachable!("no dedicated allocation must occurs!")
                             })?;
                         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -693,13 +707,13 @@ impl MemoryManager {
         let requires_flushing = !memory_type.is_coherent;
 
         let (memory, offset) =
-            self.allocate_internal(e.device(), &req, memory_type.index, |r| {
+            self.allocate_internal(e.device(), &req, memory_type.index, || {
                 if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                     tracing::info!("using dedicated allocation");
 
-                    unsafe { r.for_dedicated_buffer_allocation(&o) }
+                    Some(br::MemoryDedicatedAllocateInfo::for_buffer(&o))
                 } else {
-                    r
+                    None
                 }
             })?;
         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -773,10 +787,10 @@ impl MemoryManager {
                 "multiple request is enough big to sharing one native memory"
             );
 
-            Some(make_shared_mutable_ref(
-                br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
-                    .execute(e.device().clone())?,
-            ))
+            Some(make_shared_mutable_ref(br::DeviceMemoryObject::new(
+                e.device().clone(),
+                &br::MemoryAllocateInfo::new(alloc_info.total_size, memory_index),
+            )?))
         } else {
             None
         };
@@ -800,15 +814,21 @@ impl MemoryManager {
                         .expect("no memory type index");
                     let requires_flushing = !memory_type.is_coherent;
 
-                    let mut memory_req = br::DeviceMemoryRequest::allocate(
-                        req.memoryRequirements.size as _,
-                        memory_type.index,
-                    );
-                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    let mut memory_req =
+                        br::MemoryAllocateInfo::new(req.memoryRequirements.size, memory_type.index);
+                    let dedicated_allocate_info = if e
+                        .is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
                     {
-                        memory_req = unsafe { memory_req.for_dedicated_buffer_allocation(&object) };
+                        Some(br::MemoryDedicatedAllocateInfo::for_buffer(&object))
+                    } else {
+                        None
+                    };
+
+                    if let Some(ref x) = dedicated_allocate_info {
+                        memory_req = memory_req.with_next(x);
                     }
-                    let memory = memory_req.execute(e.device().clone())?;
+
+                    let memory = br::DeviceMemoryObject::new(e.device().clone(), &memory_req)?;
 
                     binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
                         sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
@@ -848,7 +868,7 @@ impl MemoryManager {
                     } else {
                         // normal small allocation
                         let (memory, offset) =
-                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                            self.allocate_internal(e.device(), &req, memory_index, || {
                                 unreachable!("no dedicated allocation must occurs!")
                             })?;
                         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -989,13 +1009,13 @@ impl MemoryManager {
             .expect("no memory type")
             .index;
 
-        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, |r| {
+        let (memory, offset) = self.allocate_internal(e.device(), &req, memory_index, || {
             if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR) {
                 tracing::info!("using dedicated allocation");
 
-                unsafe { r.for_dedicated_image_allocation(&o) }
+                Some(br::MemoryDedicatedAllocateInfo::for_image(&o))
             } else {
-                r
+                None
             }
         })?;
         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -1061,10 +1081,10 @@ impl MemoryManager {
                 "multiple request is enough big to sharing one native memory"
             );
 
-            Some(make_shared_mutable_ref(
-                br::DeviceMemoryRequest::allocate(alloc_info.total_size as _, memory_index)
-                    .execute(e.device().clone())?,
-            ))
+            Some(make_shared_mutable_ref(br::DeviceMemoryObject::new(
+                e.device().clone(),
+                &br::MemoryAllocateInfo::new(alloc_info.total_size, memory_index),
+            )?))
         } else {
             None
         };
@@ -1089,15 +1109,21 @@ impl MemoryManager {
                         .expect("no memory type index")
                         .index;
 
-                    let mut memory_req = br::DeviceMemoryRequest::allocate(
-                        req.memoryRequirements.size as _,
-                        memory_index,
-                    );
-                    if e.is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
+                    let mut memory_req =
+                        br::MemoryAllocateInfo::new(req.memoryRequirements.size, memory_index);
+                    let dedicated_allocate_info = if e
+                        .is_extension_available(&peridot::VulkanExtension::DEDICATED_ALLOCATION_KHR)
                     {
-                        memory_req = unsafe { memory_req.for_dedicated_image_allocation(&object) };
+                        Some(br::MemoryDedicatedAllocateInfo::for_image(&object))
+                    } else {
+                        None
+                    };
+
+                    if let Some(ref x) = dedicated_allocate_info {
+                        memory_req = memory_req.with_next(x);
                     }
-                    let memory = memory_req.execute(e.device().clone())?;
+
+                    let memory = br::DeviceMemoryObject::new(e.device().clone(), &memory_req)?;
 
                     bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
                         sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
@@ -1134,7 +1160,7 @@ impl MemoryManager {
                     } else {
                         // normal small allocation
                         let (memory, offset) =
-                            self.allocate_internal(e.device(), &req, memory_index, |_| {
+                            self.allocate_internal(e.device(), &req, memory_index, || {
                                 unreachable!("no dedicated allocation must occurs!")
                             })?;
                         // TODO: 強制アラインメント(VkMemoryRequirements::sizeがアラインメント調整用パディングを含んでいる前提
@@ -1229,11 +1255,12 @@ fn bind_buffers(
     if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
 
-        e.device().bind_buffers(&binds)?;
-    } else {
-        // use old binding
+        return unsafe { e.device().bind_buffers_raw(&binds) };
+    }
 
-        for b in binds.iter() {
+    // use old binding
+    for b in binds.iter() {
+        unsafe {
             e.device()
                 .bind_buffer_raw(b.buffer, b.memory, b.memoryOffset)?;
         }
@@ -1249,11 +1276,12 @@ fn bind_images(
     if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
 
-        e.device().bind_images(&binds)?;
-    } else {
-        // use old binding
+        return unsafe { e.device().bind_images_raw(&binds) };
+    }
 
-        for b in binds.iter() {
+    // use old binding
+    for b in binds.iter() {
+        unsafe {
             e.device()
                 .bind_image_raw(b.image, b.memory, b.memoryOffset)?;
         }

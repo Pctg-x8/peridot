@@ -79,7 +79,7 @@ pub fn gen_userlib_import_code(
 pub use {}::{entry_fn_name} as game_main;
 pub const APP_IDENTIFIER: &'static str = {userlib_name:?};
 pub const APP_TITLE: &'static str = {userlib_title:?};
-pub const APP_VERSION: bedrock::Version = bedrock::Version::new({}, {}, {});",
+pub const APP_VERSION: bedrock::Version = bedrock::Version::new(0, {}, {}, {});",
         userlib_name.replace('-', "_"),
         userlib_version.major,
         userlib_version.minor,

@@ -688,6 +688,6 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self,
         rec: br::CmdRecord<'r, CB, Device>,
     ) -> br::CmdRecord<'r, CB, Device> {
-        rec.bind_graphics_pipeline(&self.0)
+        rec.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }

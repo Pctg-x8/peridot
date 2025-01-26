@@ -11,7 +11,7 @@ use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::Subs
 
 mod sound_backend;
 
-use crate::presenter::{wayland::Wayland, xcb::X11, BorrowFd, EventProcessor, WindowBackend};
+use crate::presenter::{wayland::Wayland, BorrowFd, EventProcessor, WindowBackend};
 mod epoll;
 mod input;
 mod kernel_input;
@@ -296,9 +296,10 @@ async fn main() {
             .await;
             return;
         }
+        #[cfg(feature = "support-xcb")]
         if backend_name == "xcb" {
             run_with_window_backend(Arc::new(RwLock::new(
-                X11::try_init().expect("Failed to initialize xcb backend"),
+                presenter::xcb::X11::try_init().expect("Failed to initialize xcb backend"),
             )))
             .await;
             return;
@@ -314,7 +315,8 @@ async fn main() {
         run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }
-    if let Some(x) = X11::try_init() {
+    #[cfg(feature = "support-xcb")]
+    if let Some(x) = presenter::xcb::X11::try_init() {
         run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }

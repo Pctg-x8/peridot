@@ -78,7 +78,7 @@ impl<Device: br::Device> Texture2D<br::ImageObject<Device>> {
         br::ImageObject::new(g, &idesc).map(|o| (o, pixels_stg))
     }
 }
-impl<Image: br::Image> Texture2D<Image> {
+impl<Image: br::Image + br::DeviceChild> Texture2D<Image> {
     pub fn new(img: Image) -> br::Result<Self> {
         let pf = PixelFormat::from(img.format());
 
@@ -107,9 +107,11 @@ impl<Image: br::Image> Texture2D<Image> {
 
         view_builder.create().map(Texture2D)
     }
-
+}
+impl<Image: br::Image> Texture2D<Image> {
+    #[inline(always)]
     pub fn image(&self) -> &Image {
-        &self.0
+        self.0.image()
     }
 }
 impl<Image: br::Image> Deref for Texture2D<Image> {
@@ -297,7 +299,7 @@ impl<Image: br::Image> DeviceWorkingTexture2D<Image> {
 
     /// Gets underlying resource object
     pub fn underlying(&self) -> &Image {
-        &*self.view
+        self.view.image()
     }
 }
 impl<Image: br::Image> Deref for DeviceWorkingTexture2D<Image> {
@@ -341,7 +343,7 @@ impl<Image: br::Image> DeviceWorkingTexture3D<Image> {
 
     /// Gets underlying resource object
     pub fn underlying(&self) -> &Image {
-        &*self.view
+        self.view.image()
     }
 }
 impl<Image: br::Image> Deref for DeviceWorkingTexture3D<Image> {
@@ -381,7 +383,7 @@ impl<Image: br::Image> DeviceWorkingCubeTexture<Image> {
 
     /// Gets underlying resource object
     pub fn underlying(&self) -> &Image {
-        &*self.view
+        self.view.image()
     }
 }
 impl<Image: br::Image> Deref for DeviceWorkingCubeTexture<Image> {

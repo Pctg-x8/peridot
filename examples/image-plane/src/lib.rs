@@ -1,6 +1,6 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::{resources::Image, SubmissionBatch};
-use br::{Device, GraphicsPipelineBuilder, ImageChild, ImageSubresourceSlice};
+use br::{Device, ImageChild, ImageSubresourceSlice};
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
@@ -328,57 +328,65 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         ),
     )
     .expect("Create PipelineLayout");
-    let gp = {
-        let shader = e
-            .load::<ShaderPackAsset>("builtin.semantic_shaders.unlit_image")
-            .expect("Loading shader")
-            .instantiate(e.graphics().device().clone())
-            .expect("Instantiate Shaders");
-        let shader_stages = [
-            shader.pipeline_vertex_shader(),
-            shader.pipeline_fragment_shader().expect("no fsh?"),
-        ];
-        let vertex_bindings = [br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
-            peridot::VertexUV,
-        >(0)];
-        let vertex_attributes = [
-            br::vk::VkVertexInputAttributeDescription {
-                binding: 0,
-                location: shader
-                    .resolve_input_semantic_location(VertexInputSemantic::Position(0))
-                    .expect("no position input?"),
-                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                offset: core::mem::offset_of!(peridot::VertexUV, pos) as _,
-            },
-            br::vk::VkVertexInputAttributeDescription {
-                binding: 0,
-                location: shader
-                    .resolve_input_semantic_location(VertexInputSemantic::Texcoord(0))
-                    .expect("no texcoord input?"),
-                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                offset: core::mem::offset_of!(peridot::VertexUV, uv) as _,
-            },
-        ];
-        let vps = br::VertexProcessingStages::new(
-            &shader_stages,
-            &vertex_bindings,
-            &vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-        );
-        let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
-        let vp = [sc[0].make_viewport(0.0..1.0)];
-        let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(&pl, renderpass.subpass(0), vps);
-        let color_blends = [ColorAttachmentBlending::Disabled.into_vk()];
-        gpb.viewport_state(br::ViewportState::new(&vp, &sc))
-            .multisample_state(br::MultisampleState::new().into())
-            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-
-        gpb.create(
-            e.graphics().device().clone(),
+    let shader = e
+        .load::<ShaderPackAsset>("builtin.semantic_shaders.unlit_image")
+        .expect("Loading shader")
+        .instantiate(e.graphics().device().clone())
+        .expect("Instantiate Shaders");
+    let sc = [screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO)];
+    let vp = [sc[0].make_viewport(0.0..1.0)];
+    let [gp] = e
+        .graphics()
+        .device()
+        .new_graphics_pipeline_array(
+            &[br::GraphicsPipelineCreateInfo::new(
+                &pl,
+                renderpass.subpass(0),
+                &[
+                    shader.pipeline_vertex_shader(),
+                    shader.pipeline_fragment_shader().expect("no fsh?"),
+                ],
+                &br::PipelineVertexInputStateCreateInfo::new(
+                    &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
+                        peridot::VertexUV,
+                    >(0)],
+                    &[
+                        br::vk::VkVertexInputAttributeDescription {
+                            binding: 0,
+                            location: shader
+                                .resolve_input_semantic_location(VertexInputSemantic::Position(0))
+                                .expect("no position input?"),
+                            format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                            offset: core::mem::offset_of!(peridot::VertexUV, pos) as _,
+                        },
+                        br::vk::VkVertexInputAttributeDescription {
+                            binding: 0,
+                            location: shader
+                                .resolve_input_semantic_location(VertexInputSemantic::Texcoord(0))
+                                .expect("no texcoord input?"),
+                            format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                            offset: core::mem::offset_of!(peridot::VertexUV, uv) as _,
+                        },
+                    ],
+                ),
+                &br::PipelineInputAssemblyStateCreateInfo::new(
+                    br::PrimitiveTopology::TriangleStrip,
+                ),
+                &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
+                &br::PipelineRasterizationStateCreateInfo::new(
+                    br::PolygonMode::Fill,
+                    br::CullModeFlags::NONE,
+                    br::FrontFace::CounterClockwise,
+                ),
+                &br::PipelineColorBlendStateCreateInfo::new(&[
+                    ColorAttachmentBlending::Disabled.into_vk()
+                ]),
+            )
+            .multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
         )
-        .expect("Create GraphicsPipeline")
-    };
+        .expect("Create GraphicsPipeline");
+    let gp = gp.clone_parent();
     #[cfg(feature = "debug")]
     gp.set_name(Some(c"Main Pipeline"))
         .expect("Failed to set pipeline name");
@@ -456,6 +464,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             &renderpass,
             fb,
             screen_size.wh().into_rect(br::vk::VkOffset2D::ZERO),
+            br::SubpassContents::Inline,
         )
         .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
@@ -519,6 +528,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                                 fb,
                                 br::vk::VkExtent2D::from(new_size)
                                     .into_rect(br::vk::VkOffset2D::ZERO),
+                                br::SubpassContents::Inline,
                             )
                             .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
@@ -588,6 +598,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         &renderpass,
                         fb,
                         br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO),
+                        br::SubpassContents::Inline,
                     )
                     .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
