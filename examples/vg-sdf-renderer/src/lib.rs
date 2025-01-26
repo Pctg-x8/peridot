@@ -294,7 +294,7 @@ impl TwoPassStencilSDFRenderer {
         );
         let multisample_state = br::PipelineMultisampleStateCreateInfo::new();
 
-        let [triangle_fans_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] =
+        let [triangles_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] =
             e.graphics()
                 .device()
                 .new_graphics_pipeline_array(
@@ -429,7 +429,7 @@ impl TwoPassStencilSDFRenderer {
             outline_shader,
             outline_shader_modules,
             triangle_fans_stencil_pipeline: peridot::LayoutedPipeline::combine(
-                triangle_fans_stencil_pipeline.clone_parent(),
+                triangles_stencil_pipeline.clone_parent(),
                 empty_pl.clone(),
             ),
             curve_triangles_stencil_pipeline: peridot::LayoutedPipeline::combine(
@@ -505,7 +505,7 @@ impl TwoPassStencilSDFRenderer {
         );
         let multisample_state = br::PipelineMultisampleStateCreateInfo::new();
 
-        let [triangle_fans_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] =
+        let [triangles_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] =
             g.device()
                 .new_graphics_pipeline_array(
                     &[
@@ -631,7 +631,7 @@ impl TwoPassStencilSDFRenderer {
 
         self.target_size = new_size;
         self.triangle_fans_stencil_pipeline = peridot::LayoutedPipeline::combine(
-            triangle_fans_stencil_pipeline.clone_parent(),
+            triangles_stencil_pipeline.clone_parent(),
             self.triangle_fans_stencil_pipeline.layout().clone(),
         );
         self.curve_triangles_stencil_pipeline = peridot::LayoutedPipeline::combine(
