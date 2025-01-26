@@ -1,7 +1,5 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
-use br::{
-    Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch,
-};
+use br::{Device, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use log::*;
 use peridot::math::Vector2;
 use peridot::mthelper::SharedRef;
@@ -319,8 +317,6 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let curve_shader_modules =
         PvpShaderModules::new(e.graphics().device(), &curve_shader).expect("Creating CurveShader");
     debug!("ScreenSize: {screen_size:?}");
-    let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
-    let vp = [sc[0].make_viewport(0.0..1.0)];
     let pl = SharedRef::new(
         br::PipelineLayoutObject::new(
             e.graphics().device().clone(),
@@ -335,149 +331,140 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .expect("Create PipelineLayout"),
     );
 
-    let (gp, gp_curve);
-    let (gp2, gp2_curve);
-    {
+    let [gp, gp_curve, gp2, gp2_curve] = {
+        let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
+        let vp = [sc[0].make_viewport(0.0..1.0)];
+        let viewport_state = br::PipelineViewportStateCreateInfo::new_array(&vp, &sc);
+
         let spc_map = &[
-            br::vk::VkSpecializationMapEntry {
-                constantID: 0,
-                offset: 0,
-                size: 4,
-            },
-            br::vk::VkSpecializationMapEntry {
-                constantID: 1,
-                offset: 4,
-                size: 4,
-            },
+            br::vk::VkSpecializationMapEntry::for_type::<f32>(0, 0),
+            br::vk::VkSpecializationMapEntry::for_type::<f32>(1, 4),
         ];
         let vsh_parameters = br::SpecializationInfo::from_binary(spc_map, unsafe {
             as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..])
         });
 
-        let color1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
+        let gp1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
             r: 1.0,
             g: 0.5,
             b: 0.0,
             a: 1.0,
         });
-        let shader_stages = [
-            shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&color1_fsh_parameters),
-        ];
-        let curve_shader_stages = [
-            curve_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            curve_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&color1_fsh_parameters),
-        ];
-        let interior_vertex_processing = br::VertexProcessingStages::new(
-            &shader_stages,
-            &shader.vertex_bindings,
-            &shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        );
-        let curve_vertex_processing = br::VertexProcessingStages::new(
-            &curve_shader_stages,
-            &curve_shader.vertex_bindings,
-            &curve_shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        );
-
-        let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
-        let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(
-            &pl,
-            render_pass.subpass(0),
-            interior_vertex_processing,
-        );
-        gpb.multisample_state(Some({
-            let mut state = br::MultisampleState::new();
-            state.rasterization_samples(msaa_count as _);
-
-            state
-        }))
-        .viewport_state(br::ViewportState::new(&vp, &sc))
-        .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        gp = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Create GraphicsPipeline"),
-            pl.clone(),
-        );
-        gpb.vertex_processing(curve_vertex_processing);
-        gp_curve = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Create GraphicsPipeline of CurveRender"),
-            pl.clone(),
-        );
-
-        let fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
+        let gp2_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
             r: 0.0,
             g: 0.5,
             b: 1.0,
             a: 1.0,
         });
-        let shader_stages = [
-            shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&fsh_parameters),
-        ];
-        let curve_shader_stages = [
-            curve_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            curve_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&fsh_parameters),
-        ];
-        let interior_vertex_processing = br::VertexProcessingStages::new(
-            &shader_stages,
+
+        let vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
             &shader.vertex_bindings,
             &shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         );
-        let curve_vertex_processing = br::VertexProcessingStages::new(
-            &curve_shader_stages,
+        let curve_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
             &curve_shader.vertex_bindings,
             &curve_shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         );
-        gpb.vertex_processing(interior_vertex_processing);
-        gp2 = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
+        let input_assembly_state =
+            br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleList);
+        let ms =
+            br::PipelineMultisampleStateCreateInfo::new().rasterization_samples(msaa_count as _);
+        let rs = br::PipelineRasterizationStateCreateInfo::new(
+            br::PolygonMode::Fill,
+            br::CullModeFlags::NONE,
+            br::FrontFace::CounterClockwise,
+        );
+        let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
+
+        e.graphics()
+            .device()
+            .new_graphics_pipeline_array(
+                &[
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp1_fsh_parameters),
+                        ],
+                        &vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .multisample_state(&ms),
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            curve_shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            curve_shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp1_fsh_parameters),
+                        ],
+                        &curve_vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .multisample_state(&ms),
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp2_fsh_parameters),
+                        ],
+                        &vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .multisample_state(&ms),
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            curve_shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            curve_shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp2_fsh_parameters),
+                        ],
+                        &curve_vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .multisample_state(&ms),
+                ],
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
-            .expect("Creating GraphicsPipeline2"),
-            pl.clone(),
-        );
-        gpb.vertex_processing(curve_vertex_processing);
-        gp2_curve = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Creating GraphicsPipeline2 for CurveRender"),
-            pl.clone(),
-        );
-    }
+            .expect("Failed to create graphics pipelines")
+    };
+    let gp = LayoutedPipeline::combine(gp.clone_parent(), pl.clone());
+    let gp_curve = LayoutedPipeline::combine(gp_curve.clone_parent(), pl.clone());
+    let gp2 = LayoutedPipeline::combine(gp2.clone_parent(), pl.clone());
+    let gp2_curve = LayoutedPipeline::combine(gp2_curve.clone_parent(), pl.clone());
 
     let render_vg = RenderVG {
         params: vg_renderer_params,
@@ -511,6 +498,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             &render_pass,
             f,
             screen_size.into_rect(br::vk::VkOffset2D::ZERO),
+            br::SubpassContents::Inline,
         )
         .with_clear_values(vec![
             br::ClearValue::color([1.0; 4]),
@@ -610,6 +598,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         &render_pass,
                         f,
                         br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO),
+                        br::SubpassContents::Inline,
                     )
                     .with_clear_values(vec![
                         br::ClearValue::color([1.0; 4]),

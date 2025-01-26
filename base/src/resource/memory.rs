@@ -3,10 +3,7 @@
 use bedrock as br;
 use br::PhysicalDevice;
 
-use crate::{
-    mthelper::{DynamicMut, SharedRef},
-    DeviceObject,
-};
+use crate::{mthelper::make_shared_mutable_ref, DeviceObject};
 
 pub struct MemoryBadget<'g, Buffer: br::Buffer, Image: br::Image> {
     g: &'g crate::Graphics,
@@ -117,12 +114,12 @@ where
             .device_local_index(self.memory_type_bitmask)
             .expect("No device-local memory")
             .index();
-        tracing::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{:x}(?0x{:x})",
-            self.total_size, mt, self.memory_type_bitmask);
-        let mem = SharedRef::new(DynamicMut::new(
-            br::DeviceMemoryRequest::allocate(self.total_size as _, mt)
-                .execute(self.g.device.clone())?,
-        ));
+        tracing::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{mt:x}(?0x{:x})",
+            self.total_size, self.memory_type_bitmask);
+        let mem = make_shared_mutable_ref(br::DeviceMemoryObject::new(
+            self.g.device().clone(),
+            &br::MemoryAllocateInfo::new(self.total_size, mt),
+        )?);
 
         self.entries
             .into_iter()
@@ -159,10 +156,10 @@ where
         }
         tracing::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt.index(), self.memory_type_bitmask);
-        let mem = SharedRef::new(DynamicMut::new(
-            br::DeviceMemoryRequest::allocate(self.total_size as _, mt.index())
-                .execute(self.g.device.clone())?,
-        ));
+        let mem = make_shared_mutable_ref(br::DeviceMemoryObject::new(
+            self.g.device.clone(),
+            &br::MemoryAllocateInfo::new(self.total_size, mt.index()),
+        )?);
 
         self.entries
             .into_iter()

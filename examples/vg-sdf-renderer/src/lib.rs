@@ -1,5 +1,5 @@
 use bedrock::{self as br, CommandBufferMut, Device, RenderPass, VkHandle};
-use br::{GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
+use br::{Image, ImageChild, ImageSubresourceSlice, SubmissionBatch};
 use peridot::mthelper::SharedRef;
 use peridot::SpecConstantStorage;
 use peridot_command_object::{
@@ -238,22 +238,39 @@ impl TwoPassStencilSDFRenderer {
         let scissors =
             [br::vk::VkExtent2D::from(init_target_size).into_rect(br::vk::VkOffset2D::ZERO)];
         let viewports = [scissors[0].make_viewport(0.0..1.0)];
+        let viewport_state = br::PipelineViewportStateCreateInfo::new(&viewports, &scissors);
+
         let fill_shader: PvpContainer = e
             .load("builtin.vg.sdf.shaders.triangle_fans")
             .expect("Failed to load triangle_fans shader asset");
         let fill_shader_modules = PvpShaderModules::new(e.graphics().device(), &fill_shader)
             .expect("Failed to create triangle_fans shader modules");
+        let fill_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
+            &fill_shader.vertex_bindings,
+            &fill_shader.vertex_attributes,
+        );
+
         let curve_fill_shader: PvpContainer = e
             .load("builtin.vg.sdf.shaders.curve_triangles")
             .expect("Failed to load curve_triangles shader asset");
         let curve_fill_shader_modules =
             PvpShaderModules::new(e.graphics().device(), &curve_fill_shader)
                 .expect("Failed to create curve_triangles shader modules");
+        let curve_fill_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
+            &curve_fill_shader.vertex_bindings,
+            &curve_fill_shader.vertex_attributes,
+        );
+
         let outline_shader: PvpContainer = e
             .load("builtin.vg.sdf.shaders.outline_distance")
             .expect("Failed to load outline_distance shader asset");
         let outline_shader_modules = PvpShaderModules::new(e.graphics().device(), &outline_shader)
             .expect("Failed to create outline_disdtance shader modules");
+        let outline_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
+            &outline_shader.vertex_bindings,
+            &outline_shader.vertex_attributes,
+        );
+
         let empty_pl = SharedRef::new(
             br::PipelineLayoutObject::new(
                 e.graphics().device().clone(),
@@ -264,125 +281,143 @@ impl TwoPassStencilSDFRenderer {
 
         let stencil_triangle_vsh_parameters =
             br::SpecializationInfo::new(&stencil_triangle_vsh_parameters);
-        let stencil_triangle_shader_stages = [
-            fill_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&stencil_triangle_vsh_parameters),
-            fill_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?"),
-        ];
-        let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
-            &empty_pl,
-            render_pass.subpass(0),
-            br::VertexProcessingStages::new(
-                &stencil_triangle_shader_stages,
-                &fill_shader.vertex_bindings,
-                &fill_shader.vertex_attributes,
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            ),
-        );
-        let color_blends = [ColorAttachmentBlending::Disabled.into_vk()];
-        pipebuild
-            .viewport_state(br::ViewportState::new(&viewports, &scissors))
-            .multisample_state(Some(br::MultisampleState::new()))
-            .depth_stencil_state(
-                br::DepthStencilState::new()
-                    .stencil_state_front(Self::stencil_invert())
-                    .stencil_state_back(Self::stencil_invert())
-                    .stencil_test(true),
-            )
-            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        let triangle_fans_stencil_pipeline = pipebuild
-            .create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create Triangle Fans Stencil Pipeline");
-        let stencil_curve_shader_stages = [
-            curve_fill_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&stencil_triangle_vsh_parameters),
-            curve_fill_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?"),
-        ];
-        pipebuild.vertex_processing(br::VertexProcessingStages::new(
-            &stencil_curve_shader_stages,
-            &curve_fill_shader.vertex_bindings,
-            &curve_fill_shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        ));
-        let curve_triangles_stencil_pipeline = pipebuild
-            .create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create Curve Triangles Stencil Pipeline");
         let fill_color_fsh_parameters = &br::SpecializationInfo::new(&fill_fsh_color_output);
-        let invert_fill_shader_stages = [
-            fill_shader_modules.pipeline_vertex_shader_stage(),
-            fill_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&fill_color_fsh_parameters),
-        ];
-        let color_blends = [ColorAttachmentBlending::new(
-            Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR),
-            Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA),
-        )
-        .into_vk()];
-        pipebuild
-            .render_pass(&render_pass, 1)
-            .vertex_processing(br::VertexProcessingStages::new(
-                &invert_fill_shader_stages,
-                &fill_shader.vertex_bindings,
-                &fill_shader.vertex_attributes,
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            ))
-            .depth_stencil_state(
-                br::DepthStencilState::new()
-                    .stencil_state_front(Self::stencil_match())
-                    .stencil_state_back(Self::stencil_match())
-                    .stencil_test(true),
-            )
-            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        let invert_pipeline = pipebuild
-            .create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create Invert Pipeline");
         let outline_vsh_parameters = br::SpecializationInfo::new(&outline_vsh_parameters);
-        let outline_render_shader_stages = [
-            outline_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&outline_vsh_parameters),
-            outline_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?"),
-        ];
-        let color_blends = [ColorAttachmentBlending::MAX.into_vk()];
-        pipebuild
-            .vertex_processing(br::VertexProcessingStages::new(
-                &outline_render_shader_stages,
-                &outline_shader.vertex_bindings,
-                &outline_shader.vertex_attributes,
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            ))
-            .depth_stencil_state(
-                br::DepthStencilState::new()
-                    .stencil_test(false)
-                    .stencil_state_front(Self::stencil_noop())
-                    .stencil_state_back(Self::stencil_noop()),
-            )
-            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        let outline_distance_pipeline = pipebuild
-            .create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create Outline Distance Pipeline");
+
+        let color_blends = [ColorAttachmentBlending::Disabled.into_vk()];
+        let color_blend_state = br::PipelineColorBlendStateCreateInfo::new(&color_blends);
+
+        let rasterization_state = br::PipelineRasterizationStateCreateInfo::new(
+            br::PolygonMode::Fill,
+            br::CullModeFlags::NONE,
+            br::FrontFace::CounterClockwise,
+        );
+        let multisample_state = br::PipelineMultisampleStateCreateInfo::new();
+
+        let [triangle_fans_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] =
+            e.graphics()
+                .device()
+                .new_graphics_pipeline_array(
+                    &[
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            render_pass.subpass(0),
+                            &[
+                                fill_shader_modules
+                                    .pipeline_vertex_shader_stage()
+                                    .with_specialization_info(&stencil_triangle_vsh_parameters),
+                                fill_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?"),
+                            ],
+                            &fill_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleList,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &color_blend_state,
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_invert())
+                                .stencil_state_back(Self::stencil_invert())
+                                .stencil_test(true),
+                        ),
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            render_pass.subpass(0),
+                            &[
+                                curve_fill_shader_modules
+                                    .pipeline_vertex_shader_stage()
+                                    .with_specialization_info(&stencil_triangle_vsh_parameters),
+                                curve_fill_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?"),
+                            ],
+                            &curve_fill_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleList,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &color_blend_state,
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_invert())
+                                .stencil_state_back(Self::stencil_invert())
+                                .stencil_test(true),
+                        ),
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            render_pass.subpass(1),
+                            &[
+                                fill_shader_modules.pipeline_vertex_shader_stage(),
+                                fill_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?")
+                                    .with_specialization_info(&fill_color_fsh_parameters),
+                            ],
+                            &fill_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleStrip,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &br::PipelineColorBlendStateCreateInfo::new(&[
+                                ColorAttachmentBlending::new(
+                                    Blending::source_only(
+                                        br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+                                    ),
+                                    Blending::source_only(
+                                        br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+                                    ),
+                                )
+                                .into_vk(),
+                            ]),
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_match())
+                                .stencil_state_back(Self::stencil_match())
+                                .stencil_test(true),
+                        ),
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            render_pass.subpass(1),
+                            &[
+                                outline_shader_modules
+                                    .pipeline_vertex_shader_stage()
+                                    .with_specialization_info(&outline_vsh_parameters),
+                                outline_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?"),
+                            ],
+                            &outline_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleList,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &br::PipelineColorBlendStateCreateInfo::new(&[
+                                ColorAttachmentBlending::MAX.into_vk(),
+                            ]),
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_noop())
+                                .stencil_state_back(Self::stencil_noop())
+                                .stencil_test(false),
+                        ),
+                    ],
+                    None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                )
+                .expect("Failed to create graphics pipelines");
 
         Self {
             render_pass,
@@ -394,16 +429,19 @@ impl TwoPassStencilSDFRenderer {
             outline_shader,
             outline_shader_modules,
             triangle_fans_stencil_pipeline: peridot::LayoutedPipeline::combine(
-                triangle_fans_stencil_pipeline,
+                triangle_fans_stencil_pipeline.clone_parent(),
                 empty_pl.clone(),
             ),
             curve_triangles_stencil_pipeline: peridot::LayoutedPipeline::combine(
-                curve_triangles_stencil_pipeline,
+                curve_triangles_stencil_pipeline.clone_parent(),
                 empty_pl.clone(),
             ),
-            invert_pipeline: peridot::LayoutedPipeline::combine(invert_pipeline, empty_pl.clone()),
+            invert_pipeline: peridot::LayoutedPipeline::combine(
+                invert_pipeline.clone_parent(),
+                empty_pl.clone(),
+            ),
             outline_distance_pipeline: peridot::LayoutedPipeline::combine(
-                outline_distance_pipeline,
+                outline_distance_pipeline.clone_parent(),
                 empty_pl.clone(),
             ),
         }
@@ -430,138 +468,182 @@ impl TwoPassStencilSDFRenderer {
 
         let scissors = [br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO)];
         let viewports = [scissors[0].make_viewport(0.0..1.0)];
+        let viewport_state = br::PipelineViewportStateCreateInfo::new(&viewports, &scissors);
 
-        let vsh_parameters = br::SpecializationInfo::new(&stencil_vsh_parameters);
-        let shader_stages = [
-            self.fill_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            self.fill_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?"),
-        ];
-        let mut pipebuild = br::NonDerivedGraphicsPipelineBuilder::new(
-            self.triangle_fans_stencil_pipeline.layout(),
-            self.render_pass.subpass(0),
-            br::VertexProcessingStages::new(
-                &shader_stages,
-                &self.fill_shader.vertex_bindings,
-                &self.fill_shader.vertex_attributes,
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            ),
+        let fill_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
+            &self.fill_shader.vertex_bindings,
+            &self.fill_shader.vertex_attributes,
         );
-        let color_blends = [ColorAttachmentBlending::Disabled.into_vk()];
-        pipebuild
-            .viewport_state(br::ViewportState::new(&viewports, &scissors))
-            .multisample_state(Some(br::MultisampleState::new()))
-            .depth_stencil_state(
-                br::DepthStencilState::new()
-                    .stencil_test(true)
-                    .stencil_state_front(Self::stencil_invert())
-                    .stencil_state_back(Self::stencil_invert()),
-            )
-            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        let triangle_fans_stencil_pipeline = pipebuild
-            .create(
-                g.device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to recreate Triangle Fans Stencil Pipeline");
-        let shader_stages = [
-            self.curve_fill_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            self.curve_fill_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?"),
-        ];
-        pipebuild.vertex_processing(br::VertexProcessingStages::new(
-            &shader_stages,
+        let curve_fill_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
             &self.curve_fill_shader.vertex_bindings,
             &self.curve_fill_shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        ));
-        let curve_triangles_stencil_pipeline = pipebuild
-            .create(
+        );
+        let outline_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
+            &self.outline_shader.vertex_bindings,
+            &self.outline_shader.vertex_attributes,
+        );
+
+        let empty_pl = SharedRef::new(
+            br::PipelineLayoutObject::new(
                 g.device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                &br::PipelineLayoutCreateInfo::new(&[], &[]),
             )
-            .expect("Failed to create Curve Triangles Stencil Pipeline");
-        let fsh_parameters = br::SpecializationInfo::new(&fill_fsh_color_output);
-        let shader_stages = [
-            self.fill_shader_modules.pipeline_vertex_shader_stage(),
-            self.fill_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&fsh_parameters),
-        ];
-        let color_blends = [ColorAttachmentBlending::new(
-            Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR),
-            Blending::source_only(br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA),
-        )
-        .into_vk()];
-        pipebuild
-            .render_pass(&self.render_pass, 1)
-            .vertex_processing(br::VertexProcessingStages::new(
-                &shader_stages,
-                &self.fill_shader.vertex_bindings,
-                &self.fill_shader.vertex_attributes,
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            ))
-            .depth_stencil_state(
-                br::DepthStencilState::new()
-                    .stencil_test(true)
-                    .stencil_state_front(Self::stencil_match())
-                    .stencil_state_back(Self::stencil_match()),
-            )
-            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        let invert_pipeline = pipebuild
-            .create(
-                g.device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create Invert Pipeline");
-        let vsh_parameters = br::SpecializationInfo::new(&outline_vsh_parameters);
-        let shader_stages = [
-            self.outline_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            self.outline_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?"),
-        ];
-        let color_blends = [ColorAttachmentBlending::MAX.into_vk()];
-        pipebuild
-            .vertex_processing(br::VertexProcessingStages::new(
-                &shader_stages,
-                &self.outline_shader.vertex_bindings,
-                &self.outline_shader.vertex_attributes,
-                br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            ))
-            .depth_stencil_state(br::DepthStencilState::new())
-            .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        let outline_distance_pipeline = pipebuild
-            .create(
-                g.device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create Outline Distance Pipeline");
+            .expect("Failed to create empty pipeline layout"),
+        );
+
+        let vsh_parameters = br::SpecializationInfo::new(&stencil_vsh_parameters);
+        let fill_color_fsh_parameters = &br::SpecializationInfo::new(&fill_fsh_color_output);
+        let outline_vsh_parameters = br::SpecializationInfo::new(&outline_vsh_parameters);
+
+        let color_blends = [ColorAttachmentBlending::Disabled.into_vk()];
+        let color_blend_state = br::PipelineColorBlendStateCreateInfo::new(&color_blends);
+
+        let rasterization_state = br::PipelineRasterizationStateCreateInfo::new(
+            br::PolygonMode::Fill,
+            br::CullModeFlags::NONE,
+            br::FrontFace::CounterClockwise,
+        );
+        let multisample_state = br::PipelineMultisampleStateCreateInfo::new();
+
+        let [triangle_fans_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] =
+            g.device()
+                .new_graphics_pipeline_array(
+                    &[
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            self.render_pass.subpass(0),
+                            &[
+                                self.fill_shader_modules
+                                    .pipeline_vertex_shader_stage()
+                                    .with_specialization_info(&vsh_parameters),
+                                self.fill_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?"),
+                            ],
+                            &fill_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleList,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &color_blend_state,
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_invert())
+                                .stencil_state_back(Self::stencil_invert())
+                                .stencil_test(true),
+                        ),
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            self.render_pass.subpass(0),
+                            &[
+                                self.curve_fill_shader_modules
+                                    .pipeline_vertex_shader_stage()
+                                    .with_specialization_info(&vsh_parameters),
+                                self.curve_fill_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?"),
+                            ],
+                            &curve_fill_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleList,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &color_blend_state,
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_invert())
+                                .stencil_state_back(Self::stencil_invert())
+                                .stencil_test(true),
+                        ),
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            self.render_pass.subpass(1),
+                            &[
+                                self.fill_shader_modules.pipeline_vertex_shader_stage(),
+                                self.fill_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?")
+                                    .with_specialization_info(&fill_color_fsh_parameters),
+                            ],
+                            &fill_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleStrip,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &br::PipelineColorBlendStateCreateInfo::new(&[
+                                ColorAttachmentBlending::new(
+                                    Blending::source_only(
+                                        br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+                                    ),
+                                    Blending::source_only(
+                                        br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+                                    ),
+                                )
+                                .into_vk(),
+                            ]),
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_match())
+                                .stencil_state_back(Self::stencil_match())
+                                .stencil_test(true),
+                        ),
+                        br::GraphicsPipelineCreateInfo::new(
+                            &empty_pl,
+                            self.render_pass.subpass(1),
+                            &[
+                                self.outline_shader_modules
+                                    .pipeline_vertex_shader_stage()
+                                    .with_specialization_info(&outline_vsh_parameters),
+                                self.outline_shader_modules
+                                    .pipeline_fragment_shader_stage()
+                                    .expect("no fsh?"),
+                            ],
+                            &outline_vertex_input_state,
+                            &br::PipelineInputAssemblyStateCreateInfo::new(
+                                br::PrimitiveTopology::TriangleList,
+                            ),
+                            &viewport_state,
+                            &rasterization_state,
+                            &br::PipelineColorBlendStateCreateInfo::new(&[
+                                ColorAttachmentBlending::MAX.into_vk(),
+                            ]),
+                        )
+                        .multisample_state(&multisample_state)
+                        .depth_stencil_state(
+                            &br::PipelineDepthStencilStateCreateInfo::new()
+                                .stencil_state_front(Self::stencil_noop())
+                                .stencil_state_back(Self::stencil_noop())
+                                .stencil_test(false),
+                        ),
+                    ],
+                    None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                )
+                .expect("Failed to create graphics pipelines");
 
         self.target_size = new_size;
         self.triangle_fans_stencil_pipeline = peridot::LayoutedPipeline::combine(
-            triangle_fans_stencil_pipeline,
+            triangle_fans_stencil_pipeline.clone_parent(),
             self.triangle_fans_stencil_pipeline.layout().clone(),
         );
         self.curve_triangles_stencil_pipeline = peridot::LayoutedPipeline::combine(
-            curve_triangles_stencil_pipeline,
+            curve_triangles_stencil_pipeline.clone_parent(),
             self.curve_triangles_stencil_pipeline.layout().clone(),
         );
         self.invert_pipeline = peridot::LayoutedPipeline::combine(
-            invert_pipeline,
+            invert_pipeline.clone_parent(),
             self.invert_pipeline.layout().clone(),
         );
         self.outline_distance_pipeline = peridot::LayoutedPipeline::combine(
-            outline_distance_pipeline,
+            outline_distance_pipeline.clone_parent(),
             self.outline_distance_pipeline.layout().clone(),
         );
     }
@@ -596,8 +678,13 @@ impl TwoPassStencilSDFRenderer {
                  + br::DeviceChild<ConcreteDevice = peridot::DeviceObject>),
         buffers: &'s TwoPassStencilSDFRendererBuffers,
     ) -> impl GraphicsCommand<peridot::DeviceObject> + 's {
-        let rp = BeginRenderPass::new(&self.render_pass, framebuffer, self.render_area())
-            .with_clear_values(Self::CLEAR_VALUES.into());
+        let rp = BeginRenderPass::new(
+            &self.render_pass,
+            framebuffer,
+            self.render_area(),
+            br::SubpassContents::Inline,
+        )
+        .with_clear_values(Self::CLEAR_VALUES.into());
 
         let stencil_fill_triangles_render = buffers
             .fill_triangle_groups

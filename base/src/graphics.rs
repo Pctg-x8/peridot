@@ -63,21 +63,21 @@ impl<'s> VulkanExtension<'s> {
     pub const DEBUG_REPORT_EXT: Self = Self::new(c"VK_EXT_debug_report");
     pub const DEBUG_UTILS_EXT: Self = Self::new(c"VK_EXT_debug_utils");
     pub const GET_PHYSICAL_DEVICE_PROPERTIES2_KHR: Self =
-        Self::new(c"VK_KHR_get_physical_device_properties2").promoted(br::Version::new(1, 1, 0));
+        Self::new(c"VK_KHR_get_physical_device_properties2").promoted(br::Version::new(0, 1, 1, 0));
     pub const DEDICATED_ALLOCATION_KHR: Self =
-        Self::new(c"VK_KHR_dedicated_allocation").promoted(br::Version::new(1, 1, 0));
+        Self::new(c"VK_KHR_dedicated_allocation").promoted(br::Version::new(0, 1, 1, 0));
     pub const GET_MEMORY_REQUIREMENTS2_KHR: Self =
-        Self::new(c"VK_KHR_get_memory_requirements2").promoted(br::Version::new(1, 1, 0));
+        Self::new(c"VK_KHR_get_memory_requirements2").promoted(br::Version::new(0, 1, 1, 0));
     pub const BIND_MEMORY2_KHR: Self =
-        Self::new(c"VK_KHR_bind_memory2").promoted(br::Version::new(1, 1, 0));
+        Self::new(c"VK_KHR_bind_memory2").promoted(br::Version::new(0, 1, 1, 0));
     pub const SYNCHRONIZATION2_KHR: Self =
-        Self::new(c"VK_KHR_synchronization2").promoted(br::Version::new(1, 3, 0));
+        Self::new(c"VK_KHR_synchronization2").promoted(br::Version::new(0, 1, 3, 0));
     pub const CREATE_RENDERPASS2_KHR: Self =
-        Self::new(c"VK_KHR_create_renderpass2").promoted(br::Version::new(1, 2, 0));
+        Self::new(c"VK_KHR_create_renderpass2").promoted(br::Version::new(0, 1, 2, 0));
     pub const MULTIVIEW_KHR: Self =
-        Self::new(c"VK_KHR_multiview").promoted(br::Version::new(1, 1, 0));
+        Self::new(c"VK_KHR_multiview").promoted(br::Version::new(0, 1, 1, 0));
     pub const MAINTENANCE2_KHR: Self =
-        Self::new(c"VK_KHR_maintenance2").promoted(br::Version::new(1, 1, 0));
+        Self::new(c"VK_KHR_maintenance2").promoted(br::Version::new(0, 1, 1, 0));
 }
 
 /// Graphics manager
@@ -115,7 +115,7 @@ impl Graphics {
             VulkanExtension::DEBUG_REPORT_EXT.name,
         ]);
 
-        if vk_version < br::Version::new(1, 1, 0) {
+        if vk_version < br::Version::new(0, 1, 1, 0) {
             optional_instance_extensions
                 .extend([VulkanExtension::GET_PHYSICAL_DEVICE_PROPERTIES2_KHR.name]);
             optional_device_extensions.extend([
@@ -126,17 +126,17 @@ impl Graphics {
                 VulkanExtension::BIND_MEMORY2_KHR.name,
             ]);
         }
-        if vk_version < br::Version::new(1, 2, 0) {
+        if vk_version < br::Version::new(0, 1, 2, 0) {
             optional_device_extensions.push(VulkanExtension::CREATE_RENDERPASS2_KHR.name);
         }
-        if vk_version < br::Version::new(1, 3, 0) {
+        if vk_version < br::Version::new(0, 1, 3, 0) {
             optional_device_extensions.push(VulkanExtension::SYNCHRONIZATION2_KHR.name);
         }
         optional_instance_extensions.sort();
         optional_device_extensions.sort();
 
         let mut validation_layer_available = false;
-        match br::enumerate_extension_properties_cstr(None) {
+        match br::instance_extension_properties_cstr_alloc(None) {
             Ok(xs) => {
                 for x in xs {
                     let name_cstr = match x.extensionName.as_cstr() {
@@ -172,7 +172,7 @@ impl Graphics {
             }
         }
 
-        match br::enumerate_layer_properties() {
+        match br::enumerate_layer_properties_alloc() {
             Ok(xs) => {
                 for l in xs {
                     let name_cstr = match l.layerName.as_cstr() {
@@ -204,7 +204,7 @@ impl Graphics {
                         validation_layer_available = true;
                     }
 
-                    match br::enumerate_extension_properties_cstr(Some(name_cstr)) {
+                    match br::instance_extension_properties_cstr_alloc(Some(name_cstr)) {
                         Ok(xs) => {
                             for x in xs {
                                 let ext_name_cstr = match x.extensionName.as_cstr() {
@@ -258,7 +258,7 @@ impl Graphics {
             &app_name,
             app_version,
             c"Interlude2:Peridot",
-            br::Version::new(0, 1, 0),
+            br::Version::new(0, 0, 1, 0),
         )
         .api_version(vk_version);
 
@@ -358,7 +358,7 @@ impl Graphics {
         MemoryTypeManager::diagnose_heaps(&adapter);
         memory_type_manager.diagnose_types();
         let Some(gqf_index) = adapter
-            .queue_family_properties()
+            .queue_family_properties_alloc()
             .find_matching_index(br::QueueFlags::GRAPHICS)
         else {
             tracing::error!("No suitable queue(graphics) found on device");
@@ -376,14 +376,14 @@ impl Graphics {
             Standard(br::vk::VkPhysicalDeviceFeatures),
             Extendable(br::PhysicalDeviceFeatures2<'r>),
         }
-        let mut sync2 = if vk_version >= br::Version::new(1, 3, 0)
+        let mut sync2 = if vk_version >= br::Version::new(0, 1, 3, 0)
             || device_extensions.contains(&VulkanExtension::SYNCHRONIZATION2_KHR.name)
         {
             Some(br::PhysicalDeviceSynchronization2Features::new(true))
         } else {
             None
         };
-        let features = if vk_version >= br::Version::new(1, 1, 0)
+        let features = if vk_version >= br::Version::new(0, 1, 1, 0)
             || instance_extensions
                 .contains(&VulkanExtension::GET_PHYSICAL_DEVICE_PROPERTIES2_KHR.name)
         {
@@ -426,7 +426,7 @@ impl Graphics {
             )
             .expect("Failed to create onetime submit command pool"),
             graphics_queue: QueueSet {
-                q: parking_lot::Mutex::new(device.clone().queue(gqf_index, 0)),
+                q: parking_lot::Mutex::new(device.queue(gqf_index, 0).clone_parent()),
                 family: gqf_index,
             },
             adapter: adapter.clone_parent(),

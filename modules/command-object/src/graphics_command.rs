@@ -279,7 +279,11 @@ impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for PipelineBarrier {
         cb.pipeline_barrier(
             src_stage_mask,
             self.dst_stage_mask,
-            self.by_region,
+            if self.by_region {
+                br::vk::VK_DEPENDENCY_BY_REGION_BIT
+            } else {
+                0
+            },
             &[],
             &self.buffer_barriers,
             &self.image_barriers,
@@ -415,29 +419,27 @@ pub struct BeginRenderPass<R: br::RenderPass, F: br::Framebuffer> {
     framebuffer: F,
     rect: br::vk::VkRect2D,
     clear_values: Vec<br::ClearValue>,
-    inline_commands: bool,
+    subpass_contents: br::SubpassContents,
 }
 impl<R: br::RenderPass, F: br::Framebuffer> BeginRenderPass<R, F> {
-    pub const fn new(render_pass: R, framebuffer: F, rect: br::vk::VkRect2D) -> Self {
+    pub const fn new(
+        render_pass: R,
+        framebuffer: F,
+        rect: br::vk::VkRect2D,
+        subpass_contents: br::SubpassContents,
+    ) -> Self {
         Self {
             render_pass,
             framebuffer,
             rect,
             clear_values: Vec::new(),
-            inline_commands: true,
+            subpass_contents,
         }
     }
 
     pub fn with_clear_values(self, clear_values: Vec<br::ClearValue>) -> Self {
         Self {
             clear_values,
-            ..self
-        }
-    }
-
-    pub fn non_inline_commands(self) -> Self {
-        Self {
-            inline_commands: false,
             ..self
         }
     }
@@ -453,19 +455,22 @@ impl<
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
         cb.begin_render_pass(
-            &self.render_pass,
-            &self.framebuffer,
-            self.rect.clone(),
-            &self.clear_values,
-            self.inline_commands,
+            &br::RenderPassBeginInfo::new(
+                &self.render_pass,
+                &self.framebuffer,
+                self.rect.clone(),
+                &self.clear_values,
+            ),
+            self.subpass_contents,
         )
     }
 }
 
-pub struct NextSubpass(bool);
+pub struct NextSubpass(br::SubpassContents);
 impl NextSubpass {
-    pub const WITH_INLINE_COMMANDS: Self = Self(true);
-    pub const WITH_COMMAND_BUFFER_EXECUTIONS: Self = Self(false);
+    pub const WITH_INLINE_COMMANDS: Self = Self(br::SubpassContents::Inline);
+    pub const WITH_COMMAND_BUFFER_EXECUTIONS: Self =
+        Self(br::SubpassContents::SecondaryCommandBuffers);
 }
 impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for NextSubpass {
     fn execute<'r>(
@@ -498,7 +503,7 @@ where
         &self,
         cb: bedrock::CmdRecord<'r, dyn bedrock::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> bedrock::CmdRecord<'r, dyn bedrock::VkHandleMut<Handle = VkCommandBuffer>, Device> {
-        cb.bind_graphics_pipeline(&self.0)
+        cb.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }
 
@@ -582,7 +587,8 @@ where
         &self,
         cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device>,
     ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = VkCommandBuffer>, Device> {
-        cb.bind_graphics_descriptor_sets(
+        cb.bind_descriptor_sets(
+            br::PipelineBindPoint::Graphics,
             &self.layout,
             self.from,
             self.sets.as_ref(),
@@ -884,10 +890,10 @@ where
 }
 
 #[repr(transparent)]
-pub struct CommandBuffers(pub Vec<VkCommandBuffer>);
+pub struct CommandBuffers(pub Vec<br::VkHandleRef<'static, VkCommandBuffer>>);
 
 #[repr(transparent)]
-pub struct CommandBuffersRef<'s>(pub &'s [VkCommandBuffer]);
+pub struct CommandBuffersRef<'s>(pub &'s [br::VkHandleRef<'s, VkCommandBuffer>]);
 
 impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for CommandBuffersRef<'_> {
     fn execute<'r>(
@@ -898,7 +904,7 @@ impl<Device: br::Device + ?Sized> GraphicsCommand<Device> for CommandBuffersRef<
     }
 }
 impl<const N: usize, Device: br::Device + ?Sized> GraphicsCommand<Device>
-    for [br::vk::VkCommandBuffer; N]
+    for [br::VkHandleRef<'_, VkCommandBuffer>; N]
 {
     fn execute<'r>(
         &self,

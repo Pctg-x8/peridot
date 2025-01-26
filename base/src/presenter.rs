@@ -1,6 +1,6 @@
 //! Platform Presenter(Swapchain Abstraction)
 
-use bedrock::{self as br, QueueMut, VkHandle, VkHandleMut};
+use bedrock::{self as br, ImageChild, QueueMut, VkHandle, VkHandleMut};
 #[cfg(feature = "debug")]
 use br::VkObject;
 use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
@@ -103,7 +103,7 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             .expect("Failed to set swapchain name");
 
         let back_buffer_images: Vec<SharedRef<_>> = chain
-            .get_images()
+            .images_alloc()
             .expect("Failed to get back-buffer images")
             .into_iter()
             .map(|bb| {
@@ -225,7 +225,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             .back_buffer_images
             .iter()
             .map(|v| {
-                v.by_ref()
+                v.image()
                     .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                     .memory_barrier(br::ImageLayout::PresentSrc.from_undefined())
             })
@@ -234,7 +234,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
-            false,
+            0,
             &[],
             &[],
             &image_barriers,
@@ -310,10 +310,11 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         g.graphics_queue
             .q
             .get_mut()
-            .present(br::PresentInfo::new(
+            .present(&br::PresentInfo::new(
                 &[self.present_order.as_transparent_ref()],
                 &[self.swapchain.get().swapchain.as_transparent_ref()],
                 &[bb_index],
+                &mut [br::vk::VK_SUCCESS],
             ))
             .map(drop)
     }

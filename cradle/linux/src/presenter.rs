@@ -1,6 +1,7 @@
 use std::{ffi::CStr, os::fd::BorrowedFd};
 
 pub mod wayland;
+#[cfg(feature = "support-xcb")]
 pub mod xcb;
 
 pub trait WindowBackend {

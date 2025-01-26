@@ -278,7 +278,7 @@ impl TransferBatch2 {
         rec.pipeline_barrier(
             br::PipelineStageFlags::HOST,
             br::PipelineStageFlags::TRANSFER,
-            false,
+            0,
             &[],
             &self
                 .src_transition_sets
@@ -304,7 +304,7 @@ impl TransferBatch2 {
                 r.pipeline_barrier(
                     br::PipelineStageFlags(p),
                     br::PipelineStageFlags::TRANSFER,
-                    false,
+                    0,
                     &[],
                     &trans
                         .iter()
@@ -342,7 +342,7 @@ impl TransferBatch2 {
                 r.pipeline_barrier(
                     br::PipelineStageFlags::TRANSFER,
                     br::PipelineStageFlags(p),
-                    false,
+                    0,
                     &[],
                     &ts.iter()
                         .map(|(res, range, a)| {
@@ -366,7 +366,7 @@ impl TransferBatch2 {
         .pipeline_barrier(
             br::PipelineStageFlags::TRANSFER,
             br::PipelineStageFlags::HOST,
-            false,
+            0,
             &[],
             &self
                 .src_transition_sets
@@ -538,7 +538,7 @@ impl<Device: br::Device> TransferBatch<Device> {
             .push((
                 res,
                 br::vk::VkImageSubresourceRange {
-                    aspectMask: br::AspectMask::COLOR.0,
+                    aspectMask: br::AspectMask::COLOR.bits(),
                     baseMipLevel: 0,
                     levelCount: 1,
                     baseArrayLayer: 0,
@@ -602,7 +602,7 @@ impl<Device: br::Device> TransferBatch<Device> {
         r.pipeline_barrier(
             br::PipelineStageFlags::HOST,
             br::PipelineStageFlags::TRANSFER,
-            false,
+            0,
             &[],
             &barriers,
             &barriers_i,
@@ -671,7 +671,7 @@ impl<Device: br::Device> TransferBatch<Device> {
                 r.pipeline_barrier(
                     br::PipelineStageFlags::TRANSFER,
                     *stg,
-                    false,
+                    0,
                     &[],
                     &buf_barriers,
                     &img_barriers,

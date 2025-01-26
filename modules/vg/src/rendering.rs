@@ -236,7 +236,10 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
     ) -> br::CmdRecord<'r, CB, Device> {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
         let cmd = cmd
-            .bind_graphics_pipeline(extras.interior_pipeline.pipeline())
+            .bind_pipeline(
+                br::PipelineBindPoint::Graphics,
+                extras.interior_pipeline.pipeline(),
+            )
             .push_constant(
                 extras.interior_pipeline.layout(),
                 br::vk::VK_SHADER_STAGE_VERTEX_BIT,
@@ -249,7 +252,8 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                 4 * 3,
                 &0u32,
             )
-            .bind_graphics_descriptor_sets(
+            .bind_descriptor_sets(
+                br::PipelineBindPoint::Graphics,
                 extras.interior_pipeline.layout(),
                 0,
                 &[extras.transform_buffer_descriptor_set.into()],
@@ -289,36 +293,39 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                     })
             });
 
-        cmd.bind_graphics_pipeline(extras.curve_pipeline.pipeline())
-            .bind_vertex_buffers(
-                0,
-                &[buffer.as_transparent_ref(), buffer.as_transparent_ref()],
-                &[
-                    self.buffer_offsets.curve_positions as _,
-                    self.buffer_offsets.curve_helper_coords as _,
-                ],
-            )
-            .bind_index_buffer(
-                buffer,
-                self.buffer_offsets.curve_indices,
-                br::IndexType::U32,
-            )
-            .inject(|r| {
-                self.render_info
-                    .curve_index_range_per_mesh
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, ir)| ir.end != ir.start)
-                    .fold(r, |r, (n, ir)| {
-                        r.push_constant(
-                            extras.curve_pipeline.layout(),
-                            br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                            4 * 2,
-                            &(n as u32),
-                        )
-                        .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0)
-                    })
-            })
+        cmd.bind_pipeline(
+            br::PipelineBindPoint::Graphics,
+            extras.curve_pipeline.pipeline(),
+        )
+        .bind_vertex_buffers(
+            0,
+            &[buffer.as_transparent_ref(), buffer.as_transparent_ref()],
+            &[
+                self.buffer_offsets.curve_positions as _,
+                self.buffer_offsets.curve_helper_coords as _,
+            ],
+        )
+        .bind_index_buffer(
+            buffer,
+            self.buffer_offsets.curve_indices,
+            br::IndexType::U32,
+        )
+        .inject(|r| {
+            self.render_info
+                .curve_index_range_per_mesh
+                .iter()
+                .enumerate()
+                .filter(|(_, ir)| ir.end != ir.start)
+                .fold(r, |r, (n, ir)| {
+                    r.push_constant(
+                        extras.curve_pipeline.layout(),
+                        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                        4 * 2,
+                        &(n as u32),
+                    )
+                    .draw_indexed(ir.end - ir.start, 1, ir.start, 0, 0)
+                })
+        })
     }
 }
 
