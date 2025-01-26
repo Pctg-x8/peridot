@@ -32,6 +32,8 @@ impl Iterator for UIntFragmentIterator {
 }
 
 /// octet variadic unsigned integer
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VariableUInt(pub u32);
 impl VariableUInt {
     pub fn write(&self, writer: &mut (impl Write + ?Sized)) -> IOResult<usize> {

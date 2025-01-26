@@ -37,24 +37,24 @@ impl BufferUsage {
         let mut f = br::PipelineStageFlags(0);
 
         if self.has_bits(Self::HOST_RO | Self::HOST_RW) {
-            f = f.host();
+            f |= br::PipelineStageFlags::HOST;
         }
         if self.has_bits(Self::TRANSFER_SRC | Self::TRANSFER_DST) {
-            f = f.transfer();
+            f |= br::PipelineStageFlags::TRANSFER;
         }
         if self.has_bits(Self::VERTEX_BUFFER | Self::INDEX_BUFFER) {
-            f = f.vertex_input();
+            f |= br::PipelineStageFlags::VERTEX_INPUT;
         }
         if self.has_bits(Self::INDIRECT_BUFFER) {
-            f = f.draw_indirect();
+            f |= br::PipelineStageFlags::DRAW_INDIRECT;
         }
         if self.has_bits(Self::VERTEX_UNIFORM | Self::VERTEX_STORAGE_RO | Self::VERTEX_STORAGE_RW) {
-            f = f.vertex_shader();
+            f |= br::PipelineStageFlags::VERTEX_SHADER;
         }
         if self.has_bits(
             Self::FRAGMENT_UNIFORM | Self::FRAGMENT_STORAGE_RO | Self::FRAGMENT_STORAGE_RW,
         ) {
-            f = f.fragment_shader();
+            f |= br::PipelineStageFlags::FRAGMENT_SHADER;
         }
 
         f
@@ -118,11 +118,12 @@ pub(crate) fn vk_pipeline_stage_mask_requirements_for_image_layout(
         br::ImageLayout::General => br::PipelineStageFlags::ALL_COMMANDS,
         br::ImageLayout::ColorAttachmentOpt => br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
         br::ImageLayout::DepthStencilAttachmentOpt => {
-            br::PipelineStageFlags::EARLY_FRAGMENT_TESTS.late_fragment_tests()
+            br::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                | br::PipelineStageFlags::LATE_FRAGMENT_TESTS
         }
         br::ImageLayout::DepthStencilReadOnlyOpt => br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
         br::ImageLayout::ShaderReadOnlyOpt => {
-            br::PipelineStageFlags::VERTEX_SHADER.fragment_shader()
+            br::PipelineStageFlags::VERTEX_SHADER | br::PipelineStageFlags::FRAGMENT_SHADER
         }
         br::ImageLayout::TransferSrcOpt | br::ImageLayout::TransferDestOpt => {
             br::PipelineStageFlags::TRANSFER

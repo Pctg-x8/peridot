@@ -31,8 +31,8 @@ impl<B: br::Buffer> RangedBuffer<B> {
         RangedBuffer(&self.0, self.1.clone())
     }
 
-    pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferRef {
-        br::DescriptorBufferRef::new(&self.0, self.1.clone())
+    pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferInfo {
+        br::DescriptorBufferInfo::new(&self.0, self.1.clone())
     }
 
     pub fn subslice(self, range: Range<u64>) -> Self {
@@ -190,8 +190,8 @@ impl<'b, B: br::Buffer + 'b> RangedBuffer<&'b B> {
         RangedBuffer(self.0.clone(), self.1.clone())
     }
 
-    pub fn into_descriptor_buffer_ref(self) -> br::DescriptorBufferRef<'b> {
-        br::DescriptorBufferRef::new(self.0, self.1)
+    pub fn into_descriptor_buffer_ref(self) -> br::DescriptorBufferInfo<'b> {
+        br::DescriptorBufferInfo::new(self.0, self.1)
     }
 }
 impl<B: br::Buffer + peridot::TransferrableBufferResource + 'static> RangedBuffer<B> {
@@ -270,7 +270,11 @@ impl<R: br::Image> RangedImage<R> {
     }
 
     pub fn single_depth_stencil_plane(resource: R) -> Self {
-        Self(resource.subresource_range(br::AspectMask::DEPTH.stencil(), 0..1, 0..1))
+        Self(resource.subresource_range(
+            br::AspectMask::DEPTH | br::AspectMask::STENCIL,
+            0..1,
+            0..1,
+        ))
     }
 
     pub fn single_stencil_plane(resource: R) -> Self {

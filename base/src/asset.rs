@@ -15,7 +15,7 @@ where
 
 pub trait PlatformAssetLoader {
     type Asset: Read + Seek + 'static;
-    type StreamingAsset: InputStream + 'static;
+    type StreamingAsset: InputStream + Sync + Send + 'static;
 
     fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
     fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
@@ -41,14 +41,16 @@ pub trait FromAsset: LogicalAssetData {
 }
 pub trait FromStreamingAsset: LogicalAssetData {
     type Error: From<IOError>;
-    fn from_asset<Asset: InputStream + 'static>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: InputStream + Sync + Send + 'static>(
+        asset: Asset,
+    ) -> Result<Self, Self::Error>;
 }
 
 // Shader Blob //
 use bedrock as br;
 
 /// An shader blob representation as Asset
-pub struct SpirvShaderBlob(Vec<u8>);
+pub struct SpirvShaderBlob(Vec<u32>);
 impl SpirvShaderBlob {
     /// Instantiates the Shader Binary as a VkShaderModule
     #[inline]
@@ -56,7 +58,7 @@ impl SpirvShaderBlob {
         &self,
         dev: Device,
     ) -> br::Result<br::ShaderModuleObject<Device>> {
-        dev.new_shader_module(&self.0)
+        br::ShaderModuleObject::new(dev, &br::ShaderModuleCreateInfo::new(&self.0))
     }
 }
 impl LogicalAssetData for SpirvShaderBlob {
@@ -66,9 +68,15 @@ impl FromAsset for SpirvShaderBlob {
     type Error = IOError;
 
     fn from_asset<Asset: Read + Seek + 'static>(mut asset: Asset) -> Result<Self, IOError> {
-        let mut buf = Vec::new();
-        asset
-            .read_to_end(&mut buf)
-            .map(move |_| SpirvShaderBlob(buf))
+        asset.seek(SeekFrom::End(0))?;
+        let len = asset.stream_position()? as usize;
+        asset.rewind()?;
+
+        let mut buf = vec![0u32; (len + 3) >> 2];
+        asset.read_exact(unsafe {
+            core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, len)
+        })?;
+
+        Ok(SpirvShaderBlob(buf))
     }
 }

@@ -11,7 +11,7 @@ use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::Subs
 
 mod sound_backend;
 
-use crate::presenter::{wayland::Wayland, xcb::X11, BorrowFd, EventProcessor, WindowBackend};
+use crate::presenter::{wayland::Wayland, BorrowFd, EventProcessor, WindowBackend};
 mod epoll;
 mod input;
 mod kernel_input;
@@ -99,7 +99,7 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
 
 pub struct GameDriver {
     engine_input: peridot::InputProcess,
-    engine_audio: Arc<std::sync::RwLock<peridot::audio::Mixer>>,
+    engine_audio: Arc<RwLock<peridot::audio::Mixer>>,
     _snd: Box<dyn SoundBackend>,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
     frame_timing_sender: async_std::channel::Sender<()>,
@@ -198,10 +198,7 @@ where
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
     window_backend.write().show();
-    gd.engine_audio
-        .write()
-        .expect("Failed to mutate audio mixer")
-        .start();
+    gd.engine_audio.write().start();
     let mut events = Vec::new();
     let mut last_drawn_geometry = window_backend.read().geometry();
     while !window_backend.read().has_close_requested() {
@@ -278,10 +275,7 @@ where
         gd.usercode_thread.await;
     }
 
-    gd.engine_audio
-        .write()
-        .expect("Failed to mutate audio mixer")
-        .stop();
+    gd.engine_audio.write().stop();
     tracing::trace!("Terminating Program...");
 }
 
@@ -302,9 +296,10 @@ async fn main() {
             .await;
             return;
         }
+        #[cfg(feature = "support-xcb")]
         if backend_name == "xcb" {
             run_with_window_backend(Arc::new(RwLock::new(
-                X11::try_init().expect("Failed to initialize xcb backend"),
+                presenter::xcb::X11::try_init().expect("Failed to initialize xcb backend"),
             )))
             .await;
             return;
@@ -320,7 +315,8 @@ async fn main() {
         run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }
-    if let Some(x) = X11::try_init() {
+    #[cfg(feature = "support-xcb")]
+    if let Some(x) = presenter::xcb::X11::try_init() {
         run_with_window_backend(Arc::new(RwLock::new(x))).await;
         return;
     }

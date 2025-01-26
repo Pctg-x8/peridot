@@ -17,7 +17,7 @@ impl FontProvider for CoreTextFontProvider {
     type Font = CoreTextFont;
 
     fn best_match(
-        &self,
+        &mut self,
         family_name: &str,
         properties: &FontProperties,
         size: f32,

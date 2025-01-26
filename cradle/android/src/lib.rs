@@ -3,16 +3,43 @@
 use br::PhysicalDevice;
 use log::*;
 
+mod native_wrapper;
+#[allow(dead_code)]
 mod userlib;
 
+use android::{AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
 use bedrock as br;
+use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
-use peridot::{EngineEvents, FeatureRequests};
 use std::ffi::CStr;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+fn init_logger() {
+    let android_layer = match tracing_android::layer("Peridot") {
+        Ok(x) => Some(x),
+        Err(_) => {
+            unsafe {
+                android::__android_log_print(
+                    android::ANDROID_LOG_WARN,
+                    c"peridot::tracing".as_ptr(),
+                    c"Could not create android tracing layer".as_ptr(),
+                );
+            }
+            None
+        }
+    };
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().pretty())
+        .with(android_layer)
+        .init();
+    std::panic::set_hook(Box::new(|p| {
+        tracing::error!("{p}");
+    }));
+}
 
 struct Game {
     engine_input: peridot::InputProcess,
@@ -24,7 +51,7 @@ struct Game {
     usercode_thread: async_std::task::JoinHandle<()>,
 }
 impl Game {
-    fn new(asset_manager: AssetManager, window: *mut android::ANativeWindow) -> Self {
+    fn new(asset_manager: native_wrapper::AssetManager, window: native_wrapper::Window) -> Self {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
 
@@ -65,7 +92,7 @@ impl Game {
 }
 
 struct Presenter {
-    window: *mut android::ANativeWindow,
+    window: native_wrapper::Window,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 unsafe impl Sync for Presenter {}
@@ -74,12 +101,15 @@ impl Presenter {
     pub fn new(
         g: &peridot::Graphics,
         render_queue_family_index: u32,
-        window: *mut android::ANativeWindow,
+        window: native_wrapper::Window,
     ) -> Self {
-        let obj = g
-            .adapter()
-            .new_surface_android(window)
-            .expect("Failed to create Surface");
+        let obj = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkAndroidSurfaceCreateInfoKHR::new(window.as_ptr()),
+            )
+            .expect("Failed to create Surface")
+        };
         let supported = g
             .adapter()
             .surface_support(render_queue_family_index, &obj)
@@ -89,10 +119,12 @@ impl Presenter {
         }
 
         Self {
+            sc: peridot::IntegratedSwapchain::new(
+                g,
+                obj,
+                peridot::math::Vector2(window.width() as _, window.height() as _),
+            ),
             window,
-            sc: peridot::IntegratedSwapchain::new(g, obj, unsafe {
-                peridot::math::Vector2((*window).width() as _, (*window).height() as _)
-            }),
         }
     }
 }
@@ -156,51 +188,55 @@ impl peridot::PlatformPresenter for Presenter {
         true
     }
 
+    #[inline(always)]
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
-        unsafe { peridot::math::Vector2((*self.window).width() as _, (*self.window).height() as _) }
+        peridot::math::Vector2(self.window.width() as _, self.window.height() as _)
     }
 }
 
-use android::{Asset, AssetManager, AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
 use std::ffi::CString;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 struct PlatformAssetLoader {
-    amgr: AssetManager,
+    amgr: RwLock<native_wrapper::AssetManager>,
 }
 unsafe impl Sync for PlatformAssetLoader {}
 unsafe impl Send for PlatformAssetLoader {}
 impl PlatformAssetLoader {
-    fn new(amgr: AssetManager) -> Self {
-        PlatformAssetLoader { amgr }
+    fn new(amgr: native_wrapper::AssetManager) -> Self {
+        PlatformAssetLoader {
+            amgr: RwLock::new(amgr),
+        }
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset = Asset;
-    type StreamingAsset = Asset;
+    type Asset = native_wrapper::Asset;
+    type StreamingAsset = native_wrapper::Asset;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Asset> {
+    fn get(&self, path: &str, ext: &str) -> IOResult<native_wrapper::Asset> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
-            .open(path_str.as_ptr(), AASSET_MODE_RANDOM)
+            .write()
+            .open(&path_str, AASSET_MODE_RANDOM)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Asset> {
+    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<native_wrapper::Asset> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
         self.amgr
-            .open(path_str.as_ptr(), AASSET_MODE_STREAMING)
+            .write()
+            .open(&path_str, AASSET_MODE_STREAMING)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
 }
 
 struct NativeLink {
     al: PlatformAssetLoader,
-    w: *mut android::ANativeWindow,
+    w: native_wrapper::Window,
 }
 unsafe impl Sync for NativeLink {}
 unsafe impl Send for NativeLink {}
@@ -218,7 +254,7 @@ impl peridot::NativeLinker for NativeLink {
         &self.al
     }
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
-        Presenter::new(g, g.graphics_queue_family_index(), self.w)
+        Presenter::new(g, g.graphics_queue_family_index(), self.w.clone())
     }
 }
 
@@ -256,49 +292,38 @@ use jni::{
 };
 
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_init<'e>(
-    env: JNIEnv<'e>,
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_init<'e>(
+    mut env: JNIEnv<'e>,
     _: JClass,
     surface: JObject,
     asset_manager: JObject,
 ) -> JByteBuffer<'e> {
-    // android_logger::init_once(android_logger::Filter::default().with_min_level(log::Level::Trace));
-
-    std::panic::set_hook(Box::new(|p| {
-        log::error!("Panicking in app! {}", p);
-    }));
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().pretty())
-        .with(tracing_android::layer("Peridot").expect("Failed to create android tracing layer"))
-        .init();
-
+    init_logger();
     tracing::info!("Initializing NativeGameEngine...");
 
-    std::panic::set_hook(Box::new(|p| {
-        tracing::error!("Panicking in app! {}", p);
-    }));
-
-    let window = unsafe { android::ANativeWindow_fromSurface(env.clone(), surface) };
-    let am =
-        unsafe { AssetManager::from_java(env.clone(), asset_manager).expect("null assetmanager") };
+    let window = native_wrapper::Window::from_surface(&env, &surface)
+        .expect("No native window associated to the surface");
+    let am = native_wrapper::AssetManager::from_java(&env, &asset_manager)
+        .expect("Failed to get AndroidAssetManager native object");
     let e = Game::new(am, window);
 
     let ptr = Box::into_raw(Box::new(e));
-    env.new_direct_byte_buffer(unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, 0) })
-        .expect("Creating DirectByteBuffer failed")
+    unsafe {
+        env.new_direct_byte_buffer(ptr as *mut u8, core::mem::size_of::<Game>())
+            .expect("Creating DirectByteBuffer failed")
+    }
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_fin(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
 ) {
     info!("Finalizing NativeGameEngine...");
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let e = unsafe { Box::from_raw(bytes.as_ptr() as *mut Game) };
+    let e = unsafe { Box::from_raw(bytes as *mut Game) };
 
     async_std::task::block_on(async move {
         if e.event_sender
@@ -311,15 +336,15 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_fin(
     });
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_update(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_update(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let e = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let e = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     match e.frame_timing_sender.try_send(()) {
         Ok(_) => (),
@@ -344,10 +369,7 @@ impl audio_backend::aaudio::DataCallback for Generator {
         for b in bufslice.iter_mut() {
             *b = 0.0;
         }
-        self.0
-            .write()
-            .expect("Mixer Write Failed!")
-            .process(bufslice);
+        self.0.write().process(bufslice);
 
         audio_backend::aaudio::CallbackResult::Continue
     }
@@ -375,17 +397,13 @@ impl NativeAudioEngine {
         stream
             .request_start()
             .expect("Failed to start playback stream");
-        generator.0.write().expect("AudioEngine Poisoned").start();
+        generator.0.write().start();
 
         NativeAudioEngine { stream, generator }
     }
 
     pub fn pause(&mut self) {
-        self.generator
-            .0
-            .write()
-            .expect("AudioEngine Poisoning")
-            .stop();
+        self.generator.0.write().stop();
         self.stream.request_pause().expect("Failed to pause stream");
         let mut st = self.stream.state();
         while st != audio_backend::aaudio::native::AAUDIO_STREAM_STATE_PAUSED {
@@ -398,48 +416,44 @@ impl NativeAudioEngine {
 }
 impl Drop for NativeAudioEngine {
     fn drop(&mut self) {
-        self.generator
-            .0
-            .write()
-            .expect("AudioEngine Poisoning")
-            .stop();
+        self.generator.0.write().stop();
         self.stream.request_stop();
         trace!("NativeAudioEngine end");
     }
 }
 
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchDownEvent(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchDownEvent(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
     id: jint,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     gd.engine_input
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_processTouchUpEvent(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchUpEvent(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
     id: jint,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     gd.engine_input
         .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
 }
 #[no_mangle]
-pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
@@ -448,9 +462,9 @@ pub extern "system" fn Java_jp_ct2_peridot_NativeLibLink_setTouchPositionAbsolut
     y: jfloat,
 ) {
     let bytes = e
-        .get_direct_buffer_address(obj)
+        .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes.as_ptr() as *mut Game).as_mut().expect("null ptr?") };
+    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
 
     gd.pos_cache.borrow_mut().set(id as _, x, y);
     gd.engine_input

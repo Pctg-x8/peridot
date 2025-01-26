@@ -29,7 +29,7 @@ impl FontProvider for DirectWriteFontProvider {
     type Font = DirectWriteFont;
 
     fn best_match(
-        &self,
+        &mut self,
         family_name: &str,
         properties: &FontProperties,
         size: f32,

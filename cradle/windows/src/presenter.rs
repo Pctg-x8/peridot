@@ -48,10 +48,13 @@ impl Presenter {
         {
             panic!("WindowSubsystem does not support Vulkan Rendering");
         }
-        let s = g
-            .adapter()
-            .new_surface_win32(super::module_handle(), window.read().0)
-            .expect("Failed to create Surface");
+        let s = unsafe {
+            br::SurfaceObject::new(
+                g.adapter(),
+                &br::vk::VkWin32SurfaceCreateInfoKHR::new(super::module_handle(), window.read().0),
+            )
+            .expect("Failed to create Surface")
+        };
         let support = g
             .adapter()
             .surface_support(g.graphics_queue_family_index(), &s)
@@ -232,22 +235,32 @@ impl InteropBackbufferResource {
                 )
                 .expect("Failed to create SharedHandle from D3D12")
         });
-        let vk_shared_handle =
-            br::ExternalMemoryHandleTypeWin32::D3D12Resource.with_handle(shared_handle.handle());
-        let image = br::ImageDesc::new(size, format)
-            .as_color_attachment()
-            .init_layout(br::ImageLayout::Preinitialized)
-            .exportable_as(vk_shared_handle.0.into())
-            .create(g.device().clone())
-            .expect("Failed to create Interop Image");
+        let exportable = br::vk::VkExternalMemoryImageCreateInfoKHR::new(
+            br::ExternalMemoryHandleTypeWin32::D3D12Resource as _,
+        );
+        let image = br::ImageObject::new(
+            g.device().clone(),
+            &br::ImageCreateInfo::new(size, format)
+                .as_color_attachment()
+                .init_layout(br::ImageLayout::Preinitialized)
+                .with_next(&exportable),
+        )
+        .expect("Failed to create Interop Image");
         let image_mreq = image.requirements();
-        let handle_import_props = unsafe {
-            vk_shared_handle
-                .properties(
-                    g.device(),
-                    br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink(),
-                )
-                .expect("Failed to query Handle Memory Properties")
+        let handle_import_props = {
+            let mut sink = br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink();
+
+            unsafe {
+                g.device()
+                    .memory_win32_handle_properties(
+                        br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                        shared_handle.handle(),
+                        &mut sink,
+                    )
+                    .expect("Failed to query Handle Memory Properties");
+
+                sink.assume_init()
+            }
         };
         let memory_type_index = g
             .memory_type_manager
@@ -255,11 +268,18 @@ impl InteropBackbufferResource {
             .expect("Failed to find matching memory type for importing")
             .index();
         let memory = SharedRef::new(
-            vk_shared_handle
-                .into_import_request(memory_type_index, Some(&hname))
-                .execute(g.device().clone())
-                .expect("Failed to import memory")
-                .into(),
+            br::DeviceMemoryObject::new(
+                g.device().clone(),
+                &br::MemoryAllocateInfo::new(1, memory_type_index).with_next(
+                    &br::ImportMemoryWin32HandleInfo::new(
+                        br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                        shared_handle.handle(),
+                        Some(&hname),
+                    ),
+                ),
+            )
+            .expect("Failed to import memory")
+            .into(),
         );
         let image =
             peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
@@ -436,12 +456,12 @@ impl Presenter {
             })
             .collect();
 
-        let buffer_ready_order = br::SemaphoreBuilder::new()
-            .create(g.device().clone())
-            .expect("Failed to create Buffer Ready Semaphore");
-        let present_order = br::SemaphoreBuilder::new()
-            .create(g.device().clone())
-            .expect("Failed to create Present Order Semaphore");
+        let buffer_ready_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Buffer Ready Semaphore");
+        let present_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Present Order Semaphore");
         let render_completion_fence = unsafe {
             device12
                 .CreateFence(0, D3D12_FENCE_FLAG_SHARED)
@@ -465,12 +485,13 @@ impl Presenter {
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence")
         });
-        present_order
-            .import(
+        g.device()
+            .import_semaphore_win32_handle(&br::ImportSemaphoreWin32HandleInfo::new(
+                &present_order,
                 br::ExternalSemaphoreHandleTypeWin32::D3DFence
                     .with_handle(render_completion_fence_handle.handle()),
                 &render_completion_fence_name,
-            )
+            ))
             .expect("Failed to import Render Completion Fence");
         let present_completion_event =
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
@@ -534,7 +555,7 @@ impl peridot::PlatformPresenter for Presenter {
         recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::TOP_OF_PIPE,
-            true,
+            br::vk::VK_DEPENDENCY_BY_REGION_BIT,
             &[],
             &[],
             &barriers,
@@ -557,11 +578,10 @@ impl peridot::PlatformPresenter for Presenter {
         render_submission: impl br::SubmissionBatch,
         update_submission: Option<impl br::SubmissionBatch>,
     ) -> br::Result<()> {
+        use br::VulkanStructureAsRef;
+
         let signal_counters = [self.render_completion_counter + 1];
-        let signal_info = br::vk::VkD3D12FenceSubmitInfoKHR::from(br::D3D12FenceSubmitInfo::new(
-            &[],
-            &signal_counters,
-        ));
+        let signal_info = br::D3D12FenceSubmitInfo::new(&[], &signal_counters);
         if let Some(cs) = update_submission {
             // copy -> render
             let update_signals = [&self.buffer_ready_order];
@@ -577,7 +597,7 @@ impl peridot::PlatformPresenter for Presenter {
                 .with_signal_semaphores(&render_signals);
 
             let render_submission = br::vk::VkSubmitInfo {
-                pNext: &signal_info as *const _ as _,
+                pNext: signal_info.as_generic() as *const _ as _,
                 ..render_submission.make_info_struct()
             };
             let update_submission = update_submission.make_info_struct();
@@ -594,7 +614,7 @@ impl peridot::PlatformPresenter for Presenter {
             let render_submission = render_submission.with_signal_semaphores(&render_signals);
 
             let render_submission = br::vk::VkSubmitInfo {
-                pNext: &signal_info as *const _ as _,
+                pNext: signal_info.as_generic() as *const _ as _,
                 ..render_submission.make_info_struct()
             };
 

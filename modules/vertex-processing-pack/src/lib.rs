@@ -4,15 +4,12 @@ extern crate bedrock;
 extern crate peridot_serialization_utils;
 use peridot_serialization_utils::*;
 
-use bedrock::{self as br, VkHandle, VulkanStructure};
-#[cfg(feature = "with-loader-impl")]
-use std::borrow::Cow;
+use bedrock as br;
 use std::fs::File;
 #[cfg(feature = "with-loader-impl")]
 use std::io::Read;
 use std::io::{
-    BufRead, BufReader, Cursor, Error as IOError, ErrorKind, Result as IOResult, Seek, SeekFrom,
-    Write,
+    BufRead, BufReader, Cursor, Error as IOError, Result as IOResult, Seek, SeekFrom, Write,
 };
 use std::path::Path;
 
@@ -20,8 +17,8 @@ use std::path::Path;
 pub struct PvpContainer {
     pub vertex_bindings: Vec<br::vk::VkVertexInputBindingDescription>,
     pub vertex_attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
-    pub vertex_shader: Vec<u8>,
-    pub fragment_shader: Option<Vec<u8>>,
+    pub vertex_shader: Vec<u32>,
+    pub fragment_shader: Option<Vec<u32>>,
 }
 impl PvpContainer {
     pub fn empty() -> Self {
@@ -42,10 +39,10 @@ impl PvpContainer {
         VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
         self.vertex_attributes.binary_serialize(&mut blob)?;
         VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
-        self.vertex_shader.binary_serialize(&mut blob)?;
+        SpvBinary::from_ref(&self.vertex_shader).binary_serialize(&mut blob)?;
         if let Some(ref b) = self.fragment_shader {
             VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
-            b.binary_serialize(&mut blob)?;
+            SpvBinary::from_ref(b).binary_serialize(&mut blob)?;
         } else {
             VariableUInt(0).write(writer)?;
         }
@@ -67,10 +64,10 @@ impl PvpContainer {
         VariableUInt(blob.len() as _).write_async(writer).await?;
         self.vertex_attributes.binary_serialize(&mut blob)?;
         VariableUInt(blob.len() as _).write_async(writer).await?;
-        self.vertex_shader.binary_serialize(&mut blob)?;
+        SpvBinary::from_ref(&self.vertex_shader).binary_serialize(&mut blob)?;
         if let Some(ref b) = self.fragment_shader {
             VariableUInt(blob.len() as _).write_async(writer).await?;
-            b.binary_serialize(&mut blob)?;
+            SpvBinary::from_ref(b).binary_serialize(&mut blob)?;
         } else {
             VariableUInt(0).write_async(writer).await?;
         }
@@ -98,169 +95,45 @@ impl peridot::FromAsset for PvpContainer {
 }
 
 #[cfg(feature = "with-loader-impl")]
-pub struct PvpShaderModulesStageProvider<'d, Device: br::Device> {
-    vertex: &'d br::ShaderModuleObject<Device>,
-    fragment: Option<&'d br::ShaderModuleObject<Device>>,
-    vertex_spec_constants: Option<(&'d [br::vk::VkSpecializationMapEntry], &'d [u8])>,
-    fragment_spec_constants: Option<(&'d [br::vk::VkSpecializationMapEntry], &'d [u8])>,
-}
-#[cfg(feature = "with-loader-impl")]
-impl<'d, Device: br::Device> PvpShaderModulesStageProvider<'d, Device> {
-    pub fn set_vertex_spec_constants(
-        &mut self,
-        map_entries: &'d [br::vk::VkSpecializationMapEntry],
-        data: &'d [u8],
-    ) {
-        self.vertex_spec_constants = Some((map_entries, data));
-    }
-
-    pub fn set_fragment_spec_constants(
-        &mut self,
-        map_entries: &'d [br::vk::VkSpecializationMapEntry],
-        data: &'d [u8],
-    ) {
-        self.fragment_spec_constants = Some((map_entries, data));
-    }
-}
-#[cfg(feature = "with-loader-impl")]
-impl<Device: br::Device> br::PipelineShaderStageProvider
-    for PvpShaderModulesStageProvider<'_, Device>
-{
-    type ExtraStorage = (
-        Option<Box<br::vk::VkSpecializationInfo>>,
-        Option<Box<br::vk::VkSpecializationInfo>>,
-    );
-
-    fn base_struct(
-        &self,
-        extra_storage: &Self::ExtraStorage,
-    ) -> Vec<br::vk::VkPipelineShaderStageCreateInfo> {
-        let mut v = vec![br::vk::VkPipelineShaderStageCreateInfo {
-            sType: br::vk::VkPipelineShaderStageCreateInfo::TYPE,
-            pNext: core::ptr::null(),
-            flags: 0,
-            stage: br::ShaderStage::VERTEX.0,
-            module: self.vertex.native_ptr(),
-            pName: unsafe { core::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0").as_ptr() },
-            pSpecializationInfo: extra_storage
-                .0
-                .as_ref()
-                .map_or_else(core::ptr::null, |x| x.as_ref() as _),
-        }];
-
-        if let Some(ref f) = self.fragment {
-            v.push(br::vk::VkPipelineShaderStageCreateInfo {
-                sType: br::vk::VkPipelineShaderStageCreateInfo::TYPE,
-                pNext: core::ptr::null(),
-                flags: 0,
-                stage: br::ShaderStage::FRAGMENT.0,
-                module: f.native_ptr(),
-                pName: unsafe {
-                    core::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0").as_ptr()
-                },
-                pSpecializationInfo: extra_storage
-                    .1
-                    .as_ref()
-                    .map_or_else(core::ptr::null, |x| x.as_ref() as _),
-            });
-        }
-
-        v
-    }
-    fn make_extras(&self) -> Self::ExtraStorage {
-        (
-            self.vertex_spec_constants.as_ref().map(|c| {
-                Box::new(br::vk::VkSpecializationInfo {
-                    mapEntryCount: c.0.len() as _,
-                    pMapEntries: c.0.as_ptr(),
-                    dataSize: c.1.len(),
-                    pData: c.1.as_ptr() as *const _ as _,
-                })
-            }),
-            self.fragment_spec_constants.as_ref().map(|c| {
-                Box::new(br::vk::VkSpecializationInfo {
-                    mapEntryCount: c.0.len() as _,
-                    pMapEntries: c.0.as_ptr(),
-                    dataSize: c.1.len(),
-                    pData: c.1.as_ptr() as *const _ as _,
-                })
-            }),
-        )
-    }
-}
-
-#[cfg(feature = "with-loader-impl")]
-pub struct PvpShaderModules<'d, Device: br::Device> {
-    bindings: Vec<br::vk::VkVertexInputBindingDescription>,
-    attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
+pub struct PvpShaderModules<Device: br::Device> {
     vertex: br::ShaderModuleObject<Device>,
     fragment: Option<br::ShaderModuleObject<Device>>,
-    vertex_spec_constants: Option<(Cow<'d, [br::vk::VkSpecializationMapEntry]>, Cow<'d, [u8]>)>,
-    fragment_spec_constants: Option<(Cow<'d, [br::vk::VkSpecializationMapEntry]>, Cow<'d, [u8]>)>,
 }
 #[cfg(feature = "with-loader-impl")]
-impl<'d, Device: br::Device + Clone> PvpShaderModules<'d, Device> {
-    pub fn new(device: &Device, container: PvpContainer) -> br::Result<Self> {
-        let fragment = container
-            .fragment_shader
-            .map(|b| device.clone().new_shader_module(&b))
-            .transpose()?;
-
+impl<Device: br::Device + Clone> PvpShaderModules<Device> {
+    pub fn new(device: &Device, container: &PvpContainer) -> br::Result<Self> {
         Ok(Self {
-            vertex: device.clone().new_shader_module(&container.vertex_shader)?,
-            fragment,
-            bindings: container.vertex_bindings,
-            attributes: container.vertex_attributes,
-            vertex_spec_constants: None,
-            fragment_spec_constants: None,
+            vertex: br::ShaderModuleObject::new(
+                device.clone(),
+                &br::ShaderModuleCreateInfo::new(&container.vertex_shader),
+            )?,
+            fragment: container
+                .fragment_shader
+                .as_ref()
+                .map(|b| {
+                    br::ShaderModuleObject::new(device.clone(), &br::ShaderModuleCreateInfo::new(b))
+                })
+                .transpose()?,
         })
     }
 
-    pub fn set_vertex_spec_constants(
-        &mut self,
-        map_entries: Cow<'d, [br::vk::VkSpecializationMapEntry]>,
-        data: Cow<'d, [u8]>,
-    ) {
-        self.vertex_spec_constants = Some((map_entries, data));
+    pub fn pipeline_vertex_shader_stage<'d, 's>(&'d self) -> br::PipelineShaderStage<'d, 's> {
+        use br::ShaderModule;
+
+        self.vertex
+            .with_entry_point(c"main")
+            .on_stage(br::ShaderStage::Vertex)
     }
 
-    pub fn set_fragment_spec_constants(
-        &mut self,
-        map_entries: Cow<'d, [br::vk::VkSpecializationMapEntry]>,
-        data: Cow<'d, [u8]>,
-    ) {
-        self.fragment_spec_constants = Some((map_entries, data));
-    }
-
-    pub fn generate_vps(
+    pub fn pipeline_fragment_shader_stage<'d, 's>(
         &'d self,
-        primitive_topo: br::vk::VkPrimitiveTopology,
-    ) -> br::VertexProcessingStages<'d, PvpShaderModulesStageProvider<'d, Device>> {
-        let bindings = unsafe {
-            // Transparentなのでok
-            std::slice::from_raw_parts(
-                self.bindings.as_ptr() as *const br::VertexInputBindingDescription,
-                self.bindings.len(),
-            )
-        };
+    ) -> Option<br::PipelineShaderStage<'d, 's>> {
+        use br::ShaderModule;
 
-        br::VertexProcessingStages::new(
-            PvpShaderModulesStageProvider {
-                vertex: &self.vertex,
-                fragment: self.fragment.as_ref(),
-                vertex_spec_constants: self
-                    .vertex_spec_constants
-                    .as_ref()
-                    .map(|(a, b)| (a.as_ref(), b.as_ref())),
-                fragment_spec_constants: self
-                    .fragment_spec_constants
-                    .as_ref()
-                    .map(|(a, b)| (a.as_ref(), b.as_ref())),
-            },
-            bindings,
-            &self.attributes,
-            primitive_topo,
-        )
+        self.fragment.as_ref().map(|x| {
+            x.with_entry_point(c"main")
+                .on_stage(br::ShaderStage::Fragment)
+        })
     }
 }
 
@@ -335,24 +208,26 @@ impl<R: async_std::io::BufRead + async_std::io::Seek + Unpin> PvpContainerReader
         Vec::binary_deserialize_async(&mut self.reader).await
     }
 
-    pub async fn read_vertex_shader(&mut self) -> IOResult<Vec<u8>> {
+    pub async fn read_vertex_shader(&mut self) -> IOResult<Vec<u32>> {
         async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(self.vsh_offset)).await?;
-        Vec::binary_deserialize_async(&mut self.reader).await
+        SpvBinary::binary_deserialize_async(&mut self.reader)
+            .await
+            .map(|x| x.0)
     }
 
     pub fn is_fragment_stage_provided(&self) -> bool {
         self.fsh_offset.is_some()
     }
 
-    pub async fn read_fragment_shader(&mut self) -> IOResult<Option<Vec<u8>>> {
+    pub async fn read_fragment_shader(&mut self) -> IOResult<Option<Vec<u32>>> {
         let Some(o) = self.fsh_offset else {
             return Ok(None);
         };
 
         async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(o)).await?;
-        Vec::binary_deserialize_async(&mut self.reader)
+        SpvBinary::binary_deserialize_async(&mut self.reader)
             .await
-            .map(Some)
+            .map(|x| Some(x.0))
     }
 
     pub async fn into_container(mut self) -> IOResult<PvpContainer> {
@@ -372,6 +247,7 @@ impl PvpContainerReaderAsync<async_std::io::BufReader<async_std::fs::File>> {
         Self::new(async_std::io::BufReader::new(
             async_std::fs::File::open(path).await?,
         ))
+        .await
     }
 }
 
@@ -420,20 +296,20 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
         self.reader.seek(SeekFrom::Start(self.va_offset))?;
         Vec::<_>::binary_unserialize(&mut self.reader)
     }
-    pub fn read_vertex_shader(&mut self) -> IOResult<Vec<u8>> {
+    pub fn read_vertex_shader(&mut self) -> IOResult<Vec<u32>> {
         self.reader.seek(SeekFrom::Start(self.vsh_offset))?;
-        Vec::<u8>::binary_unserialize(&mut self.reader)
+        SpvBinary::binary_unserialize(&mut self.reader).map(|x| x.0)
     }
     pub fn is_fragment_stage_provided(&mut self) -> bool {
         self.fsh_offset.is_some()
     }
-    pub fn read_fragment_shader(&mut self) -> IOResult<Option<Vec<u8>>> {
+    pub fn read_fragment_shader(&mut self) -> IOResult<Option<Vec<u32>>> {
         let Some(o) = self.fsh_offset else {
             return Ok(None);
         };
 
         self.reader.seek(SeekFrom::Start(o))?;
-        Vec::<u8>::binary_unserialize(&mut self.reader).map(Some)
+        SpvBinary::binary_unserialize(&mut self.reader).map(|x| Some(x.0))
     }
 
     pub fn into_container(mut self) -> IOResult<PvpContainer> {
@@ -456,19 +332,16 @@ trait BinarySerializeVkStructures {
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>
     where
         Self: Sized;
-    fn serialize_into_memory(&self) -> IOResult<Vec<u8>> {
-        let mut sink = Cursor::new(Vec::new());
-        self.binary_serialize(&mut sink).map(|_| sink.into_inner())
-    }
 }
 #[cfg(feature = "async-rt-async-std")]
 trait AsyncBinarySerializeVkStructures {
-    fn binary_serialize_async<'s>(
-        &'s self,
-        sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<usize>> + 's;
+    // つかってないやつ
+    // fn binary_serialize_async<'s>(
+    //     &'s self,
+    //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
+    // ) -> impl std::future::Future<Output = IOResult<usize>> + 's;
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized;
@@ -504,21 +377,21 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
 }
 #[cfg(feature = "async-rt-async-std")]
 impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
-    fn binary_serialize_async<'s>(
-        &'s self,
-        sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
-        async move {
-            let w1 = VariableUInt(self.inputRate as _).write_async(sink).await?;
-            let w2 = VariableUInt(self.binding as _).write_async(sink).await?;
-            let w3 = VariableUInt(self.stride as _).write_async(sink).await?;
+    // fn binary_serialize_async<'s>(
+    //     &'s self,
+    //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
+    // ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
+    //     async move {
+    //         let w1 = VariableUInt(self.inputRate as _).write_async(sink).await?;
+    //         let w2 = VariableUInt(self.binding as _).write_async(sink).await?;
+    //         let w3 = VariableUInt(self.stride as _).write_async(sink).await?;
 
-            Ok(w1 + w2 + w3)
-        }
-    }
+    //         Ok(w1 + w2 + w3)
+    //     }
+    // }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -574,22 +447,22 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
 }
 #[cfg(feature = "async-rt-async-std")]
 impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
-    fn binary_serialize_async<'s>(
-        &'s self,
-        sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
-        async move {
-            let w1 = VariableUInt(self.location as _).write_async(sink).await?;
-            let w2 = VariableUInt(self.binding as _).write_async(sink).await?;
-            let w3 = VariableUInt(self.offset as _).write_async(sink).await?;
-            let w4 = VariableUInt(self.format as _).write_async(sink).await?;
+    // fn binary_serialize_async<'s>(
+    //     &'s self,
+    //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
+    // ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
+    //     async move {
+    //         let w1 = VariableUInt(self.location as _).write_async(sink).await?;
+    //         let w2 = VariableUInt(self.binding as _).write_async(sink).await?;
+    //         let w3 = VariableUInt(self.offset as _).write_async(sink).await?;
+    //         let w4 = VariableUInt(self.format as _).write_async(sink).await?;
 
-            Ok(w1 + w2 + w3 + w4)
-        }
-    }
+    //         Ok(w1 + w2 + w3 + w4)
+    //     }
+    // }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -631,22 +504,22 @@ impl<T: BinarySerializeVkStructures> BinarySerializeVkStructures for Vec<T> {
 }
 #[cfg(feature = "async-rt-async-std")]
 impl<T: AsyncBinarySerializeVkStructures> AsyncBinarySerializeVkStructures for Vec<T> {
-    fn binary_serialize_async<'s>(
-        &'s self,
-        sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
-        async move {
-            let mut write_bytes = VariableUInt(self.len() as _).write_async(sink).await?;
-            for x in self.iter() {
-                write_bytes += x.binary_serialize_async(sink).await?;
-            }
+    // fn binary_serialize_async<'s>(
+    //     &'s self,
+    //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
+    // ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
+    //     async move {
+    //         let mut write_bytes = VariableUInt(self.len() as _).write_async(sink).await?;
+    //         for x in self.iter() {
+    //             write_bytes += x.binary_serialize_async(sink).await?;
+    //         }
 
-            Ok(write_bytes)
-        }
-    }
+    //         Ok(write_bytes)
+    //     }
+    // }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -663,37 +536,57 @@ impl<T: AsyncBinarySerializeVkStructures> AsyncBinarySerializeVkStructures for V
         }
     }
 }
-impl BinarySerializeVkStructures for Vec<u8> {
-    fn binary_serialize<W: Write>(&self, sink: &mut W) -> IOResult<usize> {
-        VariableUInt(self.len() as _)
-            .write(sink)
-            .and_then(|w0| sink.write_all(self).map(move |_| self.len() + w0))
+
+#[repr(transparent)]
+pub struct SpvBinary(pub Vec<u32>);
+impl SpvBinary {
+    pub const fn from_ref(b: &Vec<u32>) -> &Self {
+        unsafe { core::mem::transmute(b) }
     }
+}
+
+impl BinarySerializeVkStructures for SpvBinary {
+    fn binary_serialize<W: Write>(&self, sink: &mut W) -> IOResult<usize> {
+        let w0 = VariableUInt(self.0.len() as _).write(sink)?;
+        sink.write_all(unsafe {
+            core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
+        })?;
+
+        Ok(w0 + self.0.len() << 2)
+    }
+
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>
     where
         Self: Sized,
     {
         let VariableUInt(element_count) = VariableUInt::read(source)?;
-        let mut buf = vec![0u8; element_count as usize];
-        source.read_exact(&mut buf).map(|_| buf)
+        let mut buf = vec![0u32; element_count as usize];
+        source
+            .read_exact(unsafe {
+                core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() << 2)
+            })
+            .map(|_| Self(buf))
     }
 }
 #[cfg(feature = "async-rt-async-std")]
-impl AsyncBinarySerializeVkStructures for Vec<u8> {
-    fn binary_serialize_async<'s>(
-        &'s self,
-        sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
-        async move {
-            let l = VariableUInt(self.len() as _).write_async(sink).await?;
-            async_std::io::WriteExt::write_all(sink, self).await?;
+impl AsyncBinarySerializeVkStructures for SpvBinary {
+    // fn binary_serialize_async<'s>(
+    //     &'s self,
+    //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
+    // ) -> impl std::future::Future<Output = IOResult<usize>> + 's {
+    //     async move {
+    //         let l = VariableUInt(self.0.len() as _).write_async(sink).await?;
+    //         async_std::io::WriteExt::write_all(sink, unsafe {
+    //             core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
+    //         })
+    //         .await?;
 
-            Ok(l + self.len())
-        }
-    }
+    //         Ok(l + self.0.len())
+    //     }
+    // }
 
     fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::Read + Unpin + ?Sized),
+        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
     where
         Self: Sized,
@@ -704,9 +597,12 @@ impl AsyncBinarySerializeVkStructures for Vec<u8> {
             unsafe {
                 buf.set_len(len as _);
             }
-            async_std::io::ReadExt::read_exact(source, &mut buf).await?;
+            async_std::io::ReadExt::read_exact(source, unsafe {
+                core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() << 2)
+            })
+            .await?;
 
-            Ok(buf)
+            Ok(Self(buf))
         }
     }
 }

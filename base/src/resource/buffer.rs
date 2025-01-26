@@ -348,34 +348,44 @@ impl<'g> BufferPrealloc<'g> {
         }
     }
 
-    pub fn build_desc(&self) -> br::BufferDesc {
-        br::BufferDesc::new(self.total as _, self.usage)
+    pub fn build_desc(&self) -> br::BufferCreateInfo {
+        br::BufferCreateInfo::new(self.total as _, self.usage)
     }
 
     /// this ignores usage flags from appended contents
-    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferDesc {
-        br::BufferDesc::new(self.total as _, usage)
+    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferCreateInfo {
+        br::BufferCreateInfo::new(self.total as _, usage)
     }
 
     pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage).create(self.g.device.clone())
+        br::BufferObject::new(
+            self.g.device.clone(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage),
+        )
     }
 
     pub fn build_transferred(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_dest())
-            .create(self.g.device.clone())
+        br::BufferObject::new(
+            self.g.device().clone(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_dest()),
+        )
     }
 
     pub fn build_upload(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage.transfer_src())
-            .create(self.g.device.clone())
+        br::BufferObject::new(
+            self.g.device.clone(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_src()),
+        )
     }
 
     pub fn build_custom_usage(
         &self,
         usage: br::BufferUsage,
     ) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferDesc::new(self.total as _, self.usage | usage).create(self.g.device.clone())
+        br::BufferObject::new(
+            self.g.device.clone(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage | usage),
+        )
     }
 
     pub fn add(&mut self, content: BufferContent) -> u64 {

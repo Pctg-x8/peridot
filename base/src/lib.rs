@@ -1,22 +1,24 @@
 use async_std::stream::StreamExt;
 use futures_util::FutureExt;
-use log::*;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 
 use bedrock as br;
 use br::Device;
+#[cfg(feature = "mt")]
+use br::Status;
+use parking_lot::RwLock;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant as InstantTimer};
 
 mod graphics;
 pub use self::graphics::{
     CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
-    MemoryTypeManager,
+    MemoryTypeManager, VulkanExtension,
 };
 mod state_track;
 use self::state_track::StateFence;
@@ -241,7 +243,7 @@ pub struct Engine<NL: NativeLinker> {
 impl<PL: NativeLinker> Engine<PL> {
     pub fn new(
         name: &str,
-        version: (u16, u16, u16),
+        version: br::Version,
         native_link: PL,
         requested_features: br::vk::VkPhysicalDeviceFeatures,
         engine_events_bus: (
@@ -280,7 +282,7 @@ impl<PL: NativeLinker> Engine<PL> {
     }
 
     pub fn post_init(&mut self) {
-        trace!("PostInit BaseEngine...");
+        tracing::trace!("PostInit BaseEngine...");
     }
 }
 impl<NL: NativeLinker> Engine<NL> {
@@ -290,7 +292,7 @@ impl<NL: NativeLinker> Engine<NL> {
 
     pub async fn quit(&self) {
         if let Err(e) = self.engine_events_sender.send(EngineEvent::Shutdown).await {
-            warn!("Engine has already shutting down: {e:?}");
+            tracing::warn!(cause = ?e, "Engine has already shutting down");
         }
     }
 
@@ -334,10 +336,10 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.presenter.requesting_back_buffer_layout()
     }
-    pub fn back_buffer_attachment_desc(&self) -> br::AttachmentDescription {
+    pub fn back_buffer_attachment_desc(&self) -> br::vk::VkAttachmentDescription {
         let (ol, _) = self.requesting_back_buffer_layout();
 
-        br::AttachmentDescription::new(self.back_buffer_format(), ol, ol)
+        br::vk::VkAttachmentDescription::new(self.back_buffer_format(), ol, ol)
     }
 
     pub fn input(&self) -> &InputProcess {
@@ -686,6 +688,6 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
         &self,
         rec: br::CmdRecord<'r, CB, Device>,
     ) -> br::CmdRecord<'r, CB, Device> {
-        rec.bind_graphics_pipeline(&self.0)
+        rec.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }

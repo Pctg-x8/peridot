@@ -1,6 +1,6 @@
 //! Platform Presenter(Swapchain Abstraction)
 
-use bedrock::{self as br, SemaphoreMut};
+use bedrock::{self as br, ImageChild, QueueMut, VkHandle, VkHandleMut};
 #[cfg(feature = "debug")]
 use br::VkObject;
 use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
@@ -74,11 +74,12 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             height: eh,
         };
         let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
-        let pre_transform = if br::SurfaceTransform::Identity.contains(si.supportedTransforms) {
-            br::SurfaceTransform::Identity
-        } else {
-            br::SurfaceTransform::Inherit
-        };
+        let pre_transform =
+            if (si.supportedTransforms & br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0 {
+                br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+            } else {
+                br::vk::VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR
+            };
         let chain = br::SwapchainBuilder::new(
             surface,
             buffer_count,
@@ -102,7 +103,7 @@ impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
             .expect("Failed to set swapchain name");
 
         let back_buffer_images: Vec<SharedRef<_>> = chain
-            .get_images()
+            .images_alloc()
             .expect("Failed to get back-buffer images")
             .into_iter()
             .map(|bb| {
@@ -151,15 +152,15 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, &surface)
             .expect("Failed to gather surface info");
 
-        let rendering_order = br::SemaphoreBuilder::new()
-            .create(g.device.clone())
-            .expect("Failed to create Rendering Order Semaphore");
-        let buffer_ready_order = br::SemaphoreBuilder::new()
-            .create(g.device.clone())
-            .expect("Failed to create BufferReady Order Semaphore");
-        let present_order = br::SemaphoreBuilder::new()
-            .create(g.device.clone())
-            .expect("Failed to create Present Order Semaphore");
+        let rendering_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Rendering Order Semaphore");
+        let buffer_ready_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create BufferReady Order Semaphore");
+        let present_order =
+            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
+                .expect("Failed to create Present Order Semaphore");
         #[cfg(feature = "debug")]
         {
             rendering_order
@@ -224,7 +225,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             .back_buffer_images
             .iter()
             .map(|v| {
-                v.by_ref()
+                v.image()
                     .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
                     .memory_barrier(br::ImageLayout::PresentSrc.from_undefined())
             })
@@ -233,7 +234,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
-            false,
+            0,
             &[],
             &[],
             &image_barriers,
@@ -244,7 +245,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
     pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.swapchain.get_mut().swapchain.acquire_next(
             None,
-            br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_mut_ref()),
+            br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_ref_mut()),
         )
     }
 
@@ -306,11 +307,16 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             g.submit_buffered_commands(&[render_submission], last_render_fence)?;
         }
 
-        self.swapchain.get_mut().swapchain.queue_present(
-            g.graphics_queue.q.get_mut(),
-            bb_index,
-            &[self.present_order.as_transparent_ref()],
-        )
+        g.graphics_queue
+            .q
+            .get_mut()
+            .present(&br::PresentInfo::new(
+                &[self.present_order.as_transparent_ref()],
+                &[self.swapchain.get().swapchain.as_transparent_ref()],
+                &[bb_index],
+                &mut [br::vk::VK_SUCCESS],
+            ))
+            .map(drop)
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) {

@@ -12,7 +12,6 @@ mt = []
 
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
-log = "*"
 libc = "*"
 rayon = "1.0"
 num_cpus = "1.0"
@@ -29,4 +28,11 @@ tracing.workspace = true
 
 [dependencies.bedrock]
 workspace = true
-features = ["VK_KHR_surface", "VK_KHR_swapchain", "Implements", "Multithreaded"]
+features = [
+    "VK_KHR_surface",
+    "VK_KHR_swapchain",
+    "Implements",
+    "Multithreaded",
+    "VK_KHR_get_physical_device_properties2",
+    "VK_KHR_synchronization2",
+]

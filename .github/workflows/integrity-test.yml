@@ -400,6 +400,11 @@ jobs:
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Check - Trailing Newline for Source Code Files
         uses: "./.github/actions/codeform-checker"
+      - env:
+          RUN_SCRIPT: linefeed_checker
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Running Check - Enforce Line Feed to LF only
+        uses: "./.github/actions/codeform-checker"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"

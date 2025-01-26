@@ -1,4 +1,4 @@
-use bedrock::{self as br, CommandBufferMut, CommandPoolMut};
+use bedrock::{self as br, CommandBufferMut, CommandPoolMut, VkHandleMut};
 use std::ops::{Deref, DerefMut};
 
 use super::{DeviceObject, Graphics};
@@ -28,7 +28,13 @@ impl<Device: br::Device> DerefMut for CommandBundle<Device> {
 impl<Device: br::Device> Drop for CommandBundle<Device> {
     fn drop(&mut self) {
         unsafe {
-            self.1.free(&self.0[..]);
+            self.1.free(
+                &self
+                    .0
+                    .iter_mut()
+                    .map(|x| x.as_transparent_ref_mut())
+                    .collect::<Vec<_>>()[..],
+            );
         }
     }
 }
@@ -38,15 +44,27 @@ impl CommandBundle<DeviceObject> {
             CBSubmissionType::Graphics => g.graphics_queue.family,
             CBSubmissionType::Transfer => g.graphics_queue.family,
         };
-        let mut cp = br::CommandPoolBuilder::new(qf).create(g.device.clone())?;
+        let mut cp =
+            br::CommandPoolObject::new(g.device.clone(), &br::CommandPoolCreateInfo::new(qf))?;
 
-        Ok(Self(cp.alloc(count as _, true)?, cp))
+        Ok(Self(
+            br::CommandBufferObject::alloc(
+                g.device.clone(),
+                &br::CommandBufferAllocateInfo::new(
+                    &mut cp,
+                    count as _,
+                    br::CommandBufferLevel::Primary,
+                ),
+            )?,
+            cp,
+        ))
     }
 }
 impl<Device: br::Device> CommandBundle<Device> {
     #[inline]
-    pub fn reset(&mut self) -> br::Result<()> {
-        self.1.reset(true)
+    pub unsafe fn reset(&mut self) -> br::Result<()> {
+        self.1
+            .reset(br::vk::VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT)
     }
 
     #[inline]
@@ -62,19 +80,25 @@ impl<Device: br::Device> CommandBundle<Device> {
 
 pub struct LocalCommandBundle<
     'p,
-    CommandBuffer: br::CommandBuffer,
+    CommandBuffer: br::CommandBufferMut,
     CommandPool: br::CommandPoolMut + 'p,
 >(pub Vec<CommandBuffer>, pub &'p mut CommandPool);
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPoolMut + 'p> Drop
+impl<'p, CommandBuffer: br::CommandBufferMut, CommandPool: br::CommandPoolMut + 'p> Drop
     for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     fn drop(&mut self) {
         unsafe {
-            self.1.free(&self.0[..]);
+            self.1.free(
+                &self
+                    .0
+                    .iter_mut()
+                    .map(|x| x.as_transparent_ref_mut())
+                    .collect::<Vec<_>>()[..],
+            );
         }
     }
 }
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPoolMut + 'p> Deref
+impl<'p, CommandBuffer: br::CommandBufferMut, CommandPool: br::CommandPoolMut + 'p> Deref
     for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     type Target = [CommandBuffer];
@@ -83,7 +107,7 @@ impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPoolMut + 'p>
         &self.0
     }
 }
-impl<'p, CommandBuffer: br::CommandBuffer, CommandPool: br::CommandPoolMut + 'p> DerefMut
+impl<'p, CommandBuffer: br::CommandBufferMut, CommandPool: br::CommandPoolMut + 'p> DerefMut
     for LocalCommandBundle<'p, CommandBuffer, CommandPool>
 {
     fn deref_mut(&mut self) -> &mut [CommandBuffer] {
