@@ -1,6 +1,6 @@
 use bedrock::{
-    self as br, CommandBufferMut, Device, Image, ImageChild, RenderPass, SubmissionBatch, VkHandle,
-    VulkanStructure,
+    self as br, CommandBufferMut, CommandPoolMut, Device, Image, ImageChild, RenderPass,
+    SubmissionBatch, VkHandle, VulkanStructure,
 };
 use peridot::math::Zero;
 use peridot_vertex_processing_pack::PvpShaderModules;
@@ -1393,8 +1393,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .size()
         .as_2d_ref()
         .clone();
-    let scissor_rect = screen_size.into_rect(br::vk::VkOffset2D::ZERO);
-    let viewport = scissor_rect.make_viewport(0.0..1.0);
+    let mut scissor_rect = screen_size.into_rect(br::vk::VkOffset2D::ZERO);
+    let mut viewport = scissor_rect.make_viewport(0.0..1.0);
 
     let main_renderpass = br::RenderPassObject::new(
         e.graphics().device().clone(),
@@ -1414,8 +1414,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         ),
     )
     .expect("Failed to create main renderpass");
-    let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
-    let main_framebuffers = backbuffer_resources
+    let mut backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+    let mut main_framebuffers = backbuffer_resources
         .iter()
         .map(|bb| {
             br::FramebufferObject::new(
@@ -1481,7 +1481,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
         )
         .expect("Failed to create unlit fill pipeline");
-    let unlit_fill_pipeline = unlit_fill_pipeline.clone_parent();
+    let mut unlit_fill_pipeline = unlit_fill_pipeline.clone_parent();
 
     // プレイヤーカード風UI試作
     let user_card_cell_ui = UIElement {
@@ -1820,6 +1820,9 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         },
     );
 
+    println!("layout boxes: {}", boxes.len());
+    // TODO: レイアウトボックスが1024を超えたときの対応（どうしよ）
+    assert!(boxes.len() < 1024, "too many layout boxes!!");
     let mut pmm = peridot_memory_manager::MemoryManager::new(e.graphics());
     let [vertex_buffer, instance_buffer] = pmm
         .allocate_device_local_buffer_array(
@@ -1914,7 +1917,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         &br::CommandPoolCreateInfo::new(e.graphics_queue_family_index()),
     )
     .expect("Failed to create ui render command pool");
-    let [mut ui_render_cb] = unsafe {
+    let [ui_render_cb] = unsafe {
         e.graphics()
             .device()
             .allocate_command_buffer_array(&br::CommandBufferFixedCountAllocateInfo::new(
@@ -1923,6 +1926,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             ))
             .expect("Failed to allocate ui render command buffer")
     };
+    let mut ui_render_cb = ui_render_cb.clone_parent();
     unsafe {
         let inherit_info = br::CommandBufferInheritanceInfo::of_rendering(
             main_renderpass.subpass(0),
@@ -1997,10 +2001,141 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
     content_init.await.expect("Failed to initialize content");
 
+    let mut new_size: Option<peridot::math::Vector2<u32>> = None;
+
     while let Some(ev) = e.event_receivers().wait_for_event().await {
         match ev {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
+                if let Some(ns) = new_size.take() {
+                    e.wait_for_last_rendering_completion();
+
+                    unsafe {
+                        render_cp
+                            .reset(br::vk::VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT)
+                            .expect("Failed to reset render command pool");
+                        ui_render_cp
+                            .reset(br::vk::VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT)
+                            .expect("Failed to reset ui render command pool");
+                    }
+                    drop(main_framebuffers);
+                    drop(backbuffer_resources);
+
+                    e.resize_presenter_backbuffers(ns);
+
+                    scissor_rect = br::vk::VkExtent2D::from(ns).into_rect(br::vk::VkOffset2D::ZERO);
+                    viewport = scissor_rect.make_viewport(0.0..1.0);
+
+                    backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+                    main_framebuffers = backbuffer_resources
+                        .iter()
+                        .map(|bb| {
+                            br::FramebufferObject::new(
+                                e.graphics().device().clone(),
+                                &br::FramebufferCreateInfo::new(
+                                    &main_renderpass,
+                                    &[bb.as_transparent_ref()],
+                                    ns.0,
+                                    ns.1,
+                                ),
+                            )
+                            .expect("Failed to create main framebuffer")
+                        })
+                        .collect::<Vec<_>>();
+
+                    let [p1] = e
+                        .graphics()
+                        .device()
+                        .new_graphics_pipeline_array(
+                            &[br::GraphicsPipelineCreateInfo::new(
+                                &unlit_fill_pipeline_layout,
+                                main_renderpass.subpass(0),
+                                &[
+                                    unlit_fill_shader_modules.pipeline_vertex_shader_stage(),
+                                    unlit_fill_shader_modules
+                                        .pipeline_fragment_shader_stage()
+                                        .expect("no fsh?"),
+                                ],
+                                &br::PipelineVertexInputStateCreateInfo::new(
+                                    &unlit_fill_shader.vertex_bindings,
+                                    &unlit_fill_shader.vertex_attributes,
+                                ),
+                                &br::PipelineInputAssemblyStateCreateInfo::new(
+                                    br::PrimitiveTopology::TriangleStrip,
+                                ),
+                                &br::PipelineViewportStateCreateInfo::new_array(
+                                    &[viewport],
+                                    &[scissor_rect],
+                                ),
+                                &br::PipelineRasterizationStateCreateInfo::new(
+                                    br::PolygonMode::Fill,
+                                    br::CullModeFlags::NONE,
+                                    br::FrontFace::CounterClockwise,
+                                ),
+                                &br::PipelineColorBlendStateCreateInfo::new(&[
+                                    br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+                                ]),
+                            )
+                            .multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+                            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                        )
+                        .expect("Failed to create unlit fill pipeline");
+                    unlit_fill_pipeline = p1.clone_parent();
+
+                    unsafe {
+                        let inherit_info = br::CommandBufferInheritanceInfo::of_rendering(
+                            main_renderpass.subpass(0),
+                            None::<&br::FramebufferObject<peridot::DeviceObject>>,
+                        );
+                        let begin_info = br::CommandBufferBeginInfo::new()
+                            .with_inheritance_info(&inherit_info)
+                            .renderpass_continue()
+                            .simultaneous_use();
+
+                        ui_render_cb
+                            .begin_raw(&begin_info, e.graphics().device())
+                            .expect("Failed to begin ui render command recording")
+                    }
+                    .bind_pipeline(br::PipelineBindPoint::Graphics, &unlit_fill_pipeline)
+                    .push_constant(
+                        &unlit_fill_pipeline_layout,
+                        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                        0,
+                        &peridot::math::Vector2(640.0f32, ns.1 as f32 * 640.0f32 / ns.0 as f32),
+                    )
+                    .bind_vertex_buffers(
+                        0,
+                        &[
+                            vertex_buffer.as_transparent_ref(),
+                            instance_buffer.as_transparent_ref(),
+                        ],
+                        &[0, 0],
+                    )
+                    .draw(4, boxes.len() as _, 0, 0)
+                    .end()
+                    .expect("Failed to finish ui render command recording");
+
+                    for (cb, fb) in render_cb.iter_mut().zip(main_framebuffers.iter()) {
+                        unsafe {
+                            cb.begin(e.graphics().device())
+                                .expect("Failed to begin render command recording")
+                                .begin_render_pass(
+                                    &br::RenderPassBeginInfo::new(
+                                        &main_renderpass,
+                                        fb,
+                                        scissor_rect,
+                                        &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 0.0])],
+                                    ),
+                                    br::SubpassContents::SecondaryCommandBuffers,
+                                )
+                                .execute_commands(&[ui_render_cb.as_transparent_ref()])
+                                .end_render_pass()
+                                .end()
+                                .expect("Failed to finish render command recording");
+                        }
+                    }
+                }
+
                 let fd = e.prepare_frame().expect("Failed to prepare frame");
 
                 e.do_render(
@@ -2013,7 +2148,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 .expect("Failed to render");
             }
             peridot::Event::Resize(ns) => {
-                println!("not implemented: Resize: {ns:?}");
+                new_size = Some(ns);
             }
         }
     }
