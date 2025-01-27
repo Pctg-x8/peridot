@@ -123,6 +123,8 @@ pub enum ChildrenLayoutMode {
     Grid {
         columns: Vec<GridCellSize>,
         rows: Vec<GridCellSize>,
+        column_alignment: LayoutAlignment,
+        row_alignment: LayoutAlignment,
         gap: f32,
     },
 }
@@ -135,6 +137,9 @@ pub struct UIElement {
     pub padding: RectEdge<f32>,
     pub layout_width: LayoutSize,
     pub layout_height: LayoutSize,
+    pub layout_alignment_override: Option<LayoutAlignment>,
+    pub column_alignment_override: Option<LayoutAlignment>,
+    pub row_alignment_override: Option<LayoutAlignment>,
     pub children_layout: ChildrenLayoutMode,
     pub debug_color: peridot::math::Vector4<f32>,
     pub children: Vec<UIElement>,
@@ -149,6 +154,9 @@ impl Default for UIElement {
             padding: RectEdge::all(0.0),
             layout_width: LayoutSize::Unscaled,
             layout_height: LayoutSize::Unscaled,
+            layout_alignment_override: None,
+            column_alignment_override: None,
+            row_alignment_override: None,
             children_layout: ChildrenLayoutMode::Free,
             debug_color: peridot::math::Vector4(0.0, 0.0, 0.0, 0.0),
             children: Vec::new(),
@@ -506,10 +514,10 @@ fn apply_layout_rects<'e>(
 pub trait HorizontalJustifyMethod {
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect>;
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)>;
 }
 
 pub struct HorizontalJustifyEnd {
@@ -519,18 +527,18 @@ impl HorizontalJustifyMethod for HorizontalJustifyEnd {
     #[inline]
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width
             - (content_total_width + self.gap * (row_layout_rects.len() - 1) as f32);
 
-        row_layout_rects.scan(space, move |offset, r| {
+        row_layout_rects.scan(space, move |offset, (r, a)| {
             let o = *offset;
             *offset += r.width() + self.gap;
 
-            Some(r.r#move(peridot::math::Vector2(o, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(o, 0.0)), a))
         })
     }
 }
@@ -542,18 +550,18 @@ impl HorizontalJustifyMethod for HorizontalJustifyCenter {
     #[inline]
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width
             - (content_total_width + self.gap * (row_layout_rects.len() - 1) as f32);
 
-        row_layout_rects.scan(space * 0.5f32, move |offset, r| {
+        row_layout_rects.scan(space * 0.5f32, move |offset, (r, a)| {
             let o = *offset;
             *offset += r.width() + self.gap;
 
-            Some(r.r#move(peridot::math::Vector2(o, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(o, 0.0)), a))
         })
     }
 }
@@ -564,21 +572,21 @@ pub struct HorizontalJustifySpaceBetween {
 impl HorizontalJustifyMethod for HorizontalJustifySpaceBetween {
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width - content_total_width;
         let new_gap = match row_layout_rects.len() {
             x if x <= 1 => self.min_gap,
             x => (space / (x - 1) as f32).max(self.min_gap),
         };
 
-        row_layout_rects.scan(0.0f32, move |left, r| {
+        row_layout_rects.scan(0.0f32, move |left, (r, a)| {
             let place_left = *left;
             *left += r.width() + new_gap;
 
-            Some(r.r#move(peridot::math::Vector2(place_left, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(place_left, 0.0)), a))
         })
     }
 }
@@ -589,10 +597,10 @@ pub struct HorizontalJustifySpaceAround {
 impl HorizontalJustifyMethod for HorizontalJustifySpaceAround {
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width - content_total_width;
         let new_gap = space / (row_layout_rects.len() + 1) as f32;
         let (new_gap, offset) = if new_gap < self.min_gap {
@@ -602,11 +610,11 @@ impl HorizontalJustifyMethod for HorizontalJustifySpaceAround {
             (new_gap, new_gap)
         };
 
-        row_layout_rects.scan(offset, move |offset, r| {
+        row_layout_rects.scan(offset, move |offset, (r, a)| {
             let offs = *offset;
             *offset += r.width() + new_gap;
 
-            Some(r.r#move(peridot::math::Vector2(offs, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(offs, 0.0)), a))
         })
     }
 }
@@ -621,7 +629,7 @@ fn layout_horizontal_justify_per_row<'e>(
 ) -> Vec<LayoutRect> {
     let (lb, ub) = elements_ordered.size_hint();
     let mut layout_rects = Vec::with_capacity(ub.unwrap_or(lb));
-    let mut row_rects = Vec::<LayoutRect>::new();
+    let mut row_rects = Vec::<(LayoutRect, LayoutAlignment)>::new();
 
     let mut content_total_width = 0.0f32;
     let mut row_height = 0.0f32;
@@ -642,11 +650,11 @@ fn layout_horizontal_justify_per_row<'e>(
                                 content_total_width,
                                 global_rect.size.0,
                             )
-                            .map(|r| {
+                            .map(|(r, a)| {
                                 let yoffs = compute_horizontal_alignment_axis_offset(
                                     row_height,
                                     r.height(),
-                                    alignment,
+                                    a,
                                 );
 
                                 r.r#move(global_rect.pos + peridot::math::Vector2(0.0, yoffs))
@@ -664,7 +672,10 @@ fn layout_horizontal_justify_per_row<'e>(
         }
 
         row_height = row_height.max(child_layout.height());
-        row_rects.push(child_layout.r#move(peridot::math::Vector2(0.0, content_y_offset)));
+        row_rects.push((
+            child_layout.r#move(peridot::math::Vector2(0.0, content_y_offset)),
+            e.layout_alignment_override.unwrap_or(alignment),
+        ));
         content_total_width += content_width;
         available_content_size.0 -= content_width + gap;
     }
@@ -672,9 +683,8 @@ fn layout_horizontal_justify_per_row<'e>(
     layout_rects.extend(
         justify
             .horizontal_justify(row_rects.drain(..), content_total_width, global_rect.size.0)
-            .map(|r| {
-                let yoffs =
-                    compute_horizontal_alignment_axis_offset(row_height, r.height(), alignment);
+            .map(|(r, a)| {
+                let yoffs = compute_horizontal_alignment_axis_offset(row_height, r.height(), a);
 
                 r.r#move(global_rect.pos + peridot::math::Vector2(0.0, yoffs))
             }),
@@ -795,7 +805,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -815,7 +825,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -850,7 +860,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -872,7 +882,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -900,7 +910,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.bottom();
@@ -918,7 +928,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.bottom();
@@ -972,7 +982,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -997,7 +1007,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -1036,7 +1046,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -1061,7 +1071,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -1232,6 +1242,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
         ChildrenLayoutMode::Grid {
             ref columns,
             ref rows,
+            column_alignment,
+            row_alignment,
             gap,
         } => {
             let mut column_fixed_sizes = vec![0.0; columns.len()];
@@ -1335,6 +1347,16 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         row_size[current_row],
                     )),
                 );
+                let left_offset = compute_vertical_alignment_axis_offset(
+                    column_size[current_column],
+                    child_layout.size.0,
+                    c.row_alignment_override.unwrap_or(row_alignment),
+                );
+                let top_offset = compute_horizontal_alignment_axis_offset(
+                    row_size[current_row],
+                    child_layout.size.1,
+                    c.column_alignment_override.unwrap_or(column_alignment),
+                );
 
                 layout1(
                     c,
@@ -1346,7 +1368,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 // TODO: 行数が多くなったときの処理（親コンテナの残りを全部割当、でいいはず）
                                 row_offsets[current_row],
                             )
-                            + child_layout.pos,
+                            + child_layout.pos
+                            + peridot::math::Vector2(left_offset, top_offset),
                         size: child_layout.size,
                     },
                 );
@@ -1503,6 +1526,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         children_layout: ChildrenLayoutMode::Grid {
                             columns: vec![GridCellSize::Flexible(1.0), GridCellSize::FitContent],
                             rows: vec![GridCellSize::FitContent],
+                            column_alignment: LayoutAlignment::Start,
+                            row_alignment: LayoutAlignment::Start,
                             gap: 4.0,
                         },
                         children: vec![
@@ -1536,27 +1561,83 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 0.5),
                         ..Default::default()
                     },
-                    // comment_area
+                    // details_block
                     UIElement {
                         size: peridot::math::Vector2(
                             UIElementSize::Fill,
                             UIElementSize::FitContent,
                         ),
-                        debug_color: peridot::math::Vector4(1.0, 1.0, 0.5, 0.125),
-                        padding: RectEdge {
-                            left: 16.0,
-                            right: 16.0,
-                            top: 24.0,
-                            bottom: 24.0,
+                        children_layout: ChildrenLayoutMode::Grid {
+                            columns: vec![GridCellSize::Flexible(1.0), GridCellSize::FitContent],
+                            rows: vec![GridCellSize::FitContent],
+                            column_alignment: LayoutAlignment::Start,
+                            row_alignment: LayoutAlignment::Start,
+                            gap: 4.0,
                         },
                         children: vec![
-                            // comment
+                            // comment_area
                             UIElement {
                                 size: peridot::math::Vector2(
                                     UIElementSize::Fill,
-                                    UIElementSize::Fixed(20.0),
+                                    UIElementSize::FitContent,
                                 ),
-                                debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 0.5),
+                                debug_color: peridot::math::Vector4(1.0, 1.0, 0.5, 0.125),
+                                padding: RectEdge {
+                                    left: 16.0,
+                                    right: 16.0,
+                                    top: 24.0,
+                                    bottom: 24.0,
+                                },
+                                children: vec![
+                                    // comment
+                                    UIElement {
+                                        size: peridot::math::Vector2(
+                                            UIElementSize::Fill,
+                                            UIElementSize::Fixed(20.0),
+                                        ),
+                                        debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 0.5),
+                                        ..Default::default()
+                                    },
+                                ],
+                                ..Default::default()
+                            },
+                            // buttons_container
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::FitContent,
+                                    UIElementSize::FitContent,
+                                ),
+                                column_alignment_override: Some(LayoutAlignment::End),
+                                children: vec![
+                                    // follow_button
+                                    UIElement {
+                                        size: peridot::math::Vector2(
+                                            UIElementSize::FitContent,
+                                            UIElementSize::FitContent,
+                                        ),
+                                        debug_color: peridot::math::Vector4(0.5, 1.0, 0.0, 1.0),
+                                        padding: RectEdge {
+                                            left: 4.0,
+                                            right: 4.0,
+                                            top: 4.0,
+                                            bottom: 4.0,
+                                        },
+                                        children: vec![
+                                            // button_label
+                                            UIElement {
+                                                size: peridot::math::Vector2(
+                                                    UIElementSize::Fixed(64.0),
+                                                    UIElementSize::Fixed(20.0),
+                                                ),
+                                                debug_color: peridot::math::Vector4(
+                                                    0.5, 0.0, 0.0, 1.0,
+                                                ),
+                                                ..Default::default()
+                                            },
+                                        ],
+                                        ..Default::default()
+                                    },
+                                ],
                                 ..Default::default()
                             },
                         ],
@@ -1680,6 +1761,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         GridCellSize::Flexible(1.0),
                     ],
                     rows: vec![GridCellSize::FitContent, GridCellSize::FitContent],
+                    column_alignment: LayoutAlignment::Start,
+                    row_alignment: LayoutAlignment::Start,
                     gap: 4.0,
                 },
                 children: vec![
