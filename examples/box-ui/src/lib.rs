@@ -1,6 +1,6 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, Device, GraphicsPipelineBuilder, Image,
-    ImageChild, RenderPass, SubmissionBatch, VkHandle, VkRawHandle, VulkanStructure,
+    self as br, CommandBufferMut, Device, Image, ImageChild, RenderPass, SubmissionBatch, VkHandle,
+    VulkanStructure,
 };
 use peridot::math::Zero;
 use peridot_vertex_processing_pack::PvpShaderModules;
@@ -150,7 +150,7 @@ impl Default for UIElement {
             layout_width: LayoutSize::Unscaled,
             layout_height: LayoutSize::Unscaled,
             children_layout: ChildrenLayoutMode::Free,
-            debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 1.0),
+            debug_color: peridot::math::Vector4(0.0, 0.0, 0.0, 0.0),
             children: Vec::new(),
         }
     }
@@ -284,6 +284,15 @@ fn compute_layout_rect(
                 let mut current_column = 0;
                 let mut current_row = 0;
                 for c in target.children.iter() {
+                    if current_column >= columns.len() {
+                        current_column = 0;
+                        max_right = max_right.max(row_right);
+                        accum_bottom += row_bottom + gap;
+                        row_bottom = 0.0;
+                        row_right = 0.0;
+                        current_row += 1;
+                    }
+
                     if current_column > 0 {
                         row_right += gap;
                     }
@@ -303,14 +312,6 @@ fn compute_layout_rect(
                     });
 
                     current_column += 1;
-                    if current_column >= columns.len() {
-                        current_column = 0;
-                        max_right = max_right.max(row_right);
-                        accum_bottom += row_bottom + gap;
-                        row_bottom = 0.0;
-                        row_right = 0.0;
-                        current_row += 1;
-                    }
                 }
 
                 peridot::math::Vector2(max_right.max(row_right), accum_bottom + row_bottom)
@@ -1235,71 +1236,201 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let scissor_rect = screen_size.into_rect(br::vk::VkOffset2D::ZERO);
     let viewport = scissor_rect.make_viewport(0.0..1.0);
 
-    let main_renderpass = br::RenderPassBuilder::new(
-        &[e.back_buffer_attachment_desc()
-            .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
-        &[br::SubpassDescription::new().color_attachments(
-            &[br::AttachmentReference::new(
-                0,
-                br::ImageLayout::ColorAttachmentOpt,
+    let main_renderpass = br::RenderPassObject::new(
+        e.graphics().device().clone(),
+        &br::RenderPassCreateInfo::new(
+            &[e.back_buffer_attachment_desc()
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
+            &[br::SubpassDescription::new().color_attachments(
+                &[br::vk::VkAttachmentReference::new(
+                    0,
+                    br::ImageLayout::ColorAttachmentOpt,
+                )],
+                &[],
             )],
-            &[],
-        )],
-        &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
-            None, 0, true,
-        )],
+            &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            )],
+        ),
     )
-    .create(e.graphics().device().clone())
     .expect("Failed to create main renderpass");
     let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
     let main_framebuffers = backbuffer_resources
         .iter()
         .map(|bb| {
-            br::FramebufferBuilder::new_with_attachment(&main_renderpass, bb)
-                .create()
-                .expect("Failed to create main framebuffer")
+            br::FramebufferObject::new(
+                e.graphics().device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &main_renderpass,
+                    &[bb.as_transparent_ref()],
+                    screen_size.width,
+                    screen_size.height,
+                ),
+            )
+            .expect("Failed to create main framebuffer")
         })
         .collect::<Vec<_>>();
 
-    let unlit_fill_shader = PvpShaderModules::new(
-        e.graphics().device(),
-        e.load("shaders.unlit_fill")
-            .expect("Failed to load unlit_fill shader"),
+    let unlit_fill_shader = e
+        .load("shaders.unlit_fill")
+        .expect("Failed to load unlit_fill shader");
+    let unlit_fill_shader_modules =
+        PvpShaderModules::new(e.graphics().device(), &unlit_fill_shader)
+            .expect("Failed to create unlit_fill shader modules");
+    let unlit_fill_pipeline_layout = br::PipelineLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::PipelineLayoutCreateInfo::new(
+            &[],
+            &[br::vk::VkPushConstantRange::for_type::<
+                peridot::math::Vector2<f32>,
+            >(br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0)],
+        ),
     )
-    .expect("Failed to create unlit_fill shader modules");
-    let unlit_fill_pipeline_layout = br::PipelineLayoutBuilder::new(
-        &[],
-        &[
-            br::PushConstantRange::for_type::<peridot::math::Vector2<f32>>(
-                br::ShaderStage::VERTEX,
-                0,
-            ),
-        ],
-    )
-    .create(e.graphics().device().clone())
     .expect("Failed to create pipeline layout");
-    let unlit_fill_pipeline = {
-        let mut builder = br::NonDerivedGraphicsPipelineBuilder::new(
-            &unlit_fill_pipeline_layout,
-            main_renderpass.subpass(0),
-            unlit_fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP),
-        );
-        builder
-            .viewport_scissors(
-                br::DynamicArrayState::Static(&[viewport]),
-                br::DynamicArrayState::Static(&[scissor_rect]),
+    let [unlit_fill_pipeline] = e
+        .graphics()
+        .device()
+        .new_graphics_pipeline_array(
+            &[br::GraphicsPipelineCreateInfo::new(
+                &unlit_fill_pipeline_layout,
+                main_renderpass.subpass(0),
+                &[
+                    unlit_fill_shader_modules.pipeline_vertex_shader_stage(),
+                    unlit_fill_shader_modules
+                        .pipeline_fragment_shader_stage()
+                        .expect("no fsh?"),
+                ],
+                &br::PipelineVertexInputStateCreateInfo::new(
+                    &unlit_fill_shader.vertex_bindings,
+                    &unlit_fill_shader.vertex_attributes,
+                ),
+                &br::PipelineInputAssemblyStateCreateInfo::new(
+                    br::PrimitiveTopology::TriangleStrip,
+                ),
+                &br::PipelineViewportStateCreateInfo::new_array(&[viewport], &[scissor_rect]),
+                &br::PipelineRasterizationStateCreateInfo::new(
+                    br::PolygonMode::Fill,
+                    br::CullModeFlags::NONE,
+                    br::FrontFace::CounterClockwise,
+                ),
+                &br::PipelineColorBlendStateCreateInfo::new(&[
+                    br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+                ]),
             )
-            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
-            .multisample_state(Some(br::MultisampleState::new()));
+            .multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Failed to create unlit fill pipeline");
+    let unlit_fill_pipeline = unlit_fill_pipeline.clone_parent();
 
-        builder
-            .create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create unlit_fill pipeline")
+    // プレイヤーカード風UI試作
+    let user_card_cell_ui = UIElement {
+        size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::FitContent),
+        padding: RectEdge::all(8.0),
+        debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+        children_layout: ChildrenLayoutMode::Horizontal {
+            direction: LayoutDirection::Normal,
+            justify: LayoutJustify::Start,
+            alignment: LayoutAlignment::Start,
+            overflow: Overflow::Hidden,
+            gap: 8.0,
+        },
+        children: vec![
+            // user_icon
+            UIElement {
+                size: peridot::math::Vector2(
+                    UIElementSize::Fixed(64.0),
+                    UIElementSize::Fixed(64.0),
+                ),
+                debug_color: peridot::math::Vector4(1.0, 0.0, 1.0, 0.5),
+                ..Default::default()
+            },
+            // detail_rows
+            UIElement {
+                size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::FitContent),
+                // debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+                children_layout: ChildrenLayoutMode::Vertical {
+                    direction: LayoutDirection::Normal,
+                    justify: LayoutJustify::Start,
+                    alignment: LayoutAlignment::Start,
+                    overflow: Overflow::Hidden,
+                    gap: 4.0,
+                },
+                children: vec![
+                    // name_container
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fill,
+                            UIElementSize::FitContent,
+                        ),
+                        children_layout: ChildrenLayoutMode::Grid {
+                            columns: vec![GridCellSize::Flexible(1.0), GridCellSize::FitContent],
+                            rows: vec![GridCellSize::FitContent],
+                            gap: 4.0,
+                        },
+                        children: vec![
+                            // name
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::Fill,
+                                    UIElementSize::Fixed(24.0),
+                                ),
+                                debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 1.0),
+                                ..Default::default()
+                            },
+                            // level
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::Fixed(64.0),
+                                    UIElementSize::Fixed(20.0),
+                                ),
+                                debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 1.0),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    // separator
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fill,
+                            UIElementSize::Fixed(4.0),
+                        ),
+                        debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 0.5),
+                        ..Default::default()
+                    },
+                    // comment_area
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fill,
+                            UIElementSize::FitContent,
+                        ),
+                        debug_color: peridot::math::Vector4(1.0, 1.0, 0.5, 0.125),
+                        padding: RectEdge {
+                            left: 16.0,
+                            right: 16.0,
+                            top: 24.0,
+                            bottom: 24.0,
+                        },
+                        children: vec![
+                            // comment
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::Fill,
+                                    UIElementSize::Fixed(20.0),
+                                ),
+                                debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 0.5),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
     };
-
     let ui_tree = UIElement {
         size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::Fill),
         padding: RectEdge::all(8.0),
@@ -1451,6 +1582,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 ],
                 ..Default::default()
             },
+            user_card_cell_ui,
         ],
         ..Default::default()
     };
@@ -1469,10 +1601,10 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .allocate_device_local_buffer_array(
             e.graphics(),
             [
-                br::BufferDesc::new_for_type::<[Vertex; 4]>(
+                br::BufferCreateInfo::new_for_type::<[Vertex; 4]>(
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
-                br::BufferDesc::new_for_type::<[BoxInstance; 1024]>(
+                br::BufferCreateInfo::new_for_type::<[BoxInstance; 1024]>(
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
             ],
@@ -1485,7 +1617,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut init_buffer = pmm
         .allocate_upload_buffer(
             e.graphics(),
-            br::BufferDesc::new_for_type::<BufferInitContent>(br::BufferUsage::TRANSFER_SRC),
+            br::BufferCreateInfo::new_for_type::<BufferInitContent>(br::BufferUsage::TRANSFER_SRC),
         )
         .expect("Failed to create init buffer");
     init_buffer
@@ -1509,7 +1641,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut instance_init_buffer = pmm
         .allocate_upload_buffer(
             e.graphics(),
-            br::BufferDesc::new(
+            br::BufferCreateInfo::new(
                 core::mem::size_of::<BoxInstance>() * boxes.len(),
                 br::BufferUsage::TRANSFER_SRC,
             ),
@@ -1540,7 +1672,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .pipeline_barrier(
                 br::PipelineStageFlags::TRANSFER,
                 br::PipelineStageFlags::VERTEX_INPUT,
-                false,
+                0,
                 &[br::vk::VkMemoryBarrier {
                     sType: br::vk::VkMemoryBarrier::TYPE,
                     pNext: core::ptr::null(),
@@ -1553,47 +1685,46 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         })
         .expect("Failed to send init commands");
 
-    let mut ui_render_cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
-        .create(e.graphics().device().clone())
-        .expect("Failed to create ui render command pool");
-    let [mut ui_render_cb] = ui_render_cp
-        .alloc_array::<1>(false)
-        .expect("Failed to allocate ui render command buffer");
+    let mut ui_render_cp = br::CommandPoolObject::new(
+        e.graphics().device().clone(),
+        &br::CommandPoolCreateInfo::new(e.graphics_queue_family_index()),
+    )
+    .expect("Failed to create ui render command pool");
+    let [mut ui_render_cb] = unsafe {
+        e.graphics()
+            .device()
+            .allocate_command_buffer_array(&br::CommandBufferFixedCountAllocateInfo::new(
+                &mut ui_render_cp,
+                br::CommandBufferLevel::Secondary,
+            ))
+            .expect("Failed to allocate ui render command buffer")
+    };
     unsafe {
-        let inherit_info = br::vk::VkCommandBufferInheritanceInfo {
-            sType: br::vk::VkCommandBufferInheritanceInfo::TYPE,
-            pNext: core::ptr::null(),
-            renderPass: main_renderpass.native_ptr(),
-            subpass: 0,
-            framebuffer: br::vk::VkFramebuffer::NULL,
-            occlusionQueryEnable: false as _,
-            queryFlags: 0,
-            pipelineStatistics: 0,
-        };
-        let begin_info = br::vk::VkCommandBufferBeginInfo {
-            sType: br::vk::VkCommandBufferBeginInfo::TYPE,
-            pNext: core::ptr::null(),
-            flags: br::vk::VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT
-                | br::vk::VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
-            pInheritanceInfo: &inherit_info,
-        };
+        let inherit_info = br::CommandBufferInheritanceInfo::of_rendering(
+            main_renderpass.subpass(0),
+            None::<&br::FramebufferObject<peridot::DeviceObject>>,
+        );
+        let begin_info = br::CommandBufferBeginInfo::new()
+            .with_inheritance_info(&inherit_info)
+            .renderpass_continue()
+            .simultaneous_use();
 
         ui_render_cb
             .begin_raw(&begin_info, e.graphics().device())
             .expect("Failed to begin ui render command recording")
     }
-    .bind_graphics_pipeline(&unlit_fill_pipeline)
+    .bind_pipeline(br::PipelineBindPoint::Graphics, &unlit_fill_pipeline)
     .push_constant(
         &unlit_fill_pipeline_layout,
-        br::ShaderStage::VERTEX,
+        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
         0,
         &peridot::math::Vector2(640.0f32, 480.0),
     )
     .bind_vertex_buffers(
         0,
         &[
-            br::BufferObjectRef::new(&vertex_buffer),
-            br::BufferObjectRef::new(&instance_buffer),
+            vertex_buffer.as_transparent_ref(),
+            instance_buffer.as_transparent_ref(),
         ],
         &[0, 0],
     )
@@ -1601,24 +1732,39 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     .end()
     .expect("Failed to finish ui render command recording");
 
-    let mut render_cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
-        .create(e.graphics().device().clone())
-        .expect("Failed to create render command pool");
-    let mut render_cb = render_cp
-        .alloc(e.back_buffer_count() as _, true)
-        .expect("Failed to allocate render command buffers");
+    let mut render_cp = br::CommandPoolObject::new(
+        e.graphics().device().clone(),
+        &br::CommandPoolCreateInfo::new(e.graphics_queue_family_index()),
+    )
+    .expect("Failed to create render command pool");
+    let render_cb = unsafe {
+        e.graphics()
+            .device()
+            .allocate_command_buffers_alloc(&br::CommandBufferAllocateInfo::new(
+                &mut render_cp,
+                e.back_buffer_count() as _,
+                br::CommandBufferLevel::Primary,
+            ))
+            .expect("Failed to allocate render command buffers")
+    };
+    let mut render_cb = render_cb
+        .into_iter()
+        .map(|x| x.clone_parent())
+        .collect::<Vec<_>>();
     for (cb, fb) in render_cb.iter_mut().zip(main_framebuffers.iter()) {
         unsafe {
             cb.begin(e.graphics().device())
                 .expect("Failed to begin render command recording")
                 .begin_render_pass(
-                    &main_renderpass,
-                    fb,
-                    scissor_rect,
-                    &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 0.0])],
-                    false,
+                    &br::RenderPassBeginInfo::new(
+                        &main_renderpass,
+                        fb,
+                        scissor_rect,
+                        &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 0.0])],
+                    ),
+                    br::SubpassContents::SecondaryCommandBuffers,
                 )
-                .execute_commands(&[ui_render_cb.native_ptr()])
+                .execute_commands(&[ui_render_cb.as_transparent_ref()])
                 .end_render_pass()
                 .end()
                 .expect("Failed to finish render command recording");
