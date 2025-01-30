@@ -19,3 +19,15 @@ libflate = "0.1"
 zstd = "0.4"
 peridot-serialization-utils = { path = "../serialization-utils" }
 async-std = { workspace = true, optional = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+bitflags = "2.8"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.59"
+features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+]

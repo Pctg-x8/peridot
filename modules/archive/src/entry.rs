@@ -1,4 +1,6 @@
-use std::io::{IoSlice, IoSliceMut, Read, Result as IOResult, Write};
+use std::io::{BufRead, IoSlice, Result as IOResult, Write};
+
+use peridot_serialization_utils::VariableULong;
 
 #[derive(Debug)]
 pub struct AssetEntryHeadingPair {
@@ -7,14 +9,12 @@ pub struct AssetEntryHeadingPair {
 }
 impl AssetEntryHeadingPair {
     pub fn write(&self, writer: &mut (impl Write + ?Sized)) -> IOResult<usize> {
-        crate::utils::write_all_vectored(
-            writer,
-            &mut [
-                IoSlice::new(&self.byte_length.to_le_bytes()),
-                IoSlice::new(&self.relative_offset.to_le_bytes()),
-            ],
-        )
-        .map(|_| 16)
+        let b1 = VariableULong(self.byte_length).to_bytes();
+        let b2 = VariableULong(self.relative_offset).to_bytes();
+
+        crate::utils::write_all_vectored(writer, &mut [IoSlice::new(&b1), IoSlice::new(&b2)])?;
+
+        Ok(b1.len() + b2.len())
     }
 
     #[cfg(feature = "async-rt-async-std")]
@@ -22,50 +22,35 @@ impl AssetEntryHeadingPair {
         &self,
         writer: &mut (impl async_std::io::Write + Unpin + ?Sized),
     ) -> IOResult<usize> {
-        crate::utils::write_all_vectored_async(
-            writer,
-            &mut [
-                IoSlice::new(&self.byte_length.to_le_bytes()),
-                IoSlice::new(&self.relative_offset.to_le_bytes()),
-            ],
-        )
-        .await
-        .map(|_| 16)
+        let b1 = VariableULong(self.byte_length).to_bytes();
+        let b2 = VariableULong(self.relative_offset).to_bytes();
+
+        crate::utils::write_all_vectored_async(writer, &mut [IoSlice::new(&b1), IoSlice::new(&b2)])
+            .await?;
+
+        Ok(b1.len() + b2.len())
     }
 
-    pub fn read(reader: &mut (impl Read + ?Sized)) -> IOResult<Self> {
-        let (mut byte_length_sink, mut relative_offset_sink) = ([0u8; 8], [0u8; 8]);
-        crate::utils::read_all_vectored(
-            reader,
-            &mut [
-                IoSliceMut::new(&mut byte_length_sink),
-                IoSliceMut::new(&mut relative_offset_sink),
-            ],
-        )?;
+    pub fn read(reader: &mut (impl BufRead + ?Sized)) -> IOResult<Self> {
+        let VariableULong(byte_length) = VariableULong::read(reader)?;
+        let VariableULong(relative_offset) = VariableULong::read(reader)?;
 
         Ok(Self {
-            byte_length: u64::from_le_bytes(byte_length_sink),
-            relative_offset: u64::from_le_bytes(relative_offset_sink),
+            byte_length,
+            relative_offset,
         })
     }
 
     #[cfg(feature = "async-rt-async-std")]
     pub async fn read_async(
-        reader: &mut (impl async_std::io::Read + Unpin + ?Sized),
+        reader: &mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> IOResult<Self> {
-        let (mut byte_length_sink, mut relative_offset_sink) = ([0u8; 8], [0u8; 8]);
-        crate::utils::read_all_vectored_async(
-            reader,
-            &mut [
-                IoSliceMut::new(&mut byte_length_sink),
-                IoSliceMut::new(&mut relative_offset_sink),
-            ],
-        )
-        .await?;
+        let VariableULong(byte_length) = VariableULong::read_async(reader).await?;
+        let VariableULong(relative_offset) = VariableULong::read_async(reader).await?;
 
         Ok(Self {
-            byte_length: u64::from_le_bytes(byte_length_sink),
-            relative_offset: u64::from_le_bytes(relative_offset_sink),
+            byte_length,
+            relative_offset,
         })
     }
 }

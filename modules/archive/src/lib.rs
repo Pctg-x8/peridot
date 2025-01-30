@@ -1,12 +1,13 @@
 //! Peridot Archive
 
-use std::fs::File;
 use std::io::prelude::{BufRead, Read};
 use std::io::Result as IOResult;
-use std::io::{BufReader, Cursor, IoSliceMut, Seek, SeekFrom};
+use std::io::{Cursor, IoSliceMut, Seek, SeekFrom};
 
 mod entry;
 mod utils;
+
+use bitflags::bitflags;
 
 pub use self::entry::AssetEntryHeadingPair;
 mod write;
@@ -17,6 +18,13 @@ pub use self::read::{ArchiveRead, ArchiveReadAsync, ArchiveReadError};
 #[repr(C)]
 pub struct LinearPaired2u64(u64, u64);
 
+bitflags! {
+    pub struct ContentFlags : u8 {
+        const EMPTY = 0;
+        const ROOT_HASH_TREE_EXACT = 0x01;
+    }
+}
+
 /// 展開後のサイズが値として入る。圧縮指定時には無視されるので適当な値を指定する
 #[derive(Debug)]
 pub enum CompressionMethod {
@@ -24,30 +32,6 @@ pub enum CompressionMethod {
     Zlib(u64),
     Lz4(u64),
     Zstd11(u64),
-}
-
-pub enum WhereArchive {
-    OnMemory(Vec<u8>),
-    FromIO(BufReader<File>),
-}
-impl WhereArchive {
-    pub fn on_memory(&mut self) -> IOResult<&[u8]> {
-        let replace_buf = if let WhereArchive::FromIO(ref mut r) = self {
-            let mut buf = Vec::new();
-            r.read_to_end(&mut buf)?;
-            Some(buf)
-        } else {
-            None
-        };
-
-        if let Some(b) = replace_buf {
-            *self = WhereArchive::OnMemory(b);
-        }
-        match self {
-            WhereArchive::OnMemory(ref b) => Ok(b),
-            _ => unreachable!(),
-        }
-    }
 }
 
 pub enum WhereArchiveAsync {
@@ -74,60 +58,6 @@ impl WhereArchiveAsync {
         match self {
             Self::OnMemory(ref b) => Ok(b),
             _ => unreachable!(),
-        }
-    }
-}
-
-pub enum EitherArchiveReader {
-    OnMemory(Cursor<Vec<u8>>),
-    FromIO(BufReader<File>),
-}
-impl EitherArchiveReader {
-    fn new(a: WhereArchive) -> Self {
-        match a {
-            WhereArchive::FromIO(r) => EitherArchiveReader::FromIO(r),
-            WhereArchive::OnMemory(b) => EitherArchiveReader::OnMemory(Cursor::new(b)),
-        }
-    }
-    pub fn unwrap(self) -> WhereArchive {
-        match self {
-            EitherArchiveReader::FromIO(r) => WhereArchive::FromIO(r),
-            EitherArchiveReader::OnMemory(c) => WhereArchive::OnMemory(c.into_inner()),
-        }
-    }
-}
-impl Read for EitherArchiveReader {
-    #[inline]
-    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
-        match self {
-            Self::FromIO(ref mut r) => r.read(buf),
-            Self::OnMemory(ref mut c) => c.read(buf),
-        }
-    }
-}
-impl BufRead for EitherArchiveReader {
-    #[inline]
-    fn fill_buf(&mut self) -> IOResult<&[u8]> {
-        match self {
-            Self::FromIO(ref mut r) => r.fill_buf(),
-            Self::OnMemory(ref mut c) => c.fill_buf(),
-        }
-    }
-
-    #[inline]
-    fn consume(&mut self, amt: usize) {
-        match self {
-            Self::FromIO(ref mut r) => r.consume(amt),
-            Self::OnMemory(ref mut c) => c.consume(amt),
-        }
-    }
-}
-impl Seek for EitherArchiveReader {
-    #[inline]
-    fn seek(&mut self, pos: SeekFrom) -> IOResult<u64> {
-        match self {
-            Self::FromIO(ref mut r) => r.seek(pos),
-            Self::OnMemory(ref mut c) => c.seek(pos),
         }
     }
 }
