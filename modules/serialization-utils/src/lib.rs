@@ -357,6 +357,22 @@ impl PascalString {
     }
 }
 impl<'s> PascalStr<'s> {
+    pub fn from_bytes_head(bytes: &'s [u8]) -> Result<(Self, usize), core::str::Utf8Error> {
+        let (VariableUInt(bytelength), bytelength_len) = VariableUInt::from_bytes_head(bytes);
+        let s = from_utf8(&bytes[bytelength_len..bytelength_len + bytelength as usize])?;
+
+        Ok((PascalStr(s), bytelength_len + bytelength as usize))
+    }
+
+    pub unsafe fn from_bytes_head_unchecked(bytes: &'s [u8]) -> (Self, usize) {
+        let (VariableUInt(bytelength), bytelength_len) = VariableUInt::from_bytes_head(bytes);
+        let s = core::str::from_utf8_unchecked(
+            &bytes[bytelength_len..bytelength_len + bytelength as usize],
+        );
+
+        (PascalStr(s), bytelength_len + bytelength as usize)
+    }
+
     pub fn write(&self, writer: &mut (impl Write + ?Sized)) -> IOResult<usize> {
         VariableUInt(self.0.as_bytes().len() as _)
             .write(writer)

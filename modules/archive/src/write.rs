@@ -1,12 +1,14 @@
 use crc::crc32;
 use libflate::deflate as zlib;
-use peridot_serialization_utils::{PascalStr, VariableUInt};
+use peridot_serialization_utils::{PascalStr, VariableULong};
 use std::{
     collections::HashMap,
     io::{IoSlice, Result as IOResult, Write},
 };
 
-use crate::{entry::AssetEntryHeadingPair, CompressionMethod, ContentFlags, EntryTreePointer};
+use crate::{
+    entry::AssetEntryHeadingPair, entry_tree::EntryTreePointer, CompressionMethod, ContentFlags,
+};
 
 pub struct ArchiveWrite {
     compression_method: CompressionMethod,
@@ -42,6 +44,46 @@ impl ArchiveWrite {
         true
     }
 
+    fn emit_exact_match_block(
+        block_buffer: &mut Vec<u8>,
+        entries: &[(&str, &AssetEntryHeadingPair)],
+    ) -> IOResult<u64> {
+        let ptr = block_buffer.len() as u64;
+        VariableULong(entries.len() as _).write(block_buffer)?;
+        for (n, h) in entries {
+            PascalStr(n).write(block_buffer)?;
+            h.write(block_buffer)?;
+        }
+
+        Ok(ptr)
+    }
+
+    fn write_exact_hash_tree(
+        hash_tree_block: &mut Vec<u8>,
+        exact_match_block: &mut Vec<u8>,
+        sorted_hash_list: &[(u64, Vec<(&str, &AssetEntryHeadingPair)>)],
+    ) -> IOResult<()> {
+        let write_base_ptr = hash_tree_block.len();
+        hash_tree_block.resize(
+            hash_tree_block.len()
+                + sorted_hash_list.len() * crate::entry_tree::EXACT_TREE_ENTRY_STRIDE,
+            0,
+        );
+
+        for (n, &(k, ref xs)) in sorted_hash_list.iter().enumerate() {
+            let exact_match_pointer = Self::emit_exact_match_block(exact_match_block, xs)?;
+
+            let mut e = crate::entry_tree::ExactBlockMutableView::at(
+                &mut hash_tree_block[write_base_ptr..],
+                n,
+            );
+            e.set_name_hash(k);
+            e.set_exact_block_offset(exact_match_pointer);
+        }
+
+        Ok(())
+    }
+
     fn gen_asset_entry_blocks(
         &self,
         header_size: usize,
@@ -58,28 +100,22 @@ impl ArchiveWrite {
             }
         }
 
-        const TARGET_PAGE_BLOCK_SIZE: usize = 8192;
-
         let mut content_flags = ContentFlags::EMPTY;
         let mut exact_match_block = Vec::new();
-        let first_hash_tree_page_left_size = TARGET_PAGE_BLOCK_SIZE - header_size - 1 - 4 - 8;
-        let mut hash_tree_block = Vec::with_capacity(first_hash_tree_page_left_size);
-        let exact_entry_count = first_hash_tree_page_left_size / (8 * 2);
-        if sorted_hash_table.len() < exact_entry_count {
+        let mut hash_tree_block = Vec::new();
+
+        let first_block_size = crate::entry_tree::first_hash_tree_block_size(header_size);
+        if crate::entry_tree::exact_root_tree_block_size(sorted_hash_table.len())
+            <= first_block_size
+        {
             // このページで十分入ってしまう
             content_flags |= ContentFlags::ROOT_HASH_TREE_EXACT;
 
-            for (k, es) in sorted_hash_table {
-                let exact_match_pointer = exact_match_block.len() as u64;
-                VariableUInt(es.len() as _).write(&mut exact_match_block)?;
-                for (n, h) in es {
-                    PascalStr(n).write(&mut exact_match_block)?;
-                    h.write(&mut exact_match_block)?;
-                }
-
-                hash_tree_block.extend(k.to_le_bytes());
-                hash_tree_block.extend(exact_match_pointer.to_le_bytes());
-            }
+            Self::write_exact_hash_tree(
+                &mut hash_tree_block,
+                &mut exact_match_block,
+                &sorted_hash_table,
+            )?;
         } else {
             // サブツリー構成が必要
             fn gen_subtree(
@@ -87,75 +123,60 @@ impl ArchiveWrite {
                 hash_block: &mut Vec<u8>,
                 exact_match_block: &mut Vec<u8>,
             ) -> IOResult<EntryTreePointer> {
-                let exact_entry_count = (TARGET_PAGE_BLOCK_SIZE - 2) / (8 * 2);
-                let this_tree_ptr;
-                if hash_table.len() < exact_entry_count {
+                if hash_table.len() < crate::entry_tree::NON_ROOT_EXACT_TREE_MAX_ELEMENT_COUNT {
                     // このページで十分に入る
-                    this_tree_ptr = EntryTreePointer::from_u64(hash_block.len() as _).exact_tree();
-                    let mut hash_block_index = hash_block.len() + 2;
-                    hash_block.resize(hash_table.len() * 8 * 2, 0);
-                    hash_block[hash_block_index - 2..hash_block_index]
-                        .copy_from_slice(&u16::to_le_bytes(hash_table.len() as _));
-                    for (k, es) in hash_table {
-                        let exact_match_pointer = exact_match_block.len() as u64;
-                        VariableUInt(es.len() as _).write(exact_match_block)?;
-                        for (n, h) in es {
-                            PascalStr(n).write(exact_match_block)?;
-                            h.write(exact_match_block)?;
-                        }
+                    let this_tree_ptr =
+                        EntryTreePointer::from_u64(hash_block.len() as _).exact_tree();
+                    hash_block.extend(u16::to_le_bytes(hash_table.len() as _));
+                    ArchiveWrite::write_exact_hash_tree(hash_block, exact_match_block, hash_table)?;
 
-                        hash_block[hash_block_index..hash_block_index + 8]
-                            .copy_from_slice(&k.to_le_bytes());
-                        hash_block[hash_block_index + 8..hash_block_index + 16]
-                            .copy_from_slice(&exact_match_pointer.to_le_bytes());
-                        hash_block_index += 16;
-                    }
-                } else {
-                    // まだサブツリーが必要
-                    this_tree_ptr = EntryTreePointer::from_u64(hash_block.len() as _);
-
-                    let entry_count = (TARGET_PAGE_BLOCK_SIZE - 8) / (8 * 3);
-                    let mut hash_block_index = hash_block.len();
-                    hash_block.resize(entry_count * (8 * 3) + 8, 0);
-                    let mut subtree_base = 0;
-                    for n in 0..entry_count {
-                        let nx = hash_table.len() * (n + 1) / (entry_count + 2);
-                        let less_ptr = gen_subtree(
-                            &hash_table[subtree_base..nx],
-                            hash_block,
-                            exact_match_block,
-                        )?;
-
-                        let exact_match_pointer = exact_match_block.len() as u64;
-                        VariableUInt(hash_table[nx].1.len() as _).write(exact_match_block)?;
-                        for (n, h) in hash_table[nx].1.iter() {
-                            PascalStr(n).write(exact_match_block)?;
-                            h.write(exact_match_block)?;
-                        }
-
-                        hash_block[hash_block_index..hash_block_index + 8]
-                            .copy_from_slice(&hash_table[nx].0.to_le_bytes());
-                        hash_block[hash_block_index + 8..hash_block_index + 16]
-                            .copy_from_slice(&exact_match_pointer.to_le_bytes());
-                        hash_block[hash_block_index + 16..hash_block_index + 24]
-                            .copy_from_slice(&less_ptr.to_le_bytes());
-                        hash_block_index += 24;
-
-                        subtree_base = nx + 1;
-                    }
-
-                    let greater_ptr =
-                        gen_subtree(&hash_table[subtree_base..], hash_block, exact_match_block)?;
-                    hash_block[hash_block_index..hash_block_index + 8]
-                        .copy_from_slice(&greater_ptr.to_le_bytes());
+                    return Ok(this_tree_ptr);
                 }
+
+                // まだサブツリーが必要
+                let this_tree_ptr = EntryTreePointer::from_u64(hash_block.len() as _);
+
+                let entry_count = crate::entry_tree::MAX_ENTRY_COUNT;
+                let hash_block_base = hash_block.len();
+                hash_block.resize(
+                    hash_block.len() + crate::entry_tree::normal_tree_block_size(entry_count),
+                    0,
+                );
+                let mut subtree_base = 0;
+                for n in 0..entry_count {
+                    let nx = hash_table.len() * (n + 1) / (entry_count + 2);
+                    let less_ptr =
+                        gen_subtree(&hash_table[subtree_base..nx], hash_block, exact_match_block)?;
+                    subtree_base = nx + 1;
+
+                    let mut e =
+                        crate::entry_tree::EntryMutableView::at(hash_block, hash_block_base, n);
+                    e.set_name_hash(hash_table[nx].0);
+                    e.set_exact_block_offset(ArchiveWrite::emit_exact_match_block(
+                        exact_match_block,
+                        &hash_table[nx].1,
+                    )?);
+                    e.set_smaller_tree_pointer(less_ptr);
+                }
+
+                let greater_ptr =
+                    gen_subtree(&hash_table[subtree_base..], hash_block, exact_match_block)?;
+                crate::entry_tree::BlockMutableView::from_offset_and_element_count(
+                    hash_block,
+                    hash_block_base,
+                    entry_count,
+                )
+                .set_larger_tree_pointer(greater_ptr);
 
                 Ok(this_tree_ptr)
             }
 
-            let entry_count = (first_hash_tree_page_left_size - 8) / (8 * 3);
-            let mut hash_block_index = 0;
-            hash_tree_block.resize(entry_count * (8 * 3) + 8, 0);
+            let entry_count = crate::entry_tree::normal_tree_entry_count(first_block_size);
+            let hash_block_base = 0;
+            hash_tree_block.resize(
+                hash_tree_block.len() + crate::entry_tree::normal_tree_block_size(entry_count),
+                0,
+            );
             let mut subtree_base = 0;
             for n in 0..entry_count {
                 let nx = sorted_hash_table.len() * (n + 1) / (entry_count + 2);
@@ -164,23 +185,19 @@ impl ArchiveWrite {
                     &mut hash_tree_block,
                     &mut exact_match_block,
                 )?;
-
-                let exact_match_pointer = exact_match_block.len() as u64;
-                VariableUInt(sorted_hash_table[nx].1.len() as _).write(&mut exact_match_block)?;
-                for (n, h) in sorted_hash_table[nx].1.iter() {
-                    PascalStr(n).write(&mut exact_match_block)?;
-                    h.write(&mut exact_match_block)?;
-                }
-
-                hash_tree_block[hash_block_index..hash_block_index + 8]
-                    .copy_from_slice(&sorted_hash_table[nx].0.to_le_bytes());
-                hash_tree_block[hash_block_index + 8..hash_block_index + 16]
-                    .copy_from_slice(&exact_match_pointer.to_le_bytes());
-                hash_tree_block[hash_block_index + 16..hash_block_index + 24]
-                    .copy_from_slice(&less_ptr.to_le_bytes());
-                hash_block_index += 24;
-
                 subtree_base = nx + 1;
+
+                let mut e = crate::entry_tree::EntryMutableView::at(
+                    &mut hash_tree_block,
+                    hash_block_base,
+                    n,
+                );
+                e.set_name_hash(sorted_hash_table[nx].0);
+                e.set_exact_block_offset(Self::emit_exact_match_block(
+                    &mut exact_match_block,
+                    &sorted_hash_table[nx].1,
+                )?);
+                e.set_smaller_tree_pointer(less_ptr);
             }
 
             let greater_ptr = gen_subtree(
@@ -188,8 +205,12 @@ impl ArchiveWrite {
                 &mut hash_tree_block,
                 &mut exact_match_block,
             )?;
-            hash_tree_block[hash_block_index..hash_block_index + 8]
-                .copy_from_slice(&greater_ptr.to_le_bytes());
+            crate::entry_tree::BlockMutableView::from_offset_and_element_count(
+                &mut hash_tree_block,
+                hash_block_base,
+                entry_count,
+            )
+            .set_larger_tree_pointer(greater_ptr);
         }
 
         Ok((hash_tree_block, exact_match_block, content_flags))
@@ -209,11 +230,11 @@ impl ArchiveWrite {
                 IoSlice::new(&[content_flags.bits()]),
                 IoSlice::new(&u32::to_le_bytes((hash_tree_block.len() >> 3) as _)),
                 IoSlice::new(&u64::to_le_bytes(exact_match_block.len() as _)),
+                IoSlice::new(&hash_tree_block),
+                IoSlice::new(&exact_match_block),
+                IoSlice::new(&self.data_bytes),
             ],
         )?;
-        writer.write_all(&hash_tree_block)?;
-        writer.write_all(&exact_match_block)?;
-        writer.write_all(&self.data_bytes)?;
 
         Ok(())
     }

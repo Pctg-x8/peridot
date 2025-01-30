@@ -11,12 +11,13 @@ use std::{
 };
 
 use crate::{
+    entry_tree::{EntryTreePointer, ExactBlockViewOps},
     AssetEntryHeadingPair, CompressionMethod, ContentFlags, EitherArchiveReaderAsync,
-    EntryTreePointer, WhereArchiveAsync,
+    WhereArchiveAsync,
 };
 use crc::crc32;
 use libflate::deflate as zlib;
-use peridot_serialization_utils::{PascalString, VariableUInt, VariableULong};
+use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt, VariableULong};
 
 #[repr(transparent)]
 pub struct NativeFileReadWrapper<R: NativeFileReader>(pub R);
@@ -516,81 +517,6 @@ impl Read for EitherArchiveReader {
 //     }
 // }
 
-#[repr(transparent)]
-struct ExactHashTreeEntryView<'b>(pub &'b [u8]);
-impl ExactHashTreeEntryView<'_> {
-    #[inline(always)]
-    fn name_hash(&self) -> u64 {
-        u64::from_le_bytes(unsafe { TryFrom::try_from(&self.0[0..8]).unwrap_unchecked() })
-    }
-
-    #[inline(always)]
-    fn exact_block_offset(&self) -> u64 {
-        u64::from_le_bytes(unsafe { TryFrom::try_from(&self.0[8..16]).unwrap_unchecked() })
-    }
-}
-
-#[repr(transparent)]
-struct HashTreeEntryView<'b>(pub &'b [u8]);
-impl HashTreeEntryView<'_> {
-    #[inline(always)]
-    fn name_hash(&self) -> u64 {
-        u64::from_le_bytes(unsafe { TryFrom::try_from(&self.0[0..8]).unwrap_unchecked() })
-    }
-
-    #[inline(always)]
-    fn exact_block_offset(&self) -> u64 {
-        u64::from_le_bytes(unsafe { TryFrom::try_from(&self.0[8..16]).unwrap_unchecked() })
-    }
-
-    #[inline(always)]
-    fn smaller_tree_pointer(&self) -> EntryTreePointer {
-        EntryTreePointer::from_le_bytes(unsafe {
-            TryFrom::try_from(&self.0[16..24]).unwrap_unchecked()
-        })
-    }
-}
-
-#[repr(transparent)]
-struct HashTreeBlockView<'b>(pub &'b [u8]);
-impl<'b> HashTreeBlockView<'b> {
-    #[inline(always)]
-    fn smallest_entry(&self) -> HashTreeEntryView<'b> {
-        HashTreeEntryView(&self.0[0..])
-    }
-
-    #[inline(always)]
-    fn entry(&self, at: usize) -> HashTreeEntryView<'b> {
-        HashTreeEntryView(&self.0[at * (8 * 3)..])
-    }
-
-    #[inline(always)]
-    fn largest_entry(&self) -> HashTreeEntryView<'b> {
-        HashTreeEntryView(&self.0[self.0.len() - 32..])
-    }
-
-    #[inline(always)]
-    fn larger_tree_pointer(&self) -> EntryTreePointer {
-        EntryTreePointer::from_le_bytes(unsafe {
-            TryFrom::try_from(&self.0[self.0.len() - 8..]).unwrap_unchecked()
-        })
-    }
-}
-
-#[repr(transparent)]
-struct ExactHashTreeBlockView<'b>(pub &'b [u8]);
-impl<'b> ExactHashTreeBlockView<'b> {
-    #[inline(always)]
-    fn entry_count(&self) -> u16 {
-        u16::from_le_bytes(unsafe { TryFrom::try_from(&self.0[0..2]).unwrap_unchecked() })
-    }
-
-    #[inline(always)]
-    fn entry(&self, at: usize) -> ExactHashTreeEntryView<'b> {
-        ExactHashTreeEntryView(&self.0[2 + at * 8 * 2..])
-    }
-}
-
 fn list_entry(
     head_size: usize,
     hash_tree_root_exact: bool,
@@ -607,75 +533,36 @@ fn list_entry(
             VariableUInt::from_bytes_head(&block[pointer..]);
         let mut read_ptr = pointer + entry_count_len;
         for _ in 0..entry_count {
-            let (VariableUInt(name_len), name_len_len) =
-                VariableUInt::from_bytes_head(&block[read_ptr..]);
-            let name_str = unsafe {
-                core::str::from_utf8_unchecked(
-                    &block[read_ptr + name_len_len..read_ptr + name_len_len + name_len as usize],
-                )
-            };
-            let (_, hlen) = AssetEntryHeadingPair::from_bytes_head(
-                &block[read_ptr + name_len_len + name_len as usize..],
-            );
+            let (PascalStr(n), name_len) =
+                unsafe { PascalStr::from_bytes_head_unchecked(&block[read_ptr..]) };
+            let (_, hlen) = AssetEntryHeadingPair::from_bytes_head(&block[read_ptr + name_len..]);
 
-            callback(name_str);
-            read_ptr += name_len_len + name_len as usize + hlen;
+            callback(n);
+            read_ptr += name_len + hlen;
         }
     }
 
-    if hash_tree_root_exact {
-        // Exact tree only
-        assert!(
-            hash_tree_block.len() & (16 - 1) == 0,
-            "exact root hash tree has extra byte?"
-        );
-        let entry_count = hash_tree_block.len() / (8 * 2);
-
-        for ptr in 0..entry_count {
+    fn enumerate_exact_tree<'b>(
+        block_view: &(impl crate::entry_tree::ExactBlockViewOps<'b> + ?Sized),
+        exact_match_block: &[u8],
+        callback: &mut impl FnMut(&str),
+    ) {
+        for ptr in 0..block_view.entry_count() {
             enumerate_exact_block_content(
                 exact_match_block,
-                ExactHashTreeEntryView(&hash_tree_block[ptr * 8 * 2..]).exact_block_offset() as _,
-                &mut callback,
+                block_view.entry(ptr).exact_block_offset() as _,
+                callback,
             );
         }
-
-        return;
     }
 
-    fn enumerate_subtree(
+    fn enumerate_tree(
+        block_view: &crate::entry_tree::BlockView,
         hash_tree_block: &[u8],
         exact_match_block: &[u8],
         callback: &mut impl FnMut(&str),
-        tree_pointer: EntryTreePointer,
     ) {
-        if tree_pointer.is_exact_tree() {
-            // Exact Tree
-            let block_view =
-                ExactHashTreeBlockView(&hash_tree_block[tree_pointer.pointer_value() as usize..]);
-            let entry_count = block_view.entry_count() as usize;
-
-            for ptr in 0..entry_count {
-                enumerate_exact_block_content(
-                    exact_match_block,
-                    block_view.entry(ptr).exact_block_offset() as _,
-                    callback,
-                );
-            }
-
-            return;
-        }
-        // normal tree
-
-        // TODO: ここのマジックナンバーは後々共通のところにおきたい
-        const TARGET_PAGE_BLOCK_SIZE: usize = 8192;
-        let entry_count = (TARGET_PAGE_BLOCK_SIZE - 8) / (8 * 3);
-
-        let block_view = HashTreeBlockView(
-            &hash_tree_block[tree_pointer.pointer_value() as usize
-                ..(tree_pointer.pointer_value() as usize + entry_count * (8 * 3) + 8)],
-        );
-
-        for ptr in 0..entry_count {
+        for ptr in 0..block_view.entry_count() {
             let e = block_view.entry(ptr);
             enumerate_subtree(
                 hash_tree_block,
@@ -694,32 +581,58 @@ fn list_entry(
         );
     }
 
-    // TODO: ここのマジックナンバーは後々共通のところにおきたい
-    const TARGET_PAGE_BLOCK_SIZE: usize = 8192;
-    let entry_count = (TARGET_PAGE_BLOCK_SIZE - head_size - 1 - 4 - 8 - 8) / (8 * 3);
+    fn enumerate_subtree(
+        hash_tree_block: &[u8],
+        exact_match_block: &[u8],
+        callback: &mut impl FnMut(&str),
+        tree_pointer: EntryTreePointer,
+    ) {
+        if tree_pointer.is_exact_tree() {
+            // Exact Tree
+            enumerate_exact_tree(
+                &crate::entry_tree::ExactBlockView(
+                    &hash_tree_block[tree_pointer.pointer_value() as usize..],
+                ),
+                exact_match_block,
+                callback,
+            );
 
-    let block_view = HashTreeBlockView(&hash_tree_block[0..entry_count * (8 / 3) + 8]);
+            return;
+        }
 
-    for ptr in 0..entry_count {
-        let e = block_view.entry(ptr);
-        enumerate_subtree(
+        // normal tree
+        enumerate_tree(
+            &crate::entry_tree::BlockView::from_offset_and_element_count(
+                hash_tree_block,
+                tree_pointer.pointer_value() as _,
+                crate::entry_tree::MAX_ENTRY_COUNT,
+            ),
             hash_tree_block,
             exact_match_block,
-            &mut callback,
-            e.smaller_tree_pointer(),
-        );
-        enumerate_exact_block_content(
-            exact_match_block,
-            e.exact_block_offset() as _,
-            &mut callback,
+            callback,
         );
     }
 
-    enumerate_subtree(
+    if hash_tree_root_exact {
+        // Exact tree only
+        enumerate_exact_tree(
+            &crate::entry_tree::ExactRootBlockView(hash_tree_block),
+            exact_match_block,
+            &mut callback,
+        );
+
+        return;
+    }
+
+    enumerate_tree(
+        &crate::entry_tree::BlockView(
+            &hash_tree_block[..crate::entry_tree::trim_normal_tree_block_size(
+                crate::entry_tree::first_hash_tree_block_size(head_size),
+            )],
+        ),
         hash_tree_block,
         exact_match_block,
         &mut callback,
-        block_view.larger_tree_pointer(),
     );
 }
 
@@ -732,193 +645,127 @@ fn find_entry(
 ) -> Option<AssetEntryHeadingPair> {
     let name_hash = xxhash_rust::xxh3::xxh3_64(name.as_bytes());
 
+    fn find_exact<'b>(
+        block_view: &(impl crate::entry_tree::ExactBlockViewOps<'b> + ?Sized),
+        target: u64,
+    ) -> Option<u64> {
+        let (mut top, mut bottom) = (0, block_view.entry_count());
+        loop {
+            let ptr = (top + bottom) / 2;
+            let e = block_view.entry(ptr);
+
+            match target.cmp(&e.name_hash()) {
+                // match
+                core::cmp::Ordering::Equal => return Some(e.exact_block_offset()),
+                core::cmp::Ordering::Less => {
+                    // bottom: exclusive
+                    bottom = ptr;
+                }
+                core::cmp::Ordering::Greater => {
+                    top = ptr + 1;
+                }
+            }
+
+            if bottom <= top {
+                return None;
+            }
+        }
+    }
+
+    fn find(
+        block_view: &crate::entry_tree::BlockView,
+        target: u64,
+    ) -> Result<u64, EntryTreePointer> {
+        // edge check
+        let e = block_view.largest_entry();
+        match target.cmp(&e.name_hash()) {
+            // exact largest
+            core::cmp::Ordering::Equal => return Ok(e.exact_block_offset()),
+            // more greater
+            core::cmp::Ordering::Greater => return Err(block_view.larger_tree_pointer()),
+            core::cmp::Ordering::Less => (/* nop */),
+        }
+
+        let e = block_view.smallest_entry();
+        match target.cmp(&e.name_hash()) {
+            // exact smallest
+            core::cmp::Ordering::Equal => return Ok(e.exact_block_offset()),
+            // more smaller
+            core::cmp::Ordering::Less => return Err(e.smaller_tree_pointer()),
+            core::cmp::Ordering::Greater => (/* nop */),
+        }
+
+        // binary search
+        let (mut top, mut bottom) = (0, block_view.entry_count());
+        loop {
+            let ptr = (top + bottom) / 2;
+            let e = block_view.entry(ptr);
+
+            match target.cmp(&e.name_hash()) {
+                // match
+                core::cmp::Ordering::Equal => return Ok(e.exact_block_offset()),
+                core::cmp::Ordering::Less => {
+                    // bottom: exclusive
+                    bottom = ptr;
+                }
+                core::cmp::Ordering::Greater => {
+                    top = ptr + 1;
+                }
+            }
+
+            if bottom <= top {
+                // search under here
+                return Err(e.smaller_tree_pointer());
+            }
+        }
+    }
+
     let exact_block_offset = 'hash_tree_finder: {
         if hash_tree_root_exact {
-            // Exact tree
-
-            assert!(
-                hash_tree_block.len() & (16 - 1) == 0,
-                "exact root hash tree has extra byte?"
+            // Exact Root Tree
+            break 'hash_tree_finder find_exact(
+                &crate::entry_tree::ExactRootBlockView(hash_tree_block),
+                name_hash,
             );
-            let entry_count = hash_tree_block.len() / (8 * 2);
-            let (mut top, mut bottom) = (0, entry_count);
-            loop {
-                let ptr = (top + bottom) / 2;
-                let e = ExactHashTreeEntryView(&hash_tree_block[ptr * (8 * 2)..]);
+        }
 
-                match name_hash.cmp(&e.name_hash()) {
-                    // match
-                    core::cmp::Ordering::Equal => break Some(e.exact_block_offset()),
-                    core::cmp::Ordering::Less => {
-                        // bottom: exclusive
-                        bottom = ptr;
-                    }
-                    core::cmp::Ordering::Greater => {
-                        top = ptr + 1;
-                    }
-                }
-
-                if bottom <= top {
-                    break None;
-                }
-            }
-        } else {
-            fn find_subtree(
-                name_hash: u64,
-                hash_tree_block: &[u8],
-                tree_pointer: EntryTreePointer,
-            ) -> Option<u64> {
-                if tree_pointer.is_exact_tree() {
-                    // Exact Tree
-                    let block_view = ExactHashTreeBlockView(
+        fn find_subtree(
+            name_hash: u64,
+            hash_tree_block: &[u8],
+            tree_pointer: EntryTreePointer,
+        ) -> Option<u64> {
+            if tree_pointer.is_exact_tree() {
+                // Exact Tree
+                return find_exact(
+                    &crate::entry_tree::ExactBlockView(
                         &hash_tree_block[tree_pointer.pointer_value() as usize..],
-                    );
-                    let entry_count = block_view.entry_count();
-                    let (mut top, mut bottom) = (0, entry_count as usize);
-                    loop {
-                        let ptr = (top + bottom) / 2;
-                        let e = block_view.entry(ptr);
-
-                        match name_hash.cmp(&e.name_hash()) {
-                            // match
-                            core::cmp::Ordering::Equal => return Some(e.exact_block_offset()),
-                            core::cmp::Ordering::Less => {
-                                // bottom: exclusive
-                                bottom = ptr;
-                            }
-                            core::cmp::Ordering::Greater => {
-                                top = ptr + 1;
-                            }
-                        }
-
-                        if bottom <= top {
-                            return None;
-                        }
-                    }
-                }
-                // normal tree
-
-                // TODO: ここのマジックナンバーは後々共通のところにおきたい
-                const TARGET_PAGE_BLOCK_SIZE: usize = 8192;
-                let entry_count = (TARGET_PAGE_BLOCK_SIZE - 8) / (8 * 3);
-
-                let block_view = HashTreeBlockView(
-                    &hash_tree_block[tree_pointer.pointer_value() as usize
-                        ..(tree_pointer.pointer_value() as usize + entry_count * (8 * 3) + 8)],
+                    ),
+                    name_hash,
                 );
-
-                // edge check
-                let e = block_view.largest_entry();
-                match name_hash.cmp(&e.name_hash()) {
-                    // exact largest
-                    core::cmp::Ordering::Equal => return Some(e.exact_block_offset()),
-                    // more greater
-                    core::cmp::Ordering::Greater => {
-                        return find_subtree(
-                            name_hash,
-                            hash_tree_block,
-                            block_view.larger_tree_pointer(),
-                        )
-                    }
-                    core::cmp::Ordering::Less => (/* nop */),
-                }
-
-                let e = block_view.smallest_entry();
-                match name_hash.cmp(&e.name_hash()) {
-                    // exact smallest
-                    core::cmp::Ordering::Equal => return Some(e.exact_block_offset()),
-                    // more smaller
-                    core::cmp::Ordering::Less => {
-                        return find_subtree(name_hash, hash_tree_block, e.smaller_tree_pointer())
-                    }
-                    core::cmp::Ordering::Greater => (/* nop */),
-                }
-
-                // binary search
-                let (mut top, mut bottom) = (0, entry_count);
-                loop {
-                    let ptr = (top + bottom) / 2;
-                    let e = block_view.entry(ptr);
-
-                    match name_hash.cmp(&e.name_hash()) {
-                        // match
-                        core::cmp::Ordering::Equal => break Some(e.exact_block_offset()),
-                        core::cmp::Ordering::Less => {
-                            // bottom: exclusive
-                            bottom = ptr;
-                        }
-                        core::cmp::Ordering::Greater => {
-                            top = ptr + 1;
-                        }
-                    }
-
-                    if bottom <= top {
-                        // search under here
-                        return find_subtree(name_hash, hash_tree_block, e.smaller_tree_pointer());
-                    }
-                }
             }
 
-            // TODO: ここのマジックナンバーは後々共通のところにおきたい
-            const TARGET_PAGE_BLOCK_SIZE: usize = 8192;
-            let entry_count = (TARGET_PAGE_BLOCK_SIZE - head_size - 1 - 4 - 8 - 8) / (8 * 3);
+            // normal tree
+            let block_view = crate::entry_tree::BlockView::from_offset_and_element_count(
+                hash_tree_block,
+                tree_pointer.pointer_value() as _,
+                crate::entry_tree::MAX_ENTRY_COUNT,
+            );
 
-            let block_view = HashTreeBlockView(&hash_tree_block[0..entry_count * (8 / 3) + 8]);
-
-            // edge check
-            let e = block_view.largest_entry();
-            match name_hash.cmp(&e.name_hash()) {
-                // exact largest
-                core::cmp::Ordering::Equal => break 'hash_tree_finder Some(e.exact_block_offset()),
-                // more greater
-                core::cmp::Ordering::Greater => {
-                    break 'hash_tree_finder find_subtree(
-                        name_hash,
-                        hash_tree_block,
-                        block_view.larger_tree_pointer(),
-                    )
-                }
-                core::cmp::Ordering::Less => (/* nop */),
+            match find(&block_view, name_hash) {
+                Ok(x) => Some(x),
+                Err(p) => find_subtree(name_hash, hash_tree_block, p),
             }
+        }
 
-            let e = block_view.smallest_entry();
-            match name_hash.cmp(&e.name_hash()) {
-                // exact smallest
-                core::cmp::Ordering::Equal => break 'hash_tree_finder Some(e.exact_block_offset()),
-                // more smaller
-                core::cmp::Ordering::Less => {
-                    break 'hash_tree_finder find_subtree(
-                        name_hash,
-                        hash_tree_block,
-                        e.smaller_tree_pointer(),
-                    );
-                }
-                core::cmp::Ordering::Greater => (/* nop */),
-            }
+        let block_view = crate::entry_tree::BlockView(
+            &hash_tree_block[..crate::entry_tree::trim_normal_tree_block_size(
+                crate::entry_tree::first_hash_tree_block_size(head_size),
+            )],
+        );
 
-            // binary search
-            let (mut top, mut bottom) = (0, entry_count);
-            loop {
-                let ptr = (top + bottom) / 2;
-                let e = block_view.entry(ptr);
-
-                match name_hash.cmp(&e.name_hash()) {
-                    // match
-                    core::cmp::Ordering::Equal => break Some(e.exact_block_offset()),
-                    core::cmp::Ordering::Less => {
-                        // bottom: exclusive
-                        bottom = ptr;
-                    }
-                    core::cmp::Ordering::Greater => {
-                        top = ptr + 1;
-                    }
-                }
-
-                if bottom <= top {
-                    // search under here
-                    break find_subtree(name_hash, hash_tree_block, e.smaller_tree_pointer());
-                }
-            }
+        match find(&block_view, name_hash) {
+            Ok(x) => Some(x),
+            Err(p) => find_subtree(name_hash, hash_tree_block, p),
         }
     }?;
 
@@ -927,24 +774,17 @@ fn find_entry(
         VariableUInt::from_bytes_head(&exact_match_block[exact_block_offset as usize..]);
     let mut read_ptr = exact_block_offset as usize + exact_entry_offset;
     for _ in 0..exact_entry_count {
-        let (VariableUInt(name_len), name_len_bytes) =
-            VariableUInt::from_bytes_head(&exact_match_block[read_ptr..]);
-        let name_bytes = unsafe {
-            core::str::from_utf8_unchecked(
-                &exact_match_block
-                    [read_ptr + name_len_bytes..read_ptr + name_len_bytes + name_len as usize],
-            )
-        };
-        let (h, hlen) = AssetEntryHeadingPair::from_bytes_head(
-            &exact_match_block[read_ptr + name_len_bytes + name_len as usize..],
-        );
+        let (PascalStr(n), name_bytes) =
+            unsafe { PascalStr::from_bytes_head_unchecked(&exact_match_block[read_ptr..]) };
+        let (h, hlen) =
+            AssetEntryHeadingPair::from_bytes_head(&exact_match_block[read_ptr + name_bytes..]);
 
-        if name_bytes == name {
+        if n == name {
             // match!
             return Some(h);
         }
 
-        read_ptr += name_len_bytes + name_len as usize + hlen;
+        read_ptr += name_bytes + hlen;
     }
 
     None
