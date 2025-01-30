@@ -13,7 +13,7 @@ pub use self::entry::AssetEntryHeadingPair;
 mod write;
 pub use self::write::ArchiveWrite;
 mod read;
-pub use self::read::{ArchiveRead, ArchiveReadAsync, ArchiveReadError};
+pub use self::read::{Archive, ArchiveRead, ArchiveReadAsync, ArchiveReadError};
 
 #[repr(C)]
 pub struct LinearPaired2u64(u64, u64);
@@ -32,6 +32,37 @@ pub enum CompressionMethod {
     Zlib(u64),
     Lz4(u64),
     Zstd11(u64),
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EntryTreePointer(u64);
+impl EntryTreePointer {
+    const EXACT_TREE_BIT: u64 = 0x8000_0000_0000_0000;
+
+    pub const fn from_u64(x: u64) -> Self {
+        Self(x)
+    }
+
+    pub const fn pointer_value(self) -> u64 {
+        self.0 & !Self::EXACT_TREE_BIT
+    }
+
+    pub const fn to_le_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    pub const fn from_le_bytes(b: [u8; 8]) -> Self {
+        Self(u64::from_le_bytes(b))
+    }
+
+    pub const fn exact_tree(self) -> Self {
+        Self(self.0 | Self::EXACT_TREE_BIT)
+    }
+
+    pub const fn is_exact_tree(&self) -> bool {
+        self.0 & Self::EXACT_TREE_BIT != 0
+    }
 }
 
 pub enum WhereArchiveAsync {

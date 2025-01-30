@@ -3,7 +3,7 @@ use clap::{App, Arg, ArgMatches};
 use peridot_archive as par;
 use std::fs::{metadata, read, read_dir};
 use std::io::prelude::Write;
-use std::io::Result as IOResult;
+use std::io::{Read, Result as IOResult};
 
 #[async_std::main]
 async fn main() {
@@ -143,34 +143,37 @@ async fn new(args: &ArgMatches<'_>) {
 }
 
 fn extract(args: &ArgMatches) {
-    let mut archive = par::ArchiveRead::from_file(
+    let archive = par::Archive::open(
         args.value_of("arc").expect("arc not found"),
         args.is_present("check"),
     )
-    .expect("reading archive error");
+    .expect("Failed to open archive");
 
     if let Some(apath) = args.value_of("apath") {
-        if let Some(b) = archive.read_bin(apath).expect("readbin") {
-            let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
-            NativeOfstream::from_stream_ptr(foptr)
-                .expect("open stream")
-                .write_all(&b[..])
-                .expect("writing");
-        } else {
-            panic!("Entry not found in archive: {}", apath);
-        }
+        let Some(h) = archive.find_entry(apath) else {
+            panic!("Entry not found in archive: {apath}");
+        };
+        let mut content = Vec::new();
+        archive
+            .read_bin(h)
+            .read_to_end(&mut content)
+            .expect("Failed to read content");
+
+        let foptr = unsafe { libc::fdopen(libc::dup(1), "wb\x00".as_ptr() as *const _) };
+        NativeOfstream::from_stream_ptr(foptr)
+            .expect("open stream")
+            .write_all(&content[..])
+            .expect("writing");
     }
 }
 fn list(args: &ArgMatches) {
-    let archive = par::ArchiveRead::from_file(
+    let archive = par::Archive::open(
         args.value_of("arc").expect("arc not found"),
         args.is_present("check"),
     )
-    .expect("check not found");
+    .expect("Failed to open archive");
 
-    for n in archive.entry_names() {
-        println!("{}", n);
-    }
+    archive.list_entry(|n| println!("{n}"));
 }
 
 use std::ptr::NonNull;

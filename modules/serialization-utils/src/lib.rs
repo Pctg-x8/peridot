@@ -36,6 +36,21 @@ impl Iterator for UIntFragmentIterator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VariableUInt(pub u32);
 impl VariableUInt {
+    pub fn from_bytes_head(bytes: &[u8]) -> (Self, usize) {
+        let (mut v, mut shifts, mut read_bytes) = (0u32, 0u8, 0usize);
+        for b in bytes {
+            read_bytes += 1;
+            v |= ((b & 0x7f) as u32) << shifts;
+            shifts += 7;
+
+            if b & 0x80 == 0 || shifts >= 32 {
+                break;
+            }
+        }
+
+        (Self(v), read_bytes)
+    }
+
     pub fn write(&self, writer: &mut (impl Write + ?Sized)) -> IOResult<usize> {
         let write_bytes = UIntFragmentIterator::from(self.0).collect::<Vec<_>>();
         writer.write_all(&write_bytes)?;
@@ -172,6 +187,10 @@ impl VariableUInt {
 pub struct VariableULong(pub u64);
 impl VariableULong {
     pub fn to_bytes(&self) -> Vec<u8> {
+        if self.0 == 0 {
+            return vec![0];
+        }
+
         // 一番右の1の位置を7で切り上げ
         let size = (64 - self.0.leading_zeros() as usize + 6) / 7;
         let mut buf = Vec::with_capacity(size);

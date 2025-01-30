@@ -53,4 +53,18 @@ impl AssetEntryHeadingPair {
             relative_offset,
         })
     }
+
+    pub fn from_bytes_head(bytes: &[u8]) -> (Self, usize) {
+        let (VariableULong(byte_length), bl_bytes) = VariableULong::from_bytes_head(bytes);
+        let (VariableULong(relative_offset), ro_bytes) =
+            VariableULong::from_bytes_head(&bytes[bl_bytes..]);
+
+        (
+            Self {
+                byte_length,
+                relative_offset,
+            },
+            bl_bytes + ro_bytes,
+        )
+    }
 }
