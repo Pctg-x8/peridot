@@ -1,37 +1,18 @@
 use std::{
     collections::HashMap,
     convert::TryFrom,
-    fs::File,
-    io::{
-        BufRead, BufReader, Cursor, Error as IOError, ErrorKind, IoSliceMut, Read,
-        Result as IOResult, Seek, SeekFrom,
-    },
+    io::{Cursor, Error as IOError, ErrorKind, IoSliceMut, Read, Result as IOResult, SeekFrom},
     os::windows::ffi::OsStrExt,
     path::Path,
 };
 
 use crate::{
-    entry_tree::{EntryTreePointer, ExactBlockViewOps},
-    AssetEntryHeadingPair, CompressionMethod, ContentFlags, EitherArchiveReaderAsync,
-    WhereArchiveAsync,
+    entry_tree::EntryTreePointer, AssetEntryHeadingPair, CompressionMethod, ContentFlags,
+    EitherArchiveReaderAsync, WhereArchiveAsync,
 };
 use crc::crc32;
 use libflate::deflate as zlib;
-use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt, VariableULong};
-
-#[repr(transparent)]
-pub struct NativeFileReadWrapper<R: NativeFileReader>(pub R);
-impl<R: NativeFileReader> NativeFileReadWrapper<R> {
-    pub const fn from_mut_ref(r: &mut R) -> &mut Self {
-        unsafe { core::mem::transmute(r) }
-    }
-}
-impl<R: NativeFileReader> std::io::Read for NativeFileReadWrapper<R> {
-    #[inline]
-    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
-        self.0.read(buf)
-    }
-}
+use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt};
 
 pub trait NativeFileReader {
     type MemoryUnmapData;
@@ -440,82 +421,6 @@ impl ArchiveReadAsync {
         self.content
     }
 }
-
-pub enum WhereArchive {
-    OnMemory(Vec<u8>),
-    FromIO(PlatformNativeFileReader),
-}
-impl WhereArchive {
-    pub fn on_memory(&mut self) -> IOResult<&[u8]> {
-        let replace_buf = if let WhereArchive::FromIO(ref mut r) = self {
-            Some(r.read_to_end()?)
-        } else {
-            None
-        };
-
-        if let Some(b) = replace_buf {
-            *self = WhereArchive::OnMemory(b);
-        }
-        match self {
-            WhereArchive::OnMemory(ref b) => Ok(b),
-            _ => unreachable!(),
-        }
-    }
-}
-
-pub enum EitherArchiveReader {
-    OnMemory(Cursor<Vec<u8>>),
-    FromIO(PlatformNativeFileReader),
-}
-impl EitherArchiveReader {
-    fn new(a: WhereArchive) -> Self {
-        match a {
-            WhereArchive::FromIO(r) => EitherArchiveReader::FromIO(r),
-            WhereArchive::OnMemory(b) => EitherArchiveReader::OnMemory(Cursor::new(b)),
-        }
-    }
-    pub fn unwrap(self) -> WhereArchive {
-        match self {
-            EitherArchiveReader::FromIO(r) => WhereArchive::FromIO(r),
-            EitherArchiveReader::OnMemory(c) => WhereArchive::OnMemory(c.into_inner()),
-        }
-    }
-}
-impl Read for EitherArchiveReader {
-    #[inline]
-    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
-        match self {
-            Self::FromIO(ref mut r) => r.read(buf),
-            Self::OnMemory(ref mut c) => c.read(buf),
-        }
-    }
-}
-// impl BufRead for EitherArchiveReader {
-//     #[inline]
-//     fn fill_buf(&mut self) -> IOResult<&[u8]> {
-//         match self {
-//             Self::FromIO(ref mut r) => r.fill_buf(),
-//             Self::OnMemory(ref mut c) => c.fill_buf(),
-//         }
-//     }
-
-//     #[inline]
-//     fn consume(&mut self, amt: usize) {
-//         match self {
-//             Self::FromIO(ref mut r) => r.consume(amt),
-//             Self::OnMemory(ref mut c) => c.consume(amt),
-//         }
-//     }
-// }
-// impl Seek for EitherArchiveReader {
-//     #[inline]
-//     fn seek(&mut self, pos: SeekFrom) -> IOResult<u64> {
-//         match self {
-//             Self::FromIO(ref mut r) => r.seek(pos),
-//             Self::OnMemory(ref mut c) => c.seek(pos),
-//         }
-//     }
-// }
 
 fn list_entry(
     head_size: usize,
@@ -1042,7 +947,7 @@ impl Archive {
         check_integrity: bool,
     ) -> ArchiveReadResult<Self> {
         let mut f = PlatformNativeFileReader::open(path)?;
-        let (comp, crc) = ArchiveRead::read_file_header(&mut f)?;
+        let (comp, crc) = Self::read_file_header(&mut f)?;
         if check_integrity {
             // read entire file for compute crc32
             let body = f.read_to_end()?;
@@ -1062,84 +967,6 @@ impl Archive {
                 Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
             }
         }
-    }
-
-    #[inline]
-    pub fn list_entry(&self, callback: impl FnMut(&str)) {
-        match self {
-            Self::OnMemory(ref x) => x.list_entry(callback),
-            Self::FileStreaming(ref x) => x.list_entry(callback),
-        }
-    }
-
-    #[inline]
-    pub fn find_entry(&self, name: &str) -> Option<AssetEntryHeadingPair> {
-        match self {
-            Self::OnMemory(ref x) => x.find_entry(name),
-            Self::FileStreaming(ref x) => x.find_entry(name),
-        }
-    }
-
-    #[inline]
-    pub fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> ArchiveBinReader<'a> {
-        match self {
-            Self::OnMemory(ref x) => ArchiveBinReader::OnMemory(x.read_bin(heading)),
-            Self::FileStreaming(ref x) => ArchiveBinReader::FileStreaming(x.read_bin(heading)),
-        }
-    }
-}
-
-pub struct ArchiveRead {
-    entries: HashMap<String, AssetEntryHeadingPair>,
-    content: EitherArchiveReader,
-    content_baseptr: u64,
-}
-impl ArchiveRead {
-    pub fn from_file<P: AsRef<Path>>(path: P, check_integrity: bool) -> ArchiveReadResult<Self> {
-        let mut fi = PlatformNativeFileReader::open(&path)?;
-        let (comp, crc) = Self::read_file_header(&mut fi)?;
-        let mut body = WhereArchive::FromIO(fi);
-        if check_integrity {
-            let input_crc = crc32::checksum_ieee(&body.on_memory()?[..]);
-            if input_crc != crc {
-                return Err(ArchiveReadError::IntegrityCheckFailed);
-            }
-        }
-
-        match comp {
-            CompressionMethod::Lz4(_) => {
-                let mut compressed = Vec::new();
-                EitherArchiveReader::new(body).read_to_end(&mut compressed)?;
-                body = lz4_compression::prelude::decompress(&compressed)
-                    .map(WhereArchive::OnMemory)?;
-            }
-            CompressionMethod::Zlib(ub) => {
-                let mut sink = Vec::with_capacity(ub as _);
-                let reader = EitherArchiveReader::new(body);
-                let mut decoder = zlib::Decoder::new(reader);
-                decoder.read_to_end(&mut sink)?;
-                body = WhereArchive::OnMemory(sink);
-            }
-            CompressionMethod::Zstd11(ub) => {
-                let mut sink = Vec::with_capacity(ub as _);
-                let mut decoder = zstd::Decoder::new(EitherArchiveReader::new(body))?;
-                decoder.read_to_end(&mut sink)?;
-                body = WhereArchive::OnMemory(sink);
-            }
-            CompressionMethod::None => (/* Nothing to do */),
-        }
-
-        unimplemented!("needs fix");
-
-        // let mut areader = EitherArchiveReader::new(body);
-        // let entries = Self::read_asset_entries(&mut areader)?;
-        // let content_baseptr = areader.seek(SeekFrom::Current(0))?;
-
-        // Ok(ArchiveRead {
-        //     entries,
-        //     content: areader,
-        //     content_baseptr,
-        // })
     }
 
     fn read_file_header(
@@ -1168,48 +995,28 @@ impl ArchiveRead {
         Ok((comp, u32::from_le_bytes(crc32_bytes)))
     }
 
-    fn read_asset_entries(
-        reader: &mut (impl BufRead + ?Sized),
-    ) -> IOResult<HashMap<String, AssetEntryHeadingPair>> {
-        let VariableUInt(count) = VariableUInt::read(reader)?;
-        if count <= 0 {
-            return Ok(HashMap::new());
-        }
-        let mut elements = HashMap::with_capacity(count as _);
-        for _ in 0..count {
-            let heading = AssetEntryHeadingPair::read(reader)?;
-            let PascalString(id_ref) = PascalString::read(reader)?;
-            elements.insert(id_ref, heading);
-        }
-        return Ok(elements);
-    }
-
-    pub fn read_bin(&mut self, path: &str) -> IOResult<Option<Vec<u8>>> {
-        if let Some(entry_pair) = self.find(path) {
-            unimplemented!("needs fix");
-            // self.content.seek(SeekFrom::Start(entry_pair.byte_offset))?;
-            let mut sink = Vec::with_capacity(entry_pair.byte_length as _);
-            unsafe {
-                sink.set_len(entry_pair.byte_length as _);
-            }
-
-            self.content.read_exact(&mut sink).map(move |_| Some(sink))
-        } else {
-            Ok(None)
+    #[inline]
+    pub fn list_entry(&self, callback: impl FnMut(&str)) {
+        match self {
+            Self::OnMemory(ref x) => x.list_entry(callback),
+            Self::FileStreaming(ref x) => x.list_entry(callback),
         }
     }
-    pub fn entry_names(&self) -> impl Iterator<Item = &str> {
-        self.entries.keys().map(|k| k.as_str())
-    }
-    pub fn find<'s>(&'s self, path: &str) -> Option<AssetEntryInfo> {
-        self.entries.get(path).map(|x| AssetEntryInfo {
-            byte_length: x.byte_length,
-            byte_offset: self.content_baseptr + x.relative_offset,
-        })
+
+    #[inline]
+    pub fn find_entry(&self, name: &str) -> Option<AssetEntryHeadingPair> {
+        match self {
+            Self::OnMemory(ref x) => x.find_entry(name),
+            Self::FileStreaming(ref x) => x.find_entry(name),
+        }
     }
 
-    pub fn into_inner_reader(self) -> EitherArchiveReader {
-        self.content
+    #[inline]
+    pub fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> ArchiveBinReader<'a> {
+        match self {
+            Self::OnMemory(ref x) => ArchiveBinReader::OnMemory(x.read_bin(heading)),
+            Self::FileStreaming(ref x) => ArchiveBinReader::FileStreaming(x.read_bin(heading)),
+        }
     }
 }
 
