@@ -6,6 +6,7 @@ use std::io::{Cursor, IoSliceMut, Seek, SeekFrom};
 
 mod entry;
 mod entry_tree;
+mod native_io;
 mod utils;
 
 use bitflags::bitflags;
@@ -14,7 +15,7 @@ pub use self::entry::AssetEntryHeadingPair;
 mod write;
 pub use self::write::ArchiveWrite;
 mod read;
-pub use self::read::{Archive, ArchiveReadAsync, ArchiveReadError};
+pub use self::read::{Archive, ArchiveAsync, ArchiveReadError};
 
 #[repr(C)]
 pub struct LinearPaired2u64(u64, u64);
