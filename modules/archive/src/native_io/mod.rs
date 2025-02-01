@@ -60,28 +60,23 @@ pub trait AsyncNativeFileReader: NativeFileMemoryMapProvider {
             }
             let mut o = 0;
             loop {
-                match self.read_async(&mut buf[o..]).await {
-                    Ok(0) => {
-                        buf.truncate(o);
-                        break;
-                    }
-                    Ok(r) => {
-                        o += r;
-                        if o >= buf.len() {
-                            buf.reserve_exact(GROW_SIZE);
-                            unsafe {
-                                buf.set_len(buf.capacity());
-                            }
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                        buf.truncate(o);
-                        break;
-                    }
+                let r = match self.read_async(&mut buf[o..]).await {
+                    Ok(0) => break,
+                    Ok(r) => r,
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                     Err(e) => return Err(e),
+                };
+
+                o += r;
+                if o >= buf.len() {
+                    buf.reserve_exact(GROW_SIZE);
+                    unsafe {
+                        buf.set_len(buf.capacity());
+                    }
                 }
             }
 
+            buf.truncate(o);
             Ok(buf)
         }
     }
@@ -112,28 +107,23 @@ pub trait NativeFileReader: NativeFileMemoryMapProvider {
         }
         let mut o = 0;
         loop {
-            match self.read(&mut buf[o..]) {
-                Ok(0) => {
-                    buf.truncate(o);
-                    break;
-                }
-                Ok(r) => {
-                    o += r;
-                    if o >= buf.len() {
-                        buf.reserve_exact(GROW_SIZE);
-                        unsafe {
-                            buf.set_len(buf.capacity());
-                        }
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    buf.truncate(o);
-                    break;
-                }
+            let r = match self.read(&mut buf[o..]) {
+                Ok(0) => break,
+                Ok(r) => r,
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err(e),
+            };
+
+            o += r;
+            if o >= buf.len() {
+                buf.reserve_exact(GROW_SIZE);
+                unsafe {
+                    buf.set_len(buf.capacity());
+                }
             }
         }
 
+        buf.truncate(o);
         Ok(buf)
     }
 }
