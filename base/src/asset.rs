@@ -28,15 +28,18 @@ pub trait FromAsset: LogicalAssetData {
     fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>;
 
     fn from_archive(
-        reader: &mut peridot_archive::ArchiveRead,
+        reader: &mut peridot_archive::Archive,
         path: &str,
     ) -> Result<Self, Self::Error> {
-        match reader.read_bin(path)? {
-            None => {
-                Err(IOError::new(ErrorKind::NotFound, "No Entry in primary asset package").into())
-            }
-            Some(b) => Self::from_asset(Cursor::new(b)),
-        }
+        let Some(h) = reader.find_entry(path) else {
+            return Err(
+                IOError::new(ErrorKind::NotFound, "No Entry in primary asset package").into(),
+            );
+        };
+
+        let mut buf = Vec::new();
+        reader.read_bin(h).read_to_end(&mut buf)?;
+        Self::from_asset(Cursor::new(buf))
     }
 }
 pub trait FromStreamingAsset: LogicalAssetData {
