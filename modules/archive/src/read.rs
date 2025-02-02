@@ -5,13 +5,14 @@ use std::{
 };
 
 use crate::{
+    entry::AssetNameRef,
     entry_tree::EntryTreePointer,
     native_io::{AsyncNativeFileReader, NativeFileMemoryMapProvider, NativeFileReader},
     AssetEntryHeadingPair, CompressionMethod, ContentFlags,
 };
 use crc::crc32;
 use libflate::deflate as zlib;
-use peridot_serialization_utils::{PascalStr, VariableUInt};
+use peridot_serialization_utils::{VariableUInt, VariableULong};
 
 #[cfg(windows)]
 type PlatformNativeFileReader = crate::native_io::windows::WindowsNativeFileReader;
@@ -59,30 +60,46 @@ fn list_entry(
     hash_tree_root_exact: bool,
     hash_tree_block: &[u8],
     exact_match_block: &[u8],
-    mut callback: impl FnMut(&str),
+    mut callback: impl FnMut(AssetNameRef),
 ) {
     fn enumerate_exact_block_content(
         block: &[u8],
         pointer: usize,
-        callback: &mut impl FnMut(&str),
+        callback: &mut impl FnMut(AssetNameRef),
     ) {
         let (VariableUInt(entry_count), entry_count_len) =
             VariableUInt::from_bytes_head(&block[pointer..]);
         let mut read_ptr = pointer + entry_count_len;
         for _ in 0..entry_count {
-            let (PascalStr(n), name_len) =
-                unsafe { PascalStr::from_bytes_head_unchecked(&block[read_ptr..]) };
-            let (_, hlen) = AssetEntryHeadingPair::from_bytes_head(&block[read_ptr + name_len..]);
+            let (VariableULong(n), name_bytes) = VariableULong::from_bytes_head(&block[read_ptr..]);
+            read_ptr += name_bytes;
+            let name_ext = &block[read_ptr..read_ptr + n as usize];
+            read_ptr += n as usize;
+            let (_, hlen) = AssetEntryHeadingPair::from_bytes_head(&block[read_ptr..]);
+            read_ptr += hlen;
+
+            let name_split = name_ext
+                .iter()
+                .position(|&x| x == 0)
+                .unwrap_or(name_ext.len());
+            let n = AssetNameRef {
+                name: unsafe { core::str::from_utf8_unchecked(&name_ext[..name_split]) },
+                ext: if name_split >= name_ext.len() - 1 {
+                    // no ext
+                    ""
+                } else {
+                    unsafe { core::str::from_utf8_unchecked(&name_ext[name_split + 1..]) }
+                },
+            };
 
             callback(n);
-            read_ptr += name_len + hlen;
         }
     }
 
     fn enumerate_exact_tree<'b>(
         block_view: &(impl crate::entry_tree::ExactBlockViewOps<'b> + ?Sized),
         exact_match_block: &[u8],
-        callback: &mut impl FnMut(&str),
+        callback: &mut impl FnMut(AssetNameRef),
     ) {
         for ptr in 0..block_view.entry_count() {
             enumerate_exact_block_content(
@@ -97,7 +114,7 @@ fn list_entry(
         block_view: &crate::entry_tree::BlockView,
         hash_tree_block: &[u8],
         exact_match_block: &[u8],
-        callback: &mut impl FnMut(&str),
+        callback: &mut impl FnMut(AssetNameRef),
     ) {
         for ptr in 0..block_view.entry_count() {
             let e = block_view.entry(ptr);
@@ -121,7 +138,7 @@ fn list_entry(
     fn enumerate_subtree(
         hash_tree_block: &[u8],
         exact_match_block: &[u8],
-        callback: &mut impl FnMut(&str),
+        callback: &mut impl FnMut(AssetNameRef),
         tree_pointer: EntryTreePointer,
     ) {
         if tree_pointer.is_exact_tree() {
@@ -176,11 +193,13 @@ fn list_entry(
 fn find_entry(
     head_size: usize,
     name: &str,
+    ext: &str,
     hash_tree_root_exact: bool,
     hash_tree_block: &[u8],
     exact_match_block: &[u8],
 ) -> Option<AssetEntryHeadingPair> {
-    let name_hash = xxhash_rust::xxh3::xxh3_64(name.as_bytes());
+    let name = AssetNameRef { name, ext };
+    let name_hash = name.hash();
 
     fn find_exact<'b>(
         block_view: &(impl crate::entry_tree::ExactBlockViewOps<'b> + ?Sized),
@@ -311,19 +330,35 @@ fn find_entry(
         VariableUInt::from_bytes_head(&exact_match_block[exact_block_offset as usize..]);
     let mut read_ptr = exact_block_offset as usize + exact_entry_offset;
     for _ in 0..exact_entry_count {
-        let (PascalStr(n), name_bytes) =
-            unsafe { PascalStr::from_bytes_head_unchecked(&exact_match_block[read_ptr..]) };
-        let (h, hlen) =
-            AssetEntryHeadingPair::from_bytes_head(&exact_match_block[read_ptr + name_bytes..]);
+        let (VariableULong(n), name_bytes) =
+            VariableULong::from_bytes_head(&exact_match_block[read_ptr..]);
+        read_ptr += name_bytes;
+        let name_ext = &exact_match_block[read_ptr..read_ptr + n as usize];
+        read_ptr += n as usize;
+        let (h, hlen) = AssetEntryHeadingPair::from_bytes_head(&exact_match_block[read_ptr..]);
+        read_ptr += hlen;
+
+        let name_split = name_ext
+            .iter()
+            .position(|&x| x == 0)
+            .unwrap_or(name_ext.len());
+        let n = AssetNameRef {
+            name: unsafe { core::str::from_utf8_unchecked(&name_ext[..name_split]) },
+            ext: if name_split >= name_ext.len() - 1 {
+                // no ext
+                ""
+            } else {
+                unsafe { core::str::from_utf8_unchecked(&name_ext[name_split + 1..]) }
+            },
+        };
 
         if n == name {
             // match!
             return Some(h);
         }
-
-        read_ptr += name_bytes + hlen;
     }
 
+    // no match in exact name list
     None
 }
 
@@ -404,7 +439,7 @@ impl OnMemoryArchive {
         })
     }
 
-    fn list_entry(&self, callback: impl FnMut(&str)) {
+    fn list_entry(&self, callback: impl FnMut(AssetNameRef)) {
         list_entry(
             self.head_size,
             self.content_flags
@@ -415,10 +450,11 @@ impl OnMemoryArchive {
         )
     }
 
-    fn find_entry(&self, name: &str) -> Option<AssetEntryHeadingPair> {
+    fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
         find_entry(
             self.head_size,
             name,
+            ext,
             self.content_flags
                 .contains(ContentFlags::ROOT_HASH_TREE_EXACT),
             &self.block[self.hash_tree_block_range.clone()],
@@ -539,7 +575,7 @@ impl FileStreamingArchiveAsync {
         })
     }
 
-    fn list_entry(&self, callback: impl FnMut(&str)) {
+    fn list_entry(&self, callback: impl FnMut(AssetNameRef)) {
         let entry_ptr = self
             .entry_mapped_head
             .load(core::sync::atomic::Ordering::Acquire);
@@ -565,7 +601,7 @@ impl FileStreamingArchiveAsync {
         )
     }
 
-    fn find_entry(&self, name: &str) -> Option<AssetEntryHeadingPair> {
+    fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
         let entry_ptr = self
             .entry_mapped_head
             .load(core::sync::atomic::Ordering::Acquire);
@@ -574,6 +610,7 @@ impl FileStreamingArchiveAsync {
             // FileStreamingのときは4+4固定になる（非圧縮でしかこれにならないので）
             4 + 4,
             name,
+            ext,
             self.content_flags
                 .contains(ContentFlags::ROOT_HASH_TREE_EXACT),
             unsafe {
@@ -658,7 +695,7 @@ impl FileStreamingArchive {
         })
     }
 
-    fn list_entry(&self, callback: impl FnMut(&str)) {
+    fn list_entry(&self, callback: impl FnMut(AssetNameRef)) {
         let entry_ptr = self
             .entry_mapped_head
             .load(core::sync::atomic::Ordering::Acquire);
@@ -684,7 +721,7 @@ impl FileStreamingArchive {
         )
     }
 
-    fn find_entry(&self, name: &str) -> Option<AssetEntryHeadingPair> {
+    fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
         let entry_ptr = self
             .entry_mapped_head
             .load(core::sync::atomic::Ordering::Acquire);
@@ -693,6 +730,7 @@ impl FileStreamingArchive {
             // FileStreamingのときは4+4固定になる（非圧縮でしかこれにならないので）
             4 + 4,
             name,
+            ext,
             self.content_flags
                 .contains(ContentFlags::ROOT_HASH_TREE_EXACT),
             unsafe {
@@ -832,7 +870,7 @@ impl ArchiveAsync {
     }
 
     #[inline]
-    pub fn list_entry(&self, callback: impl FnMut(&str)) {
+    pub fn list_entry(&self, callback: impl FnMut(AssetNameRef)) {
         match self {
             Self::OnMemory(ref x) => x.list_entry(callback),
             Self::FileStreaming(ref x) => x.list_entry(callback),
@@ -840,10 +878,10 @@ impl ArchiveAsync {
     }
 
     #[inline]
-    pub fn find_entry(&self, name: &str) -> Option<AssetEntryHeadingPair> {
+    pub fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
         match self {
-            Self::OnMemory(ref x) => x.find_entry(name),
-            Self::FileStreaming(ref x) => x.find_entry(name),
+            Self::OnMemory(ref x) => x.find_entry(name, ext),
+            Self::FileStreaming(ref x) => x.find_entry(name, ext),
         }
     }
 
@@ -915,7 +953,7 @@ impl Archive {
     }
 
     #[inline]
-    pub fn list_entry(&self, callback: impl FnMut(&str)) {
+    pub fn list_entry(&self, callback: impl FnMut(AssetNameRef)) {
         match self {
             Self::OnMemory(ref x) => x.list_entry(callback),
             Self::FileStreaming(ref x) => x.list_entry(callback),
@@ -923,10 +961,10 @@ impl Archive {
     }
 
     #[inline]
-    pub fn find_entry(&self, name: &str) -> Option<AssetEntryHeadingPair> {
+    pub fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
         match self {
-            Self::OnMemory(ref x) => x.find_entry(name),
-            Self::FileStreaming(ref x) => x.find_entry(name),
+            Self::OnMemory(ref x) => x.find_entry(name, ext),
+            Self::FileStreaming(ref x) => x.find_entry(name, ext),
         }
     }
 

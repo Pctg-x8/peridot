@@ -11,7 +11,7 @@ mod utils;
 
 use bitflags::bitflags;
 
-pub use self::entry::AssetEntryHeadingPair;
+pub use self::entry::{AssetEntryHeadingPair, AssetNameRef};
 mod write;
 pub use self::write::ArchiveWrite;
 mod read;

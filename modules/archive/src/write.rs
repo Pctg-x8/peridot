@@ -1,18 +1,20 @@
 use crc::crc32;
 use libflate::deflate as zlib;
-use peridot_serialization_utils::{PascalStr, VariableULong};
+use peridot_serialization_utils::VariableULong;
 use std::{
     collections::HashMap,
     io::{IoSlice, Result as IOResult, Write},
 };
 
 use crate::{
-    entry::AssetEntryHeadingPair, entry_tree::EntryTreePointer, CompressionMethod, ContentFlags,
+    entry::{AssetEntryHeadingPair, AssetName},
+    entry_tree::EntryTreePointer,
+    CompressionMethod, ContentFlags,
 };
 
 pub struct ArchiveWrite {
     compression_method: CompressionMethod,
-    entries: HashMap<String, AssetEntryHeadingPair>,
+    entries: HashMap<AssetName, AssetEntryHeadingPair>,
     data_bytes: Vec<u8>,
 }
 impl ArchiveWrite {
@@ -25,8 +27,9 @@ impl ArchiveWrite {
     }
 
     /// エントリを追加する 成功したらtrue
-    pub fn add(&mut self, name: String, content: Vec<u8>) -> bool {
-        if self.entries.contains_key(&name) {
+    pub fn add(&mut self, name: String, ext: String, content: Vec<u8>) -> bool {
+        let n = AssetName { name, ext };
+        if self.entries.contains_key(&n) {
             // すでにある
             return false;
         }
@@ -34,7 +37,7 @@ impl ArchiveWrite {
         let relative_offset = self.data_bytes.len() as u64;
         self.data_bytes.extend(content);
         self.entries.insert(
-            name,
+            n,
             AssetEntryHeadingPair {
                 relative_offset,
                 byte_length: self.data_bytes.len() as u64 - relative_offset,
@@ -46,12 +49,15 @@ impl ArchiveWrite {
 
     fn emit_exact_match_block(
         block_buffer: &mut Vec<u8>,
-        entries: &[(&str, &AssetEntryHeadingPair)],
+        entries: &[(&AssetName, &AssetEntryHeadingPair)],
     ) -> IOResult<u64> {
         let ptr = block_buffer.len() as u64;
         VariableULong(entries.len() as _).write(block_buffer)?;
         for (n, h) in entries {
-            PascalStr(n).write(block_buffer)?;
+            VariableULong((n.name.len() + 1 + n.ext.len()) as _).write(block_buffer)?;
+            block_buffer.extend(n.name.as_bytes());
+            block_buffer.push(0);
+            block_buffer.extend(n.ext.as_bytes());
             h.write(block_buffer)?;
         }
 
@@ -61,7 +67,7 @@ impl ArchiveWrite {
     fn write_exact_hash_tree(
         hash_tree_block: &mut Vec<u8>,
         exact_match_block: &mut Vec<u8>,
-        sorted_hash_list: &[(u64, Vec<(&str, &AssetEntryHeadingPair)>)],
+        sorted_hash_list: &[(u64, Vec<(&AssetName, &AssetEntryHeadingPair)>)],
     ) -> IOResult<()> {
         let write_base_ptr = hash_tree_block.len();
         hash_tree_block.resize(
@@ -90,10 +96,10 @@ impl ArchiveWrite {
     ) -> IOResult<(Vec<u8>, Vec<u8>, ContentFlags)> {
         // ここもしかしたらもうちょい最適化できるかも？（毎回binary_searchするとでかいテーブルになったときにメモリのキャッシュ効率が悪そう）
         // 一旦これはオフラインで動くコードなので（Readよりは頻度低い）あとで考える
-        let mut sorted_hash_table: Vec<(u64, Vec<(&str, &AssetEntryHeadingPair)>)> =
+        let mut sorted_hash_table: Vec<(u64, Vec<(&AssetName, &AssetEntryHeadingPair)>)> =
             Vec::with_capacity(self.entries.len());
         for (name, heading) in self.entries.iter() {
-            let name_hash = xxhash_rust::xxh3::xxh3_64(name.as_bytes());
+            let name_hash = name.hash();
             match sorted_hash_table.binary_search_by_key(&name_hash, |&(nh, _)| nh) {
                 Ok(x) => sorted_hash_table[x].1.push((name, heading)),
                 Err(x) => sorted_hash_table.insert(x, (name_hash, vec![(name, heading)])),
@@ -119,7 +125,7 @@ impl ArchiveWrite {
         } else {
             // サブツリー構成が必要
             fn gen_subtree(
-                hash_table: &[(u64, Vec<(&str, &AssetEntryHeadingPair)>)],
+                hash_table: &[(u64, Vec<(&AssetName, &AssetEntryHeadingPair)>)],
                 hash_block: &mut Vec<u8>,
                 exact_match_block: &mut Vec<u8>,
             ) -> IOResult<EntryTreePointer> {

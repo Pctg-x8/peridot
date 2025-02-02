@@ -1,6 +1,41 @@
-use std::io::{BufRead, IoSlice, Result as IOResult, Write};
+use std::{
+    hash::{Hash, Hasher},
+    io::{BufRead, IoSlice, Result as IOResult, Write},
+};
 
 use peridot_serialization_utils::VariableULong;
+
+pub fn asset_name_hash(name: &str, ext: &str) -> u64 {
+    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+    name.hash(&mut hasher);
+    ext.hash(&mut hasher);
+
+    hasher.finish()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AssetName {
+    pub name: String,
+    pub ext: String,
+}
+impl AssetName {
+    #[inline(always)]
+    pub fn hash(&self) -> u64 {
+        asset_name_hash(&self.name, &self.ext)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AssetNameRef<'s> {
+    pub name: &'s str,
+    pub ext: &'s str,
+}
+impl AssetNameRef<'_> {
+    #[inline(always)]
+    pub fn hash(&self) -> u64 {
+        asset_name_hash(self.name, self.ext)
+    }
+}
 
 #[derive(Debug)]
 pub struct AssetEntryHeadingPair {

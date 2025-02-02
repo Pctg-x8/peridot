@@ -30,8 +30,9 @@ pub trait FromAsset: LogicalAssetData {
     fn from_archive(
         reader: &mut peridot_archive::Archive,
         path: &str,
+        ext: &str,
     ) -> Result<Self, Self::Error> {
-        let Some(h) = reader.find_entry(path) else {
+        let Some(h) = reader.find_entry(path, ext) else {
             return Err(
                 IOError::new(ErrorKind::NotFound, "No Entry in primary asset package").into(),
             );

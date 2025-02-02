@@ -1,4 +1,4 @@
-use std::io::{Error as IOError, ErrorKind, IoSlice, IoSliceMut, Result as IOResult, Write};
+use std::io::{Error as IOError, ErrorKind, IoSlice, Result as IOResult, Write};
 
 pub fn write_all_vectored(
     w: &mut (impl Write + ?Sized),
@@ -52,7 +52,7 @@ pub async fn write_all_vectored_async<'b>(
 #[cfg(feature = "async-rt-async-std")]
 struct ReadVFuture<'r, 'bs, 'b, R: 'r + ?Sized> {
     reader: &'r mut R,
-    buffers: &'bs mut [IoSliceMut<'b>],
+    buffers: &'bs mut [std::io::IoSliceMut<'b>],
 }
 #[cfg(feature = "async-rt-async-std")]
 impl<'r, 'bs, 'b, R: 'r + ?Sized> std::future::Future for ReadVFuture<'r, 'bs, 'b, R>

@@ -89,6 +89,7 @@ async fn main() {
     }
 }
 
+// TODO: アセット名生成部分が正しくないのであとで書き直す
 async fn new(args: &ArgMatches<'_>) {
     let ifiled = args.values_of("ifiled").expect("noargs: ifiled");
     #[cfg(windows)]
@@ -118,16 +119,43 @@ async fn new(args: &ArgMatches<'_>) {
     for f in directory_walker {
         println!("Archiver input <<= {}", f.display());
         let fstr = f.to_str().expect("nullchar");
-        let ename = if fstr.starts_with(&basedir) {
-            &fstr[basedir.len()..]
-        } else {
-            &fstr
-        };
-        if fstr.is_empty() {
+        let ename = fstr.strip_prefix(&basedir).unwrap_or(&fstr);
+        if ename.is_empty() {
             eprintln!("Warn: empty entry name. wont be written");
         }
-        if !archive.add(ename.to_owned(), read(&f).expect("file io error")) {
-            eprintln!("Warn: {:?} has already been added", fstr);
+        let path = std::path::PathBuf::from(ename);
+        let Some(stem) = path.file_stem() else {
+            eprintln!("Warn: empty file stem, ignroing");
+            continue;
+        };
+        let dir = path
+            .parent()
+            .map_or("", |x| x.to_str().expect("invalid utf-8 sequence"));
+        let name = if dir.is_empty() {
+            stem.to_str().expect("invalid utf-8 sequence").to_owned()
+        } else {
+            let mut x = String::with_capacity(dir.len() + 1 + stem.len());
+            x.extend(dir.chars().map(|x| {
+                if x == std::path::MAIN_SEPARATOR {
+                    '.'
+                } else {
+                    x
+                }
+            }));
+            x.push('.');
+            x.push_str(stem.to_str().expect("invalid utf-8 sequence"));
+
+            x
+        };
+        let ext = path
+            .extension()
+            .map_or("", |x| x.to_str().expect("invalid utf-8 sequence"));
+        if !archive.add(
+            name.to_owned(),
+            ext.to_owned(),
+            read(&f).expect("file io error"),
+        ) {
+            eprintln!("Warn: {:?}({name}.{ext}) has already been added", fstr);
         }
     }
 
@@ -150,7 +178,12 @@ fn extract(args: &ArgMatches) {
     .expect("Failed to open archive");
 
     if let Some(apath) = args.value_of("apath") {
-        let Some(h) = archive.find_entry(apath) else {
+        let (name, ext) = match &apath.rsplitn(2, '.').collect::<Vec<_>>()[..] {
+            &[name] => (name, ""),
+            &[ext, name] => (name, ext),
+            _ => unreachable!(),
+        };
+        let Some(h) = archive.find_entry(name, ext) else {
             panic!("Entry not found in archive: {apath}");
         };
         let mut content = Vec::new();
@@ -173,7 +206,7 @@ fn list(args: &ArgMatches) {
     )
     .expect("Failed to open archive");
 
-    archive.list_entry(|n| println!("{n}"));
+    archive.list_entry(|n| println!("{} ({})", n.name, n.ext));
 }
 
 use std::ptr::NonNull;
