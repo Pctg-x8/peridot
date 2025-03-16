@@ -19,9 +19,14 @@ typedef struct {
     void (*terminate)(void* context_ptr);
     void (*update)(void* context_ptr);
     void (*resize)(void* context_ptr, uint32_t w, uint32_t h);
+    void (*handle_character_keydown)(void* context_ptr, uint8_t character);
+    void (*handle_character_keyup)(void* context_ptr, uint8_t character);
+    void (*handle_keymod_down)(void* context_ptr, uint8_t code);
+    void (*handle_keymod_up)(void* context_ptr, uint8_t code);
+    void (*handle_mouse_button_down)(void* context_ptr, uint8_t index);
+    void (*handle_mouse_button_up)(void* context_ptr, uint8_t index);
+    void (*report_mouse_move_abs)(void* context_ptr, float x, float y);
 } GameDriverCallbacks;
-
-typedef struct GameRun_ GameRun;
 
 const uint8_t KEYMOD_SHIFT = 1;
 const uint8_t KEYMOD_OPTION = 2;
@@ -29,17 +34,7 @@ const uint8_t KEYMOD_CONTROL = 3;
 const uint8_t KEYMOD_COMMAND = 4;
 const uint8_t KEYMOD_CAPSLOCK = 5;
 
-GameRun* launch_game(void* initializationContext, void* viewptr);
-
-void handle_character_keydown(GameRun* engineptr, uint8_t character);
-void handle_character_keyup(GameRun* engineptr, uint8_t character);
-void handle_keymod_down(GameRun* engineptr, uint8_t code);
-void handle_keymod_up(GameRun* engineptr, uint8_t code);
-
-void handle_mouse_button_down(GameRun* engineptr, uint8_t index);
-void handle_mouse_button_up(GameRun* engineptr, uint8_t index);
-void report_mouse_move_abs(GameRun* engineptr, float x, float y);
-
+void launch_game(void* initializationContext, void* viewptr);
 void* captionbar_text();
 
 #ifdef __cplusplus

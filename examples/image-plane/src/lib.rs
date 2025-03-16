@@ -481,12 +481,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     bgm.write().play();
 
     let mut rot = 0.0f32;
-    println!("th: {:?}", std::thread::current().id());
     loop {
         match e.wait_for_event2().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
-                println!("nextFrame th: {:?}", std::thread::current().id());
                 let fd = match e.prepare_frame() {
                     Ok(fd) => fd,
                     Err(peridot::PrepareFrameError::FramebufferOutOfDate) => {

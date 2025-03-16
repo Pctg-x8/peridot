@@ -9,34 +9,59 @@
 import Foundation
 import Cocoa
 
-final class NativeGameEngine {
-    private var p: OpaquePointer
+struct NativeGameDriver {
+    private let callbacks: UnsafeMutablePointer<GameDriverCallbacks>
+    private let contextPtr: UnsafeMutableRawPointer
     
-    init(forLayer layer: CAMetalLayer, on initializationContext: UnsafeMutableRawPointer) {
-        self.p = launch_game(initializationContext, unsafeBitCast(layer, to: UnsafeMutablePointer.self))
-    }
-    
-    func handleCharacterKeyDown(character: UInt8) {
-        handle_character_keydown(self.p, character)
-    }
-    func handleCharacterKeyUp(character: UInt8) {
-        handle_character_keyup(self.p, character)
-    }
-    func handleKeymodDown(code: UInt8) {
-        handle_keymod_down(self.p, code)
-    }
-    func handleKeymodUp(code: UInt8) {
-        handle_keymod_up(self.p, code)
+    init(callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
+        self.callbacks = callbacks
+        self.contextPtr = contextPtr
     }
     
-    func handleMouseButtonDown(index: UInt8) { handle_mouse_button_down(self.p, index) }
-    func handleMouseButtonUp(index: UInt8) { handle_mouse_button_up(self.p, index) }
-    func reportMouseMove(x: Float, y: Float) { report_mouse_move_abs(self.p, x, y) }
-    
-    static func captionbarText() -> NSString? {
-        let p = captionbar_text()
-        return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
+    func terminate() {
+        self.callbacks.pointee.terminate(self.contextPtr)
     }
+    
+    func update() {
+        self.callbacks.pointee.update(self.contextPtr)
+    }
+    
+    func resize(_ size: NSSize) {
+        self.callbacks.pointee.resize(self.contextPtr, UInt32(size.width), UInt32(size.height))
+    }
+    
+    func handleKeyDown(character c: UniChar) {
+        self.callbacks.pointee.handle_character_keydown(self.contextPtr, UInt8(c))
+    }
+    
+    func handleKeyUp(character c: UniChar) {
+        self.callbacks.pointee.handle_character_keyup(self.contextPtr, UInt8(c))
+    }
+    
+    func handleKeyDown(mod code: UInt8) {
+        self.callbacks.pointee.handle_keymod_down(self.contextPtr, code)
+    }
+    
+    func handleKeyUp(mod code: UInt8) {
+        self.callbacks.pointee.handle_keymod_up(self.contextPtr, code)
+    }
+    
+    func handleMouseButtonDown(_ index: UInt8) {
+        self.callbacks.pointee.handle_mouse_button_down(self.contextPtr, index)
+    }
+    
+    func handleMouseButtonUp(_ index: UInt8) {
+        self.callbacks.pointee.handle_mouse_button_up(self.contextPtr, index)
+    }
+    
+    func reportMouseMoveAbs(x: Float, y: Float) {
+        self.callbacks.pointee.report_mouse_move_abs(self.contextPtr, x, y)
+    }
+}
+
+func captionbarText() -> NSString? {
+    let p = captionbar_text()
+    return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
 }
 
 @_cdecl("nsapp_reply_should_terminate")

@@ -11,7 +11,6 @@ import Cocoa
 import QuartzCore
 
 final class PeridotRenderableView : NSView {
-    weak var enginePointer: NativeGameEngine? = nil
     weak var viewController: PeridotRenderableViewController? = nil
     
     override func draw(_ dirtyRect: NSRect) {

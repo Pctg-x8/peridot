@@ -328,8 +328,8 @@ type Engine<'q> = peridot::Engine<'q, NativeLink>;
 
 const USERCODE_WAKER_VTABLE: &'static core::task::RawWakerVTable = &core::task::RawWakerVTable::new(
     |ptr| core::task::RawWaker::new(ptr, USERCODE_WAKER_VTABLE),
-    |_| {},
-    |_| {},
+    |_| /*println!("game_main wake")*/{},
+    |_| /*println!("game_main wake by ref")*/{},
     |_| {},
 );
 
@@ -349,8 +349,7 @@ fn launch_f<'f, F>(
     initialization_context: *mut core::ffi::c_void,
     v: *mut core::ffi::c_void,
     launch_usercode: impl FnOnce(peridot::Engine<'f, NativeLink>) -> F,
-) -> *mut core::ffi::c_void
-where
+) where
     F: Future<Output = ()> + 'f,
 {
     let (event_sender, event_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
@@ -376,7 +375,7 @@ where
     let mut nae = NativeAudioEngine::init();
     nae.start(engine.audio_mixer().clone());
     engine.post_init();
-    let ex_input = engine.input().clone();
+    let input = engine.input().clone();
 
     let usercode_waker =
         unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
@@ -388,6 +387,7 @@ where
     struct GameDriverContext<F> {
         usercode: Pin<Box<F>>,
         state: Box<AppInternalState>,
+        input: peridot::InputProcess,
     }
     extern "C" fn game_driver_terminate<F: core::future::Future>(ctx: *mut core::ffi::c_void) {
         let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
@@ -440,10 +440,102 @@ where
             .as_mut()
             .poll(&mut core::task::Context::from_waker(&usercode_waker));
     }
+    extern "C" fn game_driver_handle_character_keydown<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        character: u8,
+    ) {
+        let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
+
+        ctx.input.dispatch_button_event(
+            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
+            true,
+        );
+    }
+    extern "C" fn game_driver_handle_character_keyup<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        character: u8,
+    ) {
+        let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
+
+        ctx.input.dispatch_button_event(
+            peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
+            false,
+        );
+    }
+    extern "C" fn game_driver_handle_keymod_down<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        code: u8,
+    ) {
+        let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
+
+        let code_to_bty = match code {
+            KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
+            KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
+            KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
+            KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
+            KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
+            _ => return,
+        };
+        ctx.input.dispatch_button_event(code_to_bty, true);
+    }
+    extern "C" fn game_driver_handle_keymod_up<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        code: u8,
+    ) {
+        let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
+
+        let code_to_bty = match code {
+            KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
+            KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
+            KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
+            KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
+            KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
+            _ => return,
+        };
+        ctx.input.dispatch_button_event(code_to_bty, false);
+    }
+    extern "C" fn game_driver_handle_mouse_button_down<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        index: u8,
+    ) {
+        let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
+
+        ctx.input
+            .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), true);
+    }
+    extern "C" fn game_driver_handle_mouse_button_up<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        index: u8,
+    ) {
+        let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
+
+        ctx.input
+            .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false);
+    }
+    extern "C" fn game_driver_report_mouse_move_abs<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        x: f32,
+        y: f32,
+    ) {
+        let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
+
+        let scale = unsafe { nsscreen_backing_scale_factor() };
+        ctx.input
+            .dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x * scale, true);
+        ctx.input
+            .dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
+    }
     let cbs: &'static GameDriverCallbacks = &GameDriverCallbacks {
         terminate: game_driver_terminate::<F>,
         update: game_driver_update::<F>,
         resize: game_driver_resize::<F>,
+        handle_character_keydown: game_driver_handle_character_keydown::<F>,
+        handle_character_keyup: game_driver_handle_character_keyup::<F>,
+        handle_keymod_down: game_driver_handle_keymod_down::<F>,
+        handle_keymod_up: game_driver_handle_keymod_up::<F>,
+        handle_mouse_button_down: game_driver_handle_mouse_button_down::<F>,
+        handle_mouse_button_up: game_driver_handle_mouse_button_up::<F>,
+        report_mouse_move_abs: game_driver_report_mouse_move_abs::<F>,
     };
     unsafe {
         give_game_driver_callbacks(
@@ -452,20 +544,32 @@ where
             Box::into_raw(Box::new(GameDriverContext {
                 usercode,
                 state: Box::from_raw(state_ptr),
+                input,
             })) as _,
         )
     }
-
-    core::ptr::null_mut()
 }
 
 // Swift Linking //
+
+const KEYMOD_SHIFT: u8 = 1;
+const KEYMOD_OPTION: u8 = 2;
+const KEYMOD_CONTROL: u8 = 3;
+const KEYMOD_COMMAND: u8 = 4;
+const KEYMOD_CAPSLOCK: u8 = 5;
 
 #[repr(C)]
 pub struct GameDriverCallbacks {
     terminate: extern "C" fn(*mut core::ffi::c_void),
     update: extern "C" fn(*mut core::ffi::c_void),
     resize: extern "C" fn(*mut core::ffi::c_void, w: u32, h: u32),
+    handle_character_keydown: extern "C" fn(*mut core::ffi::c_void, character: u8),
+    handle_character_keyup: extern "C" fn(*mut core::ffi::c_void, character: u8),
+    handle_keymod_down: extern "C" fn(*mut core::ffi::c_void, code: u8),
+    handle_keymod_up: extern "C" fn(*mut core::ffi::c_void, code: u8),
+    handle_mouse_button_down: extern "C" fn(*mut core::ffi::c_void, index: u8),
+    handle_mouse_button_up: extern "C" fn(*mut core::ffi::c_void, index: u8),
+    report_mouse_move_abs: extern "C" fn(*mut core::ffi::c_void, x: f32, y: f32),
 }
 
 unsafe extern "C" {
@@ -489,7 +593,7 @@ unsafe extern "C" {
 pub extern "C" fn launch_game(
     initialization_context: *mut core::ffi::c_void,
     v: *mut core::ffi::c_void,
-) -> *mut core::ffi::c_void {
+) {
     log::set_logger(&LOGGER).expect("Failed to set logger");
     log::set_max_level(log::LevelFilter::Trace);
 
@@ -503,7 +607,7 @@ pub extern "C" fn launch_game(
 
     launch_f(initialization_context, v, |mut engine| async move {
         userlib::game_main(&mut engine).await;
-    })
+    });
 }
 
 #[no_mangle]
@@ -511,67 +615,6 @@ pub extern "C" fn captionbar_text() -> *mut c_void {
     NSString::from_str(userlib::APP_TITLE)
         .expect("CaptionbarText NSString Allocation")
         .into_id() as *mut _
-}
-
-#[no_mangle]
-pub extern "C" fn handle_character_keydown(g: *mut GameDriver, character: u8) {
-    // trace!("Dispatching Character Down Event: {}", character);
-    // unsafe {
-    //     (*g).ex_input.dispatch_button_event(
-    //         peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
-    //         true,
-    //     );
-    // }
-    eprintln!("old function");
-}
-#[no_mangle]
-pub extern "C" fn handle_character_keyup(g: *mut GameDriver, character: u8) {
-    // trace!("Dispatching Character Up Event: {}", character);
-    // unsafe {
-    //     (*g).ex_input.dispatch_button_event(
-    //         peridot::NativeButtonInput::Character((character as char).to_ascii_uppercase()),
-    //         false,
-    //     );
-    // }
-    eprintln!("old function");
-}
-
-const KEYMOD_SHIFT: u8 = 1;
-const KEYMOD_OPTION: u8 = 2;
-const KEYMOD_CONTROL: u8 = 3;
-const KEYMOD_COMMAND: u8 = 4;
-const KEYMOD_CAPSLOCK: u8 = 5;
-#[no_mangle]
-pub extern "C" fn handle_keymod_down(g: *mut GameDriver, code: u8) {
-    // trace!("Dispatching Keymod Down Event: {}", code);
-    // let code_to_bty = match code {
-    //     KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
-    //     KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
-    //     KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
-    //     KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
-    //     KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
-    //     _ => return,
-    // };
-    // unsafe {
-    //     (*g).ex_input.dispatch_button_event(code_to_bty, true);
-    // }
-    eprintln!("old function");
-}
-#[no_mangle]
-pub extern "C" fn handle_keymod_up(g: *mut GameDriver, code: u8) {
-    // trace!("Dispatching Keymod Up Event: {}", code);
-    // let code_to_bty = match code {
-    //     KEYMOD_SHIFT => peridot::NativeButtonInput::LeftShift,
-    //     KEYMOD_OPTION => peridot::NativeButtonInput::LeftAlt,
-    //     KEYMOD_CONTROL => peridot::NativeButtonInput::LeftControl,
-    //     KEYMOD_COMMAND => peridot::NativeButtonInput::LeftMeta,
-    //     KEYMOD_CAPSLOCK => peridot::NativeButtonInput::CapsLock,
-    //     _ => return,
-    // };
-    // unsafe {
-    //     (*g).ex_input.dispatch_button_event(code_to_bty, false);
-    // }
-    eprintln!("old function");
 }
 
 struct NativeInputHandler {
@@ -597,33 +640,4 @@ impl peridot::NativeInput for NativeInputHandler {
             None
         }
     }
-}
-
-#[no_mangle]
-pub extern "C" fn handle_mouse_button_down(g: *mut GameDriver, index: u8) {
-    // unsafe {
-    //     (*g).ex_input
-    //         .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), true);
-    // }
-    eprintln!("old function");
-}
-#[no_mangle]
-pub extern "C" fn handle_mouse_button_up(g: *mut GameDriver, index: u8) {
-    // unsafe {
-    //     (*g).ex_input
-    //         .dispatch_button_event(peridot::NativeButtonInput::Mouse(index as _), false);
-    // }
-    eprintln!("old function");
-}
-
-#[no_mangle]
-pub extern "C" fn report_mouse_move_abs(g: *mut GameDriver, x: f32, y: f32) {
-    // unsafe {
-    //     let scale = nsscreen_backing_scale_factor();
-    //     (*g).ex_input
-    //         .dispatch_analog_event(peridot::NativeAnalogInput::MouseX, x * scale, true);
-    //     (*g).ex_input
-    //         .dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
-    // }
-    eprintln!("old function");
 }
