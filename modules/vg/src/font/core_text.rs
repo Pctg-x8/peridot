@@ -1,11 +1,11 @@
-use appkit::{CTFont, CTFontOrientation, ExternalRc};
+use appkit::{CTFont, CTFontOrientation};
 use euclid::Rect;
 use lyon_path::builder::PathBuilder;
 
 use crate::{Font, GlyphLoadingError};
 
 #[repr(transparent)]
-pub struct CoreTextFont(pub(crate) ExternalRc<CTFont>);
+pub struct CoreTextFont(pub(crate) appkit::CoreRetainedObject<CTFont>);
 impl Font for CoreTextFont {
     type GlyphID = u32;
 

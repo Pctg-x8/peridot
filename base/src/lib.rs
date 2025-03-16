@@ -10,6 +10,7 @@ use br::Status;
 use parking_lot::RwLock;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
+use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -228,7 +229,56 @@ impl EngineEventReceiver {
     }
 }
 
-pub struct Engine<NL: NativeLinker> {
+pub struct WaitForEventFuture<'e> {
+    queue: &'e RefCell<VecDeque<Event>>,
+    queue_waker: &'e RefCell<Vec<core::task::Waker>>,
+}
+impl core::future::Future for WaitForEventFuture<'_> {
+    type Output = Event;
+
+    #[inline]
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if let Some(e) = self.queue.borrow_mut().pop_front() {
+            core::task::Poll::Ready(e)
+        } else {
+            self.queue_waker.borrow_mut().push(cx.waker().clone());
+            core::task::Poll::Pending
+        }
+    }
+}
+
+pub struct EventQueue {
+    queue: RefCell<VecDeque<Event>>,
+    queue_waker: RefCell<Vec<core::task::Waker>>,
+}
+impl EventQueue {
+    pub fn new() -> Self {
+        Self {
+            queue: RefCell::new(VecDeque::new()),
+            queue_waker: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn enqueue(&self, event: Event) {
+        self.queue.borrow_mut().push_back(event);
+        for w in core::mem::replace(&mut *self.queue_waker.borrow_mut(), Vec::new()) {
+            w.wake();
+        }
+    }
+
+    #[inline(always)]
+    pub fn wait_for_event<'q>(&'q self) -> impl core::future::Future<Output = Event> + 'q {
+        WaitForEventFuture {
+            queue: &self.queue,
+            queue_waker: &self.queue_waker,
+        }
+    }
+}
+
+pub struct Engine<'q, NL: NativeLinker> {
     native_link: NL,
     presenter: NL::Presenter,
     pub(self) g: Graphics,
@@ -239,8 +289,9 @@ pub struct Engine<NL: NativeLinker> {
     request_resize: bool,
     engine_events_sender: async_std::channel::Sender<EngineEvent>,
     receivers: core::cell::UnsafeCell<EngineEventReceiver>,
+    shared_event_queue: &'q EventQueue,
 }
-impl<PL: NativeLinker> Engine<PL> {
+impl<'q, PL: NativeLinker> Engine<'q, PL> {
     pub fn new(
         name: &str,
         version: br::Version,
@@ -251,6 +302,7 @@ impl<PL: NativeLinker> Engine<PL> {
             async_std::channel::Receiver<EngineEvent>,
         ),
         frame_timing_receiver: async_std::channel::Receiver<()>,
+        shared_event_queue: &'q EventQueue,
     ) -> Self {
         let mut g = Graphics::new(
             name,
@@ -278,6 +330,7 @@ impl<PL: NativeLinker> Engine<PL> {
                 frame_timing_receiver,
                 other_events_receiver: engine_events_bus.1,
             }),
+            shared_event_queue,
         }
     }
 
@@ -285,9 +338,14 @@ impl<PL: NativeLinker> Engine<PL> {
         tracing::trace!("PostInit BaseEngine...");
     }
 }
-impl<NL: NativeLinker> Engine<NL> {
+impl<'q, NL: NativeLinker> Engine<'q, NL> {
     pub fn event_receivers(&self) -> &mut EngineEventReceiver {
         unsafe { &mut *self.receivers.get() }
+    }
+
+    #[inline(always)]
+    pub fn wait_for_event2(&self) -> impl core::future::Future<Output = Event> + 'q {
+        self.shared_event_queue.wait_for_event()
     }
 
     pub async fn quit(&self) {
@@ -386,7 +444,7 @@ impl<NL: NativeLinker> Engine<NL> {
         &self.audio_mixer
     }
 }
-impl<PL: NativeLinker> Engine<PL> {
+impl<PL: NativeLinker> Engine<'_, PL> {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.native_link.asset_loader().get(path, A::EXT)?)
     }
@@ -402,7 +460,7 @@ impl<PL: NativeLinker> Engine<PL> {
         self.native_link.rendering_precision()
     }
 }
-impl<PL: NativeLinker> Engine<PL> {
+impl<PL: NativeLinker> Engine<'_, PL> {
     pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
         StateFence::wait(&mut self.last_rendering_completion)
             .expect("Waiting last command completion");
@@ -518,7 +576,7 @@ impl<PL: NativeLinker> Engine<PL> {
         }
     }
 }
-impl<NL: NativeLinker> Drop for Engine<NL> {
+impl<NL: NativeLinker> Drop for Engine<'_, NL> {
     fn drop(&mut self) {
         unsafe {
             self.graphics().device.wait().expect("device error");

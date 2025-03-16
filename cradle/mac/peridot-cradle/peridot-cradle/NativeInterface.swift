@@ -12,18 +12,8 @@ import Cocoa
 final class NativeGameEngine {
     private var p: OpaquePointer
     
-    init(forLayer layer: CAMetalLayer) {
-        self.p = launch_game(unsafeBitCast(layer, to: UnsafeMutablePointer.self))
-    }
-    deinit {
-        NSLog("GameEngine Terminating")
-        terminate_game(self.p)
-        NSLog("GameEngine Terminated")
-    }
-    
-    func update() { update_game(self.p) }
-    func resize(_ newSize: NSSize) {
-        resize_game(self.p, UInt32(newSize.width), UInt32(newSize.height))
+    init(forLayer layer: CAMetalLayer, on initializationContext: UnsafeMutableRawPointer) {
+        self.p = launch_game(initializationContext, unsafeBitCast(layer, to: UnsafeMutablePointer.self))
     }
     
     func handleCharacterKeyDown(character: UInt8) {
@@ -81,4 +71,9 @@ func obtain_mouse_pointer_position(
         x.pointee = Float32(pl.x) * nsscreen_backing_scale_factor()
         y.pointee = Float32(h - pl.y) * nsscreen_backing_scale_factor()
     }
+}
+
+@_cdecl("give_game_driver_callbacks")
+func give_game_driver_callbacks(initializationContext: UnsafeMutableRawPointer, callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
+    unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self).setGameDriverCallbacks(callbacks, contextPtr: contextPtr)
 }

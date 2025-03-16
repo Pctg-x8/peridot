@@ -51,6 +51,9 @@ final class PeridotRenderableViewController : NSViewController {
     var workDispatcher: DispatchSourceUserDataAdd? = nil
     var clientMousePoint = CGPoint(x: 0, y: 0)
     
+    private var gameDriverCallbacks: UnsafeMutablePointer<GameDriverCallbacks>? = nil
+    private var gameDriverCallbackContextPtr: UnsafeMutableRawPointer? = nil
+    
     func initDispatchers() {
         func onUpdateDisplay(_ _: CVDisplayLink,
                              _ inNow: UnsafePointer<CVTimeStamp>,
@@ -63,7 +66,7 @@ final class PeridotRenderableViewController : NSViewController {
             return kCVReturnSuccess
         }
         let workDispatcher = DispatchSource.makeUserDataAddSource(queue: DispatchQueue.main)
-        workDispatcher.setEventHandler(handler: { () in self.enginePointer!.update() })
+        workDispatcher.setEventHandler(handler: { [weak self] in self?.updateNative() })
         self.workDispatcher = workDispatcher
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
         CVDisplayLinkSetOutputCallback(self.dplink!, onUpdateDisplay,
@@ -73,7 +76,7 @@ final class PeridotRenderableViewController : NSViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.enginePointer = NativeGameEngine(forLayer: self.view.layer! as! CAMetalLayer)
+        launch_game(unsafeBitCast(self, to: UnsafeMutableRawPointer.self), unsafeBitCast(self.view.layer! as! CAMetalLayer, to: UnsafeMutableRawPointer.self))
         self.view.window?.title = NativeGameEngine.captionbarText()! as String
         initDispatchers()
         
@@ -182,12 +185,15 @@ final class PeridotRenderableViewController : NSViewController {
         }
         
         (self.view as! PeridotRenderableView).enginePointer = self.enginePointer
+        (self.view as! PeridotRenderableView).viewController = self
     }
     override func viewDidAppear() {
         super.viewDidAppear()
         NSLog("BeginTimer")
-        if let d = self.workDispatcher { d.resume() }
-        if let d = self.dplink { CVDisplayLinkStart(d) }
+        self.workDispatcher?.resume()
+        if let d = self.dplink {
+            CVDisplayLinkStart(d)
+        }
     }
     override func viewWillDisappear() {
         super.viewWillDisappear()
@@ -197,6 +203,34 @@ final class PeridotRenderableViewController : NSViewController {
             let rv = CVDisplayLinkStop(d)
             NSLog("Stopped Timer with %d", rv)
         }
-        if let d = self.workDispatcher { d.cancel() }
+        self.workDispatcher?.cancel()
+    }
+    
+    func setGameDriverCallbacks(_ callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
+        NSLog("setGameDrivercallbacks")
+        self.gameDriverCallbacks = callbacks
+        self.gameDriverCallbackContextPtr = contextPtr
+    }
+    
+    func updateNative() {
+        guard let cb = self.gameDriverCallbacks else {
+            return
+        }
+        guard let ctx = self.gameDriverCallbackContextPtr else {
+            return
+        }
+        
+        cb.pointee.update(ctx)
+    }
+    
+    func resizeNative(_ size: NSSize) {
+        guard let cb = self.gameDriverCallbacks else {
+            return
+        }
+        guard let ctx = self.gameDriverCallbackContextPtr else {
+            return
+        }
+        
+        cb.pointee.resize(ctx, UInt32(size.width), UInt32(size.height))
     }
 }

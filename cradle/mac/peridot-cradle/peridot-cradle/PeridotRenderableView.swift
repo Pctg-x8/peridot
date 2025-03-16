@@ -12,6 +12,7 @@ import QuartzCore
 
 final class PeridotRenderableView : NSView {
     weak var enginePointer: NativeGameEngine? = nil
+    weak var viewController: PeridotRenderableViewController? = nil
     
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -40,7 +41,7 @@ final class PeridotRenderableView : NSView {
             l.bounds = rect
         }
         if !self.inLiveResize {
-            if let e = self.enginePointer { e.resize(newSize) }
+            self.viewController?.resizeNative(newSize)
         }
     }
 }

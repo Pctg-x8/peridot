@@ -1237,25 +1237,36 @@ impl<'s> CombinedShaderGenContext<'s> {
         }
 
         // expand header code blocks
-        sink.write_vectored(
-            &self
-                .vertex_shader_header_ordered
-                .iter()
-                .map(|x| {
-                    std::io::IoSlice::new(
-                        x.slice
-                            .strip_prefix('{')
-                            .unwrap_or(x.slice)
-                            .strip_suffix('}')
-                            .unwrap_or(x.slice)
-                            .as_bytes(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )?;
+        for x in self.vertex_shader_header_ordered.iter() {
+            sink.write_all(
+                x.slice
+                    .strip_prefix('{')
+                    .unwrap_or(x.slice)
+                    .strip_suffix('}')
+                    .unwrap_or(x.slice)
+                    .as_bytes(),
+            )?;
+        }
+        // なぜかmacだとpipeしたstdinに対するwrite_vectoredがうまく動かない（中途半端なとこでEOF判定される？）
+        // let r = sink.write_vectored(
+        //     &self
+        //         .vertex_shader_header_ordered
+        //         .iter()
+        //         .map(|x| {
+        //             std::io::IoSlice::new(
+        //                 x.slice
+        //                     .strip_prefix('{')
+        //                     .unwrap_or(x.slice)
+        //                     .strip_suffix('}')
+        //                     .unwrap_or(x.slice)
+        //                     .as_bytes(),
+        //             )
+        //         })
+        //         .collect::<Vec<_>>(),
+        // )?;
 
         // expand main code blocks
-        sink.write_all(b"void main() {\n")?;
+        sink.write_all(b"void main() {\n").unwrap();
         sink.write_vectored(
             &self
                 .vertex_shader_main_ordered
@@ -1322,22 +1333,33 @@ impl<'s> CombinedShaderGenContext<'s> {
         }
 
         // expand header code blocks
-        sink.write_vectored(
-            &self
-                .fragment_shader_header_ordered
-                .iter()
-                .map(|x| {
-                    std::io::IoSlice::new(
-                        x.slice
-                            .strip_prefix('{')
-                            .unwrap_or(x.slice)
-                            .strip_suffix('}')
-                            .unwrap_or(x.slice)
-                            .as_bytes(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )?;
+        for x in self.fragment_shader_header_ordered.iter() {
+            sink.write_all(
+                x.slice
+                    .strip_prefix('{')
+                    .unwrap_or(x.slice)
+                    .strip_suffix('}')
+                    .unwrap_or(x.slice)
+                    .as_bytes(),
+            )?;
+        }
+        // なぜかmacだとpipeしたstdinに対するwrite_vectoredがうまく動かない（中途半端なとこでEOF判定される？）
+        // sink.write_vectored(
+        //     &self
+        //         .fragment_shader_header_ordered
+        //         .iter()
+        //         .map(|x| {
+        //             std::io::IoSlice::new(
+        //                 x.slice
+        //                     .strip_prefix('{')
+        //                     .unwrap_or(x.slice)
+        //                     .strip_suffix('}')
+        //                     .unwrap_or(x.slice)
+        //                     .as_bytes(),
+        //             )
+        //         })
+        //         .collect::<Vec<_>>(),
+        // )?;
 
         // expand main code blocks
         sink.write_all(b"void main() {\n")?;
