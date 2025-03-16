@@ -482,7 +482,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let mut rot = 0.0f32;
     loop {
-        match e.wait_for_event2().await {
+        match e.next_event().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
                 let fd = match e.prepare_frame() {

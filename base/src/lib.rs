@@ -229,11 +229,11 @@ impl EngineEventReceiver {
     }
 }
 
-pub struct WaitForEventFuture<'e> {
+pub struct NextEventFuture<'e> {
     queue: &'e RefCell<VecDeque<Event>>,
     queue_waker: &'e RefCell<Vec<core::task::Waker>>,
 }
-impl core::future::Future for WaitForEventFuture<'_> {
+impl core::future::Future for NextEventFuture<'_> {
     type Output = Event;
 
     #[inline]
@@ -270,8 +270,8 @@ impl EventQueue {
     }
 
     #[inline(always)]
-    pub fn wait_for_event<'q>(&'q self) -> impl core::future::Future<Output = Event> + 'q {
-        WaitForEventFuture {
+    pub fn next_event<'q>(&'q self) -> impl core::future::Future<Output = Event> + 'q {
+        NextEventFuture {
             queue: &self.queue,
             queue_waker: &self.queue_waker,
         }
@@ -344,8 +344,8 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     }
 
     #[inline(always)]
-    pub fn wait_for_event2(&self) -> impl core::future::Future<Output = Event> + 'q {
-        self.shared_event_queue.wait_for_event()
+    pub fn next_event(&self) -> impl core::future::Future<Output = Event> + 'q {
+        self.shared_event_queue.next_event()
     }
 
     pub async fn quit(&self) {
