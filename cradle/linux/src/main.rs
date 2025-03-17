@@ -1,3 +1,4 @@
+use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
@@ -97,36 +98,54 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
     }
 }
 
-pub struct GameDriver {
+static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
+    |ptr| core::task::RawWaker::new(ptr, &USERCODE_WAKER_VTABLE),
+    |_| {},
+    |_| {},
+    |_| {},
+);
+
+pub struct GameDriver<MainF> {
     engine_input: peridot::InputProcess,
     engine_audio: Arc<RwLock<peridot::audio::Mixer>>,
     _snd: Box<dyn SoundBackend>,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
     frame_timing_sender: async_std::channel::Sender<()>,
-    usercode_thread: async_std::task::JoinHandle<()>,
+    event_queue: Pin<Box<peridot::EventQueue>>,
+    usercode: Pin<Box<MainF>>,
+    // self-referential struct
+    _pinned: core::marker::PhantomPinned,
 }
-impl GameDriver {
-    fn new<PP>(pp: Arc<RwLock<PP>>) -> Self
+impl<MainF: Future> GameDriver<MainF> {
+    fn new<PP>(
+        pp: SharedMutableRef<PP>,
+        usercode_launcher: impl FnOnce(
+            peridot::Engine<'static, NativeLink<SharedMutableRef<PP>>>,
+        ) -> MainF,
+    ) -> Self
     where
         PP: PointerPositionProvider + Send + Sync + 'static,
-        Arc<RwLock<PP>>: PresenterProvider,
-        <Arc<RwLock<PP>> as PresenterProvider>::Presenter: Sync + Send,
-        <<Arc<RwLock<PP>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer: Sync + Send
+        SharedMutableRef<PP>: PresenterProvider<
+            Presenter: Sync + Send + peridot::PlatformPresenter<BackBuffer: Sync + Send>,
+        >,
     {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
 
-        let nl = NativeLink {
-            al: PlatformAssetLoader::new(),
-            pp: pp.clone(),
-        };
+        let event_queue = Box::pin(peridot::EventQueue::new());
+        let event_queue_lifetime_extended: &'static peridot::EventQueue =
+            unsafe { &*(&*event_queue as *const _) };
         let mut engine = peridot::Engine::new(
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
-            nl,
+            NativeLink {
+                al: PlatformAssetLoader::new(),
+                pp: pp.clone(),
+            },
             Default::default(),
             (event_sender.clone(), event_receiver),
             frame_timing_receiver,
+            &event_queue_lifetime_extended,
         );
         engine
             .input()
@@ -146,9 +165,7 @@ impl GameDriver {
 
         let engine_input = engine.input().clone();
         let engine_audio = engine.audio_mixer().clone();
-        let usercode_thread = async_std::task::spawn(async move {
-            userlib::game_main(&mut engine).await;
-        });
+        let mut usercode = Box::pin(usercode_launcher(engine));
 
         Self {
             engine_input,
@@ -156,8 +173,21 @@ impl GameDriver {
             _snd,
             event_sender,
             frame_timing_sender,
-            usercode_thread,
+            event_queue,
+            usercode,
+            _pinned: core::marker::PhantomPinned,
         }
+    }
+
+    /// returns true if usercode coroutine has done
+    pub fn step(&mut self) -> bool {
+        let usercode_waker =
+            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
+
+        self.usercode
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&usercode_waker))
+            .is_ready()
     }
 }
 
@@ -184,15 +214,16 @@ impl Drop for EpollTemporaryAddFd<'_> {
     }
 }
 
-async fn run_with_window_backend<W>(window_backend: Arc<RwLock<W>>)
+fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
     W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
-    Arc<RwLock<W>>: PresenterProvider,
-    <Arc<RwLock<W>> as PresenterProvider>::Presenter: Sync + Send,
-    <<Arc<RwLock<W>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer:
-        Sync + Send,
+    SharedMutableRef<W>: PresenterProvider<
+        Presenter: Sync + Send + peridot::PlatformPresenter<BackBuffer: Sync + Send>,
+    >,
 {
-    let gd = GameDriver::new(window_backend.clone());
+    let mut gd = GameDriver::new(window_backend.clone(), |mut engine| async move {
+        userlib::game_main(&mut engine).await;
+    });
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
     let mut input = input::InputSystem::new(&ep, 1, 2);
@@ -202,6 +233,9 @@ where
     let mut events = Vec::new();
     let mut last_drawn_geometry = window_backend.read().geometry();
     while !window_backend.read().has_close_requested() {
+        // step usercode before wait
+        gd.step();
+
         if events.len() != 2 + input.managed_devices_count() {
             // resize
             events.resize(2 + input.managed_devices_count(), unsafe {
@@ -228,22 +262,11 @@ where
             let current_geometry = window_backend.read().geometry();
             if last_drawn_geometry != current_geometry {
                 last_drawn_geometry = current_geometry;
-                if let Err(e) = gd
-                    .event_sender
-                    .send(peridot::EngineEvent::Resize(last_drawn_geometry))
-                    .await
-                {
-                    warn!("Failed to send resize event: {e:?}");
-                }
+                gd.event_queue
+                    .enqueue(peridot::Event::Resize(last_drawn_geometry));
             }
 
-            match gd.frame_timing_sender.try_send(()) {
-                Ok(_) => (),
-                Err(async_std::channel::TrySendError::Full(_)) => (),
-                Err(async_std::channel::TrySendError::Closed(_)) => {
-                    warn!("Frame Timing channel was closed!");
-                }
-            }
+            gd.event_queue.enqueue(peridot::Event::NextFrame);
             continue;
         }
 
@@ -266,21 +289,14 @@ where
         }
     }
 
-    if gd
-        .event_sender
-        .send(peridot::EngineEvent::Shutdown)
-        .await
-        .is_ok()
-    {
-        gd.usercode_thread.await;
-    }
+    gd.event_queue.enqueue(peridot::Event::Shutdown);
+    while !gd.step() {}
 
     gd.engine_audio.write().stop();
     tracing::trace!("Terminating Program...");
 }
 
-#[async_std::main]
-async fn main() {
+fn main() {
     let fmt = tracing_subscriber::fmt::layer().pretty();
     let env_filter = tracing_subscriber::filter::EnvFilter::from_default_env();
     tracing_subscriber::registry()
@@ -290,18 +306,16 @@ async fn main() {
 
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
-            run_with_window_backend(Arc::new(RwLock::new(
+            run_with_window_backend(make_shared_mutable_ref(
                 Wayland::try_init().expect("Failed to initialize wayland backend"),
-            )))
-            .await;
+            ));
             return;
         }
         #[cfg(feature = "support-xcb")]
         if backend_name == "xcb" {
-            run_with_window_backend(Arc::new(RwLock::new(
+            run_with_window_backend(make_shared_mutable_ref(
                 presenter::xcb::X11::try_init().expect("Failed to initialize xcb backend"),
-            )))
-            .await;
+            ));
             return;
         }
 
@@ -312,12 +326,12 @@ async fn main() {
     }
 
     if let Some(x) = Wayland::try_init() {
-        run_with_window_backend(Arc::new(RwLock::new(x))).await;
+        run_with_window_backend(make_shared_mutable_ref(x));
         return;
     }
     #[cfg(feature = "support-xcb")]
     if let Some(x) = presenter::xcb::X11::try_init() {
-        run_with_window_backend(Arc::new(RwLock::new(x))).await;
+        run_with_window_backend(make_shared_mutable_ref(x));
         return;
     }
 
