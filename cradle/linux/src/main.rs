@@ -163,7 +163,7 @@ impl<MainF: Future> GameDriver<MainF> {
 
         let engine_input = engine.input().clone();
         let engine_audio = engine.audio_mixer().clone();
-        let mut usercode = Box::pin(usercode_launcher(engine));
+        let usercode = Box::pin(usercode_launcher(engine));
 
         Self {
             engine_input,
