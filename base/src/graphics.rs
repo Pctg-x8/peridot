@@ -449,10 +449,7 @@ impl Graphics {
     /// Submits any commands as transient commands.
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
-        )
-            -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+        generator: impl FnOnce(br::CmdRecord<DeviceObject>) -> br::CmdRecord<DeviceObject>,
     ) -> br::Result<()> {
         let mut cb = LocalCommandBundle(
             br::CommandBufferObject::alloc(
@@ -465,7 +462,13 @@ impl Graphics {
             )?,
             &mut self.cp_onetime_submit,
         );
-        generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
+        generator(unsafe {
+            cb[0].begin(
+                &br::CommandBufferBeginInfo::new().onetime_submit(),
+                &self.device,
+            )?
+        })
+        .end()?;
         self.graphics_queue.q.get_mut().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             None,
@@ -501,10 +504,7 @@ impl Graphics {
     #[cfg(feature = "mt")]
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
-        )
-            -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+        generator: impl FnOnce(br::CmdRecord<DeviceObject>) -> br::CmdRecord<DeviceObject>,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         use bedrock::VkHandleMut;
 
@@ -524,7 +524,13 @@ impl Graphics {
             )?,
             pool,
         );
-        generator(unsafe { cb[0].begin_once(&self.device)? }).end()?;
+        generator(unsafe {
+            cb[0].begin(
+                &br::CommandBufferBeginInfo::new().onetime_submit(),
+                &self.device,
+            )?
+        })
+        .end()?;
         self.graphics_queue.q.lock().submit(
             &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
             Some(unsafe {

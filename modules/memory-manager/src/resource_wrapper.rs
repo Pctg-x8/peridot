@@ -1,5 +1,5 @@
 use bedrock::{self as br, DeviceMemoryMut};
-use br::{Device, DeviceChild, VkHandle, VulkanStructure};
+use br::{Device, DeviceChild, VkHandle};
 #[allow(unused_imports)]
 use peridot::mthelper::DynamicMutabilityProvider;
 use peridot::mthelper::SharedMutableRef;
@@ -192,26 +192,14 @@ impl Buffer {
                 locked.object.device().invalidate_memory_range(
                     &ranges
                         .iter()
-                        .map(|r| br::vk::VkMappedMemoryRange {
-                            sType: br::vk::VkMappedMemoryRange::TYPE,
-                            pNext: core::ptr::null(),
-                            memory: locked.object.native_ptr(),
-                            offset: r.start,
-                            size: r.end - r.start,
-                        })
+                        .map(|r| br::MappedMemoryRange::new(&locked.object, r.clone()))
                         .collect::<Vec<_>>(),
                 )
             }
             BackingMemory::Native(ref mut m) => m.device().invalidate_memory_range(
                 &ranges
                     .iter()
-                    .map(|r| br::vk::VkMappedMemoryRange {
-                        sType: br::vk::VkMappedMemoryRange::TYPE,
-                        pNext: core::ptr::null(),
-                        memory: m.native_ptr(),
-                        offset: r.start,
-                        size: r.end - r.start,
-                    })
+                    .map(|r| br::MappedMemoryRange::new(m, r.clone()))
                     .collect::<Vec<_>>(),
             ),
             BackingMemory::NativeShared(ref m) => {
@@ -220,13 +208,7 @@ impl Buffer {
                 locked.device().invalidate_memory_range(
                     &ranges
                         .iter()
-                        .map(|r| br::vk::VkMappedMemoryRange {
-                            sType: br::vk::VkMappedMemoryRange::TYPE,
-                            pNext: core::ptr::null(),
-                            memory: locked.native_ptr(),
-                            offset: r.start,
-                            size: r.end - r.start,
-                        })
+                        .map(|r| br::MappedMemoryRange::new(&locked, r.clone()))
                         .collect::<Vec<_>>(),
                 )
             }
@@ -245,26 +227,14 @@ impl Buffer {
                 locked.object.device().flush_mapped_memory_ranges(
                     &ranges
                         .iter()
-                        .map(|r| br::vk::VkMappedMemoryRange {
-                            sType: br::vk::VkMappedMemoryRange::TYPE,
-                            pNext: core::ptr::null(),
-                            memory: locked.object.native_ptr(),
-                            offset: r.start,
-                            size: r.end - r.start,
-                        })
+                        .map(|r| br::MappedMemoryRange::new(&locked.object, r.clone()))
                         .collect::<Vec<_>>(),
                 )
             }
             BackingMemory::Native(ref mut m) => m.device().flush_mapped_memory_ranges(
                 &ranges
                     .iter()
-                    .map(|r| br::vk::VkMappedMemoryRange {
-                        sType: br::vk::VkMappedMemoryRange::TYPE,
-                        pNext: core::ptr::null(),
-                        memory: m.native_ptr(),
-                        offset: r.start,
-                        size: r.end - r.start,
-                    })
+                    .map(|r| br::MappedMemoryRange::new(m, r.clone()))
                     .collect::<Vec<_>>(),
             ),
             BackingMemory::NativeShared(ref m) => {
@@ -273,13 +243,7 @@ impl Buffer {
                 locked.device().flush_mapped_memory_ranges(
                     &ranges
                         .iter()
-                        .map(|r| br::vk::VkMappedMemoryRange {
-                            sType: br::vk::VkMappedMemoryRange::TYPE,
-                            pNext: core::ptr::null(),
-                            memory: locked.native_ptr(),
-                            offset: r.start,
-                            size: r.end - r.start,
-                        })
+                        .map(|r| br::MappedMemoryRange::new(&locked, r.clone()))
                         .collect::<Vec<_>>(),
                 )
             }
@@ -297,18 +261,15 @@ impl Buffer {
                 let ptr = unsafe {
                     locked
                         .object
-                        .map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
+                        .map_raw(self.offset..self.offset + self.size as br::DeviceSize)?
                 };
                 if self.requires_explicit_sync() && mode.is_read() {
                     unsafe {
                         self.device()
-                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.object.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
+                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
+                                &locked.object,
+                                self.offset..self.offset + self.size as br::DeviceSize,
+                            )])?;
                     }
                 }
                 let r = op(AnyPointer(unsafe {
@@ -316,15 +277,11 @@ impl Buffer {
                 }));
                 if self.requires_explicit_sync() && mode.is_write() {
                     unsafe {
-                        self.device().flush_mapped_memory_ranges(&[
-                            br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.object.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            },
-                        ])?;
+                        self.device()
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                &locked.object,
+                                self.offset..self.offset + self.size as br::DeviceSize,
+                            )])?;
                     }
                 }
                 unsafe {
@@ -340,13 +297,10 @@ impl Buffer {
                 if self.requires_flushing && mode.is_read() {
                     unsafe {
                         m.device()
-                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: m.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
+                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
+                                m,
+                                self.offset..self.offset + self.size as br::DeviceSize,
+                            )])?;
                     }
                 }
                 let r = op(AnyPointer(unsafe {
@@ -355,13 +309,10 @@ impl Buffer {
                 if self.requires_flushing && mode.is_write() {
                     unsafe {
                         m.device()
-                            .flush_mapped_memory_ranges(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: m.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                m,
+                                self.offset..self.offset + self.size as br::DeviceSize,
+                            )])?;
                     }
                 }
                 unsafe {
@@ -378,13 +329,10 @@ impl Buffer {
                 if self.requires_explicit_sync() && mode.is_read() {
                     unsafe {
                         self.device()
-                            .invalidate_memory_range(&[br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            }])?;
+                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
+                                &locked,
+                                self.offset..self.offset + self.size as br::DeviceSize,
+                            )])?;
                     }
                 }
                 let r = op(AnyPointer(unsafe {
@@ -392,15 +340,11 @@ impl Buffer {
                 }));
                 if self.requires_explicit_sync() && mode.is_write() {
                     unsafe {
-                        self.device().flush_mapped_memory_ranges(&[
-                            br::vk::VkMappedMemoryRange {
-                                sType: br::vk::VkMappedMemoryRange::TYPE,
-                                pNext: core::ptr::null(),
-                                memory: locked.native_ptr(),
-                                offset: self.offset,
-                                size: self.size as _,
-                            },
-                        ])?;
+                        self.device()
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                &locked,
+                                self.offset..self.offset + self.size as br::DeviceSize,
+                            )])?;
                     }
                 }
                 unsafe {

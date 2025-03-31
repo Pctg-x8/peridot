@@ -241,7 +241,7 @@ impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemoryMut>
 {
     pub fn guard_map<R>(
         &mut self,
-        action: impl FnOnce(&br::MappedMemoryRange<M>) -> R,
+        action: impl FnOnce(&br::MappedMemory<M>) -> R,
     ) -> br::Result<R> {
         self.0.guard_map(self.1.clone(), action)
     }

@@ -177,12 +177,12 @@ where
 
 #[repr(transparent)]
 pub struct AutocloseMappedMemoryRange<'m, DeviceMemory: br::DeviceMemoryMut + ?Sized + 'm>(
-    pub(super) Option<br::MappedMemoryRange<'m, DeviceMemory>>,
+    pub(super) Option<br::MappedMemory<'m, DeviceMemory>>,
 );
 impl<'m, DeviceMemory: br::DeviceMemoryMut + ?Sized + 'm> std::ops::Deref
     for AutocloseMappedMemoryRange<'m, DeviceMemory>
 {
-    type Target = br::MappedMemoryRange<'m, DeviceMemory>;
+    type Target = br::MappedMemory<'m, DeviceMemory>;
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref().expect("object has been dropped")
