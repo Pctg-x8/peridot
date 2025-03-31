@@ -409,10 +409,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
 
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
-        )
-            -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+        generator: impl FnOnce(br::CmdRecord<DeviceObject>) -> br::CmdRecord<DeviceObject>,
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -430,11 +427,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(
-                br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
-            )
-                -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>
-            + 's,
+        generator: impl FnOnce(br::CmdRecord<DeviceObject>) -> br::CmdRecord<DeviceObject> + 's,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
     }
@@ -738,14 +731,10 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
     }
 
     #[inline(always)]
-    pub fn bind<
-        'r,
-        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
-        Device: br::Device + ?Sized,
-    >(
+    pub fn bind<'r, Device: ?Sized>(
         &self,
-        rec: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
+        rec: br::CmdRecord<'r, Device>,
+    ) -> br::CmdRecord<'r, Device> {
         rec.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }

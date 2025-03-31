@@ -17,10 +17,10 @@ pub trait PlatformPresenter {
     fn back_buffer_count(&self) -> usize;
     fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>>;
 
-    fn emit_initialize_back_buffer_commands<'r, CB: br::CommandBufferMut + ?Sized>(
+    fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, CB, DeviceObject>,
-    ) -> br::CmdRecord<'r, CB, DeviceObject>;
+        recorder: br::CmdRecord<'r, DeviceObject>,
+    ) -> br::CmdRecord<'r, DeviceObject>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s>(
@@ -212,13 +212,10 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         self.swapchain.get().back_buffer_images.get(index)
     }
 
-    pub fn emit_initialize_back_buffer_commands<
-        'r,
-        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-    >(
+    pub fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, CB, DeviceObject>,
-    ) -> br::CmdRecord<'r, CB, DeviceObject> {
+        recorder: br::CmdRecord<'r, DeviceObject>,
+    ) -> br::CmdRecord<'r, DeviceObject> {
         let image_barriers = self
             .swapchain
             .get()

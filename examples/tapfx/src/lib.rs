@@ -356,9 +356,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         copy.between(in_barriers, out_barriers)
             .execute_and_finish(unsafe {
                 update_commands[0]
-                    .begin(e.graphics_device())
+                    .begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin recording update commands")
-                    .as_dyn_ref()
             })
             .expect("Failed to record commands");
     }
@@ -392,9 +391,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         (&color_renders)
             .between(rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                b.begin(e.graphics_device())
+                b.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin recording main commands")
-                    .as_dyn_ref()
             })
             .expect("Failed to record commands");
     }

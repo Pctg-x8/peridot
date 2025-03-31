@@ -508,9 +508,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         (&color_renders[..])
             .between(rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                r.begin(e.graphics_device())
+                r.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin render command recording")
-                    .as_dyn_ref()
             })
             .expect("Failed to finish render commands");
     }
@@ -608,9 +607,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     (&color_renders[..])
                         .between(rp, EndRenderPass)
                         .execute_and_finish(unsafe {
-                            r.begin(e.graphics_device())
+                            r.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                                 .expect("Start Recording CB")
-                                .as_dyn_ref()
                         })
                         .expect("Failed to finish render commands");
                 }
