@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::mem::MaybeUninit;
 mod audio;
 use audio::NativeAudioEngine;
@@ -82,12 +83,19 @@ impl ThreadsafeWindowOps {
 }
 
 pub struct GameDriver {
-    base: peridot::Engine<NativeLink>,
+    base: peridot::Engine<'static, NativeLink>,
     _snd: NativeAudioEngine,
     current_size: peridot::math::Vector2<u32>,
     ri_handler: self::input::RawInputHandler,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
 }
+
+static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
+    |ptr| core::task::RawWaker::new(ptr, &USERCODE_WAKER_VTABLE),
+    |_| {},
+    |_| {},
+    |_| {},
+);
 
 #[async_std::main]
 async fn main() {
@@ -163,7 +171,10 @@ async fn main() {
     let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
     let events_sender_th = events_sender.clone();
 
-    let thread = async_std::task::spawn(async move {
+    let event_queue = core::pin::pin!(peridot::EventQueue::new());
+    let event_queue_lifetime_extended: &'static peridot::EventQueue =
+        unsafe { &*(&*event_queue as *const _) };
+    let mut usercode_thread = core::pin::pin!(async move {
         let nl = NativeLink {
             al: AssetProvider::new(),
             window: w.clone(),
@@ -177,6 +188,7 @@ async fn main() {
             },
             (events_sender_th.clone(), events_receiver),
             frame_timing_receiver,
+            event_queue_lifetime_extended,
         );
         let ri_handler = self::input::RawInputHandler::init();
         base.input_mut()
@@ -199,22 +211,34 @@ async fn main() {
     });
 
     while process_message_all() {
-        match frame_timing_sender.try_send(()) {
-            Ok(_) => (),
-            Err(async_std::channel::TrySendError::Full(_)) => (),
-            Err(async_std::channel::TrySendError::Closed(_)) => {
-                // events bus gone
-                break;
-            }
-        }
+        event_queue.enqueue(peridot::Event::NextFrame);
+
+        let waker = unsafe {
+            core::task::Waker::from_raw(core::task::RawWaker::new(
+                core::ptr::null(),
+                &USERCODE_WAKER_VTABLE,
+            ))
+        };
+        let _ = usercode_thread
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&waker));
     }
 
-    if events_sender
-        .send(peridot::EngineEvent::Shutdown)
-        .await
-        .is_ok()
-    {
-        thread.await;
+    event_queue.enqueue(peridot::Event::Shutdown);
+    loop {
+        let waker = unsafe {
+            core::task::Waker::from_raw(core::task::RawWaker::new(
+                core::ptr::null(),
+                &USERCODE_WAKER_VTABLE,
+            ))
+        };
+        if usercode_thread
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&waker))
+            .is_ready()
+        {
+            break;
+        }
     }
 }
 
