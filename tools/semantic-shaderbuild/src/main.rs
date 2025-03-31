@@ -1266,7 +1266,7 @@ impl<'s> CombinedShaderGenContext<'s> {
         // )?;
 
         // expand main code blocks
-        sink.write_all(b"void main() {\n").unwrap();
+        sink.write_all(b"void main() {\n")?;
         sink.write_vectored(
             &self
                 .vertex_shader_main_ordered
