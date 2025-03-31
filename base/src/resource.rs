@@ -213,7 +213,7 @@ impl TexturePreallocatedGroup<br::ImageObject<DeviceObject>> {
 }
 impl<Device: br::Device + 'static> TextureInstantiatedGroup<Device> {
     /// Copy texture pixels into a staging buffer.
-    pub fn stage_data(&self, mr: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>) {
+    pub fn stage_data(&self, mr: &br::MappedMemory<impl br::DeviceMemoryMut + ?Sized>) {
         tracing::trace!("Staging Texture Data...");
         for &(ref pd, offs) in &self.0 {
             let s = unsafe {
@@ -634,7 +634,7 @@ impl<Object> BufferWithLength<Object> {
 /// Describing the type that can be used as initializer of `FixedBuffer`s
 pub trait FixedBufferInitializer {
     /// Setup memory data in staging buffer
-    fn stage_data(&mut self, m: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>);
+    fn stage_data(&mut self, m: &br::MappedMemory<impl br::DeviceMemoryMut + ?Sized>);
     fn buffer_graphics_ready<Device: br::Device + 'static>(
         &self,
         tfb: &mut TransferBatch,

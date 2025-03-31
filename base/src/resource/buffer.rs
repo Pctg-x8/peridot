@@ -36,7 +36,7 @@ impl<
     pub fn guard_map<R>(
         &mut self,
         range: std::ops::Range<u64>,
-        f: impl FnOnce(&br::MappedMemoryRange<Memory>) -> R,
+        f: impl FnOnce(&br::MappedMemory<Memory>) -> R,
     ) -> br::Result<R>
     where
         Memory: br::DeviceMemoryMut,

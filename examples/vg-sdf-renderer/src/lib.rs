@@ -982,9 +982,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .commands(fb, &buffers)
             .execute_and_finish(unsafe {
                 cmd[cx]
-                    .begin(e.graphics_device())
+                    .begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin recording commands")
-                    .as_dyn_ref()
             })
             .expect("Failed to record commands");
     }
@@ -1274,9 +1273,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         .commands(fb, &buffers)
                         .execute_and_finish(unsafe {
                             cmd[cx]
-                                .begin(e.graphics_device())
+                                .begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                                 .expect("Failed to begin recording commands")
-                                .as_dyn_ref()
                         })
                         .expect("Failed to record commands");
                 }
