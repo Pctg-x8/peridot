@@ -1,8 +1,8 @@
-use std::{collections::HashMap, ffi::CStr, sync::Arc};
+use std::{collections::HashMap, ffi::CStr};
 
 use bedrock as br;
 use br::PhysicalDevice;
-use parking_lot::RwLock;
+use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef};
 use wayland_backend::client::ReadEventsGuard;
 use wayland_client::{
     protocol::{
@@ -246,7 +246,7 @@ impl WindowBackend for Wayland {
         self.state.geometry
     }
 }
-impl PresenterProvider for Arc<RwLock<Wayland>> {
+impl PresenterProvider for SharedMutableRef<Wayland> {
     type Presenter = Presenter;
     const SURFACE_EXT_NAME: &'static CStr = c"VK_KHR_wayland_surface";
 
@@ -283,12 +283,16 @@ impl EventProcessor for Wayland {
 }
 
 pub struct Presenter {
-    window_backend: Arc<RwLock<Wayland>>,
+    window_backend: SharedMutableRef<Wayland>,
     sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
 }
 impl Presenter {
-    fn new(g: &peridot::Graphics, renderer_queue_family: u32, w: &Arc<RwLock<Wayland>>) -> Self {
-        let wlock = w.read();
+    fn new(
+        g: &peridot::Graphics,
+        renderer_queue_family: u32,
+        w: &SharedMutableRef<Wayland>,
+    ) -> Self {
+        let wlock = w.borrow();
 
         if !unsafe {
             g.adapter().wayland_presentation_support(
@@ -381,7 +385,7 @@ impl peridot::PlatformPresenter for Presenter {
     }
 
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
-        self.window_backend.read().state.geometry
+        self.window_backend.borrow().state.geometry
     }
 }
 impl PointerPositionProvider for Wayland {

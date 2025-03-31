@@ -37,7 +37,7 @@ fn init_controls(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .map(peridot::NativeAnalogInput::TouchMoveY(0), INPUT_PLANE_TOP);
 }
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     init_controls(e);
 
     let bb_size = e
@@ -398,8 +398,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     }
 
     let mut last_mouse_input = false;
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    loop {
+        match e.next_event().await {
             peridot::Event::NextFrame => {
                 let fd = e.prepare_frame().expect("Failed to prepare frame");
 

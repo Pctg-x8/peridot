@@ -209,14 +209,14 @@ struct FrameData {
 }
 
 pub struct InputProcessSharedState {
-    nativelink: Option<Box<dyn NativeInput + Sync + Send>>,
+    nativelink: Option<Box<dyn NativeInput>>,
     collected: AsyncCollectedData,
     frame: FrameData,
     input_map: InputMaps,
 }
 impl InputProcessSharedState {
     #[inline]
-    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput + Sync + Send>) {
+    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput>) {
         self.nativelink = Some(n);
     }
 
@@ -358,7 +358,7 @@ impl InputProcess {
     }
 
     #[inline]
-    pub fn set_nativelink(&self, n: Box<dyn NativeInput + Sync + Send>) {
+    pub fn set_nativelink(&self, n: Box<dyn NativeInput>) {
         self.state_write_lock().set_nativelink(n);
     }
 

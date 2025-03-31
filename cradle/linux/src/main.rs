@@ -124,10 +124,8 @@ impl<MainF: Future> GameDriver<MainF> {
         ) -> MainF,
     ) -> Self
     where
-        PP: PointerPositionProvider + Send + Sync + 'static,
-        SharedMutableRef<PP>: PresenterProvider<
-            Presenter: Sync + Send + peridot::PlatformPresenter<BackBuffer: Sync + Send>,
-        >,
+        PP: PointerPositionProvider + 'static,
+        SharedMutableRef<PP>: PresenterProvider<Presenter: peridot::PlatformPresenter>,
     {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
@@ -216,10 +214,8 @@ impl Drop for EpollTemporaryAddFd<'_> {
 
 fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
-    W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
-    SharedMutableRef<W>: PresenterProvider<
-        Presenter: Sync + Send + peridot::PlatformPresenter<BackBuffer: Sync + Send>,
-    >,
+    W: WindowBackend + EventProcessor + PointerPositionProvider + 'static,
+    SharedMutableRef<W>: PresenterProvider<Presenter: peridot::PlatformPresenter>,
 {
     let mut gd = GameDriver::new(window_backend.clone(), |mut engine| async move {
         userlib::game_main(&mut engine).await;
@@ -228,11 +224,11 @@ where
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
-    window_backend.write().show();
+    window_backend.borrow_mut().show();
     gd.engine_audio.write().start();
     let mut events = Vec::new();
-    let mut last_drawn_geometry = window_backend.read().geometry();
-    while !window_backend.read().has_close_requested() {
+    let mut last_drawn_geometry = window_backend.borrow().geometry();
+    while !window_backend.borrow().has_close_requested() {
         // step usercode before wait
         gd.step();
 
@@ -243,7 +239,7 @@ where
             });
         }
 
-        let window_backend_readiness_guard = window_backend.write().readiness_guard();
+        let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
             window_backend_readiness_guard.borrow_fd().as_raw_fd(),
@@ -259,7 +255,7 @@ where
         // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 {
             drop(window_backend_readiness_guard);
-            let current_geometry = window_backend.read().geometry();
+            let current_geometry = window_backend.borrow().geometry();
             if last_drawn_geometry != current_geometry {
                 last_drawn_geometry = current_geometry;
                 gd.event_queue
@@ -274,7 +270,7 @@ where
         for e in &events[..count as usize] {
             if e.u64 == 0 {
                 window_backend
-                    .write()
+                    .borrow_mut()
                     .process_all_events(rg.take().expect("window events signaled twice"));
             } else if e.u64 == 1 {
                 input.process_monitor_event(&ep);
@@ -283,7 +279,7 @@ where
                 input.process_device_event(
                     &mut input_lock.make_event_receiver(),
                     e.u64,
-                    &*window_backend.read(),
+                    &*window_backend.borrow(),
                 );
             }
         }
