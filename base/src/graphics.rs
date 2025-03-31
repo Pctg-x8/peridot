@@ -291,11 +291,11 @@ impl Graphics {
         let _debug_instance = match br::DebugUtilsMessengerObject::new(
             instance.clone(),
             &br::DebugUtilsMessengerCreateInfo::new(
-                br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
-                    | br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
-                br::vk::VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
-                    | br::vk::VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
-                    | br::vk::VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+                br::DebugUtilsMessageSeverityFlags::ERROR
+                    | br::DebugUtilsMessageSeverityFlags::WARNING,
+                br::DebugUtilsMessageTypeFlags::GENERAL
+                    | br::DebugUtilsMessageTypeFlags::VALIDATION
+                    | br::DebugUtilsMessageTypeFlags::PERFORMANCE,
                 crate::debug::debug_utils_callback,
             ),
         ) {
