@@ -154,7 +154,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .expect("Failed to set image data");
 
     let pre_configure_awaiter = e
-        .submit_commands_async(|mut r| {
+        .submit_commands_async(|r| {
             let texture = RangedImage::single_color_plane(&image);
             let image_data_stg_buffer_ranged = RangedBuffer::from(&image_data_stg_buffer.inner);
 
@@ -213,10 +213,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             );
             let copies = (init_vertex, init_cam_uniform, init_obj_uniform, init_tex);
 
-            let _ = copies
-                .between(in_barriers, out_barriers)
-                .execute(r.as_dyn_ref());
-            r
+            copies.between(in_barriers, out_barriers).execute(r)
         })
         .expect("Failed to submit pre-configure commands");
 
@@ -240,9 +237,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .execute_and_finish(
                 update_cb
                     .synchronized_nth(0)
-                    .begin()
-                    .expect("Failed to begin recording update command")
-                    .as_dyn_ref(),
+                    .begin(&br::CommandBufferBeginInfo::new(), e.graphics().device())
+                    .expect("Failed to begin recording update command"),
             )
             .expect("Failed to record update commands");
     }
@@ -471,9 +467,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         (&color_renders)
             .between(begin_main_rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                cb.begin(e.graphics_device())
+                cb.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin command recording")
-                    .as_dyn_ref()
             })
             .expect("Failed to record render commands");
     }
@@ -535,9 +530,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                             (&color_renders)
                                 .between(begin_main_rp, EndRenderPass)
                                 .execute_and_finish(unsafe {
-                                    cb.begin(e.graphics_device())
-                                        .expect("Failed to begin command recording")
-                                        .as_dyn_ref()
+                                    cb.begin(
+                                        &br::CommandBufferBeginInfo::new(),
+                                        e.graphics_device(),
+                                    )
+                                    .expect("Failed to begin command recording")
                                 })
                                 .expect("Failed to record render commands");
                         }
@@ -605,9 +602,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     (&color_renders)
                         .between(begin_main_rp, EndRenderPass)
                         .execute_and_finish(unsafe {
-                            cb.begin(e.graphics_device())
+                            cb.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                                 .expect("Failed to begin command recording")
-                                .as_dyn_ref()
                         })
                         .expect("Failed to record render commands");
                 }
