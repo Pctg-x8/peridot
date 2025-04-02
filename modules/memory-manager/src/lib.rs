@@ -90,7 +90,7 @@ impl br::VkHandle for TmpImage<'_> {
     }
 }
 impl TmpImage<'_> {
-    fn unwrap(
+    fn release(
         mut self,
     ) -> (
         br::vk::VkImage,
@@ -1198,7 +1198,7 @@ impl MemoryManager {
             )?;
         }
 
-        let (handle, format, size, image_type) = o.unwrap();
+        let (handle, format, size, image_type) = o.release();
         Ok(Image {
             handle,
             device: e.device().clone(),
@@ -1297,7 +1297,7 @@ impl MemoryManager {
 
                     let memory = br::DeviceMemoryObject::new(e.device().clone(), &memory_req)?;
 
-                    let (handle, format, size, image_type) = object.unwrap();
+                    let (handle, format, size, image_type) = object.release();
                     bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
                         sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
                         pNext: core::ptr::null(),
@@ -1321,7 +1321,7 @@ impl MemoryManager {
                     if let Some(ref combined) = combined_native_memory {
                         // placement into combined native memory
 
-                        let (handle, format, size, image_type) = object.unwrap();
+                        let (handle, format, size, image_type) = object.release();
                         bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
                             sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
                             pNext: core::ptr::null(),
@@ -1350,7 +1350,7 @@ impl MemoryManager {
                         // この前提が崩れることがあったら考え直す)
                         let aligned_offset = align2_u64(offset, req.alignment);
 
-                        let (handle, format, size, image_type) = object.unwrap();
+                        let (handle, format, size, image_type) = object.release();
                         bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
                             sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
                             pNext: core::ptr::null(),
