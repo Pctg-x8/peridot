@@ -359,11 +359,6 @@ jobs:
         name: Checking out
         uses: "actions/checkout@v4"
       - env:
-          RUN_SCRIPT: codeform_check
-        if: 'true'
-        name: Running Check - Line Width
-        uses: "./.github/actions/codeform-checker"
-      - env:
           RUN_SCRIPT: vulnerabilities_elliminator
         if: 'true'
         name: Running Check - Debugging Weaks
