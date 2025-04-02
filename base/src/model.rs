@@ -11,24 +11,20 @@ pub trait ModelData {
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> Self::PreallocOffsetType;
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
+        mem: &br::MappedMemory<impl br::DeviceMemoryMut + ?Sized>,
         offsets: Self::PreallocOffsetType,
     ) -> Self::RendererParams;
 }
 pub trait DefaultRenderCommands<'e, Device: br::Device> {
     type Extras: 'e;
 
-    fn default_render_commands<
-        'r,
-        NL: NativeLinker,
-        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
-    >(
+    fn default_render_commands<'r, NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: br::CmdRecord<'r, CB, Device>,
+        cmd: br::CmdRecord<'r, Device>,
         buffer: &(impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + ?Sized),
         extras: Self::Extras,
-    ) -> br::CmdRecord<'r, CB, Device>;
+    ) -> br::CmdRecord<'r, Device>;
 }
 
 #[derive(Debug, Clone)]
@@ -42,11 +38,7 @@ impl<VT: Clone> ModelData for Primitive<VT> {
     fn prealloc(&self, alloc: &mut BufferPrealloc) -> u64 {
         alloc.add(BufferContent::vertices::<VT>(self.vertices.len()))
     }
-    fn stage_data_into(
-        &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
-        vo: u64,
-    ) {
+    fn stage_data_into(&self, mem: &br::MappedMemory<impl br::DeviceMemoryMut + ?Sized>, vo: u64) {
         unsafe {
             mem.slice_mut::<VT>(vo as _, self.vertices.len())
                 .clone_from_slice(&self.vertices);
@@ -70,7 +62,7 @@ impl<VT: Clone> ModelData for IndexedPrimitive<VT> {
     }
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
+        mem: &br::MappedMemory<impl br::DeviceMemoryMut + ?Sized>,
         (vo, io): (u64, u64),
     ) {
         unsafe {

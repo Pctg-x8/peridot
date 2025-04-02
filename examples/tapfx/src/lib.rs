@@ -37,7 +37,7 @@ fn init_controls(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .map(peridot::NativeAnalogInput::TouchMoveY(0), INPUT_PLANE_TOP);
 }
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     init_controls(e);
 
     let bb_size = e
@@ -356,9 +356,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         copy.between(in_barriers, out_barriers)
             .execute_and_finish(unsafe {
                 update_commands[0]
-                    .begin(e.graphics_device())
+                    .begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin recording update commands")
-                    .as_dyn_ref()
             })
             .expect("Failed to record commands");
     }
@@ -392,16 +391,15 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         (&color_renders)
             .between(rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                b.begin(e.graphics_device())
+                b.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin recording main commands")
-                    .as_dyn_ref()
             })
             .expect("Failed to record commands");
     }
 
     let mut last_mouse_input = false;
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    loop {
+        match e.next_event().await {
             peridot::Event::NextFrame => {
                 let fd = e.prepare_frame().expect("Failed to prepare frame");
 

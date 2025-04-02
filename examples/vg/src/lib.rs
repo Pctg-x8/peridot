@@ -33,7 +33,7 @@ const unsafe fn as_u8_slice<T>(slice: &[T]) -> &[u8] {
     )
 }
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     let mut font_provider =
         pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
     let font = font_provider
@@ -508,17 +508,16 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         (&color_renders[..])
             .between(rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                r.begin(e.graphics_device())
+                r.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                     .expect("Failed to begin render command recording")
-                    .as_dyn_ref()
             })
             .expect("Failed to finish render commands");
     }
 
     let target_size = peridot::math::Vector2(screen_size.width as _, screen_size.height as _);
 
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    loop {
+        match e.next_event().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
                 let fd = e.prepare_frame().expect("Failed to prepare frame");
@@ -608,9 +607,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     (&color_renders[..])
                         .between(rp, EndRenderPass)
                         .execute_and_finish(unsafe {
-                            r.begin(e.graphics_device())
+                            r.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
                                 .expect("Start Recording CB")
-                                .as_dyn_ref()
                         })
                         .expect("Failed to finish render commands");
                 }
