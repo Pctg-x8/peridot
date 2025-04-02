@@ -327,7 +327,7 @@ impl LastRenderingCompletionFence {
     }
 }
 
-pub struct Engine<NL: NativeLinker> {
+pub struct Engine<'q, NL: NativeLinker> {
     native_link: NL,
     presenter: NL::Presenter,
     pub(self) g: Graphics,
