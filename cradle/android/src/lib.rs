@@ -8,7 +8,7 @@ mod native_wrapper;
 mod userlib;
 
 use android::{AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
-use bedrock as br;
+use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use std::ffi::CStr;
@@ -179,9 +179,32 @@ impl<F: core::future::Future> Game<F> {
     }
 }
 
+struct Surface {
+    gfx_device: peridot::VulkanGfx,
+    handle: br::vk::VkSurfaceKHR,
+}
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(
+                self.gfx_device.instance().native_ptr(),
+                self.handle,
+                None,
+            );
+        }
+    }
+}
+impl br::VkHandle for Surface {
+    type Handle = br::vk::VkSurfaceKHR;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+
 struct Presenter {
     window: native_wrapper::Window,
-    sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
+    sc: peridot::IntegratedSwapchain<Surface>,
 }
 unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
@@ -191,16 +214,17 @@ impl Presenter {
         render_queue_family_index: u32,
         window: native_wrapper::Window,
     ) -> Self {
-        let obj = unsafe {
-            br::SurfaceObject::new(
-                g.adapter(),
-                &br::vk::VkAndroidSurfaceCreateInfoKHR::new(window.as_ptr()),
-            )
-            .expect("Failed to create Surface")
+        let obj = Surface {
+            handle: unsafe {
+                br::AndroidSurfaceCreateInfo::new(window.as_ptr())
+                    .execute(g.device().instance(), None)
+                    .expect("Failed to create surface")
+            },
+            gfx_device: g.device().clone(),
         };
         let supported = g
-            .adapter()
-            .surface_support(render_queue_family_index, &obj)
+            .device()
+            .surface_support(&obj)
             .expect("Failed to query surface availability");
         if !supported {
             panic!("Vulkan Surface is not supported by this adapter");
@@ -217,46 +241,52 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
-    type BackBuffer = br::ImageViewObject<
-        br::SwapchainImage<
-            SharedRef<
-                br::SurfaceSwapchainObject<
-                    peridot::DeviceObject,
-                    br::SurfaceObject<peridot::InstanceObject>,
-                >,
-            >,
-        >,
-    >;
-
+    #[inline(always)]
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
+
+    #[inline(always)]
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
+
+    #[inline(always)]
+    fn back_buffer_size(&self) -> peridot::math::Vector2<u32> {
+        self.sc.back_buffer_size()
+    }
+
+    #[inline(always)]
+    fn back_buffer(&self, index: usize) -> Option<br::VkHandleRef<br::vk::VkImage>> {
         self.sc.back_buffer(index)
     }
 
+    #[inline(always)]
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, peridot::DeviceObject>,
-    ) -> br::CmdRecord<'r, peridot::DeviceObject> {
+        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
+    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
+
+    #[inline(always)]
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.sc.acquire_next_back_buffer_index()
     }
+
+    #[inline(always)]
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_back_buffer_layout()
     }
+
+    #[inline(always)]
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         backbuffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
+        render_submission: peridot::SubmissionBatchBuilder,
+        update_submission: Option<peridot::SubmissionBatchBuilder>,
     ) -> br::Result<()> {
         self.sc.render_and_present(
             g,
@@ -266,7 +296,8 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    /// Returns whether re-initializing is needed for backbuffer resources
+
+    #[inline(always)]
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
