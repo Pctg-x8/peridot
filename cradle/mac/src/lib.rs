@@ -5,7 +5,7 @@ use log::*;
 use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
-use br::PhysicalDevice;
+use br::{InstanceChild, VkHandle, PhysicalDevice};
 use core::future::Future;
 use peridot::mthelper::SharedRef;
 use std::ffi::CStr;
@@ -195,24 +195,45 @@ fn acquire_layer_size(layer: *mut c_void) -> peridot::math::Vector2<u32> {
 
     peridot::math::Vector2(cr.size.width as _, cr.size.height as _)
 }
+
+struct Surface {
+    gfx_device: peridot::VulkanGfx,
+    handle: br::vk::VkSurfaceKHR
+}
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(self.gfx_device.native_ptr(), self.handle, None);
+        }
+    }
+}
+impl br::VkHandle for Surface {
+    type Handle = br::vk::VkSurfaceKHR;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+
 pub struct Presenter {
     layer_ptr: *mut c_void,
-    sc: peridot::IntegratedSwapchain<br::SurfaceObject<SharedRef<br::InstanceObject>>>,
+    sc: peridot::IntegratedSwapchain<Surface>,
 }
 unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
 impl Presenter {
     fn new(layer_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
-        let obj = unsafe {
-            br::SurfaceObject::new(
-                g.adapter(),
-                &br::vk::VkMetalSurfaceCreateInfoEXT::new(layer_ptr as *const _),
-            )
-            .expect("Failed to create Surface")
+        let obj = Surface {
+            handle: unsafe {
+                br::MetalSurfaceCreateInfo::new(layer_ptr as *const _)
+                    .execute(g.device().instance(), None)
+                    .expect("Failed to create surface")
+            },
+            gfx_device: g.device().clone()
         };
         let support = g
-            .adapter()
-            .surface_support(g.graphics_queue_family_index(), &obj)
+            .device()
+            .surface_support(&obj)
             .expect("Failed to query Surface Support");
         if !support {
             panic!("Vulkan Rendering is not supported by this adapter.");
