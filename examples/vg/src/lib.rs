@@ -298,7 +298,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     br::VkHandleRef::new(&bufview),
                 ])),
             desc_curve
-                .binding_at(1)
+                .binding_at(0)
                 .write(br::DescriptorContents::UniformTexelBuffer(vec![
                     br::VkHandleRef::new(&bufview2),
                 ])),
@@ -482,7 +482,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         curve_pipeline: gp2_curve,
         transform_buffer_descriptor_set: desc_curve,
         target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-
         rendering_precision: e.rendering_precision(),
     };
     let mut color_renders = [render_vg2, render_vg];
