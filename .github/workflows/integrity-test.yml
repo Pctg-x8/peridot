@@ -385,6 +385,15 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v4"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Running Rustfmt
+        run: cargo fmt -- --check
       - env:
           RUN_SCRIPT: vulnerabilities_elliminator
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"

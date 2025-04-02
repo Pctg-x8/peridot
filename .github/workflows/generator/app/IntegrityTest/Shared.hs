@@ -66,7 +66,7 @@ checkFormats precondition =
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
-                  GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check"
+                  GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
                   GHA.namedAs "Running Check - Debugging Weaks" $
                     CodeFormCheckerAction.step CodeFormCheckerAction.ScriptVulnerabilitiesEliminator,
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $

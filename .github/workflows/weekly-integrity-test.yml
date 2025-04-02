@@ -358,6 +358,15 @@ jobs:
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+      - if: 'true'
+        name: Initialize Cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: 'true'
+        name: Running Rustfmt
+        run: cargo fmt -- --check
       - env:
           RUN_SCRIPT: vulnerabilities_elliminator
         if: 'true'
