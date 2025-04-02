@@ -773,38 +773,7 @@ impl br::VkHandle for VulkanGfxInstanceAccess {
         self.0 .0.instance
     }
 }
-impl br::Instance for VulkanGfxInstanceAccess {
-    fn get_physical_device_features2_khr_fn(&self) -> br::vk::PFN_vkGetPhysicalDeviceFeatures2KHR {
-        unimplemented!();
-    }
-
-    fn get_physical_device_properties2_khr_fn(
-        &self,
-    ) -> br::vk::PFN_vkGetPhysicalDeviceProperties2KHR {
-        unimplemented!();
-    }
-
-    fn get_physical_device_format_properties2_khr_fn(
-        &self,
-    ) -> br::vk::PFN_vkGetPhysicalDeviceFormatProperties2KHR {
-        unimplemented!();
-    }
-
-    #[cfg(feature = "debug")]
-    fn create_debug_utils_messenger_ext_fn(&self) -> br::vk::PFN_vkCreateDebugUtilsMessengerEXT {
-        unimplemented!();
-    }
-
-    #[cfg(feature = "debug")]
-    fn destroy_debug_utils_messenger_ext_fn(&self) -> br::vk::PFN_vkDestroyDebugUtilsMessengerEXT {
-        unimplemented!();
-    }
-
-    #[cfg(feature = "debug")]
-    fn set_debug_utils_object_name_ext_fn(&self) -> br::vk::PFN_vkSetDebugUtilsObjectNameEXT {
-        unimplemented!();
-    }
-}
+impl br::Instance for VulkanGfxInstanceAccess {}
 
 #[repr(transparent)]
 pub struct VulkanGfxWeak(SharedWeakRef<VulkanGfxInner>);
