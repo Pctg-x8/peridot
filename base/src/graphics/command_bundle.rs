@@ -153,8 +153,6 @@ impl<Device: br::Device> CommandBundle<Device> {
     }
 
     #[inline]
-<<<<<<< Updated upstream
-=======
     pub fn iter(&self) -> CommandBundleBufferIter<Device> {
         CommandBundleBufferIter(&self.buffers, 0, core::marker::PhantomData)
     }
@@ -170,7 +168,6 @@ impl<Device: br::Device> CommandBundle<Device> {
     }
 
     #[inline]
->>>>>>> Stashed changes
     pub fn synchronized_nth(&mut self, n: usize) -> br::SynchronizedCommandBuffer {
         // self.0は必ずself.1から生成されてるのでsafe
         unsafe {
