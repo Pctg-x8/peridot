@@ -336,7 +336,10 @@ impl VulkanGfx {
         ) {
             Ok(x) => Some(x),
             Err(e) => {
-                tracing::warn!(cause = ?e, "Failed to create Vulkan debug instance. Vulkan debug logs will not be logged");
+                tracing::warn!(
+                    cause = ?e,
+                    "Failed to create Vulkan debug instance. Vulkan debug logs will not be logged"
+                );
                 None
             }
         };
