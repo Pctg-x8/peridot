@@ -71,46 +71,44 @@ impl Presenter {
 }
 #[cfg(not(feature = "transparent"))]
 impl peridot::PlatformPresenter for Presenter {
-    type BackBuffer = br::ImageViewObject<
-        br::SwapchainImage<
-            SharedRef<
-                br::SurfaceSwapchainObject<
-                    peridot::DeviceObject,
-                    br::SurfaceObject<peridot::InstanceObject>,
-                >,
-            >,
-        >,
-    >;
-
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
+
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
+
+    fn back_buffer_size(&self) -> peridot::math::Vector2 {
+        self.sc.back_buffer_size()
+    }
+
+    fn back_buffer<'a>(&'a self, index: usize) -> Option<br::VkHandleRef<'a, br::vk::VkImage>> {
         self.sc.back_buffer(index)
     }
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, peridot::DeviceObject>,
-    ) -> br::CmdRecord<'r, peridot::DeviceObject> {
+        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
+    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
+
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.sc.acquire_next_back_buffer_index()
     }
+
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_back_buffer_layout()
     }
+
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         back_buffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
+        render_submission: peridot::SubmissionBatchBuilder,
+        update_submission: Option<peridot::SubmissionBatchBuilder>,
     ) -> br::Result<()> {
         self.sc.render_and_present(
             g,
@@ -120,12 +118,13 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    /// Returns whether re-initializing is needed for back-buffer resources
+
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs re-initializing back-buffer resource
         true
     }
+
     // unimplemented?
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)
@@ -341,6 +340,7 @@ pub struct Presenter {
     device12: ID3D12Device,
     q: ID3D12CommandQueue,
     sc: IDXGISwapChain3,
+    size: peridot::math::Vector2<u32>,
     back_buffers: Vec<InteropBackbufferResource>,
     buffer_ready_order: br::SemaphoreObject<peridot::DeviceObject>,
     present_order: br::SemaphoreObject<peridot::DeviceObject>,
@@ -499,6 +499,7 @@ impl Presenter {
             device12,
             q,
             sc,
+            size: bb_size.into(),
             back_buffers,
             buffer_ready_order,
             present_order,
@@ -514,27 +515,28 @@ impl Presenter {
 }
 #[cfg(feature = "transparent")]
 impl peridot::PlatformPresenter for Presenter {
-    type BackBuffer = br::ImageViewObject<
-        peridot::Image<
-            br::ImageObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >;
-
     fn format(&self) -> br::vk::VkFormat {
         br::vk::VK_FORMAT_R8G8B8A8_UNORM
     }
+
     fn back_buffer_count(&self) -> usize {
         2
     }
-    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
-        self.back_buffers.get(index).map(|b| &b.image_view)
+
+    fn back_buffer_size(&self) -> peridot::math::Vector2<u32> {
+        self.size
+    }
+
+    fn back_buffer<'a>(&'a self, index: usize) -> Option<br::VkHandleRef<'a, br::vk::VkImage>> {
+        self.back_buffers
+            .get(index)
+            .map(|b| b.image_view.as_transparent_ref())
     }
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, peridot::DeviceObject>,
-    ) -> br::CmdRecord<'r, peridot::DeviceObject> {
+        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
+    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
         let barriers = self
             .back_buffers
             .iter()
@@ -555,22 +557,25 @@ impl peridot::PlatformPresenter for Presenter {
             &barriers,
         )
     }
+
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         Ok(unsafe { self.sc.GetCurrentBackBufferIndex() })
     }
+
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         (
             br::ImageLayout::General,
             br::PipelineStageFlags::TOP_OF_PIPE,
         )
     }
+
     fn render_and_present<'s>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         _backbuffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
+        render_submission: peridot::SubmissionBatchBuilder,
+        update_submission: Option<peridot::SubmissionBatchBuilder>,
     ) -> br::Result<()> {
         use br::VulkanStructureAsRef;
 
@@ -649,7 +654,7 @@ impl peridot::PlatformPresenter for Presenter {
 
         Ok(())
     }
-    /// Returns whether re-initializing is needed for backbuffer resources
+
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         if self.present_inflight {
             self.present_completion_event
@@ -690,6 +695,7 @@ impl peridot::PlatformPresenter for Presenter {
         }
         true
     }
+
     // unimplemented?
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)
