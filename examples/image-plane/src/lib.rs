@@ -22,7 +22,7 @@ use peridot_command_object::{
     StandardMesh,
 };
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     let screen_size = e
         .back_buffer(0)
         .expect("no back buffers?")
@@ -476,8 +476,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     bgm.write().play();
 
     let mut rot = 0.0f32;
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    loop {
+        match e.next_event().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
                 let fd = match e.prepare_frame() {

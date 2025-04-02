@@ -725,7 +725,7 @@ impl TwoPassStencilSDFRenderer {
 
 const SDF_SIZE: f32 = 32.0;
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     let back_buffer_size = e
         .back_buffer(0)
         .expect("no back-buffer?")
@@ -988,8 +988,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .expect("Failed to record commands");
     }
 
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    loop {
+        match e.next_event().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
                 let fd = e.prepare_frame().expect("Failed to prepare frame");

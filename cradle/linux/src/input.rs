@@ -50,6 +50,47 @@ impl<T: PointerPositionProvider> PointerPositionProvider for RwLock<T> {
         self.read().query_input_focus_and_pointer_entered()
     }
 }
+impl<T: PointerPositionProvider> PointerPositionProvider for std::rc::Weak<T> {
+    fn get_pointer_position(&self) -> Option<(f32, f32)> {
+        self.upgrade().and_then(|x| x.get_pointer_position())
+    }
+
+    fn query_input_focus(&self) -> bool {
+        self.upgrade().map_or(false, |x| x.query_input_focus())
+    }
+
+    fn query_input_focus_and_pointer_entered(&self) -> (bool, bool) {
+        self.upgrade().map_or((false, false), |x| {
+            x.query_input_focus_and_pointer_entered()
+        })
+    }
+}
+impl<T: PointerPositionProvider> PointerPositionProvider for std::rc::Rc<T> {
+    fn get_pointer_position(&self) -> Option<(f32, f32)> {
+        T::get_pointer_position(&*self)
+    }
+
+    fn query_input_focus(&self) -> bool {
+        T::query_input_focus(&*self)
+    }
+
+    fn query_input_focus_and_pointer_entered(&self) -> (bool, bool) {
+        T::query_input_focus_and_pointer_entered(&*self)
+    }
+}
+impl<T: PointerPositionProvider> PointerPositionProvider for std::cell::RefCell<T> {
+    fn get_pointer_position(&self) -> Option<(f32, f32)> {
+        self.borrow().get_pointer_position()
+    }
+
+    fn query_input_focus(&self) -> bool {
+        self.borrow().query_input_focus()
+    }
+
+    fn query_input_focus_and_pointer_entered(&self) -> (bool, bool) {
+        self.borrow().query_input_focus_and_pointer_entered()
+    }
+}
 
 pub struct InputNativeLink<PosProvider: PointerPositionProvider> {
     position_provider: PosProvider,
