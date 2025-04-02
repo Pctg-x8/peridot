@@ -43,7 +43,7 @@ pub struct WebP(pub DecodedPixelData);
 pub struct BMP(pub DecodedPixelData);
 pub struct HDR {
     pub pixel_data: DecodedPixelData,
-    pub hdr_metadata: HdrMetadata
+    pub hdr_metadata: HdrMetadata,
 }
 
 impl LogicalAssetData for PNG {
