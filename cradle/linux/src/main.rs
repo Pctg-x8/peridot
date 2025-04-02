@@ -125,7 +125,7 @@ impl<MainF: Future> GameDriver<MainF> {
     ) -> Self
     where
         PP: PointerPositionProvider + 'static,
-        SharedMutableRef<PP>: PresenterProvider<Presenter: peridot::PlatformPresenter>,
+        SharedMutableRef<PP>: PresenterProvider,
     {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
@@ -215,7 +215,7 @@ impl Drop for EpollTemporaryAddFd<'_> {
 fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
     W: WindowBackend + EventProcessor + PointerPositionProvider + 'static,
-    SharedMutableRef<W>: PresenterProvider<Presenter: peridot::PlatformPresenter>,
+    SharedMutableRef<W>: PresenterProvider,
 {
     let mut gd = GameDriver::new(window_backend.clone(), |mut engine| async move {
         userlib::game_main(&mut engine).await;

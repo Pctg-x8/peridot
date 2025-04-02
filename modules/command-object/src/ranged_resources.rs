@@ -236,12 +236,10 @@ impl<B: br::Buffer + peridot::TransferrableBufferResource + 'static> RangedBuffe
         );
     }
 }
-impl<B: br::Buffer + br::MemoryBound + br::VkHandleMut, M: br::DeviceMemoryMut>
-    RangedBuffer<peridot::Buffer<B, M>>
-{
+impl RangedBuffer<peridot::Buffer> {
     pub fn guard_map<R>(
         &mut self,
-        action: impl FnOnce(&br::MappedMemory<M>) -> R,
+        action: impl FnOnce(&br::MappedMemory<peridot::ExclusiveLockedSharedMemoryBlock>) -> R,
     ) -> br::Result<R> {
         self.0.guard_map(self.1.clone(), action)
     }

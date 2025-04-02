@@ -1,18 +1,17 @@
-use crate::mthelper::SharedRef;
-use bedrock::{self as br, CommandBufferMut, QueueMut};
-use br::{Device, Instance, InstanceChild, PhysicalDevice, SubmissionBatch};
+use crate::mthelper::{SharedRef, SharedWeakRef};
+use bedrock::{self as br, ResolverInterface, VkHandle, VkRawHandle};
+use br::{Instance, PhysicalDevice};
 use std::{
     collections::HashSet,
     ffi::{CStr, CString},
-    ops::Deref,
 };
 
 pub type InstanceObject = SharedRef<br::InstanceObject>;
 pub type DeviceObject = SharedRef<br::DeviceObject<InstanceObject>>;
 
 /// Queue object with family index
-pub struct QueueSet<Device: br::Device> {
-    pub(crate) q: parking_lot::Mutex<br::QueueObject<Device>>,
+pub struct QueueSet {
+    pub(crate) q: br::vk::VkQueue,
     pub(crate) family: u32,
 }
 
@@ -29,9 +28,9 @@ use std::cell::OnceCell as OnceValue;
 use std::sync::OnceLock as OnceValue;
 
 struct CachedAdapterProperties {
-    pub available_features: OnceValue<br::vk::VkPhysicalDeviceFeatures>,
-    pub properties: OnceValue<br::vk::VkPhysicalDeviceProperties>,
-    pub memory_properties: OnceValue<br::MemoryProperties>,
+    pub available_features: OnceValue<br::PhysicalDeviceFeatures>,
+    pub properties: OnceValue<br::PhysicalDeviceProperties>,
+    pub memory_properties: OnceValue<br::PhysicalDeviceMemoryProperties>,
 }
 impl CachedAdapterProperties {
     const fn new() -> Self {
@@ -60,6 +59,11 @@ impl<'s> VulkanExtension<'s> {
         self
     }
 
+    #[inline(always)]
+    pub fn is_promoted(&self, runtime_version: &br::Version) -> bool {
+        self.promoted.as_ref().is_some_and(|v| runtime_version >= v)
+    }
+
     pub const DEBUG_REPORT_EXT: Self = Self::new(c"VK_EXT_debug_report");
     pub const DEBUG_UTILS_EXT: Self = Self::new(c"VK_EXT_debug_utils");
     pub const GET_PHYSICAL_DEVICE_PROPERTIES2_KHR: Self =
@@ -80,22 +84,48 @@ impl<'s> VulkanExtension<'s> {
         Self::new(c"VK_KHR_maintenance2").promoted(br::Version::new(0, 1, 1, 0));
 }
 
-/// Graphics manager
-pub struct Graphics {
-    pub(crate) adapter: br::PhysicalDeviceObject<InstanceObject>,
-    pub(crate) device: DeviceObject,
-    pub(crate) graphics_queue: QueueSet<DeviceObject>,
-    cp_onetime_submit: br::CommandPoolObject<DeviceObject>,
-    pub memory_type_manager: MemoryTypeManager,
+pub(crate) struct VulkanGfxInner {
+    pub(crate) instance: br::vk::VkInstance,
+    pub(crate) adapter: br::vk::VkPhysicalDevice,
+    pub(crate) device: br::vk::VkDevice,
+    pub(crate) graphics_queue_family_index: u32,
+    pub(crate) memory_type_manager: MemoryTypeManager,
     vk_version: br::Version,
-    enabled_vk_extensions: HashSet<CString>,
-    adapter_properties: CachedAdapterProperties,
-    #[cfg(feature = "mt")]
-    fence_reactor: FenceReactorThread<DeviceObject>,
+    enabled_extension_names: HashSet<CString>,
+    cached_adapter_properties: CachedAdapterProperties,
     #[cfg(feature = "debug")]
-    _debug_instance: Option<br::DebugUtilsMessengerObject<InstanceObject>>,
+    debug_instance: Option<(
+        br::vk::VkDebugUtilsMessengerEXT,
+        br::vk::PFN_vkDestroyDebugUtilsMessengerEXT,
+    )>,
+    #[cfg(feature = "debug")]
+    set_object_name_fn: Option<br::vk::PFN_vkSetDebugUtilsObjectNameEXT>,
+    get_buffer_memory_requirements2_fn: OnceValue<br::vk::PFN_vkGetBufferMemoryRequirements2KHR>,
+    get_image_memory_requirements2_fn: OnceValue<br::vk::PFN_vkGetImageMemoryRequirements2KHR>,
+    bind_buffer_memory2_fn: OnceValue<br::vk::PFN_vkBindBufferMemory2KHR>,
+    bind_image_memory2_fn: OnceValue<br::vk::PFN_vkBindImageMemory2KHR>,
 }
-impl Graphics {
+unsafe impl Sync for VulkanGfxInner {}
+unsafe impl Send for VulkanGfxInner {}
+impl Drop for VulkanGfxInner {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn::destroy_device(self.device, core::ptr::null());
+            #[cfg(feature = "debug")]
+            if let Some((inst, destroy_fn)) = self.debug_instance.take() {
+                (destroy_fn.0)(self.instance, inst, core::ptr::null());
+            }
+            br::vkfn::destroy_instance(self.instance, core::ptr::null());
+        }
+    }
+}
+#[repr(transparent)]
+#[derive(Clone)]
+pub struct VulkanGfx(pub(crate) SharedRef<VulkanGfxInner>);
+impl VulkanGfx {
+    const ENGINE_NAME: &'static core::ffi::CStr = c"Interlude2:Peridot";
+    const ENGINE_VERSION: br::Version = br::Version::new(0, 0, 1, 0);
+
     pub(crate) fn new(
         app_name: &str,
         app_version: br::Version,
@@ -103,7 +133,13 @@ impl Graphics {
         mut device_extensions: Vec<&CStr>,
         features: br::vk::VkPhysicalDeviceFeatures,
     ) -> Self {
-        let vk_version = br::instance_version().expect("Failed to get vulkan version");
+        let vk_version = match br::instance_version() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(cause = ?e, "Failed to get vulkan version. falling back to v1.0.0");
+                br::Version::new(0, 1, 0, 0)
+            }
+        };
         tracing::info!("System Vulkan Version: v{vk_version}");
 
         let mut optional_instance_extensions = Vec::new();
@@ -112,7 +148,7 @@ impl Graphics {
         #[cfg(feature = "debug")]
         optional_instance_extensions.extend([
             VulkanExtension::DEBUG_UTILS_EXT.name,
-            VulkanExtension::DEBUG_REPORT_EXT.name,
+            VulkanExtension::DEBUG_REPORT_EXT.name, // 古い環境向け
         ]);
 
         if vk_version < br::Version::new(0, 1, 1, 0) {
@@ -142,7 +178,7 @@ impl Graphics {
                     let name_cstr = match x.extensionName.as_cstr() {
                         Ok(x) => x,
                         Err(e) => {
-                            tracing::warn!({ cause = ?e }, "invalid extension name?");
+                            tracing::warn!(cause = ?e, "invalid extension name?");
                             continue;
                         }
                     };
@@ -168,7 +204,7 @@ impl Graphics {
                 }
             }
             Err(e) => {
-                tracing::warn!({ cause = ?e }, "Failed to enumerate vk instance extensions");
+                tracing::warn!(cause = ?e, "Failed to enumerate vk instance extensions");
             }
         }
 
@@ -210,7 +246,7 @@ impl Graphics {
                                 let ext_name_cstr = match x.extensionName.as_cstr() {
                                     Ok(x) => x,
                                     Err(e) => {
-                                        tracing::warn!({ cause = ?e }, "invalid extension name?");
+                                        tracing::warn!(cause = ?e, "invalid extension name?");
                                         continue;
                                     }
                                 };
@@ -239,57 +275,56 @@ impl Graphics {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!({ cause = ?e }, "Failed to enumerate vk instance extensions");
+                            tracing::warn!(cause = ?e, "Failed to enumerate vk instance extensions");
                         }
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!({ cause = ?e }, "Failed to enumerate vk instance layers");
+                tracing::warn!(cause = ?e, "Failed to enumerate vk instance layers");
             }
         }
 
         if !validation_layer_available {
-            tracing::warn!("Validation Layer is not found!");
+            tracing::warn!("Vulkan Validation Layer is not found");
         }
 
-        let app_name = CString::new(app_name).expect("invalid sequence in app name");
+        let app_name = CString::new(app_name).expect("Invalid sequence in app name");
         let app = br::ApplicationInfo::new(
             &app_name,
             app_version,
-            c"Interlude2:Peridot",
-            br::Version::new(0, 0, 1, 0),
+            Self::ENGINE_NAME,
+            Self::ENGINE_VERSION,
         )
         .api_version(vk_version);
 
         #[allow(unused_mut)]
         let mut instance_layers = Vec::new();
         #[cfg(feature = "debug")]
-        {
-            if validation_layer_available {
-                instance_layers.push(c"VK_LAYER_KHRONOS_validation".into());
-            }
-
-            tracing::debug!("Debug reporting activated!");
+        if validation_layer_available {
+            instance_layers.push(c"VK_LAYER_KHRONOS_validation".into());
+            tracing::debug!("Debug reporting activated");
         }
 
         tracing::debug!(?instance_layers, ?instance_extensions, "VkInstance setup");
-
-        let instance = SharedRef::new(
-            br::InstanceObject::new(&br::InstanceCreateInfo::new(
-                &app,
-                &instance_layers,
-                &instance_extensions
-                    .iter()
-                    .map(|&x| x.into())
-                    .collect::<Vec<_>>(),
-            ))
-            .expect("Failed to create vk instance"),
-        );
+        let instance = match br::InstanceObject::new(&br::InstanceCreateInfo::new(
+            &app,
+            &instance_layers,
+            &instance_extensions
+                .iter()
+                .map(|&x| x.into())
+                .collect::<Vec<_>>(),
+        )) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to create VkInstance");
+                std::process::abort();
+            }
+        };
 
         #[cfg(feature = "debug")]
-        let _debug_instance = match br::DebugUtilsMessengerObject::new(
-            instance.clone(),
+        let debug_instance = match br::DebugUtilsMessengerObject::new(
+            &instance,
             &br::DebugUtilsMessengerCreateInfo::new(
                 br::DebugUtilsMessageSeverityFlags::ERROR
                     | br::DebugUtilsMessageSeverityFlags::WARNING,
@@ -301,23 +336,24 @@ impl Graphics {
         ) {
             Ok(x) => Some(x),
             Err(e) => {
-                tracing::error!(
-                    { cause = ?e },
-                    "Failed to create vk debug instance. Vulkan debug logs will be unavailable."
-                );
+                tracing::warn!(cause = ?e, "Failed to create Vulkan debug instance. Vulkan debug logs will not be logged");
                 None
             }
         };
 
-        let Some(adapter) = instance
-            .iter_physical_devices()
-            .expect("Failed to enumerate physical devices")
-            .next()
-        else {
-            tracing::error!("No physical devices available");
-            panic!("Engine unrecoverable");
+        let adapter = match instance.iter_physical_devices() {
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to enumerate physical devices");
+                std::process::abort();
+            }
+            Ok(mut xs) => match xs.next() {
+                None => {
+                    tracing::error!("No available physical devices found");
+                    std::process::abort();
+                }
+                Some(x) => x,
+            },
         };
-
         match adapter.enumerate_extension_properties(None) {
             Ok(xs) => {
                 for d in xs {
@@ -350,7 +386,7 @@ impl Graphics {
                 }
             }
             Err(e) => {
-                tracing::warn!({ cause = ?e }, "Failed to enumerate vk device extensions");
+                tracing::warn!(cause = ?e, "Failed to enumerate vk device extensions");
             }
         }
 
@@ -362,10 +398,12 @@ impl Graphics {
             .find_matching_index(br::QueueFlags::GRAPHICS)
         else {
             tracing::error!("No suitable queue(graphics) found on device");
-            panic!("Engine unrecoverable");
+            std::process::abort();
         };
 
+        #[allow(unused_mut)]
         let mut device_layers = Vec::new();
+        #[cfg(feature = "debug")]
         if validation_layer_available {
             device_layers.push(c"VK_LAYER_KHRONOS_validation".into());
         }
@@ -413,88 +451,553 @@ impl Graphics {
             Features::Extendable(ref f) => device_cinfo.with_next(f),
         };
 
-        let device = SharedRef::new(
-            br::DeviceObject::new(&adapter, &device_cinfo)
-                .expect("Failed to create vk device")
-                .clone_parent(),
+        let device =
+            br::DeviceObject::new(&adapter, &device_cinfo).expect("Failed to create vk device");
+
+        let enabled_extension_names = instance_extensions
+            .into_iter()
+            .chain(device_extensions.into_iter())
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+
+        #[cfg(feature = "debug")]
+        let set_object_name_fn =
+            if enabled_extension_names.contains(VulkanExtension::DEBUG_UTILS_EXT.name) {
+                Some(unsafe {
+                    instance
+                        .native_ptr()
+                        .load_function_unconstrainted::<br::vk::PFN_vkSetDebugUtilsObjectNameEXT>()
+                })
+            } else {
+                None
+            };
+
+        Self(SharedRef::new(VulkanGfxInner {
+            #[cfg(feature = "debug")]
+            debug_instance: debug_instance.map(|x| (
+                x.unmanage().0,
+                unsafe {
+                    instance
+                        .native_ptr()
+                        .load_function_unconstrainted::<br::vk::PFN_vkDestroyDebugUtilsMessengerEXT>()
+                }
+            )),
+            #[cfg(feature = "debug")]
+            set_object_name_fn,
+            enabled_extension_names,
+            vk_version,
+            cached_adapter_properties: CachedAdapterProperties::new(),
+            graphics_queue_family_index: gqf_index,
+            memory_type_manager,
+            adapter: adapter.unmanage().0,
+            device: device.unmanage().0,
+            instance: instance.unmanage(),
+            get_buffer_memory_requirements2_fn: OnceValue::new(),
+            get_image_memory_requirements2_fn: OnceValue::new(),
+            bind_buffer_memory2_fn: OnceValue::new(),
+            bind_image_memory2_fn: OnceValue::new(),
+        }))
+    }
+
+    #[inline]
+    pub fn downgrade(&self) -> VulkanGfxWeak {
+        VulkanGfxWeak(SharedRef::downgrade(&self.0))
+    }
+
+    pub fn adapter_available_features(&self) -> &br::PhysicalDeviceFeatures {
+        self.0
+            .cached_adapter_properties
+            .available_features
+            .get_or_init(|| {
+                let mut h = core::mem::MaybeUninit::uninit();
+
+                unsafe {
+                    br::vkfn_wrapper::get_physical_device_features(self.0.adapter, &mut h);
+                    h.assume_init()
+                }
+            })
+    }
+
+    pub fn adapter_limits(&self) -> &br::vk::VkPhysicalDeviceLimits {
+        &self
+            .0
+            .cached_adapter_properties
+            .properties
+            .get_or_init(|| {
+                let mut h = core::mem::MaybeUninit::uninit();
+
+                unsafe {
+                    br::vkfn_wrapper::get_physical_device_properties(self.0.adapter, &mut h);
+                    h.assume_init()
+                }
+            })
+            .limits
+    }
+
+    pub fn adapter_memory_properties(&self) -> &br::PhysicalDeviceMemoryProperties {
+        self.0
+            .cached_adapter_properties
+            .memory_properties
+            .get_or_init(|| {
+                let mut h = core::mem::MaybeUninit::uninit();
+
+                unsafe {
+                    br::vkfn_wrapper::get_physical_device_memory_properties(self.0.adapter, &mut h);
+                    h.assume_init()
+                }
+            })
+    }
+
+    pub fn surface_support(
+        &self,
+        surface: &(impl br::VkHandle<Handle = br::vk::VkSurfaceKHR> + ?Sized),
+    ) -> br::Result<bool> {
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_support(
+                self.0.adapter,
+                self.0.graphics_queue_family_index,
+                surface.native_ptr(),
+            )
+        }
+    }
+
+    pub fn surface_capabilities(
+        &self,
+        surface: &(impl br::VkHandle<Handle = br::vk::VkSurfaceKHR> + ?Sized),
+    ) -> br::Result<br::SurfaceCapabilities> {
+        let mut sink = core::mem::MaybeUninit::uninit();
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_capabilities(
+                self.0.adapter,
+                surface.native_ptr(),
+                &mut sink,
+            )?;
+        }
+
+        Ok(unsafe { sink.assume_init() })
+    }
+
+    pub fn surface_formats(
+        &self,
+        surface: &(impl br::VkHandle<Handle = br::vk::VkSurfaceKHR> + ?Sized),
+    ) -> br::Result<Vec<br::SurfaceFormat>> {
+        let x = unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_format_count(
+                self.0.adapter,
+                surface.native_ptr(),
+            )?
+        };
+        if x == 0 {
+            // no items
+            return Ok(Vec::new());
+        }
+
+        let mut sink = Vec::with_capacity(x as _);
+        unsafe {
+            sink.set_len(sink.capacity());
+        }
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_formats(
+                self.0.adapter,
+                surface.native_ptr(),
+                &mut sink,
+            )?;
+        }
+
+        Ok(sink)
+    }
+
+    pub fn surface_present_modes(
+        &self,
+        surface: &(impl br::VkHandle<Handle = br::vk::VkSurfaceKHR> + ?Sized),
+    ) -> br::Result<Vec<br::PresentMode>> {
+        let x = unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_present_mode_count(
+                self.0.adapter,
+                surface.native_ptr(),
+            )?
+        };
+        if x == 0 {
+            // no items
+            return Ok(Vec::new());
+        }
+
+        let mut sink = Vec::with_capacity(x as _);
+        unsafe {
+            sink.set_len(sink.capacity());
+        }
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_present_modes(
+                self.0.adapter,
+                surface.native_ptr(),
+                &mut sink,
+            )?;
+        }
+
+        Ok(sink)
+    }
+
+    #[cfg(feature = "debug")]
+    pub unsafe fn set_object_name_raw(
+        &self,
+        object_type: br::vk::VkObjectType,
+        handle: &(impl br::VkRawHandle + ?Sized),
+        name: &core::ffi::CStr,
+    ) -> br::Result<()> {
+        let Some(ref f) = self.0.set_object_name_fn else {
+            return Ok(());
+        };
+
+        unsafe {
+            (f.0)(
+                self.0.device,
+                &br::DebugUtilsObjectNameInfo::new_raw(
+                    object_type,
+                    handle.raw_handle_value(),
+                    Some(name),
+                ) as *const _ as _,
+            )
+            .into_result()
+            .map(drop)
+        }
+    }
+
+    #[cfg(feature = "debug")]
+    pub fn set_object_name(
+        &self,
+        object: &(impl br::VkHandle<Handle: br::VkRawHandle> + br::VkObject + ?Sized),
+        name: &core::ffi::CStr,
+    ) -> br::Result<()> {
+        let Some(ref f) = self.0.set_object_name_fn else {
+            return Ok(());
+        };
+
+        unsafe {
+            (f.0)(
+                self.0.device,
+                &br::DebugUtilsObjectNameInfo::new(object, Some(name)) as *const _ as _,
+            )
+            .into_result()
+            .map(drop)
+        }
+    }
+
+    #[inline]
+    pub fn get_buffer_memory_requirements2_fn(
+        &self,
+    ) -> &br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
+        self.0
+            .get_buffer_memory_requirements2_fn
+            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+    }
+
+    #[inline]
+    pub fn get_image_memory_requirements2_fn(
+        &self,
+    ) -> &br::vk::PFN_vkGetImageMemoryRequirements2KHR {
+        self.0
+            .get_image_memory_requirements2_fn
+            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+    }
+
+    #[inline]
+    pub fn bind_buffer_memory2_fn(&self) -> &br::vk::PFN_vkBindBufferMemory2KHR {
+        self.0
+            .bind_buffer_memory2_fn
+            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+    }
+
+    #[inline]
+    pub fn bind_image_memory2_fn(&self) -> &br::vk::PFN_vkBindImageMemory2KHR {
+        self.0
+            .bind_image_memory2_fn
+            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+    }
+}
+impl br::DeviceExtCommandFunctionProvider for VulkanGfx {
+    fn cmd_pipeline_barrier_2_khr_fn(&self) -> br::vk::PFN_vkCmdPipelineBarrier2KHR {
+        todo!("vkCmdPipelineBarrier2KHR resolve");
+    }
+}
+impl br::VkHandle for VulkanGfx {
+    type Handle = br::vk::VkDevice;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.0.device
+    }
+}
+impl br::InstanceChild for VulkanGfx {
+    type ConcreteInstance = VulkanGfxInstanceAccess;
+
+    fn instance(&self) -> &Self::ConcreteInstance {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl br::Device for VulkanGfx {
+    fn bind_buffer_memory2_khr_fn(&self) -> br::vk::PFN_vkBindBufferMemory2KHR {
+        unimplemented!();
+    }
+
+    fn bind_image_memory2_khr_fn(&self) -> br::vk::PFN_vkBindImageMemory2KHR {
+        unimplemented!();
+    }
+
+    fn get_buffer_memory_requirements_2_khr_fn(
+        &self,
+    ) -> br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
+        unimplemented!();
+    }
+
+    fn get_image_memory_requirements_2_khr_fn(
+        &self,
+    ) -> br::vk::PFN_vkGetImageMemoryRequirements2KHR {
+        unimplemented!();
+    }
+
+    fn get_image_sparse_memory_requirements_2_khr_fn(
+        &self,
+    ) -> br::vk::PFN_vkGetImageSparseMemoryRequirements2KHR {
+        unimplemented!();
+    }
+}
+
+#[repr(transparent)]
+pub struct VulkanGfxInstanceAccess(VulkanGfx);
+impl br::VkHandle for VulkanGfxInstanceAccess {
+    type Handle = br::vk::VkInstance;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.0 .0.instance
+    }
+}
+impl br::Instance for VulkanGfxInstanceAccess {
+    fn get_physical_device_features2_khr_fn(&self) -> br::vk::PFN_vkGetPhysicalDeviceFeatures2KHR {
+        unimplemented!();
+    }
+
+    fn get_physical_device_properties2_khr_fn(
+        &self,
+    ) -> br::vk::PFN_vkGetPhysicalDeviceProperties2KHR {
+        unimplemented!();
+    }
+
+    fn get_physical_device_format_properties2_khr_fn(
+        &self,
+    ) -> br::vk::PFN_vkGetPhysicalDeviceFormatProperties2KHR {
+        unimplemented!();
+    }
+
+    #[cfg(feature = "debug")]
+    fn create_debug_utils_messenger_ext_fn(&self) -> br::vk::PFN_vkCreateDebugUtilsMessengerEXT {
+        unimplemented!();
+    }
+
+    #[cfg(feature = "debug")]
+    fn destroy_debug_utils_messenger_ext_fn(&self) -> br::vk::PFN_vkDestroyDebugUtilsMessengerEXT {
+        unimplemented!();
+    }
+
+    #[cfg(feature = "debug")]
+    fn set_debug_utils_object_name_ext_fn(&self) -> br::vk::PFN_vkSetDebugUtilsObjectNameEXT {
+        unimplemented!();
+    }
+}
+
+#[repr(transparent)]
+pub struct VulkanGfxWeak(SharedWeakRef<VulkanGfxInner>);
+impl VulkanGfxWeak {
+    pub fn upgrade(&self) -> Option<VulkanGfx> {
+        self.0.upgrade().map(VulkanGfx)
+    }
+}
+
+struct LocalOnetimeSubmitCommandBuffer<'c> {
+    buffer: br::vk::VkCommandBuffer,
+    pool: &'c br::vk::VkCommandPool,
+    device: &'c VulkanGfx,
+}
+unsafe impl Sync for LocalOnetimeSubmitCommandBuffer<'_> {}
+unsafe impl Send for LocalOnetimeSubmitCommandBuffer<'_> {}
+impl Drop for LocalOnetimeSubmitCommandBuffer<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::free_command_buffers(self.device.0.device, *self.pool, &[self.buffer])
+        }
+    }
+}
+
+struct StandaloneOnetimeSubmitCommandBundle {
+    buffer: br::vk::VkCommandBuffer,
+    pool: br::vk::VkCommandPool,
+    device: VulkanGfx,
+}
+unsafe impl Sync for StandaloneOnetimeSubmitCommandBundle {}
+unsafe impl Send for StandaloneOnetimeSubmitCommandBundle {}
+impl Drop for StandaloneOnetimeSubmitCommandBundle {
+    fn drop(&mut self) {
+        unsafe {
+            // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
+            br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
+        }
+    }
+}
+
+/// Graphics manager
+pub struct Graphics {
+    pub(crate) gfx_device: VulkanGfx,
+    pub(crate) graphics_queue: QueueSet,
+    cp_onetime_submit: br::vk::VkCommandPool,
+    #[cfg(feature = "mt")]
+    fence_reactor: FenceReactorThread,
+}
+unsafe impl Sync for Graphics {}
+unsafe impl Send for Graphics {}
+impl Drop for Graphics {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_command_pool(
+                self.gfx_device.0.device,
+                self.cp_onetime_submit,
+                None,
+            );
+        }
+    }
+}
+impl Graphics {
+    pub(crate) fn new(
+        app_name: &str,
+        app_version: br::Version,
+        instance_extensions: Vec<&CStr>,
+        device_extensions: Vec<&CStr>,
+        features: br::vk::VkPhysicalDeviceFeatures,
+    ) -> Self {
+        let gfx_device = VulkanGfx::new(
+            app_name,
+            app_version,
+            instance_extensions,
+            device_extensions,
+            features,
         );
+        let graphics_queue = QueueSet {
+            q: unsafe {
+                br::vkfn_wrapper::get_device_queue(
+                    gfx_device.0.device,
+                    gfx_device.0.graphics_queue_family_index,
+                    0,
+                )
+            },
+            family: gfx_device.0.graphics_queue_family_index,
+        };
+        let cp_onetime_submit = match unsafe {
+            br::vkfn_wrapper::create_command_pool(
+                gfx_device.0.device,
+                &br::CommandPoolCreateInfo::new(gfx_device.0.graphics_queue_family_index)
+                    .transient(),
+                None,
+            )
+        } {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to create onetime submit command pool");
+                std::process::abort();
+            }
+        };
 
         Self {
-            cp_onetime_submit: br::CommandPoolObject::new(
-                device.clone(),
-                &br::CommandPoolCreateInfo::new(gqf_index).transient(),
-            )
-            .expect("Failed to create onetime submit command pool"),
-            graphics_queue: QueueSet {
-                q: parking_lot::Mutex::new(device.queue(gqf_index, 0).clone_parent()),
-                family: gqf_index,
-            },
-            adapter: adapter.clone_parent(),
-            device,
-            adapter_properties: CachedAdapterProperties::new(),
-            vk_version,
-            enabled_vk_extensions: instance_extensions
-                .into_iter()
-                .chain(device_extensions.into_iter())
-                .map(ToOwned::to_owned)
-                .collect(),
-            memory_type_manager,
             #[cfg(feature = "mt")]
             fence_reactor: FenceReactorThread::new(),
-            #[cfg(feature = "debug")]
-            _debug_instance,
+            gfx_device,
+            graphics_queue,
+            cp_onetime_submit,
         }
+    }
+
+    pub const fn device(&self) -> &VulkanGfx {
+        &self.gfx_device
+    }
+
+    pub fn adapter_raw(&self) -> br::vk::VkPhysicalDevice {
+        self.gfx_device.0.adapter
     }
 
     /// Submits any commands as transient commands.
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(br::CmdRecord<DeviceObject>) -> br::CmdRecord<DeviceObject>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
     ) -> br::Result<()> {
-        let mut cb = LocalCommandBundle(
-            br::CommandBufferObject::alloc(
-                self.device.clone(),
+        let mut buffers = [br::vk::VkCommandBuffer::NULL];
+        unsafe {
+            br::vkfn_wrapper::allocate_command_buffers(
+                self.gfx_device.0.device,
                 &br::CommandBufferAllocateInfo::new(
-                    &mut self.cp_onetime_submit,
+                    &mut br::VkHandleRefMut::dangling(self.cp_onetime_submit),
                     1,
                     br::CommandBufferLevel::Primary,
                 ),
-            )?,
-            &mut self.cp_onetime_submit,
-        );
-        generator(unsafe {
-            cb[0].begin(
+                &mut buffers,
+            )?;
+        }
+        let cb = LocalOnetimeSubmitCommandBuffer {
+            buffer: buffers[0],
+            pool: &self.cp_onetime_submit,
+            device: &self.gfx_device,
+        };
+        unsafe {
+            br::vkfn_wrapper::begin_command_buffer(
+                cb.buffer,
                 &br::CommandBufferBeginInfo::new().onetime_submit(),
-                &self.device,
             )?
-        })
+        }
+        generator(br::CmdRecord::new(
+            unsafe { br::VkHandleRefMut::dangling(cb.buffer) },
+            &self.gfx_device,
+        ))
         .end()?;
-        self.graphics_queue.q.get_mut().submit(
-            &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
-            None,
-        )?;
-        self.graphics_queue.q.get_mut().wait()
+        unsafe {
+            br::vkfn_wrapper::queue_submit(
+                br::VkHandleRefMut::dangling(self.graphics_queue.q),
+                &[br::SubmitInfo::new_array(
+                    &[],
+                    &[],
+                    &[br::VkHandleRef::dangling(cb.buffer)],
+                    &[],
+                )],
+                None,
+            )?;
+            br::vkfn_wrapper::queue_wait_idle(self.graphics_queue.q)?;
+        }
+
+        Ok(())
     }
     pub fn submit_buffered_commands(
         &mut self,
         batches: &[impl br::SubmissionBatch],
-        fence: &mut impl br::FenceMut,
+        fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
     ) -> br::Result<()> {
-        self.graphics_queue
-            .q
-            .get_mut()
-            .submit(batches, Some(fence.as_transparent_ref_mut()))
+        let batches = batches
+            .into_iter()
+            .map(|x| unsafe { br::SubmitInfo::from_raw(x.make_info_struct()) })
+            .collect::<Vec<_>>();
+
+        unsafe {
+            br::vkfn_wrapper::queue_submit(
+                br::VkHandleRefMut::dangling(self.graphics_queue.q),
+                &batches,
+                Some(fence.as_transparent_ref_mut()),
+            )
+        }
     }
     pub fn submit_buffered_commands_raw(
         &mut self,
-        batches: &[br::vk::VkSubmitInfo],
-        fence: &mut impl br::FenceMut,
+        batches: &[br::SubmitInfo],
+        fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
     ) -> br::Result<()> {
         unsafe {
-            self.graphics_queue
-                .q
-                .get_mut()
-                .submit_raw(batches, Some(fence.as_transparent_ref_mut()))
+            br::vkfn_wrapper::queue_submit(
+                br::VkHandleRefMut::dangling(self.graphics_queue.q),
+                batches,
+                Some(fence.as_transparent_ref_mut()),
+            )
         }
     }
 
@@ -504,41 +1007,111 @@ impl Graphics {
     #[cfg(feature = "mt")]
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(br::CmdRecord<DeviceObject>) -> br::CmdRecord<DeviceObject>,
-    ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+    ) -> br::Result<impl core::future::Future<Output = br::Result<()>> + 's> {
         use bedrock::VkHandleMut;
 
-        let mut fence = std::sync::Arc::new(br::FenceObject::new(
-            self.device().clone(),
-            &br::FenceCreateInfo::new(0),
-        )?);
+        struct StandaloneFence {
+            handle: br::vk::VkFence,
+            device: VulkanGfx,
+        }
+        impl Drop for StandaloneFence {
+            fn drop(&mut self) {
+                unsafe {
+                    br::vkfn_wrapper::destroy_fence(self.device.native_ptr(), self.handle, None);
+                }
+            }
+        }
+        impl br::VkHandle for StandaloneFence {
+            type Handle = br::vk::VkFence;
 
-        let mut pool = br::CommandPoolObject::new(
-            self.device.clone(),
-            &br::CommandPoolCreateInfo::new(self.graphics_queue_family_index()).transient(),
-        )?;
-        let mut cb = CommandBundle(
-            br::CommandBufferObject::alloc(
-                self.device.clone(),
-                &br::CommandBufferAllocateInfo::new(&mut pool, 1, br::CommandBufferLevel::Primary),
-            )?,
-            pool,
-        );
-        generator(unsafe {
-            cb[0].begin(
-                &br::CommandBufferBeginInfo::new().onetime_submit(),
-                &self.device,
+            fn native_ptr(&self) -> Self::Handle {
+                self.handle
+            }
+        }
+        impl br::VkHandleMut for StandaloneFence {
+            fn native_ptr_mut(&mut self) -> Self::Handle {
+                self.handle
+            }
+        }
+        impl AwaitableFence for StandaloneFence {
+            fn is_ready(&self) -> bedrock::Result<bool> {
+                let r = unsafe {
+                    br::vkfn_wrapper::get_fence_status(self.device.0.device, self.handle)?
+                };
+
+                Ok(r == br::vk::VK_SUCCESS)
+            }
+        }
+
+        let mut fence = StandaloneFence {
+            handle: unsafe {
+                br::vkfn_wrapper::create_fence(
+                    self.gfx_device.0.device,
+                    &br::FenceCreateInfo::new(0),
+                    None,
+                )?
+            },
+            device: self.gfx_device.clone(),
+        };
+
+        let pool = unsafe {
+            br::vkfn_wrapper::create_command_pool(
+                self.gfx_device.0.device,
+                &br::CommandPoolCreateInfo::new(self.graphics_queue.family).transient(),
+                None,
             )?
-        })
+        };
+        let mut cb = [br::vk::VkCommandBuffer::NULL];
+        match unsafe {
+            br::vkfn_wrapper::allocate_command_buffers(
+                self.gfx_device.0.device,
+                &br::CommandBufferAllocateInfo::new(
+                    &mut br::VkHandleRefMut::dangling(pool),
+                    1,
+                    br::CommandBufferLevel::Primary,
+                ),
+                &mut cb,
+            )
+        } {
+            Ok(()) => (),
+            Err(e) => {
+                unsafe {
+                    br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
+                }
+
+                return Err(e);
+            }
+        }
+        let cb = StandaloneOnetimeSubmitCommandBundle {
+            buffer: cb[0],
+            pool,
+            device: self.gfx_device.clone(),
+        };
+        unsafe {
+            br::vkfn_wrapper::begin_command_buffer(
+                cb.buffer,
+                &br::CommandBufferBeginInfo::new().onetime_submit(),
+            )?
+        };
+        generator(br::CmdRecord::new(
+            unsafe { br::VkHandleRefMut::dangling(cb.buffer) },
+            &self.gfx_device,
+        ))
         .end()?;
-        self.graphics_queue.q.lock().submit(
-            &[br::EmptySubmissionBatch.with_command_buffers(&cb[..])],
-            Some(unsafe {
-                std::sync::Arc::get_mut(&mut fence)
-                    .unwrap_unchecked()
-                    .as_transparent_ref_mut()
-            }),
-        )?;
+        unsafe {
+            br::vkfn_wrapper::queue_submit(
+                br::VkHandleRefMut::dangling(self.graphics_queue.q),
+                &[br::SubmitInfo::new_array(
+                    &[],
+                    &[],
+                    &[br::VkHandleRef::dangling(cb.buffer)],
+                    &[],
+                )],
+                Some(fence.as_transparent_ref_mut()),
+            )?;
+        }
+        let fence = std::sync::Arc::new(fence);
 
         Ok(async move {
             self.await_fence(fence).await?;
@@ -554,9 +1127,7 @@ impl Graphics {
     #[cfg(feature = "mt")]
     pub const fn await_fence<'s>(
         &'s self,
-        fence: std::sync::Arc<
-            impl br::Fence + br::DeviceChild<ConcreteDevice = DeviceObject> + Send + Sync + 'static,
-        >,
+        fence: std::sync::Arc<impl AwaitableFence + Send + Sync + 'static>,
     ) -> impl std::future::Future<Output = br::Result<()>> + 's {
         FenceWaitFuture {
             reactor: &self.fence_reactor,
@@ -565,59 +1136,41 @@ impl Graphics {
         }
     }
 
-    pub fn instance(&self) -> &InstanceObject {
-        self.device.instance()
-    }
-
-    pub const fn adapter(&self) -> &br::PhysicalDeviceObject<InstanceObject> {
-        &self.adapter
-    }
-
-    pub const fn device(&self) -> &DeviceObject {
-        &self.device
-    }
-
     pub const fn graphics_queue_family_index(&self) -> u32 {
         self.graphics_queue.family
     }
 
     pub fn vk_extension_is_available(&self, name: &CStr) -> bool {
-        self.enabled_vk_extensions.contains(name)
+        self.gfx_device.0.enabled_extension_names.contains(name)
     }
 
     #[inline(always)]
     pub fn is_extension_available(&self, ext: &VulkanExtension) -> bool {
-        ext.promoted.is_some_and(|x| self.vk_version >= x)
-            || self.enabled_vk_extensions.contains(ext.name)
+        ext.promoted
+            .is_some_and(|x| self.gfx_device.0.vk_version >= x)
+            || self.gfx_device.0.enabled_extension_names.contains(ext.name)
+    }
+
+    pub fn vk_version(&self) -> &br::Version {
+        &self.gfx_device.0.vk_version
+    }
+
+    pub fn wait_operations(&mut self) -> br::Result<()> {
+        unsafe { br::vkfn_wrapper::device_wait_idle(self.gfx_device.0.device) }
     }
 }
 /// Adapter Property exports
 impl Graphics {
-    pub fn adapter_available_features(&self) -> &br::vk::VkPhysicalDeviceFeatures {
-        self.adapter_properties
-            .available_features
-            .get_or_init(|| self.adapter.features())
+    pub fn adapter_available_features(&self) -> &br::PhysicalDeviceFeatures {
+        self.gfx_device.adapter_available_features()
     }
 
     pub fn adapter_limits(&self) -> &br::vk::VkPhysicalDeviceLimits {
-        &self
-            .adapter_properties
-            .properties
-            .get_or_init(|| self.adapter.properties())
-            .limits
+        self.gfx_device.adapter_limits()
     }
 
-    pub fn adapter_memory_properties(&self) -> &br::MemoryProperties {
-        self.adapter_properties
-            .memory_properties
-            .get_or_init(|| self.adapter.memory_properties())
-    }
-}
-impl Deref for Graphics {
-    type Target = DeviceObject;
-
-    fn deref(&self) -> &DeviceObject {
-        &self.device
+    pub fn adapter_memory_properties(&self) -> &br::PhysicalDeviceMemoryProperties {
+        self.gfx_device.adapter_memory_properties()
     }
 }
 

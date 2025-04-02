@@ -8,7 +8,7 @@ edition = "2021"
 [features]
 debug = ["bedrock/VK_EXT_debug_utils"]
 derive = ["peridot-derive"]
-mt = []
+mt = ["bedrock/Multithreaded"]
 
 [dependencies]
 pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
@@ -32,7 +32,6 @@ features = [
     "VK_KHR_surface",
     "VK_KHR_swapchain",
     "Implements",
-    "Multithreaded",
     "VK_KHR_get_physical_device_properties2",
     "VK_KHR_synchronization2",
 ]

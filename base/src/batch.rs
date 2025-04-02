@@ -49,9 +49,7 @@ impl<Device: br::Device> TransferrableBufferResource for br::BufferObject<Device
         self.native_ptr()
     }
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> TransferrableBufferResource
-    for crate::Buffer<Backend, Memory>
-{
+impl TransferrableBufferResource for crate::Buffer {
     fn grouping_key(&self) -> u64 {
         unsafe { core::mem::transmute(self.native_ptr()) }
     }
@@ -442,12 +440,12 @@ impl<Device: br::Device> TransferBatch<Device> {
         Self::update_barrier_range_for(
             &mut self.barrier_range_src,
             ResourceKey(src.buffer.clone()),
-            src.range(bytes),
+            src.head_range(bytes),
         );
         Self::update_barrier_range_for(
             &mut self.barrier_range_dst,
             ResourceKey(dst.buffer.clone()),
-            dst.range(bytes),
+            dst.head_range(bytes),
         );
         self.copy_buffers
             .entry((ResourceKey(src.buffer), ResourceKey(dst.buffer)))
@@ -499,7 +497,7 @@ impl<Device: br::Device> TransferBatch<Device> {
             ImageKey(dest.clone()),
             (extent.clone(), src.buffer.clone(), src.offset),
         );
-        let sr = src.range(byte_length);
+        let sr = src.head_range(byte_length);
         Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.buffer), sr);
         self.org_layout_dst
             .insert(ImageKey(dest), br::ImageLayout::Preinitialized);

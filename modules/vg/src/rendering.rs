@@ -220,16 +220,18 @@ impl Context {
         }
     }
 }
-impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for RendererParams {
-    type Extras = RendererExternalInstances<'e, Device>;
+impl<'e, ExtFnProvider: br::Device + 'e> DefaultRenderCommands<'e, ExtFnProvider>
+    for RendererParams
+{
+    type Extras = RendererExternalInstances<'e, ExtFnProvider>;
 
     fn default_render_commands<'r, NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: br::CmdRecord<'r, Device>,
-        buffer: &(impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + ?Sized),
+        cmd: br::CmdRecord<'r, ExtFnProvider>,
+        buffer: &(impl br::Buffer + ?Sized),
         extras: Self::Extras,
-    ) -> br::CmdRecord<'r, Device> {
+    ) -> br::CmdRecord<'r, ExtFnProvider> {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
         let cmd = cmd
             .bind_pipeline(

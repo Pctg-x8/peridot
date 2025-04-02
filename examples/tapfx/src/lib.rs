@@ -40,12 +40,7 @@ fn init_controls(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     init_controls(e);
 
-    let bb_size = e
-        .back_buffer(0)
-        .expect("empty back-buffers")
-        .image()
-        .size()
-        .wh();
+    let bb_size = e.back_buffer_size();
 
     let renderpass = br::RenderPassObject::new(
         e.graphics().device().clone(),
@@ -65,7 +60,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         ),
     )
     .expect("Failed to create RenderPass");
-    let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+    let backbuffer_resources = e.iter_back_buffers().map(|x| unsafe {}).collect::<Vec<_>>();
     let framebuffers: Vec<_> = backbuffer_resources
         .iter()
         .map(|b| {
