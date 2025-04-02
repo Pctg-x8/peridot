@@ -5,7 +5,7 @@ use log::*;
 use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
-use br::{InstanceChild, VkHandle, PhysicalDevice};
+use br::{InstanceChild, VkHandle, PhysicalDevice, SurfaceCreateInfo};
 use core::future::Future;
 use peridot::mthelper::SharedRef;
 use std::ffi::CStr;
@@ -203,7 +203,7 @@ struct Surface {
 impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_surface(self.gfx_device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_surface(self.gfx_device.instance().native_ptr(), self.handle, None);
         }
     }
 }
