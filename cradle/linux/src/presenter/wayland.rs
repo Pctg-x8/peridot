@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ffi::CStr};
 
-use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef};
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
+use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef};
 use wayland_backend::client::ReadEventsGuard;
 use wayland_client::{
     protocol::{
@@ -387,14 +387,17 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.acquire_next_back_buffer_index()
     }
 
-    fn render_and_present<'s>(
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut peridot::Graphics,
         last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         back_buffer_index: u32,
-        render_submission: peridot::SubmissionBatchBuilder,
-        update_submission: Option<peridot::SubmissionBatchBuilder>,
-    ) -> br::Result<()> {
+        render_submission: peridot::SubmissionBatchBuilder<'r>,
+        update_submission: Option<peridot::SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
         self.sc.render_and_present(
             g,
             last_render_fence,

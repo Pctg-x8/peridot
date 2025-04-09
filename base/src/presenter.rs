@@ -497,14 +497,17 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
         )
     }
 
-    pub fn render_and_present<'s>(
+    pub fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut crate::Graphics,
         last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         bb_index: u32,
-        mut render_submission: SubmissionBatchBuilder,
-        mut update_submission: Option<SubmissionBatchBuilder>,
-    ) -> br::Result<()> {
+        mut render_submission: SubmissionBatchBuilder<'r>,
+        mut update_submission: Option<SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
         if let Some(ref mut cs) = update_submission {
             // copy -> render
             cs.add_signal_semaphores([unsafe {

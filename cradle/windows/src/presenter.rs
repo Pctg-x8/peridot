@@ -331,12 +331,6 @@ impl InteropBackbufferResource {
                 .bind_image_raw(image, memory, 0)
                 .expect("Failed to bind image backing memory");
         }
-        // let image_view = image
-        //     .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-        //     .view_builder()
-        //     .create()
-        //     .expect("Failed to create ImageView for Rendering")
-        //     .into();
 
         Self {
             _shared_handle: shared_handle,
