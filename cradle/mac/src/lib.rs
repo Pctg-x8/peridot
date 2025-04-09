@@ -5,7 +5,7 @@ use log::*;
 use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
-use br::{InstanceChild, VkHandle, PhysicalDevice, SurfaceCreateInfo};
+use br::{InstanceChild, PhysicalDevice, SurfaceCreateInfo, VkHandle};
 use core::future::Future;
 use peridot::mthelper::SharedRef;
 use std::ffi::CStr;
@@ -198,12 +198,16 @@ fn acquire_layer_size(layer: *mut c_void) -> peridot::math::Vector2<u32> {
 
 struct Surface {
     gfx_device: peridot::VulkanGfx,
-    handle: br::vk::VkSurfaceKHR
+    handle: br::vk::VkSurfaceKHR,
 }
 impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_surface(self.gfx_device.instance().native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_surface(
+                self.gfx_device.instance().native_ptr(),
+                self.handle,
+                None,
+            );
         }
     }
 }
@@ -229,7 +233,7 @@ impl Presenter {
                     .execute(g.device().instance(), None)
                     .expect("Failed to create surface")
             },
-            gfx_device: g.device().clone()
+            gfx_device: g.device().clone(),
         };
         let support = g
             .device()
@@ -268,8 +272,8 @@ impl peridot::PlatformPresenter for Presenter {
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r,  peridot::VulkanGfx>,
-    ) -> br::CmdRecord<'r,  peridot::VulkanGfx> {
+        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
+    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
 
@@ -277,14 +281,17 @@ impl peridot::PlatformPresenter for Presenter {
         self.sc.acquire_next_back_buffer_index()
     }
 
-    fn render_and_present<'s>(
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut peridot::Graphics,
         last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         back_buffer_index: u32,
-        render_submission: peridot::SubmissionBatchBuilder,
-        update_submission: Option<peridot::SubmissionBatchBuilder>,
-    ) -> br::Result<()> {
+        render_submission: peridot::SubmissionBatchBuilder<'r>,
+        update_submission: Option<peridot::SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
         self.sc.render_and_present(
             g,
             last_render_fence,
