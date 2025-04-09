@@ -640,6 +640,13 @@ impl VulkanGfx {
         Ok(sink)
     }
 
+    pub fn device_local_memory_index(&self, index_mask: u32) -> Option<u32> {
+        self.0
+            .memory_type_manager
+            .device_local_index(index_mask)
+            .map(|x| x.index())
+    }
+
     #[cfg(feature = "debug")]
     pub unsafe fn set_object_name_raw(
         &self,
@@ -686,12 +693,17 @@ impl VulkanGfx {
     }
 
     #[inline]
+    pub unsafe fn load_function<F: br::PFN>(&self) -> F {
+        unsafe { self.0.device.load_function_unconstrainted::<F>() }
+    }
+
+    #[inline]
     pub fn get_buffer_memory_requirements2_fn(
         &self,
     ) -> &br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
         self.0
             .get_buffer_memory_requirements2_fn
-            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
     #[inline]
@@ -700,21 +712,21 @@ impl VulkanGfx {
     ) -> &br::vk::PFN_vkGetImageMemoryRequirements2KHR {
         self.0
             .get_image_memory_requirements2_fn
-            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
     #[inline]
     pub fn bind_buffer_memory2_fn(&self) -> &br::vk::PFN_vkBindBufferMemory2KHR {
         self.0
             .bind_buffer_memory2_fn
-            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
     #[inline]
     pub fn bind_image_memory2_fn(&self) -> &br::vk::PFN_vkBindImageMemory2KHR {
         self.0
             .bind_image_memory2_fn
-            .get_or_init(|| unsafe { self.0.device.load_function_unconstrainted() })
+            .get_or_init(|| unsafe { self.load_function() })
     }
 }
 impl br::DeviceExtCommandFunctionProvider for VulkanGfx {
@@ -942,24 +954,6 @@ impl Graphics {
         Ok(())
     }
     pub fn submit_buffered_commands(
-        &mut self,
-        batches: &[impl br::SubmissionBatch],
-        fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
-    ) -> br::Result<()> {
-        let batches = batches
-            .into_iter()
-            .map(|x| unsafe { br::SubmitInfo::from_raw(x.make_info_struct()) })
-            .collect::<Vec<_>>();
-
-        unsafe {
-            br::vkfn_wrapper::queue_submit(
-                br::VkHandleRefMut::dangling(self.graphics_queue.q),
-                &batches,
-                Some(fence.as_transparent_ref_mut()),
-            )
-        }
-    }
-    pub fn submit_buffered_commands_raw(
         &mut self,
         batches: &[br::SubmitInfo],
         fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,

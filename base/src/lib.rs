@@ -474,8 +474,8 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     }
     pub fn submit_buffered_commands(
         &mut self,
-        batches: &[impl br::SubmissionBatch],
-        fence: &mut impl br::FenceMut,
+        batches: &[br::SubmitInfo],
+        fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }

@@ -16,14 +16,16 @@ pub trait PlatformPresenter {
     ) -> br::CmdRecord<'r, VulkanGfx>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
-    fn render_and_present<'s>(
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut crate::Graphics,
         last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         back_buffer_index: u32,
-        render_submission: SubmissionBatchBuilder,
-        update_submission: Option<SubmissionBatchBuilder>,
-    ) -> br::Result<()>;
+        render_submission: SubmissionBatchBuilder<'r>,
+        update_submission: Option<SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r;
     /// Returns whether re-initializing is needed for back-buffer resources
     fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) -> bool;
     fn current_geometry_extent(&self) -> peridot_math::Vector2<u32>;
@@ -270,7 +272,7 @@ impl<'d> SubmissionBatchBuilder<'d> {
         self
     }
 
-    fn build(&self) -> br::SubmitInfo {
+    pub fn build(&self) -> br::SubmitInfo {
         br::SubmitInfo::new(
             &self.wait_semaphores,
             &self.wait_dst_stages,
@@ -521,7 +523,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
                 ])
                 .add_signal_semaphores([unsafe { br::VkHandleRef::dangling(self.present_order) }]);
 
-            g.submit_buffered_commands_raw(
+            g.submit_buffered_commands(
                 &[cs.build(), render_submission.build()],
                 last_render_fence,
             )?;
@@ -534,7 +536,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
                 )])
                 .add_signal_semaphores([unsafe { br::VkHandleRef::dangling(self.present_order) }]);
 
-            g.submit_buffered_commands_raw(&[render_submission.build()], last_render_fence)?;
+            g.submit_buffered_commands(&[render_submission.build()], last_render_fence)?;
         }
 
         unsafe {

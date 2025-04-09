@@ -1,8 +1,6 @@
 #![allow(non_upper_case_globals)]
 
-use std::ffi::OsString;
 use std::io::Result as IOResult;
-use std::os::windows::ffi::OsStringExt;
 use std::ptr::NonNull;
 use windows::core::{ComInterface, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::{
