@@ -1,11 +1,15 @@
 use bedrock as br;
 
-pub struct FenceReactorThread<Device: br::Device> {
+pub trait AwaitableFence {
+    fn is_ready(&self) -> br::Result<bool>;
+}
+
+pub struct FenceReactorThread {
     pending_fences: std::sync::Arc<
         parking_lot::Mutex<
             Vec<(
                 std::task::Waker,
-                std::sync::Weak<dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync>,
+                std::sync::Weak<dyn AwaitableFence + Send + Sync>,
             )>,
         >,
     >,
@@ -13,7 +17,7 @@ pub struct FenceReactorThread<Device: br::Device> {
     thread_handle: Option<std::thread::JoinHandle<()>>,
     thread_waker: std::sync::Arc<parking_lot::Condvar>,
 }
-impl<Device: br::Device + 'static> FenceReactorThread<Device> {
+impl FenceReactorThread {
     pub fn new() -> Self {
         let pending_fences = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -27,9 +31,7 @@ impl<Device: br::Device + 'static> FenceReactorThread<Device> {
             .spawn(move || {
                 let mut managed_fences = Vec::<(
                     std::task::Waker,
-                    std::sync::Weak<
-                        dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync,
-                    >,
+                    std::sync::Weak<dyn AwaitableFence + Send + Sync>,
                 )>::new();
                 let mut signaled_indexes = Vec::new();
 
@@ -50,7 +52,7 @@ impl<Device: br::Device + 'static> FenceReactorThread<Device> {
                     if !managed_fences.is_empty() {
                         for (n, (_, f)) in managed_fences.iter().enumerate().rev() {
                             if let Some(f) = f.upgrade() {
-                                if f.status().expect("Failed to get fence status") {
+                                if f.is_ready().expect("Failed to get fence status") {
                                     signaled_indexes.push((n, true));
                                 }
                             } else {
@@ -80,7 +82,7 @@ impl<Device: br::Device + 'static> FenceReactorThread<Device> {
 
     pub fn register(
         &self,
-        fence: &std::sync::Arc<dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync>,
+        fence: &std::sync::Arc<dyn AwaitableFence + Send + Sync>,
         waker: std::task::Waker,
     ) {
         self.pending_fences
@@ -89,7 +91,7 @@ impl<Device: br::Device + 'static> FenceReactorThread<Device> {
         self.thread_waker.notify_all();
     }
 }
-impl<Device: br::Device> Drop for FenceReactorThread<Device> {
+impl Drop for FenceReactorThread {
     fn drop(&mut self) {
         if let Some(th) = self.thread_handle.take() {
             self.shutdown
@@ -100,20 +102,19 @@ impl<Device: br::Device> Drop for FenceReactorThread<Device> {
     }
 }
 
-pub(crate) struct FenceWaitFuture<'d, Device: br::Device> {
-    pub(crate) reactor: &'d FenceReactorThread<Device>,
-    pub(crate) object:
-        std::sync::Arc<dyn br::DeviceChildFence<ConcreteDevice = Device> + Send + Sync>,
+pub(crate) struct FenceWaitFuture<'d> {
+    pub(crate) reactor: &'d FenceReactorThread,
+    pub(crate) object: std::sync::Arc<dyn AwaitableFence + Send + Sync>,
     pub(crate) registered: bool,
 }
-impl<Device: br::Device + 'static> std::future::Future for FenceWaitFuture<'_, Device> {
+impl std::future::Future for FenceWaitFuture<'_> {
     type Output = br::Result<()>;
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        match self.object.status() {
+        match self.object.is_ready() {
             Err(e) => std::task::Poll::Ready(Err(e)),
             Ok(true) => std::task::Poll::Ready(Ok(())),
             Ok(false) => {

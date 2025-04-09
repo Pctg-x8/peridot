@@ -7,14 +7,28 @@ use peridot::mthelper::SharedMutableRef;
 use crate::MemoryBlock;
 
 pub(crate) enum BackingMemory {
-    Managed(SharedMutableRef<MemoryBlock<peridot::DeviceObject>>),
-    Native(br::DeviceMemoryObject<peridot::DeviceObject>),
-    NativeShared(SharedMutableRef<br::DeviceMemoryObject<peridot::DeviceObject>>),
+    Managed(SharedMutableRef<MemoryBlock>),
+    Native(br::DeviceMemoryObject<peridot::VulkanGfx>),
+    NativeShared(SharedMutableRef<br::DeviceMemoryObject<peridot::VulkanGfx>>),
+}
+impl BackingMemory {
+    #[inline]
+    pub(crate) fn vk_handle(&self) -> br::vk::VkDeviceMemory {
+        match self {
+            Self::Managed(ref m) => m.borrow().handle,
+            Self::Native(ref m) => m.native_ptr(),
+            Self::NativeShared(ref m) => m.borrow().native_ptr(),
+        }
+    }
 }
 
 pub struct Image {
-    pub(crate) object: br::ImageObject<peridot::DeviceObject>,
+    pub(crate) handle: br::vk::VkImage,
+    pub(crate) device: peridot::VulkanGfx,
     pub(crate) memory_block: BackingMemory,
+    pub(crate) format: br::Format,
+    pub(crate) size: br::Extent3D,
+    pub(crate) image_type: br::vk::VkImageViewType,
     #[allow(dead_code)]
     pub(crate) offset: u64,
     pub(crate) byte_length: usize,
@@ -25,18 +39,22 @@ impl Drop for Image {
         if let BackingMemory::Managed(ref b) = self.memory_block {
             b.borrow_mut().free(self.byte_length, self.malloc_offset);
         }
+
+        unsafe {
+            br::vkfn_wrapper::destroy_image(self.device.native_ptr(), self.handle, None);
+        }
     }
 }
 impl br::VkHandle for Image {
     type Handle = <br::ImageObject<peridot::DeviceObject> as br::VkHandle>::Handle;
 
     fn native_ptr(&self) -> Self::Handle {
-        self.object.native_ptr()
+        self.handle
     }
 }
 impl br::VkHandleMut for Image {
     fn native_ptr_mut(&mut self) -> Self::Handle {
-        self.object.native_ptr_mut()
+        self.handle
     }
 }
 impl br::VkObject for Image {
@@ -46,28 +64,27 @@ impl br::VkObject for Image {
 impl br::DeviceChildHandle for Image {
     #[inline(always)]
     fn device_handle(&self) -> bedrock::vk::VkDevice {
-        self.object.device_handle()
+        self.device.native_ptr()
     }
 }
 impl br::DeviceChild for Image {
-    type ConcreteDevice =
-        <br::ImageObject<peridot::DeviceObject> as br::DeviceChild>::ConcreteDevice;
+    type ConcreteDevice = peridot::VulkanGfx;
 
     fn device(&self) -> &Self::ConcreteDevice {
-        self.object.device()
+        &self.device
     }
 }
 impl br::Image for Image {
     fn format(&self) -> br::vk::VkFormat {
-        self.object.format()
+        self.format
     }
 
     fn size(&self) -> &br::vk::VkExtent3D {
-        self.object.size()
+        &self.size
     }
 
     fn dimension(&self) -> br::vk::VkImageViewType {
-        self.object.dimension()
+        self.image_type
     }
 }
 
@@ -132,7 +149,8 @@ impl BufferMapMode {
 }
 
 pub struct Buffer {
-    pub(crate) object: br::BufferObject<peridot::DeviceObject>,
+    pub(crate) handle: br::vk::VkBuffer,
+    pub(crate) device: peridot::VulkanGfx,
     pub(crate) memory_block: BackingMemory,
     pub(crate) requires_flushing: bool,
     pub(crate) offset: u64,
@@ -153,13 +171,18 @@ impl Buffer {
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn map_raw(
         &mut self,
-        range: core::ops::Range<br::vk::VkDeviceSize>,
+        range: core::ops::Range<br::DeviceSize>,
     ) -> br::Result<AnyPointer> {
         let p = match self.memory_block {
-            BackingMemory::Managed(ref m) => m
-                .borrow_mut()
-                .object
-                .map_raw(range.start + self.offset..range.end + self.offset),
+            BackingMemory::Managed(ref m) => unsafe {
+                br::vkfn_wrapper::map_memory(
+                    self.device.native_ptr(),
+                    m.borrow_mut().handle,
+                    self.offset + range.start,
+                    range.end - range.start,
+                    0,
+                )
+            },
             BackingMemory::Native(ref mut m) => {
                 m.map_raw(range.start + self.offset..range.end + self.offset)
             }
@@ -174,7 +197,13 @@ impl Buffer {
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn unmap_raw(&mut self) {
         match self.memory_block {
-            BackingMemory::Managed(ref m) => m.borrow_mut().object.unmap(),
+            BackingMemory::Managed(ref m) => {
+                let locked = m.borrow_mut();
+
+                unsafe {
+                    br::vkfn_wrapper::unmap_memory(locked.device.native_ptr(), locked.handle);
+                }
+            }
             BackingMemory::Native(ref mut m) => m.unmap(),
             BackingMemory::NativeShared(ref m) => m.borrow_mut().unmap(),
         }
@@ -183,18 +212,27 @@ impl Buffer {
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn invalidate_ranges_raw(
         &mut self,
-        ranges: &[core::ops::Range<br::vk::VkDeviceSize>],
+        ranges: &[core::ops::Range<br::DeviceSize>],
     ) -> br::Result<()> {
         match self.memory_block {
             BackingMemory::Managed(ref m) => {
                 let locked = m.borrow_mut();
 
-                locked.object.device().invalidate_memory_range(
-                    &ranges
-                        .iter()
-                        .map(|r| br::MappedMemoryRange::new(&locked.object, r.clone()))
-                        .collect::<Vec<_>>(),
-                )
+                unsafe {
+                    br::vkfn_wrapper::invalidate_mapped_memory_ranges(
+                        locked.device.native_ptr(),
+                        &ranges
+                            .iter()
+                            .map(|r| {
+                                br::MappedMemoryRange::new_raw(
+                                    locked.handle,
+                                    r.start,
+                                    r.end - r.start,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
             }
             BackingMemory::Native(ref mut m) => m.device().invalidate_memory_range(
                 &ranges
@@ -218,18 +256,27 @@ impl Buffer {
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn flush_ranges_raw(
         &mut self,
-        ranges: &[core::ops::Range<br::vk::VkDeviceSize>],
+        ranges: &[core::ops::Range<br::DeviceSize>],
     ) -> br::Result<()> {
         match self.memory_block {
             BackingMemory::Managed(ref m) => {
                 let locked = m.borrow_mut();
 
-                locked.object.device().flush_mapped_memory_ranges(
-                    &ranges
-                        .iter()
-                        .map(|r| br::MappedMemoryRange::new(&locked.object, r.clone()))
-                        .collect::<Vec<_>>(),
-                )
+                unsafe {
+                    br::vkfn_wrapper::flush_mapped_memory_ranges(
+                        locked.device.native_ptr(),
+                        &ranges
+                            .iter()
+                            .map(|r| {
+                                br::MappedMemoryRange::new_raw(
+                                    locked.handle,
+                                    r.start,
+                                    r.end - r.start,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
             }
             BackingMemory::Native(ref mut m) => m.device().flush_mapped_memory_ranges(
                 &ranges
@@ -257,19 +304,26 @@ impl Buffer {
     ) -> br::Result<R> {
         match self.memory_block {
             BackingMemory::Managed(ref m) => {
-                let mut locked = m.borrow_mut();
+                let locked = m.borrow_mut();
+
                 let ptr = unsafe {
-                    locked
-                        .object
-                        .map_raw(self.offset..self.offset + self.size as br::DeviceSize)?
+                    br::vkfn_wrapper::map_memory(
+                        locked.device.native_ptr(),
+                        locked.handle,
+                        self.offset,
+                        self.size as _,
+                        0,
+                    )?
                 };
                 if self.requires_explicit_sync() && mode.is_read() {
                     unsafe {
-                        self.device()
-                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
-                                &locked.object,
-                                self.offset..self.offset + self.size as br::DeviceSize,
-                            )])?;
+                        self.device().invalidate_memory_range(&[
+                            br::MappedMemoryRange::new_raw(
+                                locked.handle,
+                                self.offset,
+                                self.size as _,
+                            ),
+                        ])?;
                     }
                 }
                 let r = op(AnyPointer(unsafe {
@@ -277,15 +331,17 @@ impl Buffer {
                 }));
                 if self.requires_explicit_sync() && mode.is_write() {
                     unsafe {
-                        self.device()
-                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
-                                &locked.object,
-                                self.offset..self.offset + self.size as br::DeviceSize,
-                            )])?;
+                        self.device().flush_mapped_memory_ranges(&[
+                            br::MappedMemoryRange::new_raw(
+                                locked.handle,
+                                self.offset,
+                                self.size as _,
+                            ),
+                        ])?;
                     }
                 }
                 unsafe {
-                    locked.object.unmap();
+                    br::vkfn_wrapper::unmap_memory(locked.device.native_ptr(), locked.handle);
                 }
 
                 Ok(r)
@@ -390,46 +446,48 @@ impl Drop for Buffer {
         if let BackingMemory::Managed(ref b) = self.memory_block {
             b.borrow_mut().free(self.malloc.0 as _, self.malloc.1);
         }
+
+        unsafe {
+            br::vkfn_wrapper::destroy_buffer(self.device.native_ptr(), self.handle, None);
+        }
     }
 }
 impl br::VkHandle for Buffer {
-    type Handle = <br::BufferObject<peridot::DeviceObject> as br::VkHandle>::Handle;
+    type Handle = br::vk::VkBuffer;
 
     fn native_ptr(&self) -> Self::Handle {
-        self.object.native_ptr()
+        self.handle
     }
 }
 impl br::VkObject for Buffer {
-    const TYPE: br::vk::VkObjectType =
-        <br::BufferObject<peridot::DeviceObject> as br::VkObject>::TYPE;
+    const TYPE: br::vk::VkObjectType = br::vk::VK_OBJECT_TYPE_BUFFER;
 }
 impl br::VkHandleMut for Buffer {
     fn native_ptr_mut(&mut self) -> Self::Handle {
-        self.object.native_ptr_mut()
+        self.handle
     }
 }
 impl br::DeviceChildHandle for Buffer {
     #[inline(always)]
     fn device_handle(&self) -> bedrock::vk::VkDevice {
-        self.object.device_handle()
+        self.device.native_ptr()
     }
 }
 impl br::DeviceChild for Buffer {
-    type ConcreteDevice =
-        <br::BufferObject<peridot::DeviceObject> as br::DeviceChild>::ConcreteDevice;
+    type ConcreteDevice = peridot::VulkanGfx;
 
     fn device(&self) -> &Self::ConcreteDevice {
-        self.object.device()
+        &self.device
     }
 }
 impl br::Buffer for Buffer {}
 impl peridot::TransferrableBufferResource for Buffer {
     fn grouping_key(&self) -> u64 {
-        unsafe { core::mem::transmute(self.object.native_ptr()) }
+        unsafe { core::mem::transmute(self.handle) }
     }
 
     fn raw_handle(&self) -> br::vk::VkBuffer {
-        self.object.native_ptr()
+        self.handle
     }
 }
 

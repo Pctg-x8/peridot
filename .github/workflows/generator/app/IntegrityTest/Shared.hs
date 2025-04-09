@@ -65,8 +65,8 @@ checkFormats precondition =
         ( GHA.withCondition precondition
             <$> [ checkoutHeadStep,
                   checkoutStep,
-                  GHA.namedAs "Running Check - Line Width" $
-                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptCodeFormCheck,
+                  rustCacheStep,
+                  GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
                   GHA.namedAs "Running Check - Debugging Weaks" $
                     CodeFormCheckerAction.step CodeFormCheckerAction.ScriptVulnerabilitiesEliminator,
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $

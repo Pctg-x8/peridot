@@ -1,7 +1,6 @@
 use std::{collections::HashMap, ffi::CStr};
 
-use bedrock as br;
-use br::PhysicalDevice;
+use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef};
 use wayland_backend::client::ReadEventsGuard;
 use wayland_client::{
@@ -282,9 +281,32 @@ impl EventProcessor for Wayland {
     }
 }
 
+struct Surface {
+    handle: br::vk::VkSurfaceKHR,
+    device: peridot::VulkanGfx,
+}
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(
+                self.device.instance().native_ptr(),
+                self.handle,
+                None,
+            );
+        }
+    }
+}
+impl br::VkHandle for Surface {
+    type Handle = br::vk::VkSurfaceKHR;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+
 pub struct Presenter {
     window_backend: SharedMutableRef<Wayland>,
-    sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
+    sc: peridot::IntegratedSwapchain<Surface>,
 }
 impl Presenter {
     fn new(
@@ -295,26 +317,28 @@ impl Presenter {
         let wlock = w.borrow();
 
         if !unsafe {
-            g.adapter().wayland_presentation_support(
+            br::vkfn_wrapper::get_physical_device_wayland_presentation_support(
+                g.adapter_raw(),
                 renderer_queue_family,
                 wlock.con.display().id().as_ptr() as _,
             )
         } {
             panic!("Vulkan Presentation is not supported!");
         }
-        let so = unsafe {
-            br::SurfaceObject::new(
-                g.adapter(),
-                &br::vk::VkWaylandSurfaceCreateInfoKHR::new(
+        let so = Surface {
+            handle: unsafe {
+                br::WaylandSurfaceCreateInfo::new(
                     wlock.con.display().id().as_ptr() as _,
                     wlock.surface.id().as_ptr() as _,
-                ),
-            )
-            .expect("Failed to create Surface object")
+                )
+                .execute(g.device().instance(), None)
+                .expect("Failed to create surface object")
+            },
+            device: g.device().clone(),
         };
         if !g
-            .adapter()
-            .surface_support(renderer_queue_family, &so)
+            .device()
+            .surface_support(&so)
             .expect("Failed to query surface support")
         {
             panic!("Vulkan Surface is not supported");
@@ -329,55 +353,60 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
-    type BackBuffer = br::ImageViewObject<
-        br::SwapchainImage<
-            peridot::mthelper::SharedRef<
-                br::SurfaceSwapchainObject<
-                    peridot::DeviceObject,
-                    br::SurfaceObject<peridot::InstanceObject>,
-                >,
-            >,
-        >,
-    >;
-
-    fn format(&self) -> br::vk::VkFormat {
+    fn format(&self) -> br::Format {
         self.sc.format()
     }
+
+    fn back_buffer_size(&self) -> peridot::math::Vector2<u32> {
+        self.sc.back_buffer_size()
+    }
+
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<&peridot::mthelper::SharedRef<Self::BackBuffer>> {
+
+    fn back_buffer<'a>(
+        &'a self,
+        index: usize,
+    ) -> Option<bedrock::VkHandleRef<'a, bedrock::vk::VkImage>> {
         self.sc.back_buffer(index)
     }
+
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_back_buffer_layout()
     }
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, peridot::DeviceObject>,
-    ) -> br::CmdRecord<'r, peridot::DeviceObject> {
+        recorder: bedrock::CmdRecord<'r, peridot::VulkanGfx>,
+    ) -> bedrock::CmdRecord<'r, peridot::VulkanGfx> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
-    fn next_back_buffer_index(&mut self) -> br::Result<u32> {
+
+    fn next_back_buffer_index(&mut self) -> bedrock::Result<u32> {
         self.sc.acquire_next_back_buffer_index()
     }
-    fn render_and_present<'s>(
+
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
-        backbuffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
-    ) -> br::Result<()> {
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
+        back_buffer_index: u32,
+        render_submission: peridot::SubmissionBatchBuilder<'r>,
+        update_submission: Option<peridot::SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
         self.sc.render_and_present(
             g,
             last_render_fence,
-            backbuffer_index,
+            back_buffer_index,
             render_submission,
             update_submission,
         )
     }
+
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource

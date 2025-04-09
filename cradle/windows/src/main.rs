@@ -6,8 +6,6 @@ use log::*;
 use parking_lot::RwLock;
 mod input;
 mod userlib;
-use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
-use peridot::{EngineEvent, EngineEvents, FeatureRequests};
 use std::ffi::CStr;
 use std::sync::Arc;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
@@ -168,7 +166,7 @@ async fn main() {
 
     // Resizeをここに入れると詰まるので対策が必要（結局個別のイベントバスになるのか.......
     let (events_sender, events_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
-    let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
+    let (_frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
     let events_sender_th = events_sender.clone();
 
     let event_queue = core::pin::pin!(peridot::EventQueue::new());
@@ -386,7 +384,10 @@ impl peridot::NativeLinker for NativeLink {
     }
     #[cfg(feature = "transparent")]
     fn instance_extensions(&self) -> Vec<&CStr> {
-        vec![]
+        vec![
+            c"VK_KHR_external_memory_capabilities",
+            c"VK_KHR_external_semaphore_capabilities",
+        ]
     }
     #[cfg(not(feature = "transparent"))]
     fn device_extensions(&self) -> Vec<&CStr> {
@@ -395,7 +396,9 @@ impl peridot::NativeLinker for NativeLink {
     #[cfg(feature = "transparent")]
     fn device_extensions(&self) -> Vec<&CStr> {
         vec![
+            c"VK_KHR_external_memory",
             c"VK_KHR_external_memory_win32",
+            c"VK_KHR_external_semaphore",
             c"VK_KHR_external_semaphore_win32",
         ]
     }

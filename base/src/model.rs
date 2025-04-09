@@ -15,16 +15,16 @@ pub trait ModelData {
         offsets: Self::PreallocOffsetType,
     ) -> Self::RendererParams;
 }
-pub trait DefaultRenderCommands<'e, Device: br::Device> {
+pub trait DefaultRenderCommands<'e, ExtFnProvider> {
     type Extras: 'e;
 
     fn default_render_commands<'r, NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: br::CmdRecord<'r, Device>,
-        buffer: &(impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + ?Sized),
+        cmd: br::CmdRecord<'r, ExtFnProvider>,
+        buffer: &(impl br::Buffer + ?Sized),
         extras: Self::Extras,
-    ) -> br::CmdRecord<'r, Device>;
+    ) -> br::CmdRecord<'r, ExtFnProvider>;
 }
 
 #[derive(Debug, Clone)]
