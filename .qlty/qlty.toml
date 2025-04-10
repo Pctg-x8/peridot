@@ -80,10 +80,6 @@ threshold = 5
 [smells.function_complexity]
 threshold = 5
 
-[smells.duplication]
-enabled = true
-threshold = 20
-
 [[source]]
 name = "default"
 default = true
@@ -92,34 +88,12 @@ default = true
 name = "actionlint"
 
 [[plugin]]
-name = "bandit"
-
-[[plugin]]
-name = "brakeman"
-
-[[plugin]]
 name = "clippy"
 version = "1.86.0"
 
 [[plugin]]
-name = "dockerfmt"
-
-[[plugin]]
-name = "hadolint"
-
-[[plugin]]
-name = "markdownlint"
-mode = "comment"
-
-[[plugin]]
-name = "prettier"
-
-[[plugin]]
 name = "ripgrep"
 mode = "comment"
-
-[[plugin]]
-name = "ruff"
 
 [[plugin]]
 name = "shellcheck"
