@@ -11,7 +11,7 @@ use-freetype = ["peridot-vg/use-freetype"]
 use-fontconfig = ["peridot-vg/use-fontconfig"]
 
 [dependencies]
-peridot = { path = "../../base", features = ["derive", "mt"] }
+peridot = { path = "../../base", features = ["derive"] }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
     "VK_EXT_debug_report",
 ] }

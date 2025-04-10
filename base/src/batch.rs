@@ -49,9 +49,7 @@ impl<Device: br::Device> TransferrableBufferResource for br::BufferObject<Device
         self.native_ptr()
     }
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> TransferrableBufferResource
-    for crate::Buffer<Backend, Memory>
-{
+impl TransferrableBufferResource for crate::Buffer {
     fn grouping_key(&self) -> u64 {
         unsafe { core::mem::transmute(self.native_ptr()) }
     }
@@ -267,14 +265,10 @@ impl TransferBatch2 {
         self.register_after_transition(pipeline_stage, res, range, access_mask);
     }
 
-    pub fn generate_commands<
-        'r,
-        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
-        Device: br::Device,
-    >(
+    pub fn generate_commands<'r, Device: br::Device>(
         &self,
-        rec: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
+        rec: br::CmdRecord<'r, Device>,
+    ) -> br::CmdRecord<'r, Device> {
         rec.pipeline_barrier(
             br::PipelineStageFlags::HOST,
             br::PipelineStageFlags::TRANSFER,
@@ -446,12 +440,12 @@ impl<Device: br::Device> TransferBatch<Device> {
         Self::update_barrier_range_for(
             &mut self.barrier_range_src,
             ResourceKey(src.buffer.clone()),
-            src.range(bytes),
+            src.head_range(bytes),
         );
         Self::update_barrier_range_for(
             &mut self.barrier_range_dst,
             ResourceKey(dst.buffer.clone()),
-            dst.range(bytes),
+            dst.head_range(bytes),
         );
         self.copy_buffers
             .entry((ResourceKey(src.buffer), ResourceKey(dst.buffer)))
@@ -503,7 +497,7 @@ impl<Device: br::Device> TransferBatch<Device> {
             ImageKey(dest.clone()),
             (extent.clone(), src.buffer.clone(), src.offset),
         );
-        let sr = src.range(byte_length);
+        let sr = src.head_range(byte_length);
         Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.buffer), sr);
         self.org_layout_dst
             .insert(ImageKey(dest), br::ImageLayout::Preinitialized);
@@ -571,10 +565,10 @@ impl<Device: br::Device> TransferBatch<Device> {
 }
 /// Sinking Commands into CommandBuffers
 impl<Device: br::Device> TransferBatch<Device> {
-    pub fn sink_transfer_commands<'r, CB: br::CommandBuffer + br::VkHandleMut + ?Sized>(
+    pub fn sink_transfer_commands<'r>(
         &self,
-        r: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
+        r: br::CmdRecord<'r, Device>,
+    ) -> br::CmdRecord<'r, Device> {
         let src_barriers = self.barrier_range_src.iter().map(|(b, r)| {
             br::BufferMemoryBarrier::new(
                 &b.0,
@@ -639,10 +633,10 @@ impl<Device: br::Device> TransferBatch<Device> {
         })
     }
 
-    pub fn sink_graphics_ready_commands<'r, CB: br::CommandBuffer + br::VkHandleMut + ?Sized>(
+    pub fn sink_graphics_ready_commands<'r>(
         &self,
-        r: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
+        r: br::CmdRecord<'r, Device>,
+    ) -> br::CmdRecord<'r, Device> {
         self.ready_barriers.iter().fold(
             r,
             |r, (stg, ReadyResourceBarriers { buffer, image, .. })| {

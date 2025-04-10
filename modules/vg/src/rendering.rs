@@ -127,7 +127,7 @@ impl ModelData for Context {
 
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
+        mem: &br::MappedMemory<impl br::DeviceMemoryMut + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
         unsafe { self.write_data_into(mem.get_mut(0) as _, offsets) }
@@ -220,20 +220,18 @@ impl Context {
         }
     }
 }
-impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for RendererParams {
-    type Extras = RendererExternalInstances<'e, Device>;
+impl<'e, ExtFnProvider: br::Device + 'e> DefaultRenderCommands<'e, ExtFnProvider>
+    for RendererParams
+{
+    type Extras = RendererExternalInstances<'e, ExtFnProvider>;
 
-    fn default_render_commands<
-        'r,
-        NL: NativeLinker,
-        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
-    >(
+    fn default_render_commands<'r, NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: br::CmdRecord<'r, CB, Device>,
-        buffer: &(impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + ?Sized),
+        cmd: br::CmdRecord<'r, ExtFnProvider>,
+        buffer: &(impl br::Buffer + ?Sized),
         extras: Self::Extras,
-    ) -> br::CmdRecord<'r, CB, Device> {
+    ) -> br::CmdRecord<'r, ExtFnProvider> {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
         let cmd = cmd
             .bind_pipeline(
@@ -357,10 +355,7 @@ impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = D
 impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = Device>>
     GraphicsCommand<Device> for RenderVG<Device, Buffer>
 {
-    fn execute<'r>(
-        &self,
-        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device>,
-    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device> {
+    fn execute<'r>(&self, cb: br::CmdRecord<'r, Device>) -> br::CmdRecord<'r, Device> {
         let render_scale = self.target_pixels.clone() * self.rendering_precision.recip();
 
         let common_configs = (

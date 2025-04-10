@@ -22,7 +22,7 @@ impl FontProvider for CoreTextFontProvider {
         properties: &FontProperties,
         size: f32,
     ) -> Result<Self::Font, FontConstructionError> {
-        let traits = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
+        let mut traits = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
             FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity")
         })?;
         let weight_num = appkit::NSNumber::from_float(properties.native_weight())
@@ -41,7 +41,7 @@ impl FontProvider for CoreTextFontProvider {
             AsRef::as_ref(unsafe { &*appkit::kCTFontSymbolicTrait }),
             symbolic_traits.as_id(),
         );
-        let attrs = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
+        let mut attrs = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
             FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity")
         })?;
         let family_name_nsstr = appkit::NSString::from_str(family_name)

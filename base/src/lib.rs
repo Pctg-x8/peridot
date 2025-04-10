@@ -3,13 +3,11 @@ use futures_util::FutureExt;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 
-use bedrock as br;
-use br::Device;
-#[cfg(feature = "mt")]
-use br::Status;
+use bedrock::{self as br, VkHandle};
 use parking_lot::RwLock;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
+use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -18,10 +16,9 @@ use std::time::{Duration, Instant as InstantTimer};
 mod graphics;
 pub use self::graphics::{
     CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
-    MemoryTypeManager, VulkanExtension,
+    MemoryTypeManager, VulkanExtension, VulkanGfx,
 };
 mod state_track;
-use self::state_track::StateFence;
 mod window;
 pub use self::window::SurfaceInfo;
 mod resource;
@@ -46,7 +43,7 @@ pub use self::presenter::*;
 pub mod mthelper;
 #[allow(unused_imports)]
 use mthelper::DynamicMutabilityProvider;
-use mthelper::{DynamicMut, MappableGuardObject, MappableMutGuardObject, SharedRef};
+use mthelper::{DynamicMut, MappableGuardObject, MappableMutGuardObject};
 
 #[cfg(feature = "derive")]
 pub use peridot_derive::*;
@@ -228,19 +225,122 @@ impl EngineEventReceiver {
     }
 }
 
-pub struct Engine<NL: NativeLinker> {
+pub struct NextEventFuture<'e> {
+    queue: &'e RefCell<VecDeque<Event>>,
+    queue_waker: &'e RefCell<Vec<core::task::Waker>>,
+}
+impl core::future::Future for NextEventFuture<'_> {
+    type Output = Event;
+
+    #[inline]
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if let Some(e) = self.queue.borrow_mut().pop_front() {
+            core::task::Poll::Ready(e)
+        } else {
+            self.queue_waker.borrow_mut().push(cx.waker().clone());
+            core::task::Poll::Pending
+        }
+    }
+}
+
+pub struct EventQueue {
+    queue: RefCell<VecDeque<Event>>,
+    queue_waker: RefCell<Vec<core::task::Waker>>,
+}
+impl EventQueue {
+    pub fn new() -> Self {
+        Self {
+            queue: RefCell::new(VecDeque::new()),
+            queue_waker: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn enqueue(&self, event: Event) {
+        self.queue.borrow_mut().push_back(event);
+        for w in core::mem::replace(&mut *self.queue_waker.borrow_mut(), Vec::new()) {
+            w.wake();
+        }
+    }
+
+    #[inline(always)]
+    pub fn next_event<'q>(&'q self) -> impl core::future::Future<Output = Event> + 'q {
+        NextEventFuture {
+            queue: &self.queue,
+            queue_waker: &self.queue_waker,
+        }
+    }
+}
+
+struct LastRenderingCompletionFence {
+    handle: br::vk::VkFence,
+    device: VulkanGfx,
+    used: bool,
+}
+impl Drop for LastRenderingCompletionFence {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_fence(self.device.native_ptr(), self.handle, None);
+        }
+    }
+}
+impl LastRenderingCompletionFence {
+    pub fn new(device: &VulkanGfx) -> br::Result<Self> {
+        let handle = unsafe {
+            br::vkfn_wrapper::create_fence(device.0.device, &br::FenceCreateInfo::new(0), None)?
+        };
+
+        Ok(Self {
+            handle,
+            device: device.clone(),
+            used: false,
+        })
+    }
+
+    pub fn wait(&mut self) -> br::Result<()> {
+        if self.used {
+            unsafe {
+                br::vkfn_wrapper::wait_for_fences(
+                    self.device.0.device,
+                    &[self.handle],
+                    true,
+                    u64::MAX,
+                )?;
+                br::vkfn_wrapper::reset_fences(
+                    self.device.0.device,
+                    &[br::VkHandleRefMut::dangling(self.handle)],
+                )?;
+            }
+            self.used = false;
+        }
+
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn r#use(&mut self) -> br::VkHandleRefMut<br::vk::VkFence> {
+        self.used = true;
+
+        unsafe { br::VkHandleRefMut::dangling(self.handle) }
+    }
+}
+
+pub struct Engine<'q, NL: NativeLinker> {
     native_link: NL,
     presenter: NL::Presenter,
     pub(self) g: Graphics,
     ip: InputProcess,
     game_timer: GameTimer,
-    last_rendering_completion: StateFence<br::FenceObject<DeviceObject>>,
+    last_rendering_completion: LastRenderingCompletionFence,
     audio_mixer: Arc<RwLock<audio::Mixer>>,
     request_resize: bool,
     engine_events_sender: async_std::channel::Sender<EngineEvent>,
     receivers: core::cell::UnsafeCell<EngineEventReceiver>,
+    shared_event_queue: &'q EventQueue,
 }
-impl<PL: NativeLinker> Engine<PL> {
+impl<'q, PL: NativeLinker> Engine<'q, PL> {
     pub fn new(
         name: &str,
         version: br::Version,
@@ -251,6 +351,7 @@ impl<PL: NativeLinker> Engine<PL> {
             async_std::channel::Receiver<EngineEvent>,
         ),
         frame_timing_receiver: async_std::channel::Receiver<()>,
+        shared_event_queue: &'q EventQueue,
     ) -> Self {
         let mut g = Graphics::new(
             name,
@@ -263,11 +364,18 @@ impl<PL: NativeLinker> Engine<PL> {
         g.submit_commands(|r| presenter.emit_initialize_back_buffer_commands(r))
             .expect("Initializing Back Buffers");
 
+        let last_rendering_completion = match LastRenderingCompletionFence::new(&g.gfx_device) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Faield to create last rendering completion fence");
+                std::process::abort();
+            }
+        };
+
         Self {
             ip: InputProcess::new().into(),
             game_timer: GameTimer::new(),
-            last_rendering_completion: StateFence::new(g.device.clone())
-                .expect("Failed to create State Fence for Rendering"),
+            last_rendering_completion,
             audio_mixer: Arc::new(RwLock::new(audio::Mixer::new())),
             native_link,
             g,
@@ -278,6 +386,7 @@ impl<PL: NativeLinker> Engine<PL> {
                 frame_timing_receiver,
                 other_events_receiver: engine_events_bus.1,
             }),
+            shared_event_queue,
         }
     }
 
@@ -285,9 +394,14 @@ impl<PL: NativeLinker> Engine<PL> {
         tracing::trace!("PostInit BaseEngine...");
     }
 }
-impl<NL: NativeLinker> Engine<NL> {
+impl<'q, NL: NativeLinker> Engine<'q, NL> {
     pub fn event_receivers(&self) -> &mut EngineEventReceiver {
         unsafe { &mut *self.receivers.get() }
+    }
+
+    #[inline(always)]
+    pub fn next_event(&self) -> impl core::future::Future<Output = Event> + 'q {
+        self.shared_event_queue.next_event()
     }
 
     pub async fn quit(&self) {
@@ -303,8 +417,8 @@ impl<NL: NativeLinker> Engine<NL> {
         &mut self.g
     }
 
-    pub const fn graphics_device(&self) -> &DeviceObject {
-        &self.g.device
+    pub const fn graphics_device(&self) -> &VulkanGfx {
+        &self.g.gfx_device
     }
     pub const fn graphics_queue_family_index(&self) -> u32 {
         self.g.graphics_queue_family_index()
@@ -317,19 +431,18 @@ impl<NL: NativeLinker> Engine<NL> {
     pub fn back_buffer_format(&self) -> br::vk::VkFormat {
         self.presenter.format()
     }
+    pub fn back_buffer_size(&self) -> peridot_math::Vector2<u32> {
+        self.presenter.back_buffer_size()
+    }
     pub fn back_buffer_count(&self) -> usize {
         self.presenter.back_buffer_count()
     }
-    pub fn back_buffer(
-        &self,
-        index: usize,
-    ) -> Option<&SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> {
+    pub fn back_buffer(&self, index: usize) -> Option<br::VkHandleRef<br::vk::VkImage>> {
         self.presenter.back_buffer(index)
     }
     pub fn iter_back_buffers<'s>(
         &'s self,
-    ) -> impl Iterator<Item = &'s SharedRef<<NL::Presenter as PlatformPresenter>::BackBuffer>> + 's
-    {
+    ) -> impl Iterator<Item = br::VkHandleRef<'s, br::vk::VkImage>> + 's {
         (0..self.back_buffer_count())
             .map(move |x| self.back_buffer(x).expect("unreachable while iteration"))
     }
@@ -342,6 +455,10 @@ impl<NL: NativeLinker> Engine<NL> {
         br::vk::VkAttachmentDescription::new(self.back_buffer_format(), ol, ol)
     }
 
+    pub fn screen_size(&self) -> peridot_math::Vector2<u32> {
+        self.presenter.current_geometry_extent()
+    }
+
     pub fn input(&self) -> &InputProcess {
         &self.ip
     }
@@ -351,17 +468,14 @@ impl<NL: NativeLinker> Engine<NL> {
 
     pub fn submit_commands(
         &mut self,
-        generator: impl FnOnce(
-            br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
-        )
-            -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
     pub fn submit_buffered_commands(
         &mut self,
-        batches: &[impl br::SubmissionBatch],
-        fence: &mut impl br::FenceMut,
+        batches: &[br::SubmitInfo],
+        fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
     ) -> br::Result<()> {
         self.g.submit_buffered_commands(batches, fence)
     }
@@ -372,10 +486,7 @@ impl<NL: NativeLinker> Engine<NL> {
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl FnOnce(
-                br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>,
-            )
-                -> br::CmdRecord<br::CommandBufferObject<DeviceObject>, DeviceObject>
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>
             + 's,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
@@ -386,7 +497,7 @@ impl<NL: NativeLinker> Engine<NL> {
         &self.audio_mixer
     }
 }
-impl<PL: NativeLinker> Engine<PL> {
+impl<PL: NativeLinker> Engine<'_, PL> {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.native_link.asset_loader().get(path, A::EXT)?)
     }
@@ -402,10 +513,11 @@ impl<PL: NativeLinker> Engine<PL> {
         self.native_link.rendering_precision()
     }
 }
-impl<PL: NativeLinker> Engine<PL> {
+impl<PL: NativeLinker> Engine<'_, PL> {
     pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
-        StateFence::wait(&mut self.last_rendering_completion)
-            .expect("Waiting last command completion");
+        if let Err(e) = self.last_rendering_completion.wait() {
+            tracing::warn!(cause = ?e, "Failed to wait last command completion");
+        }
 
         let dt = self.game_timer.delta_time();
         let backbuffer_index = match self.presenter.next_back_buffer_index() {
@@ -450,19 +562,16 @@ impl<PL: NativeLinker> Engine<PL> {
     pub fn do_render(
         &mut self,
         bb_index: u32,
-        copy_submission: Option<impl br::SubmissionBatch>,
-        render_submission: impl br::SubmissionBatch,
+        copy_submission: Option<SubmissionBatchBuilder>,
+        render_submission: SubmissionBatchBuilder,
     ) -> br::Result<()> {
         let pr = self.presenter.render_and_present(
             &mut self.g,
-            self.last_rendering_completion.inner_mut(),
+            &mut self.last_rendering_completion.r#use(),
             bb_index,
             render_submission,
             copy_submission,
         );
-        unsafe {
-            self.last_rendering_completion.signal();
-        }
 
         match pr {
             Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
@@ -475,9 +584,8 @@ impl<PL: NativeLinker> Engine<PL> {
         }
     }
 
-    pub fn wait_for_last_rendering_completion(&mut self) {
-        StateFence::wait(&mut self.last_rendering_completion)
-            .expect("Waiting Last command completion");
+    pub fn wait_for_last_rendering_completion(&mut self) -> br::Result<()> {
+        self.last_rendering_completion.wait()
     }
 
     pub fn resize_presenter_backbuffers(&mut self, new_size: math::Vector2<u32>) {
@@ -518,10 +626,10 @@ impl<PL: NativeLinker> Engine<PL> {
         }
     }
 }
-impl<NL: NativeLinker> Drop for Engine<NL> {
+impl<NL: NativeLinker> Drop for Engine<'_, NL> {
     fn drop(&mut self) {
-        unsafe {
-            self.graphics().device.wait().expect("device error");
+        if let Err(e) = self.g.wait_operations() {
+            tracing::warn!(cause = ?e, "Failed to wait device operations at drop");
         }
     }
 }
@@ -680,14 +788,10 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
     }
 
     #[inline(always)]
-    pub fn bind<
-        'r,
-        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
-        Device: br::Device + ?Sized,
-    >(
+    pub fn bind<'r, Device: ?Sized>(
         &self,
-        rec: br::CmdRecord<'r, CB, Device>,
-    ) -> br::CmdRecord<'r, CB, Device> {
+        rec: br::CmdRecord<'r, Device>,
+    ) -> br::CmdRecord<'r, Device> {
         rec.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }

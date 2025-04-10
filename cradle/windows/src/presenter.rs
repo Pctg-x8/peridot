@@ -1,8 +1,8 @@
 use crate::ThreadsafeWindowOps;
-use bedrock::{self as br, Device, ImageChild, SubmissionBatch};
-use br::{Image, ImageSubresourceSlice, Semaphore};
+use bedrock::{self as br, Device, VkHandle};
+#[cfg(not(feature = "transparent"))]
+use bedrock::{InstanceChild, SurfaceCreateInfo};
 use parking_lot::RwLock;
-use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, SharedRef};
 use std::sync::Arc;
 #[cfg(feature = "transparent")]
 use windows::core::ComInterface;
@@ -33,31 +33,60 @@ use windows::Win32::Graphics::Dxgi::{
 };
 
 #[cfg(not(feature = "transparent"))]
+struct Surface {
+    device: peridot::VulkanGfx,
+    handle: br::vk::VkSurfaceKHR,
+}
+#[cfg(not(feature = "transparent"))]
+impl Drop for Surface {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(
+                self.device.instance().native_ptr(),
+                self.handle,
+                None,
+            );
+        }
+    }
+}
+#[cfg(not(feature = "transparent"))]
+impl br::VkHandle for Surface {
+    type Handle = br::vk::VkSurfaceKHR;
+
+    #[inline]
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+
+#[cfg(not(feature = "transparent"))]
 pub struct Presenter {
     _window: Arc<RwLock<ThreadsafeWindowOps>>,
-    sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
+    sc: peridot::IntegratedSwapchain<Surface>,
 }
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
     pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
-        use bedrock::PhysicalDevice;
-
-        if !g
-            .adapter()
-            .win32_presentation_support(g.graphics_queue_family_index())
-        {
+        if unsafe {
+            !br::vkfn_wrapper::get_physical_device_win32_presentation_support(
+                g.adapter_raw(),
+                g.graphics_queue_family_index(),
+            )
+        } {
             panic!("WindowSubsystem does not support Vulkan Rendering");
         }
-        let s = unsafe {
-            br::SurfaceObject::new(
-                g.adapter(),
-                &br::vk::VkWin32SurfaceCreateInfoKHR::new(super::module_handle(), window.read().0),
-            )
-            .expect("Failed to create Surface")
+        let s = Surface {
+            handle: unsafe {
+                br::Win32SurfaceCreateInfo::new(super::module_handle(), window.read().0)
+                    .execute(g.device().instance(), None)
+                    .expect("Failed to create Surface")
+            },
+            device: g.device().clone(),
         };
         let support = g
-            .adapter()
-            .surface_support(g.graphics_queue_family_index(), &s)
+            .device()
+            .surface_support(&s)
             .expect("Failed to query Surface Support");
         if !support {
             panic!("Vulkan does not support this surface to render");
@@ -71,50 +100,48 @@ impl Presenter {
 }
 #[cfg(not(feature = "transparent"))]
 impl peridot::PlatformPresenter for Presenter {
-    type BackBuffer = br::ImageViewObject<
-        br::SwapchainImage<
-            SharedRef<
-                br::SurfaceSwapchainObject<
-                    peridot::DeviceObject,
-                    br::SurfaceObject<peridot::InstanceObject>,
-                >,
-            >,
-        >,
-    >;
-
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
+
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
+
+    fn back_buffer_size(&self) -> peridot::math::Vector2<u32> {
+        self.sc.back_buffer_size()
+    }
+
+    fn back_buffer<'a>(&'a self, index: usize) -> Option<br::VkHandleRef<'a, br::vk::VkImage>> {
         self.sc.back_buffer(index)
     }
 
-    fn emit_initialize_back_buffer_commands<
-        'r,
-        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-    >(
+    fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
-    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
+        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
+    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
+
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.sc.acquire_next_back_buffer_index()
     }
+
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_back_buffer_layout()
     }
-    fn render_and_present<'s>(
+
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         back_buffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
-    ) -> br::Result<()> {
+        render_submission: peridot::SubmissionBatchBuilder<'r>,
+        update_submission: Option<peridot::SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
         self.sc.render_and_present(
             g,
             last_render_fence,
@@ -123,12 +150,13 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    /// Returns whether re-initializing is needed for back-buffer resources
+
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs re-initializing back-buffer resource
         true
     }
+
     // unimplemented?
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)
@@ -141,8 +169,8 @@ struct UnsafeThreadsafeHandle(windows::Win32::Foundation::HANDLE);
 #[cfg(feature = "transparent")]
 impl Drop for UnsafeThreadsafeHandle {
     fn drop(&mut self) {
-        unsafe {
-            windows::Win32::Foundation::CloseHandle(self.0);
+        if let Err(e) = unsafe { windows::Win32::Foundation::CloseHandle(self.0) } {
+            tracing::warn!(cause = ?e, "Error closing a handle");
         }
     }
 }
@@ -170,8 +198,8 @@ struct ThreadsafeEvent(windows::Win32::Foundation::HANDLE);
 #[cfg(feature = "transparent")]
 impl Drop for ThreadsafeEvent {
     fn drop(&mut self) {
-        unsafe {
-            windows::Win32::Foundation::CloseHandle(self.0);
+        if let Err(e) = unsafe { windows::Win32::Foundation::CloseHandle(self.0) } {
+            tracing::warn!(cause = ?e, "Error closing an event handle");
         }
     }
 }
@@ -200,27 +228,38 @@ unsafe impl Send for ThreadsafeEvent {}
 #[cfg(feature = "transparent")]
 struct InteropBackbufferResource {
     _shared_handle: UnsafeThreadsafeHandle,
-    image_view: SharedRef<
-        br::ImageViewObject<
-            peridot::Image<
-                br::ImageObject<peridot::DeviceObject>,
-                br::DeviceMemoryObject<peridot::DeviceObject>,
-            >,
-        >,
-    >,
+    device: peridot::VulkanGfx,
+    memory: br::vk::VkDeviceMemory,
+    image: br::vk::VkImage,
+}
+#[cfg(feature = "transparent")]
+impl Drop for InteropBackbufferResource {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image(self.device.native_ptr(), self.image, None);
+            br::vkfn_wrapper::free_memory(self.device.native_ptr(), self.memory, None);
+        }
+    }
+}
+#[cfg(feature = "transparent")]
+impl br::VkHandle for InteropBackbufferResource {
+    type Handle = br::vk::VkImage;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.image
+    }
 }
 #[cfg(feature = "transparent")]
 impl InteropBackbufferResource {
     pub fn new(
         g: &peridot::Graphics,
+        memory_property_fn: br::vk::PFN_vkGetMemoryWin32HandlePropertiesKHR,
         device: &ID3D12Device,
         resource: &ID3D12Resource,
         name_suffix: u32,
         size: br::vk::VkExtent2D,
         format: br::vk::VkFormat,
     ) -> Self {
-        use br::MemoryBound;
-
         let hname = widestring::WideCString::from_str(format!(
             "LocalPeridotApiInteropHandleCradle{name_suffix}"
         ))
@@ -238,38 +277,44 @@ impl InteropBackbufferResource {
         let exportable = br::vk::VkExternalMemoryImageCreateInfoKHR::new(
             br::ExternalMemoryHandleTypeWin32::D3D12Resource as _,
         );
-        let image = br::ImageObject::new(
-            g.device().clone(),
-            &br::ImageCreateInfo::new(size, format)
-                .as_color_attachment()
-                .init_layout(br::ImageLayout::Preinitialized)
-                .with_next(&exportable),
-        )
-        .expect("Failed to create Interop Image");
-        let image_mreq = image.requirements();
+        let image = unsafe {
+            br::vkfn_wrapper::create_image(
+                g.device().native_ptr(),
+                &br::ImageCreateInfo::new(size, format)
+                    .as_color_attachment()
+                    .with_next(&exportable),
+                None,
+            )
+            .expect("Failed to create Interop Image")
+        };
+        let image_mreq = unsafe {
+            br::vkfn_wrapper::get_image_memory_requirements(g.device().native_ptr(), image)
+        };
         let handle_import_props = {
             let mut sink = br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink();
 
             unsafe {
-                g.device()
-                    .memory_win32_handle_properties(
-                        br::ExternalMemoryHandleTypeWin32::D3D12Resource,
-                        shared_handle.handle(),
-                        &mut sink,
-                    )
-                    .expect("Failed to query Handle Memory Properties");
+                (memory_property_fn.0)(
+                    g.device().native_ptr(),
+                    br::ExternalMemoryHandleTypeWin32::D3D12Resource as _,
+                    shared_handle.handle(),
+                    sink.as_mut_ptr(),
+                )
+                .into_result()
+                .expect("Failed to query Handle Memory Properties");
 
                 sink.assume_init()
             }
         };
         let memory_type_index = g
-            .memory_type_manager
-            .device_local_index(image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits)
-            .expect("Failed to find matching memory type for importing")
-            .index();
-        let memory = SharedRef::new(
-            br::DeviceMemoryObject::new(
-                g.device().clone(),
+            .device()
+            .device_local_memory_index(
+                image_mreq.memoryTypeBits & handle_import_props.memoryTypeBits,
+            )
+            .expect("Failed to find matching memory type for importing");
+        let memory = unsafe {
+            br::vkfn_wrapper::allocate_memory(
+                g.device().native_ptr(),
                 &br::MemoryAllocateInfo::new(1, memory_type_index).with_next(
                     &br::ImportMemoryWin32HandleInfo::new(
                         br::ExternalMemoryHandleTypeWin32::D3D12Resource,
@@ -277,22 +322,21 @@ impl InteropBackbufferResource {
                         Some(&hname),
                     ),
                 ),
+                None,
             )
             .expect("Failed to import memory")
-            .into(),
-        );
-        let image =
-            peridot::Image::bound(image, &memory, 0).expect("Failed to bind image backing memory");
-        let image_view = image
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()
-            .expect("Failed to create ImageView for Rendering")
-            .into();
+        };
+        unsafe {
+            g.device()
+                .bind_image_raw(image, memory, 0)
+                .expect("Failed to bind image backing memory");
+        }
 
         Self {
             _shared_handle: shared_handle,
-            image_view,
+            device: g.device().clone(),
+            memory,
+            image,
         }
     }
 }
@@ -344,9 +388,10 @@ pub struct Presenter {
     device12: ID3D12Device,
     q: ID3D12CommandQueue,
     sc: IDXGISwapChain3,
+    size: peridot::math::Vector2<u32>,
     back_buffers: Vec<InteropBackbufferResource>,
-    buffer_ready_order: br::SemaphoreObject<peridot::DeviceObject>,
-    present_order: br::SemaphoreObject<peridot::DeviceObject>,
+    buffer_ready_order: br::SemaphoreObject<peridot::VulkanGfx>,
+    present_order: br::SemaphoreObject<peridot::VulkanGfx>,
     render_completion_fence: ID3D12Fence,
     present_completion_fence: ID3D12Fence,
     render_completion_counter: u64,
@@ -438,6 +483,10 @@ impl Presenter {
             width: (rc.right - rc.left) as _,
             height: (rc.bottom - rc.top) as _,
         };
+        let memory_property_fn = unsafe {
+            g.device()
+                .load_function::<br::vk::PFN_vkGetMemoryWin32HandlePropertiesKHR>()
+        };
         let back_buffers = (0..2)
             .map(|bb_index| {
                 let back_buffer = unsafe {
@@ -447,6 +496,7 @@ impl Presenter {
 
                 InteropBackbufferResource::new(
                     g,
+                    memory_property_fn,
                     &device12,
                     &back_buffer,
                     bb_index as _,
@@ -485,14 +535,21 @@ impl Presenter {
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence")
         });
-        g.device()
-            .import_semaphore_win32_handle(&br::ImportSemaphoreWin32HandleInfo::new(
-                &present_order,
-                br::ExternalSemaphoreHandleTypeWin32::D3DFence
-                    .with_handle(render_completion_fence_handle.handle()),
-                &render_completion_fence_name,
-            ))
-            .expect("Failed to import Render Completion Fence");
+        unsafe {
+            (g.device()
+                .load_function::<br::vk::PFN_vkImportSemaphoreWin32HandleKHR>()
+                .0)(
+                g.device().native_ptr(),
+                &br::ImportSemaphoreWin32HandleInfo::by_handle(
+                    &present_order,
+                    br::ExternalSemaphoreHandleTypeWin32::D3DFence
+                        .with_handle(render_completion_fence_handle.handle()),
+                )
+                .into_raw(),
+            )
+            .into_result()
+            .expect("Failed to import Render Completion Fence")
+        };
         let present_completion_event =
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
 
@@ -502,6 +559,7 @@ impl Presenter {
             device12,
             q,
             sc,
+            size: bb_size.into(),
             back_buffers,
             buffer_ready_order,
             present_order,
@@ -517,38 +575,43 @@ impl Presenter {
 }
 #[cfg(feature = "transparent")]
 impl peridot::PlatformPresenter for Presenter {
-    type BackBuffer = br::ImageViewObject<
-        peridot::Image<
-            br::ImageObject<peridot::DeviceObject>,
-            br::DeviceMemoryObject<peridot::DeviceObject>,
-        >,
-    >;
-
     fn format(&self) -> br::vk::VkFormat {
         br::vk::VK_FORMAT_R8G8B8A8_UNORM
     }
+
     fn back_buffer_count(&self) -> usize {
         2
     }
-    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
-        self.back_buffers.get(index).map(|b| &b.image_view)
+
+    fn back_buffer_size(&self) -> peridot::math::Vector2<u32> {
+        self.size
     }
 
-    fn emit_initialize_back_buffer_commands<
-        'r,
-        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-    >(
+    fn back_buffer<'a>(&'a self, index: usize) -> Option<br::VkHandleRef<'a, br::vk::VkImage>> {
+        self.back_buffers
+            .get(index)
+            .map(br::VkHandle::as_transparent_ref)
+    }
+
+    fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
-    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
+        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
+    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
         let barriers = self
             .back_buffers
             .iter()
             .map(|b| {
-                b.image_view
-                    .image()
-                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                    .memory_barrier(br::ImageLayout::Preinitialized.to(br::ImageLayout::General))
+                br::ImageMemoryBarrier::new(
+                    b,
+                    br::vk::VkImageSubresourceRange {
+                        aspectMask: br::AspectMask::COLOR.bits(),
+                        baseMipLevel: 0,
+                        levelCount: 1,
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    },
+                    br::ImageLayout::Undefined.to(br::ImageLayout::General),
+                )
             })
             .collect::<Vec<_>>();
 
@@ -561,65 +624,55 @@ impl peridot::PlatformPresenter for Presenter {
             &barriers,
         )
     }
+
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         Ok(unsafe { self.sc.GetCurrentBackBufferIndex() })
     }
+
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         (
             br::ImageLayout::General,
             br::PipelineStageFlags::TOP_OF_PIPE,
         )
     }
-    fn render_and_present<'s>(
+
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         _backbuffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
-    ) -> br::Result<()> {
-        use br::VulkanStructureAsRef;
-
+        mut render_submission: peridot::SubmissionBatchBuilder<'r>,
+        update_submission: Option<peridot::SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
         let signal_counters = [self.render_completion_counter + 1];
-        let signal_info = br::D3D12FenceSubmitInfo::new(&[], &signal_counters);
-        if let Some(cs) = update_submission {
+        let signal_info = br::D3D12FenceSubmitInfo::new(&[0], &signal_counters);
+        render_submission.add_signal_semaphores([self.present_order.as_transparent_ref()]);
+        if let Some(mut cs) = update_submission {
             // copy -> render
-            let update_signals = [&self.buffer_ready_order];
-            let render_waits = [(
-                &self.buffer_ready_order,
+            cs.add_signal_semaphores([self.buffer_ready_order.as_transparent_ref()]);
+            render_submission.add_wait_semaphores([(
+                self.buffer_ready_order.as_transparent_ref(),
                 br::PipelineStageFlags::VERTEX_INPUT,
-            )];
-            let render_signals = [&self.present_order];
+            )]);
 
-            let update_submission = cs.with_signal_semaphores(&update_signals);
-            let render_submission = render_submission
-                .with_wait_semaphores(&render_waits)
-                .with_signal_semaphores(&render_signals);
-
-            let render_submission = br::vk::VkSubmitInfo {
-                pNext: signal_info.as_generic() as *const _ as _,
-                ..render_submission.make_info_struct()
-            };
-            let update_submission = update_submission.make_info_struct();
-
-            g.submit_buffered_commands_raw(
-                &[update_submission, render_submission],
+            g.submit_buffered_commands(
+                &[
+                    cs.build(),
+                    render_submission.build().with_next(&signal_info),
+                ],
                 last_render_fence,
             )
             .expect("Failed to submit render and update commands");
         } else {
             // render only (old logic)
-            let render_signals = [&self.present_order];
-
-            let render_submission = render_submission.with_signal_semaphores(&render_signals);
-
-            let render_submission = br::vk::VkSubmitInfo {
-                pNext: signal_info.as_generic() as *const _ as _,
-                ..render_submission.make_info_struct()
-            };
-
-            g.submit_buffered_commands_raw(&[render_submission], last_render_fence)
-                .expect("Failed to submit render commands");
+            g.submit_buffered_commands(
+                &[render_submission.build().with_next(&signal_info)],
+                last_render_fence,
+            )
+            .expect("Failed to submit render commands");
         }
 
         if self.present_inflight {
@@ -655,7 +708,7 @@ impl peridot::PlatformPresenter for Presenter {
 
         Ok(())
     }
-    /// Returns whether re-initializing is needed for backbuffer resources
+
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         if self.present_inflight {
             self.present_completion_event
@@ -675,6 +728,10 @@ impl peridot::PlatformPresenter for Presenter {
                 )
                 .expect("Failed to resize backbuffers");
         }
+        let memory_property_fn = unsafe {
+            g.device()
+                .load_function::<br::vk::PFN_vkGetMemoryWin32HandlePropertiesKHR>()
+        };
         for bb_index in 0..2 {
             let back_buffer = unsafe {
                 self.sc
@@ -684,6 +741,7 @@ impl peridot::PlatformPresenter for Presenter {
 
             self.back_buffers.push(InteropBackbufferResource::new(
                 g,
+                memory_property_fn,
                 &self.device12,
                 &back_buffer,
                 bb_index as _,
@@ -696,6 +754,7 @@ impl peridot::PlatformPresenter for Presenter {
         }
         true
     }
+
     // unimplemented?
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
         peridot::math::Vector2(0, 0)

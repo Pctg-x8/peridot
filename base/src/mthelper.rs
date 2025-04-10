@@ -2,7 +2,7 @@
 
 pub trait DynamicMutabilityProvider<'a, T: 'a> {
     type BorrowType: Deref<Target = T> + 'a;
-    type BorrowMutType: Deref<Target = T> + DerefMut + 'a;
+    type BorrowMutType: DerefMut<Target = T> + 'a;
 
     fn new(v: T) -> Self;
     fn borrow(&'a self) -> Self::BorrowType;
@@ -93,9 +93,13 @@ impl<'x, T, U: 'x> MappableMutGuardObject<T, U> for parking_lot::RwLockWriteGuar
 pub use parking_lot::RwLock as DynamicMut;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "mt")]
-pub use std::sync::{Arc as SharedRef, Weak as SharedWeakRef};
+pub use std::sync::{Arc as SharedRef, OnceLock as OnceValue, Weak as SharedWeakRef};
 #[cfg(not(feature = "mt"))]
-pub use std::{cell::RefCell as DynamicMut, rc::Rc as SharedRef, rc::Weak as SharedWeakRef};
+pub use std::{
+    cell::{OnceCell as OnceValue, RefCell as DynamicMut},
+    rc::Rc as SharedRef,
+    rc::Weak as SharedWeakRef,
+};
 
 pub type SharedMutableRef<T> = SharedRef<DynamicMut<T>>;
 #[inline]

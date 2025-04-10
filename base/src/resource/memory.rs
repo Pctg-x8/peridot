@@ -1,26 +1,96 @@
 //! DeviceMemory Helper
 
-use bedrock as br;
-use br::PhysicalDevice;
+use bedrock::{self as br, VkHandle};
 
-use crate::{mthelper::make_shared_mutable_ref, DeviceObject};
+use crate::{
+    graphics::VulkanGfx,
+    mthelper::{make_shared_mutable_ref, DynamicMut, DynamicMutabilityProvider, SharedMutableRef},
+};
 
-pub struct MemoryBadget<'g, Buffer: br::Buffer, Image: br::Image> {
+use super::{UnboundedStandaloneBuffer, UnboundedStandaloneImage};
+
+pub(crate) struct SharedMemoryBlockInner {
+    pub(crate) device: VulkanGfx,
+    pub(crate) handle: br::vk::VkDeviceMemory,
+}
+impl Drop for SharedMemoryBlockInner {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::free_memory(self.device.0.device, self.handle, None);
+        }
+    }
+}
+#[derive(Clone)]
+pub struct SharedMemoryBlock(SharedMutableRef<SharedMemoryBlockInner>);
+impl SharedMemoryBlock {
+    pub(crate) fn lock_shared<'a>(
+        &'a self,
+    ) -> <DynamicMut<SharedMemoryBlockInner> as DynamicMutabilityProvider<
+        'a,
+        SharedMemoryBlockInner,
+    >>::BorrowType {
+        self.0.borrow()
+    }
+
+    pub(crate) fn lock_exclusive<'a>(&'a self) -> ExclusiveLockedSharedMemoryBlock<'a> {
+        ExclusiveLockedSharedMemoryBlock(self.0.borrow_mut())
+    }
+}
+
+#[repr(transparent)]
+pub struct ExclusiveLockedSharedMemoryBlock<'a>(
+    <DynamicMut<SharedMemoryBlockInner> as DynamicMutabilityProvider<
+        'a,
+        SharedMemoryBlockInner,
+    >>::BorrowMutType,
+);
+impl br::DeviceChildHandle for ExclusiveLockedSharedMemoryBlock<'_> {
+    #[inline]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.0.device.0.device
+    }
+}
+impl br::DeviceChild for ExclusiveLockedSharedMemoryBlock<'_> {
+    type ConcreteDevice = VulkanGfx;
+
+    #[inline]
+    fn device(&self) -> &Self::ConcreteDevice {
+        &self.0.device
+    }
+}
+impl br::VkHandle for ExclusiveLockedSharedMemoryBlock<'_> {
+    type Handle = br::vk::VkDeviceMemory;
+
+    #[inline]
+    fn native_ptr(&self) -> Self::Handle {
+        self.0.handle
+    }
+}
+impl br::VkHandleMut for ExclusiveLockedSharedMemoryBlock<'_> {
+    #[inline]
+    fn native_ptr_mut(&mut self) -> Self::Handle {
+        self.0.handle
+    }
+}
+impl br::DeviceMemory for ExclusiveLockedSharedMemoryBlock<'_> {}
+impl br::DeviceMemoryMut for ExclusiveLockedSharedMemoryBlock<'_> {}
+
+pub struct MemoryBadget<'g> {
     g: &'g crate::Graphics,
-    entries: Vec<(MemoryBadgetEntry<Buffer, Image>, u64)>,
+    entries: Vec<(MemoryBadgetEntry, u64)>,
     total_size: u64,
     memory_type_bitmask: u32,
     last_resource_tiling: Option<ResourceTiling>,
 }
-pub enum MemoryBadgetEntry<Buffer: br::Buffer, Image: br::Image> {
-    Buffer(Buffer),
-    Image(Image),
+pub enum MemoryBadgetEntry {
+    Buffer(UnboundedStandaloneBuffer),
+    Image(UnboundedStandaloneImage),
 }
-pub enum MemoryBoundResource<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory> {
-    Buffer(super::Buffer<Buffer, DeviceMemory>),
-    Image(super::Image<Image, DeviceMemory>),
+pub enum MemoryBoundResource {
+    Buffer(super::Buffer),
+    Image(super::Image),
 }
-impl<Buffer: br::Buffer, Image: br::Image> MemoryBadgetEntry<Buffer, Image> {
+impl MemoryBadgetEntry {
     #[inline]
     const fn tiling(&self) -> ResourceTiling {
         match self {
@@ -31,22 +101,23 @@ impl<Buffer: br::Buffer, Image: br::Image> MemoryBadgetEntry<Buffer, Image> {
     }
 
     #[inline]
-    fn requirements(&self) -> br::vk::VkMemoryRequirements
-    where
-        Buffer: br::MemoryBound,
-        Image: br::MemoryBound,
-    {
+    fn requirements(&self, gfx_device: &VulkanGfx) -> br::vk::VkMemoryRequirements {
         match self {
-            Self::Buffer(b) => b.requirements(),
-            Self::Image(r) => r.requirements(),
+            Self::Buffer(b) => unsafe {
+                br::vkfn_wrapper::get_buffer_memory_requirements(
+                    gfx_device.0.device,
+                    b.native_ptr(),
+                )
+            },
+            Self::Image(r) => unsafe {
+                br::vkfn_wrapper::get_image_memory_requirements(gfx_device.0.device, r.native_ptr())
+            },
         }
     }
 }
-impl<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory>
-    MemoryBoundResource<Buffer, Image, DeviceMemory>
-{
+impl MemoryBoundResource {
     #[inline]
-    pub fn unwrap_buffer(self) -> super::Buffer<Buffer, DeviceMemory> {
+    pub fn unwrap_buffer(self) -> super::Buffer {
         match self {
             MemoryBoundResource::Buffer(b) => b,
             _ => panic!("Not a buffer"),
@@ -54,18 +125,14 @@ impl<Buffer: br::Buffer, Image: br::Image, DeviceMemory: br::DeviceMemory>
     }
 
     #[inline]
-    pub fn unwrap_image(self) -> super::Image<Image, DeviceMemory> {
+    pub fn unwrap_image(self) -> super::Image {
         match self {
             MemoryBoundResource::Image(b) => b,
             _ => panic!("Not an image"),
         }
     }
 }
-impl<'g, Buffer, Image> MemoryBadget<'g, Buffer, Image>
-where
-    Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = DeviceObject> + br::MemoryBound,
-    Image: br::Image + br::DeviceChild<ConcreteDevice = DeviceObject> + br::MemoryBound,
-{
+impl<'g> MemoryBadget<'g> {
     pub const fn new(g: &'g crate::Graphics) -> Self {
         Self {
             g,
@@ -76,12 +143,8 @@ where
         }
     }
 
-    pub fn add(&mut self, v: MemoryBadgetEntry<Buffer, Image>) -> u64
-    where
-        Buffer: br::MemoryBound,
-        Image: br::MemoryBound,
-    {
-        let req = v.requirements();
+    pub fn add(&mut self, v: MemoryBadgetEntry) -> u64 {
+        let req = v.requirements(&self.g.gfx_device);
         let new_offset = super::align2!(self.total_size, req.alignment);
         let align_required = self
             .last_resource_tiling
@@ -89,7 +152,7 @@ where
         let new_offset = if align_required {
             super::align2!(
                 new_offset,
-                self.g.adapter.properties().limits.bufferImageGranularity
+                self.g.gfx_device.adapter_limits().bufferImageGranularity
             )
         } else {
             new_offset
@@ -101,25 +164,27 @@ where
         return new_offset;
     }
 
-    pub fn alloc(
-        self,
-    ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
-    where
-        Buffer: br::VkHandleMut,
-        Image: br::VkHandleMut,
-    {
+    pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>> {
         let mt = self
             .g
+            .gfx_device
+            .0
             .memory_type_manager
             .device_local_index(self.memory_type_bitmask)
             .expect("No device-local memory")
             .index();
         tracing::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{mt:x}(?0x{:x})",
             self.total_size, self.memory_type_bitmask);
-        let mem = make_shared_mutable_ref(br::DeviceMemoryObject::new(
-            self.g.device().clone(),
-            &br::MemoryAllocateInfo::new(self.total_size, mt),
-        )?);
+        let mem = SharedMemoryBlock(make_shared_mutable_ref(SharedMemoryBlockInner {
+            handle: unsafe {
+                br::vkfn_wrapper::allocate_memory(
+                    self.g.gfx_device.0.device,
+                    &br::MemoryAllocateInfo::new(self.total_size, mt),
+                    None,
+                )?
+            },
+            device: self.g.gfx_device.clone(),
+        }));
 
         self.entries
             .into_iter()
@@ -134,15 +199,11 @@ where
             .collect()
     }
 
-    pub fn alloc_upload(
-        self,
-    ) -> br::Result<Vec<MemoryBoundResource<Buffer, Image, br::DeviceMemoryObject<DeviceObject>>>>
-    where
-        Buffer: br::VkHandleMut,
-        Image: br::VkHandleMut,
-    {
+    pub fn alloc_upload(self) -> br::Result<Vec<MemoryBoundResource>> {
         let mt = self
             .g
+            .gfx_device
+            .0
             .memory_type_manager
             .host_visible_index(
                 self.memory_type_bitmask,
@@ -156,10 +217,16 @@ where
         }
         tracing::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt.index(), self.memory_type_bitmask);
-        let mem = make_shared_mutable_ref(br::DeviceMemoryObject::new(
-            self.g.device.clone(),
-            &br::MemoryAllocateInfo::new(self.total_size, mt.index()),
-        )?);
+        let mem = SharedMemoryBlock(make_shared_mutable_ref(SharedMemoryBlockInner {
+            handle: unsafe {
+                br::vkfn_wrapper::allocate_memory(
+                    self.g.gfx_device.0.device,
+                    &br::MemoryAllocateInfo::new(self.total_size, mt.index()),
+                    None,
+                )?
+            },
+            device: self.g.gfx_device.clone(),
+        }));
 
         self.entries
             .into_iter()
@@ -177,12 +244,12 @@ where
 
 #[repr(transparent)]
 pub struct AutocloseMappedMemoryRange<'m, DeviceMemory: br::DeviceMemoryMut + ?Sized + 'm>(
-    pub(super) Option<br::MappedMemoryRange<'m, DeviceMemory>>,
+    pub(super) Option<br::MappedMemory<'m, DeviceMemory>>,
 );
 impl<'m, DeviceMemory: br::DeviceMemoryMut + ?Sized + 'm> std::ops::Deref
     for AutocloseMappedMemoryRange<'m, DeviceMemory>
 {
-    type Target = br::MappedMemoryRange<'m, DeviceMemory>;
+    type Target = br::MappedMemory<'m, DeviceMemory>;
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref().expect("object has been dropped")

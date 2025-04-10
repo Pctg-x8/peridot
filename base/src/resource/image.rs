@@ -1,95 +1,125 @@
 //! Image Resource Helper
 
-use bedrock as br;
+use bedrock::{self as br, VkHandle};
 
+use crate::graphics::VulkanGfx;
 #[allow(unused_imports)]
 use crate::mthelper::DynamicMutabilityProvider;
-use crate::mthelper::{DynamicMut, SharedRef};
 
-/// A refcounted image object bound with a memory object.
-#[derive(Clone)]
-pub struct Image<Backend: br::Image, DeviceMemory: br::DeviceMemory>(
-    Backend,
-    SharedRef<DynamicMut<DeviceMemory>>,
-    u64,
-);
-impl<
-        Backend: br::Image + br::MemoryBound + br::VkHandleMut,
-        DeviceMemory: br::DeviceMemory + br::VkHandleMut,
-    > Image<Backend, DeviceMemory>
-{
+use super::SharedMemoryBlock;
+
+/// An image object that unbounded with any memory objects.
+pub struct UnboundedStandaloneImage {
+    pub(crate) handle: br::vk::VkImage,
+    pub(crate) format: br::Format,
+    pub(crate) size: br::Extent3D,
+    pub(crate) image_type: br::vk::VkImageViewType,
+    pub(crate) gfx_device: VulkanGfx,
+}
+impl Drop for UnboundedStandaloneImage {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image(self.gfx_device.0.device, self.handle, None);
+        }
+    }
+}
+impl br::VkHandle for UnboundedStandaloneImage {
+    type Handle = br::vk::VkImage;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+
+/// An image object bound with a memory object.
+pub struct Image {
+    handle: br::vk::VkImage,
+    format: br::Format,
+    size: br::Extent3D,
+    image_type: br::vk::VkImageViewType,
+    memory: SharedMemoryBlock,
+    memory_offset: u64,
+}
+impl Drop for Image {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image(
+                self.memory.lock_shared().device.0.device,
+                self.handle,
+                None,
+            );
+        }
+    }
+}
+impl Image {
     pub fn bound(
-        mut r: Backend,
-        mem: &SharedRef<DynamicMut<DeviceMemory>>,
+        r: UnboundedStandaloneImage,
+        mem: &SharedMemoryBlock,
         offset: u64,
     ) -> br::Result<Self> {
-        r.bind(&*mem.borrow(), offset as _)
-            .map(move |_| Self(r.into(), mem.clone(), offset))
+        let UnboundedStandaloneImage {
+            handle,
+            format,
+            size,
+            image_type,
+            ..
+        } = r;
+        unsafe {
+            br::vkfn_wrapper::bind_image_memory(
+                mem.lock_shared().device.0.device,
+                handle,
+                mem.lock_shared().handle,
+                offset as _,
+            )?;
+        }
+
+        Ok(Self {
+            handle,
+            format,
+            size,
+            image_type,
+            memory: mem.clone(),
+            memory_offset: offset,
+        })
     }
 
-    pub fn format(&self) -> super::PixelFormat {
-        unsafe { std::mem::transmute(self.0.format()) }
+    pub const fn format(&self) -> super::PixelFormat {
+        unsafe { core::mem::transmute(self.format) }
     }
 
     pub const fn offset_on_memory(&self) -> u64 {
-        self.2
+        self.memory_offset
     }
 }
-impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> Image<Backend, DeviceMemory> {
+impl Image {
     /// Reference to a memory object bound with this object.
     #[inline]
-    pub const fn memory(&self) -> &SharedRef<DynamicMut<DeviceMemory>> {
-        &self.1
+    pub const fn memory(&self) -> &SharedMemoryBlock {
+        &self.memory
     }
 }
-impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> std::ops::Deref
-    for Image<Backend, DeviceMemory>
-{
-    type Target = Backend;
-
-    fn deref(&self) -> &Backend {
-        &self.0
-    }
-}
-impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> br::VkHandle
-    for Image<Backend, DeviceMemory>
-{
-    type Handle = <Backend as br::VkHandle>::Handle;
+impl br::VkHandle for Image {
+    type Handle = br::vk::VkImage;
 
     fn native_ptr(&self) -> Self::Handle {
-        self.0.native_ptr()
+        self.handle
     }
 }
-impl<Backend: br::Image + br::DeviceChildHandle, Memory: br::DeviceMemory> br::DeviceChildHandle
-    for Image<Backend, Memory>
-{
-    #[inline(always)]
+impl br::DeviceChildHandle for Image {
     fn device_handle(&self) -> bedrock::vk::VkDevice {
-        self.0.device_handle()
+        self.memory.lock_shared().device.0.device
     }
 }
-impl<Backend: br::Image + br::DeviceChild, Memory: br::DeviceMemory> br::DeviceChild
-    for Image<Backend, Memory>
-{
-    type ConcreteDevice = Backend::ConcreteDevice;
-
-    #[inline(always)]
-    fn device(&self) -> &Self::ConcreteDevice {
-        self.0.device()
-    }
-}
-impl<Backend: br::Image, DeviceMemory: br::DeviceMemory> br::Image
-    for Image<Backend, DeviceMemory>
-{
-    fn format(&self) -> br::vk::VkFormat {
-        self.0.format()
+impl br::Image for Image {
+    fn format(&self) -> br::Format {
+        self.format
     }
 
-    fn size(&self) -> &br::vk::VkExtent3D {
-        self.0.size()
+    fn size(&self) -> &br::Extent3D {
+        &self.size
     }
 
     fn dimension(&self) -> br::vk::VkImageViewType {
-        self.0.dimension()
+        self.image_type
     }
 }

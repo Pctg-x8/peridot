@@ -12,7 +12,8 @@ members = [
     "modules/vg",
     "modules/transition",
     "modules/command-object",
-    "modules/memory-manager", "modules/semantic-shader",
+    "modules/memory-manager",
+    "modules/semantic-shader",
 ]
 
 [workspace.dependencies]
@@ -21,4 +22,3 @@ tracing = "0.1"
 async-std = "1.13"
 futures-util = "0.3"
 cfg-if = "1.0"
-

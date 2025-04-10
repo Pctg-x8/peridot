@@ -47,9 +47,10 @@ final class CurrentKeyboardLayoutCodeConverter {
 
 final class PeridotRenderableViewController : NSViewController {
     var dplink: CVDisplayLink? = nil
-    var enginePointer: NativeGameEngine? = nil
     var workDispatcher: DispatchSourceUserDataAdd? = nil
     var clientMousePoint = CGPoint(x: 0, y: 0)
+    
+    private var nativeGameDriver: NativeGameDriver? = nil
     
     func initDispatchers() {
         func onUpdateDisplay(_ _: CVDisplayLink,
@@ -63,7 +64,7 @@ final class PeridotRenderableViewController : NSViewController {
             return kCVReturnSuccess
         }
         let workDispatcher = DispatchSource.makeUserDataAddSource(queue: DispatchQueue.main)
-        workDispatcher.setEventHandler(handler: { () in self.enginePointer!.update() })
+        workDispatcher.setEventHandler(handler: { [weak self] in self?.nativeGameDriver?.update() })
         self.workDispatcher = workDispatcher
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
         CVDisplayLinkSetOutputCallback(self.dplink!, onUpdateDisplay,
@@ -73,8 +74,8 @@ final class PeridotRenderableViewController : NSViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.enginePointer = NativeGameEngine(forLayer: self.view.layer! as! CAMetalLayer)
-        self.view.window?.title = NativeGameEngine.captionbarText()! as String
+        launch_game(unsafeBitCast(self, to: UnsafeMutableRawPointer.self), unsafeBitCast(self.view.layer! as! CAMetalLayer, to: UnsafeMutableRawPointer.self))
+        self.view.window?.title = captionbarText()! as String
         initDispatchers()
         
         if let p = self.view.window?.mouseLocationOutsideOfEventStream {
@@ -92,79 +93,79 @@ final class PeridotRenderableViewController : NSViewController {
             .otherMouseDown, .otherMouseUp, .otherMouseDragged,
             .scrollWheel, .magnify, .smartMagnify
         ]
-        NSEvent.addLocalMonitorForEvents(matching: eventTypes) { event in
+        NSEvent.addLocalMonitorForEvents(matching: eventTypes) { [weak self] event in
             switch event.type {
             case .keyDown:
                 if !event.isARepeat {
                     if let cs = kcTranslator.translate(event.keyCode) {
                         NSLog("CharacterKeyDown: \(String(utf16CodeUnits: cs, count: CurrentKeyboardLayoutCodeConverter.MAX_CHAR_LENGTH))")
-                        self.enginePointer?.handleCharacterKeyDown(character: UInt8(cs.pointee))
+                        self?.nativeGameDriver?.handleKeyDown(character: cs.pointee)
                     }
                 }
             case .keyUp:
                 if !event.isARepeat {
                     if let cs = kcTranslator.translate(event.keyCode) {
                         NSLog("CharacterKeyUp: \(String(utf16CodeUnits: cs, count: CurrentKeyboardLayoutCodeConverter.MAX_CHAR_LENGTH))")
-                        self.enginePointer?.handleCharacterKeyUp(character: UInt8(cs.pointee))
+                        self?.nativeGameDriver?.handleKeyUp(character: cs.pointee)
                     }
                 }
             case .flagsChanged:
                 NSLog("FlagsChanged event with \(event)")
                 if event.modifierFlags.contains(.shift) && !oldFlags.contains(.shift) {
                     // shift on
-                    self.enginePointer?.handleKeymodDown(code: KEYMOD_SHIFT)
+                    self?.nativeGameDriver?.handleKeyDown(mod: KEYMOD_SHIFT)
                 }
                 if !event.modifierFlags.contains(.shift) && oldFlags.contains(.shift) {
                     // shift off
-                    self.enginePointer?.handleKeymodUp(code: KEYMOD_SHIFT)
+                    self?.nativeGameDriver?.handleKeyUp(mod: KEYMOD_SHIFT)
                 }
                 if event.modifierFlags.contains(.option) && !oldFlags.contains(.option) {
                     // opt on
-                    self.enginePointer?.handleKeymodDown(code: KEYMOD_OPTION)
+                    self?.nativeGameDriver?.handleKeyDown(mod: KEYMOD_OPTION)
                 }
                 if !event.modifierFlags.contains(.option) && oldFlags.contains(.option) {
                     // opt off
-                    self.enginePointer?.handleKeymodUp(code: KEYMOD_OPTION)
+                    self?.nativeGameDriver?.handleKeyUp(mod: KEYMOD_OPTION)
                 }
                 if event.modifierFlags.contains(.command) && !oldFlags.contains(.command) {
                     // cmd on
-                    self.enginePointer?.handleKeymodDown(code: KEYMOD_COMMAND)
+                    self?.nativeGameDriver?.handleKeyDown(mod: KEYMOD_COMMAND)
                 }
                 if !event.modifierFlags.contains(.command) && oldFlags.contains(.command) {
                     // cmd off
-                    self.enginePointer?.handleKeymodUp(code: KEYMOD_COMMAND)
+                    self?.nativeGameDriver?.handleKeyUp(mod: KEYMOD_COMMAND)
                 }
                 if event.modifierFlags.contains(.control) && !oldFlags.contains(.control) {
                     // ctrl on
-                    self.enginePointer?.handleKeymodDown(code: KEYMOD_CONTROL)
+                    self?.nativeGameDriver?.handleKeyDown(mod: KEYMOD_CONTROL)
                 }
                 if !event.modifierFlags.contains(.control) && oldFlags.contains(.control) {
                     // ctrl off
-                    self.enginePointer?.handleKeymodUp(code: KEYMOD_CONTROL)
+                    self?.nativeGameDriver?.handleKeyUp(mod: KEYMOD_CONTROL)
                 }
                 if event.modifierFlags.contains(.capsLock) && !oldFlags.contains(.capsLock) {
                     // caps on
-                    self.enginePointer?.handleKeymodDown(code: KEYMOD_CAPSLOCK)
+                    self?.nativeGameDriver?.handleKeyDown(mod: KEYMOD_CAPSLOCK)
                 }
                 if !event.modifierFlags.contains(.capsLock) && oldFlags.contains(.capsLock) {
                     // caps off
-                    self.enginePointer?.handleKeymodUp(code: KEYMOD_CAPSLOCK)
+                    self?.nativeGameDriver?.handleKeyUp(mod: KEYMOD_CAPSLOCK)
                 }
                 oldFlags = event.modifierFlags
             case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-                self.clientMousePoint = event.locationInWindow
-                self.enginePointer?.reportMouseMove(
+                self?.clientMousePoint = event.locationInWindow
+                self?.nativeGameDriver?.reportMouseMoveAbs(
                     x: Float(event.locationInWindow.x),
                     y: -Float(event.locationInWindow.y)
                 )
             case .leftMouseDown:
-                self.enginePointer?.handleMouseButtonDown(index: 0)
+                self?.nativeGameDriver?.handleMouseButtonDown(0)
             case .leftMouseUp:
-                self.enginePointer?.handleMouseButtonUp(index: 0)
+                self?.nativeGameDriver?.handleMouseButtonUp(0)
             case .rightMouseDown:
-                self.enginePointer?.handleMouseButtonDown(index: 1)
+                self?.nativeGameDriver?.handleMouseButtonDown(1)
             case .rightMouseUp:
-                self.enginePointer?.handleMouseButtonUp(index: 1)
+                self?.nativeGameDriver?.handleMouseButtonUp(1)
             case .otherMouseDown:
                 NSLog("OtherMouseDown event with \(event)")
             case .otherMouseUp:
@@ -181,13 +182,15 @@ final class PeridotRenderableViewController : NSViewController {
             return event
         }
         
-        (self.view as! PeridotRenderableView).enginePointer = self.enginePointer
+        (self.view as! PeridotRenderableView).viewController = self
     }
     override func viewDidAppear() {
         super.viewDidAppear()
         NSLog("BeginTimer")
-        if let d = self.workDispatcher { d.resume() }
-        if let d = self.dplink { CVDisplayLinkStart(d) }
+        self.workDispatcher?.resume()
+        if let d = self.dplink {
+            CVDisplayLinkStart(d)
+        }
     }
     override func viewWillDisappear() {
         super.viewWillDisappear()
@@ -197,6 +200,14 @@ final class PeridotRenderableViewController : NSViewController {
             let rv = CVDisplayLinkStop(d)
             NSLog("Stopped Timer with %d", rv)
         }
-        if let d = self.workDispatcher { d.cancel() }
+        self.workDispatcher?.cancel()
+    }
+    
+    func setGameDriverCallbacks(_ callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
+        self.nativeGameDriver = NativeGameDriver(callbacks: callbacks, contextPtr: contextPtr)
+    }
+    
+    func resizeNative(_ size: NSSize) {
+        self.nativeGameDriver?.resize(size)
     }
 }
