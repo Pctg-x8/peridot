@@ -1,0 +1,36 @@
+config_version = "0"
+
+exclude_patterns = [
+    "extras/",
+    "cradle/android/**/.idea/",
+    # auto generated
+    ".github/workflows/*.yml",
+]
+
+[[source]]
+name = "default"
+default = true
+
+[language.rust.smells.nested_control_flow]
+enabled = true
+
+[language.rust.smells.function_parameters]
+enabled = true
+
+[language.rust.smells.file_complexity]
+enabled = true
+
+[[plugins]]
+name = "clippy"
+
+[[plugins]]
+name = "actionlint"
+
+[[plugins]]
+name = "gitleaks"
+
+[[plugins]]
+name = "osv-scanner"
+
+[[plugins]]
+name = "semgrep"
