@@ -32,7 +32,6 @@ name = "gitleaks"
 [[plugin]]
 name = "osv-scanner"
 
-[[plugin]]
-name = "semgrep"
 # なぜかエラーになってしまうので一旦外す
-enabled = false
+# [[plugin]]
+# name = "semgrep"
