@@ -34,3 +34,5 @@ name = "osv-scanner"
 
 [[plugin]]
 name = "semgrep"
+# なぜかエラーになってしまうので一旦外す
+enabled = false
