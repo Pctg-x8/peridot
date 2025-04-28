@@ -120,9 +120,7 @@ impl<Device: br::Device + Clone> PvpShaderModules<Device> {
     pub fn pipeline_vertex_shader_stage<'d, 's>(&'d self) -> br::PipelineShaderStage<'d, 's> {
         use br::ShaderModule;
 
-        self.vertex
-            .with_entry_point(c"main")
-            .on_stage(br::ShaderStage::Vertex)
+        self.vertex.on_stage(br::ShaderStage::Vertex, c"main")
     }
 
     pub fn pipeline_fragment_shader_stage<'d, 's>(
@@ -130,10 +128,9 @@ impl<Device: br::Device + Clone> PvpShaderModules<Device> {
     ) -> Option<br::PipelineShaderStage<'d, 's>> {
         use br::ShaderModule;
 
-        self.fragment.as_ref().map(|x| {
-            x.with_entry_point(c"main")
-                .on_stage(br::ShaderStage::Fragment)
-        })
+        self.fragment
+            .as_ref()
+            .map(|x| x.on_stage(br::ShaderStage::Fragment, c"main"))
     }
 }
 
