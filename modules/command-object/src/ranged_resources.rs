@@ -1,7 +1,6 @@
 use std::ops::Range;
 
 use bedrock as br;
-use br::ImageSubresourceSlice;
 
 #[cfg(feature = "memory-manager-interop")]
 use peridot_memory_manager as pmm;
@@ -261,26 +260,35 @@ impl<'s> From<&'s pmm::Buffer> for RangedBuffer<&'s pmm::Buffer> {
     }
 }
 
-pub struct RangedImage<R: br::Image>(br::ImageSubresourceRange<R>);
+pub struct RangedImage<R: br::Image>(R, br::ImageSubresourceRange);
 impl<R: br::Image> RangedImage<R> {
     pub fn single_color_plane(resource: R) -> Self {
-        Self(resource.subresource_range(br::AspectMask::COLOR, 0..1, 0..1))
+        Self(
+            resource,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
     }
 
     pub fn single_depth_stencil_plane(resource: R) -> Self {
-        Self(resource.subresource_range(
-            br::AspectMask::DEPTH | br::AspectMask::STENCIL,
-            0..1,
-            0..1,
-        ))
+        Self(
+            resource,
+            br::ImageSubresourceRange::new(
+                br::AspectMask::DEPTH | br::AspectMask::STENCIL,
+                0..1,
+                0..1,
+            ),
+        )
     }
 
     pub fn single_stencil_plane(resource: R) -> Self {
-        Self(resource.subresource_range(br::AspectMask::STENCIL, 0..1, 0..1))
+        Self(
+            resource,
+            br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
+        )
     }
 
     pub fn barrier(&self, trans: br::LayoutTransition) -> br::ImageMemoryBarrier {
-        self.0.make_ref().memory_barrier(trans)
+        br::ImageMemoryBarrier::new(&self.0, self.1.clone(), trans)
     }
 
     pub fn barrier3(

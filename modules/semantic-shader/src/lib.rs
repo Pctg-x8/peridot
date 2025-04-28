@@ -67,16 +67,14 @@ impl<Device: br::Device> ShaderPack<Device> {
     /// Creates a wrapper object for GraphicsPipeline's shader stage.
     pub fn pipeline_vertex_shader(&self) -> br::PipelineShaderStage {
         self.vertex_module
-            .with_entry_point(c"main")
-            .on_stage(br::ShaderStage::Vertex)
+            .on_stage(br::ShaderStage::Vertex, c"main")
     }
 
     /// Creates a wrapper object for GraphicsPipeline's shader stage.
     pub fn pipeline_fragment_shader(&self) -> Option<br::PipelineShaderStage> {
-        self.fragment_module.as_ref().map(|m| {
-            m.with_entry_point(c"main")
-                .on_stage(br::ShaderStage::Fragment)
-        })
+        self.fragment_module
+            .as_ref()
+            .map(|m| m.on_stage(br::ShaderStage::Fragment, c"main"))
     }
 
     /// Resolves the location of shader input variable for the semantic.

@@ -1,12 +1,9 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
-use br::{Device, ImageChild, ImageSubresourceSlice};
+use br::{Device, ImageChild};
 use log::*;
 use peridot::math::Vector2;
 use peridot::mthelper::SharedRef;
-use peridot::{
-    BufferPrealloc, CBSubmissionType, CommandBundle, LayoutedPipeline, ModelData,
-    SpecConstantStorage,
-};
+use peridot::{BufferPrealloc, CBSubmissionType, CommandBundle, LayoutedPipeline, ModelData};
 use peridot_command_object::{
     BeginRenderPass, BufferUsage, ColorAttachmentBlending, EndRenderPass, GraphicsCommand,
     GraphicsCommandCombiner, GraphicsCommandSubmission, PipelineBarrier, RangedBuffer, RangedImage,
@@ -17,12 +14,16 @@ use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
 use pvg::{FontProvider, FontProviderConstruct, RenderVG};
 
-#[derive(SpecConstantStorage)]
+#[derive(br::SpecializationConstants)]
 #[repr(C)]
 pub struct VgRendererFragmentFixedColor {
+    #[constant_id = 0]
     r: f32,
+    #[constant_id = 1]
     g: f32,
+    #[constant_id = 2]
     b: f32,
+    #[constant_id = 3]
     a: f32,
 }
 
@@ -169,11 +170,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         )
         .expect("Failed to create msaa render target");
     let mut msaa_texture = SharedRef::new(
-        msaa_texture
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()
-            .expect("Failed to create msaa render target view"),
+        br::ImageViewBuilder::new(
+            msaa_texture,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .expect("Failed to create msaa render target view"),
     );
 
     let (vg_renderer_params, vg_renderer_params2) = stg_buffer
@@ -387,9 +389,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             br::vk::VkSpecializationMapEntry::for_type::<f32>(0, 0),
             br::vk::VkSpecializationMapEntry::for_type::<f32>(1, 4),
         ];
-        let vsh_parameters = br::SpecializationInfo::from_binary(spc_map, unsafe {
-            as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..])
-        });
+        let vsh_parameters = unsafe {
+            br::SpecializationInfo::from_binary(
+                spc_map,
+                as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]),
+            )
+        };
 
         let gp1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
             r: 1.0,
@@ -600,11 +605,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     )
                     .expect("Failed to create msaa render target");
                 msaa_texture = SharedRef::new(
-                    msaa_texture_res
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .view_builder()
-                        .create()
-                        .expect("Failed to create msaa render target view"),
+                    br::ImageViewBuilder::new(
+                        msaa_texture_res,
+                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                    )
+                    .create()
+                    .expect("Failed to create msaa render target view"),
                 );
 
                 PipelineBarrier::from(

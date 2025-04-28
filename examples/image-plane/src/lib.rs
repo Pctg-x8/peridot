@@ -1,6 +1,6 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
 use br::resources::Image;
-use br::{Device, ImageSubresourceSlice};
+use br::Device;
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
@@ -11,9 +11,6 @@ use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_semantic_shader::{ShaderPackAsset, VertexInputSemantic};
 use std::sync::Arc;
-
-#[cfg(feature = "debug")]
-use br::VkObject;
 
 use peridot_command_object::{
     BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
@@ -91,19 +88,16 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let cam_uniform_buffer = RangedBuffer::from(cam_uniform_buffer);
     let obj_uniform_buffer = RangedBuffer::from(obj_uniform_buffer);
     #[cfg(feature = "debug")]
-    vertex_buffer
-        .0
-        .set_name(Some(c"Vertex Buffer"))
+    e.graphics_device()
+        .set_object_name(&vertex_buffer.0, c"Vertex Buffer")
         .expect("Failed to set object name");
     #[cfg(feature = "debug")]
-    cam_uniform_buffer
-        .0
-        .set_name(Some(c"Uniform Buffer[CameraParameters]"))
+    e.graphics_device()
+        .set_object_name(&cam_uniform_buffer.0, c"Uniform Buffer[CameraParameters]")
         .expect("Failed to set object name");
     #[cfg(feature = "debug")]
-    obj_uniform_buffer
-        .0
-        .set_name(Some(c"Uniform Buffer"))
+    e.graphics_device()
+        .set_object_name(&obj_uniform_buffer.0, c"Uniform Buffer")
         .expect("Faield to set object name");
 
     let [vertex_buffer_stg, cam_uniform_buffer_stg, obj_uniform_mut_buffer] = memory_manager
@@ -422,18 +416,20 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .expect("Create GraphicsPipeline");
     let gp = gp.clone_parent();
     #[cfg(feature = "debug")]
-    gp.set_name(Some(c"Main Pipeline"))
+    e.graphics_device()
+        .set_object_name(&gp, c"Main Pipeline")
         .expect("Failed to set pipeline name");
 
     pre_configure_awaiter
         .await
         .expect("Failed to pre-configure resources");
 
-    let image_view = image
-        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-        .view_builder()
-        .create()
-        .expect("Failed to create main image view");
+    let image_view = br::ImageViewBuilder::new(
+        image,
+        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+    )
+    .create()
+    .expect("Failed to create main image view");
     let [descriptor_cam, descriptor_main] = descriptor_pool
         .alloc_array(&[
             dsl_ub1.as_transparent_ref(),
@@ -485,13 +481,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         #[cfg(feature = "debug")]
         e.graphics()
             .device()
-            .set_object_name(&br::DebugUtilsObjectNameInfo::new(
-                cb,
-                Some(
-                    &std::ffi::CString::new(format!("Primary Render Commands #{n}"))
-                        .expect("invalid sequence?"),
-                ),
-            ))
+            .set_object_name(
+                &cb,
+                &std::ffi::CString::new(format!("Primary Render Commands #{n}"))
+                    .expect("invalid sequence?"),
+            )
             .expect("Failed to set render cb name");
 
         let begin_main_rp = BeginRenderPass::new(

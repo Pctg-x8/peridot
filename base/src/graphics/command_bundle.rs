@@ -21,6 +21,9 @@ impl<Device: br::Device> br::VkHandle for CommandBundleBufferRef<'_, Device> {
         self.0
     }
 }
+impl<Device: br::Device> br::VkObject for CommandBundleBufferRef<'_, Device> {
+    const TYPE: bedrock::vk::VkObjectType = br::vk::VK_OBJECT_TYPE_COMMAND_BUFFER;
+}
 impl<Device: br::Device> br::CommandBuffer for CommandBundleBufferRef<'_, Device> {}
 
 #[repr(transparent)]
@@ -39,6 +42,9 @@ impl<Device: br::Device> br::VkHandleMut for CommandBundleBufferRefMut<'_, Devic
     fn native_ptr_mut(&mut self) -> Self::Handle {
         self.0
     }
+}
+impl<Device: br::Device> br::VkObject for CommandBundleBufferRefMut<'_, Device> {
+    const TYPE: bedrock::vk::VkObjectType = br::vk::VK_OBJECT_TYPE_COMMAND_BUFFER;
 }
 impl<Device: br::Device> br::CommandBuffer for CommandBundleBufferRefMut<'_, Device> {}
 impl<Device: br::Device> br::CommandBufferMut for CommandBundleBufferRefMut<'_, Device> {}
