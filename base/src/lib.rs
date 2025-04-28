@@ -5,7 +5,6 @@ pub use peridot_math as math;
 
 use bedrock::{self as br, VkHandle};
 use parking_lot::RwLock;
-use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CStr;
@@ -767,10 +766,6 @@ impl SubpassDependencyTemplates {
             srcAccessMask: 0,
         }
     }
-}
-
-pub trait SpecConstantStorage {
-    fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, Cow<[u8]>);
 }
 
 pub struct LayoutedPipeline<Pipeline: br::Pipeline, Layout: br::PipelineLayout>(Pipeline, Layout);

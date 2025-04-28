@@ -1,5 +1,5 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
-use br::{Device, Image, ImageSubresourceSlice};
+use br::{Device, Image};
 use peridot::mthelper::SharedRef;
 use peridot_command_object::{
     BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
@@ -357,11 +357,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .expect("Failed to execute init command");
     }
 
-    let main_image_view = main_image
-        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-        .view_builder()
-        .create()
-        .expect("Failed to create main image view");
+    let main_image_view = br::ImageViewBuilder::new(
+        main_image,
+        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+    )
+    .create()
+    .expect("Failed to create main image view");
 
     e.graphics().device().update_descriptor_sets(
         &[

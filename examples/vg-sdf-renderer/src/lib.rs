@@ -1,6 +1,5 @@
 use bedrock::{self as br, AnyRenderPassCreateInfo, Device, VkHandle};
 use peridot::mthelper::SharedRef;
-use peridot::SpecConstantStorage;
 use peridot_command_object::{
     BeginRenderPass, Blending, BufferUsage, ColorAttachmentBlending, EndRenderPass,
     GraphicsCommand, GraphicsCommandCombiner, GraphicsCommandSubmission, NextSubpass,
@@ -11,9 +10,10 @@ use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_vertex_processing_pack::{PvpContainer, PvpShaderModules};
 use peridot_vg::{FlatPathBuilder, Font, FontProvider, FontProviderConstruct};
 
-#[derive(SpecConstantStorage)]
+#[derive(br::SpecializationConstants)]
 #[repr(C)]
 pub struct FillFragmentShaderParameters {
+    #[constant_id = 0]
     enable_color_output: br::vk::VkBool32,
 }
 
@@ -105,17 +105,22 @@ impl From<StencilState> for br::vk::VkStencilOpState {
 }
 
 #[repr(C)]
-#[derive(SpecConstantStorage)]
+#[derive(br::SpecializationConstants)]
 struct StencilTriangleVertexShaderParameters {
+    #[constant_id = 0]
     pub target_width: f32,
+    #[constant_id = 1]
     pub target_height: f32,
 }
 
 #[repr(C)]
-#[derive(SpecConstantStorage)]
+#[derive(br::SpecializationConstants)]
 struct OutlineVertexShaderParameters {
+    #[constant_id = 0]
     pub target_width: f32,
+    #[constant_id = 1]
     pub target_height: f32,
+    #[constant_id = 2]
     pub sdf_max_distance: f32,
 }
 
