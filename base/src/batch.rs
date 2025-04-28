@@ -1,7 +1,7 @@
 //! Batched Operation Helpers
 
 use crate::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
-use bedrock::{self as br, ImageSubresourceSlice};
+use bedrock::{self as br};
 use br::vk::VkBufferCopy;
 use br::{VkHandle, VulkanStructure};
 use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
@@ -582,14 +582,18 @@ impl<Device: br::Device> TransferBatch<Device> {
         });
         let barriers: Vec<_> = src_barriers.chain(dst_barriers).collect();
         let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| {
-            b.0.by_ref()
-                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                .memory_barrier(l0.to(br::ImageLayout::TransferSrcOpt))
+            br::ImageMemoryBarrier::new(
+                &b.0,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                l0.to(br::ImageLayout::TransferSrcOpt),
+            )
         });
         let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| {
-            b.0.by_ref()
-                .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                .memory_barrier(l0.to(br::ImageLayout::TransferDestOpt))
+            br::ImageMemoryBarrier::new(
+                &b.0,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                l0.to(br::ImageLayout::TransferDestOpt),
+            )
         });
         let barriers_i: Vec<_> = src_barriers_i.chain(dst_barriers_i).collect();
 

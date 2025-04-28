@@ -1,6 +1,6 @@
 use super::*;
 use bedrock as br;
-use br::{ImageChild, ImageSubresourceSlice};
+use br::ImageChild;
 use std::ops::Deref;
 
 mod memory;
@@ -93,9 +93,10 @@ impl<Image: br::Image + br::DeviceChild> Texture2D<Image> {
     pub fn new(img: Image) -> br::Result<Self> {
         let pf = PixelFormat::from(img.format());
 
-        let view_builder = img
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder();
+        let view_builder = br::ImageViewBuilder::new(
+            img,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        );
         let view_builder = match pf {
             PixelFormat::RGB24 => view_builder
                 .with_format_mutation(PixelFormat::RGBA32 as _)

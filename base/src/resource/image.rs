@@ -1,6 +1,6 @@
 //! Image Resource Helper
 
-use bedrock::{self as br, VkHandle};
+use bedrock::{self as br};
 
 use crate::graphics::VulkanGfx;
 #[allow(unused_imports)]
