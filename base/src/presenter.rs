@@ -4,6 +4,31 @@ use bedrock::{self as br, VkRawHandle};
 
 use crate::{graphics::VulkanGfx, mthelper::SharedRef};
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub enum ResolutionMatchingBehavior {
+    SetToMax,
+    Nearest,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
+pub enum PresentationPreferences {
+    Fullscreen {
+        display_index: usize,
+        desired_resolution_width: u32,
+        desired_resopluion_height: u32,
+        desired_refresh_rate: f32,
+        matching_behavior: ResolutionMatchingBehavior,
+    },
+    Borderless {
+        resolution_width: u32,
+        resolution_height: u32,
+    },
+    Windowed {
+        resolution_width: u32,
+        resolution_height: u32,
+    },
+}
+
 pub trait PlatformPresenter {
     fn format(&self) -> br::vk::VkFormat;
     fn back_buffer_size(&self) -> peridot_math::Vector2<u32>;

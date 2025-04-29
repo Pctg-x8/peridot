@@ -170,6 +170,69 @@ async fn main() {
 
     let w = Arc::new(RwLock::new(ThreadsafeWindowOps(w)));
 
+    let local_preferences_path = match std::env::var_os("LOCALAPPDATA") {
+        Some(x) => Some(PathBuf::from(x).join("peridot/preferences.toml")),
+        None => {
+            tracing::warn!("No LOCALAPPDATA environment variable set. any changes to the pereference will be discarded");
+
+            None
+        }
+    };
+    let local_preferences = 'brk: {
+        let Some(ref p) = local_preferences_path else {
+            break 'brk None;
+        };
+
+        if !p.exists() {
+            break 'brk None;
+        }
+
+        let content = match std::fs::read_to_string(p) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, path = %p.display(), "Failed to load local preferences");
+                break 'brk None;
+            }
+        };
+
+        match toml::from_str(&content) {
+            Ok(x) => Some(x),
+            Err(e) => {
+                tracing::error!(cause = ?e, path = %p.display(), "Failed to parse local preferences");
+
+                break 'brk None;
+            }
+        }
+    };
+    let local_preferences = local_preferences.unwrap_or_else(|| {
+        // TODO: デフォルトはプライマリディスプレイのフルスクリーン、最高解像度にあとで変える（そのあとでプロジェクトごとに変えられるようにもするかも）
+        let default = peridot::EnginePreferences {
+            presentation: peridot::PresentationPreferences::Windowed {
+                resolution_width: 640,
+                resolution_height: 480,
+            }
+        };
+
+        if let Some(ref p) = local_preferences_path {
+            if let Err(e) = std::fs::create_dir_all(p.parent().expect("no dirname under localappdata directory?")) {
+                tracing::error!(cause = ?e, path = %p.display(), "Failed to create directories for preferences file");
+            }
+
+            match toml::to_string(&default) {
+                Ok(x) => {
+                    if let Err(e) = std::fs::write(p, x) {
+                        tracing::error!(cause = ?e, path = %p.display(), "Failed to store local preferences");
+                    }
+                },
+                Err(e) => {
+                    tracing::error!(cause = ?e, "Failed to serialize local preferences");
+                }
+            }
+        }
+
+        default
+    });
+
     // Resizeをここに入れると詰まるので対策が必要（結局個別のイベントバスになるのか.......
     let (events_sender, events_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
     let (_frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
@@ -193,6 +256,7 @@ async fn main() {
             (events_sender_th.clone(), events_receiver),
             frame_timing_receiver,
             event_queue_lifetime_extended,
+            &local_preferences,
         );
         let ri_handler = self::input::RawInputHandler::init();
         base.input_mut()
@@ -426,7 +490,11 @@ impl peridot::NativeLinker for NativeLink {
     fn asset_loader(&self) -> &AssetProvider {
         &self.al
     }
-    fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
+    fn new_presenter(
+        &self,
+        g: &peridot::Graphics,
+        _prefs: &peridot::PresentationPreferences,
+    ) -> Presenter {
         Presenter::new(g, self.window.clone())
     }
 }
