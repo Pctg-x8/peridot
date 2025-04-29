@@ -647,6 +647,22 @@ impl VulkanGfx {
             .map(|x| x.index())
     }
 
+    /// Sets an object's name for debugging.
+    ///
+    /// On failure, this function logs a warning and does not bail.
+    #[cfg(feature = "debug")]
+    #[tracing::instrument(skip(self), fields(handle = handle.raw_handle_value()))]
+    pub unsafe fn dbg_set_object_name_raw(
+        &self,
+        object_type: br::vk::VkObjectType,
+        handle: &(impl br::VkRawHandle + ?Sized),
+        name: &core::ffi::CStr,
+    ) {
+        if let Err(e) = self.set_object_name_raw(object_type, handle, name) {
+            tracing::warn!(cause = ?e, "Failed to set an object's name for debugging");
+        }
+    }
+
     #[cfg(feature = "debug")]
     pub unsafe fn set_object_name_raw(
         &self,
@@ -669,6 +685,21 @@ impl VulkanGfx {
             )
             .into_result()
             .map(drop)
+        }
+    }
+
+    /// Sets an object's name for debugging.
+    ///
+    /// On failure, this function logs a warning and does not bail.
+    #[cfg(feature = "debug")]
+    #[tracing::instrument(skip(self), fields(object_type = H::TYPE, handle = handle.native_ptr().raw_handle_value()))]
+    pub fn dbg_set_object_name<H: br::VkHandle<Handle: br::VkRawHandle> + br::VkObject + ?Sized>(
+        &self,
+        handle: &H,
+        name: &core::ffi::CStr,
+    ) {
+        if let Err(e) = self.set_object_name(handle, name) {
+            tracing::warn!(cause = ?e, "Failed to set an object's name for debugging");
         }
     }
 
