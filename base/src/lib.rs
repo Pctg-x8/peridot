@@ -47,6 +47,11 @@ use mthelper::{DynamicMut, MappableGuardObject, MappableMutGuardObject};
 #[cfg(feature = "derive")]
 pub use peridot_derive::*;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct EnginePreferences {
+    pub presentation: PresentationPreferences,
+}
+
 pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
     type Presenter: PlatformPresenter;
@@ -55,7 +60,8 @@ pub trait NativeLinker: Sized {
     fn device_extensions(&self) -> Vec<&CStr>;
 
     fn asset_loader(&self) -> &Self::AssetLoader;
-    fn new_presenter(&self, g: &Graphics) -> Self::Presenter;
+    fn new_presenter(&self, g: &Graphics, preferences: &PresentationPreferences)
+        -> Self::Presenter;
 
     fn rendering_precision(&self) -> f32 {
         1.0
@@ -351,6 +357,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
         ),
         frame_timing_receiver: async_std::channel::Receiver<()>,
         shared_event_queue: &'q EventQueue,
+        init_preferences: &EnginePreferences,
     ) -> Self {
         let mut g = Graphics::new(
             name,
@@ -359,7 +366,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
             native_link.device_extensions(),
             requested_features,
         );
-        let presenter = native_link.new_presenter(&g);
+        let presenter = native_link.new_presenter(&g, &init_preferences.presentation);
         g.submit_commands(|r| presenter.emit_initialize_back_buffer_commands(r))
             .expect("Initializing Back Buffers");
 

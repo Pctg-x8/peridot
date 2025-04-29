@@ -39,6 +39,7 @@ parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 async-std = { version = "1.13.0", features = ["attributes"] }
+toml = "0.8"
 
 [dependencies.windows]
 version = "0.51"
