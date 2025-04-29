@@ -3,9 +3,9 @@ use bedrock as br;
 use crate::graphics::VulkanGfx;
 
 pub struct SurfaceInfo {
-    pub(crate) fmt: br::SurfaceFormat,
-    pub(crate) pres_mode: br::PresentMode,
-    pub(crate) available_composite_alpha: br::CompositeAlphaFlags,
+    pub fmt: br::SurfaceFormat,
+    pub pres_mode: br::PresentMode,
+    pub available_composite_alpha: br::CompositeAlphaFlags,
 }
 impl SurfaceInfo {
     pub fn gather_info(
