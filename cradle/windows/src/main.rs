@@ -6,21 +6,27 @@ use log::*;
 use parking_lot::RwLock;
 mod input;
 mod userlib;
+use bedrock as br;
 use std::ffi::CStr;
 use std::sync::Arc;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::{BOOL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, MapWindowPoints, DISPLAY_DEVICEW,
+    HMONITOR, MONITORINFOEXW,
+};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
     GetWindowLongPtrA, LoadCursorW, PeekMessageA, PostQuitMessage, RegisterClassExA,
-    SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW,
-    PM_REMOVE, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE,
-    WNDCLASSEXA, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+    SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, EDD_GET_DEVICE_INTERFACE_NAME,
+    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
+    WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP,
+    WS_OVERLAPPEDWINDOW,
 };
 
 mod presenter;
@@ -380,7 +386,16 @@ impl peridot::NativeLinker for NativeLink {
 
     #[cfg(not(feature = "transparent"))]
     fn instance_extensions(&self) -> Vec<&CStr> {
-        vec![c"VK_KHR_surface", c"VK_KHR_win32_surface"]
+        vec![
+            c"VK_KHR_surface",
+            c"VK_KHR_win32_surface",
+            c"VK_KHR_display",
+            c"VK_KHR_get_physical_device_properties2",
+            c"VK_KHR_external_fence_capabilities",
+            c"VK_KHR_get_surface_capabilities2",
+            // TODO: これoptionalにしたいので機能拡張が必要
+            c"VK_EXT_direct_mode_display",
+        ]
     }
     #[cfg(feature = "transparent")]
     fn instance_extensions(&self) -> Vec<&CStr> {
@@ -391,7 +406,12 @@ impl peridot::NativeLinker for NativeLink {
     }
     #[cfg(not(feature = "transparent"))]
     fn device_extensions(&self) -> Vec<&CStr> {
-        vec![c"VK_KHR_swapchain"]
+        // TODO: VK_NV_acquire_winrt_displayをoptionalにしたいので機能拡張が必要
+        vec![
+            c"VK_KHR_swapchain",
+            c"VK_NV_acquire_winrt_display",
+            c"VK_EXT_full_screen_exclusive",
+        ]
     }
     #[cfg(feature = "transparent")]
     fn device_extensions(&self) -> Vec<&CStr> {

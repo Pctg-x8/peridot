@@ -1,13 +1,36 @@
 use crate::ThreadsafeWindowOps;
-use bedrock::{self as br, Device, VkHandle};
+use bedrock::{self as br, Device, Instance, ResolverInterface, VkHandle, VulkanSinkStructure};
 #[cfg(not(feature = "transparent"))]
 use bedrock::{InstanceChild, SurfaceCreateInfo};
 use parking_lot::RwLock;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 #[cfg(feature = "transparent")]
 use windows::core::ComInterface;
+use windows::core::PCWSTR;
+use windows::Devices::Display::Core::DisplayModeQueryOptions;
+use windows::Win32::Devices::DeviceAndDriverInstallation::{
+    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+    SetupDiGetDevicePropertyKeys, SetupDiGetDevicePropertyW, SetupDiOpenDevRegKey,
+    DICS_FLAG_GLOBAL, DIGCF_DEFAULT, DIGCF_PRESENT, DIREG_DEV, GUID_DEVCLASS_MONITOR,
+    SP_DEVINFO_DATA,
+};
+use windows::Win32::Devices::Display::{
+    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
+    GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, QueryDisplayConfig,
+    DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+    DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET,
+    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME, PHYSICAL_MONITOR,
+    QDC_ONLY_ACTIVE_PATHS,
+};
+use windows::Win32::Devices::Properties::{
+    DEVPKEY_NAME, DEVPROP_TYPE_STRING, DEVPROP_TYPE_UINT32, DEVPROP_TYPE_UINT64,
+};
 #[cfg(feature = "transparent")]
 use windows::Win32::Foundation::GENERIC_ALL;
+use windows::Win32::Foundation::{
+    ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, LPARAM,
+};
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 #[cfg(feature = "transparent")]
@@ -25,11 +48,30 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory, IDXGIFactory, DXGI_ERROR_NOT_FOUND};
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, IDXGIFactory2, IDXGISwapChain3, DXGI_CREATE_FACTORY_DEBUG,
     DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_DISCARD,
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
+};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, DEVMODEW, DISPLAY_DEVICEW,
+    ENUM_CURRENT_SETTINGS, ENUM_DISPLAY_SETTINGS_MODE, HMONITOR,
+};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoSetProxyBlanket, CLSCTX_INPROC_SERVER, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+    RPC_C_IMP_LEVEL_IMPERSONATE,
+};
+use windows::Win32::System::Ole::{SafeArrayAccessData, SafeArrayUnaccessData};
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegEnumValueW, RegGetValueW, KEY_READ, REG_BINARY, RRF_RT_REG_BINARY,
+};
+use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
+use windows::Win32::System::Variant::{VariantClear, VariantInit};
+use windows::Win32::System::Wmi::{
+    IWbemLocator, WbemLocator, WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY,
+    WBEM_GENERIC_FLAG_TYPE, WBEM_INFINITE,
 };
 
 #[cfg(not(feature = "transparent"))]
@@ -60,6 +102,122 @@ impl br::VkHandle for Surface {
     }
 }
 
+#[repr(transparent)]
+pub struct DeviceMode(DEVMODEW);
+
+pub struct DisplaySettingsEnumerator<'s> {
+    counter: u32,
+    device_name: Option<&'s [u16]>,
+}
+impl<'s> DisplaySettingsEnumerator<'s> {
+    pub fn new(device_name: Option<&'s [u16]>) -> Self {
+        Self {
+            counter: 0,
+            device_name,
+        }
+    }
+}
+impl Iterator for DisplaySettingsEnumerator<'_> {
+    type Item = DeviceMode;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut mode = MaybeUninit::<DEVMODEW>::uninit();
+        let r = unsafe {
+            core::ptr::write(
+                &mut (*mode.as_mut_ptr()).dmSize,
+                core::mem::size_of::<DEVMODEW>() as _,
+            );
+            core::ptr::write(&mut (*mode.as_mut_ptr()).dmDriverExtra, 0);
+
+            EnumDisplaySettingsW(
+                self.device_name
+                    .map_or(PCWSTR::null(), |x| PCWSTR(x.as_ptr())),
+                ENUM_DISPLAY_SETTINGS_MODE(self.counter),
+                mode.as_mut_ptr(),
+            )
+        };
+
+        if !r.as_bool() {
+            return None;
+        }
+
+        self.counter += 1;
+        Some(DeviceMode(unsafe { mode.assume_init() }))
+    }
+}
+
+#[repr(transparent)]
+pub struct DisplayDevice(DISPLAY_DEVICEW);
+impl DisplayDevice {
+    pub fn all() -> impl Iterator<Item = Self> {
+        DisplayDeviceEnumerator {
+            name: None,
+            counter: 0,
+            flags: 0,
+        }
+    }
+
+    pub fn monitors<'s>(&'s self) -> impl Iterator<Item = Self> + 's {
+        DisplayDeviceEnumerator {
+            name: Some(&self.0.DeviceName),
+            counter: 0,
+            flags: 0,
+        }
+    }
+
+    pub fn display_settings<'s>(&'s self) -> impl Iterator<Item = DeviceMode> + 's {
+        DisplaySettingsEnumerator {
+            counter: 0,
+            device_name: Some(&self.0.DeviceName),
+        }
+    }
+
+    pub fn render_device_string<'s>(
+        &'s self,
+    ) -> impl Iterator<Item = Result<char, core::char::DecodeUtf16Error>> + 's {
+        core::char::decode_utf16(self.0.DeviceString.iter().copied().take_while(|&x| x != 0))
+    }
+
+    pub fn render_device_name<'s>(
+        &'s self,
+    ) -> impl Iterator<Item = Result<char, core::char::DecodeUtf16Error>> + 's {
+        core::char::decode_utf16(self.0.DeviceName.iter().copied().take_while(|&x| x != 0))
+    }
+}
+
+pub struct DisplayDeviceEnumerator<'s> {
+    name: Option<&'s [u16]>,
+    counter: u32,
+    flags: u32,
+}
+impl Iterator for DisplayDeviceEnumerator<'_> {
+    type Item = DisplayDevice;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut sink = MaybeUninit::<DISPLAY_DEVICEW>::uninit();
+        let r = unsafe {
+            core::ptr::write(
+                &mut (*sink.as_mut_ptr()).cb,
+                core::mem::size_of::<DISPLAY_DEVICEW>() as _,
+            );
+            EnumDisplayDevicesW(
+                self.name.map_or(PCWSTR::null(), |x| PCWSTR(x.as_ptr())),
+                self.counter,
+                sink.as_mut_ptr(),
+                self.flags,
+            )
+        };
+
+        if !r.as_bool() {
+            // no more devices
+            return None;
+        }
+
+        self.counter += 1;
+        Some(DisplayDevice(unsafe { sink.assume_init() }))
+    }
+}
+
 #[cfg(not(feature = "transparent"))]
 pub struct Presenter {
     _window: Arc<RwLock<ThreadsafeWindowOps>>,
@@ -68,6 +226,126 @@ pub struct Presenter {
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
     pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
+        // どうやらHMONITORからだけだとモニタの正式名が取れないっぽい（Generic PnP Monitorになってしまう）のでトポロジも追ってちゃんと取得する必要がある
+        let mut path_array_elements = MaybeUninit::uninit();
+        let mut mode_info_array_elements = MaybeUninit::uninit();
+        unsafe {
+            GetDisplayConfigBufferSizes(
+                QDC_ONLY_ACTIVE_PATHS,
+                path_array_elements.as_mut_ptr(),
+                mode_info_array_elements.as_mut_ptr(),
+            )
+            .unwrap();
+        }
+        let mut path_array = Vec::with_capacity(unsafe { path_array_elements.assume_init() as _ });
+        let mut mode_info =
+            Vec::with_capacity(unsafe { mode_info_array_elements.assume_init() as _ });
+        unsafe {
+            path_array.set_len(path_array.capacity());
+            mode_info.set_len(mode_info.capacity());
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                path_array_elements.as_mut_ptr(),
+                path_array.as_mut_ptr(),
+                mode_info_array_elements.as_mut_ptr(),
+                mode_info.as_mut_ptr(),
+                None,
+            )
+            .unwrap();
+        }
+        for x in &path_array {
+            println!(
+                "path target {:?} {}",
+                x.targetInfo.adapterId, x.targetInfo.id
+            );
+
+            let mut cfg_source_name = MaybeUninit::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>::uninit();
+            unsafe {
+                core::ptr::write(
+                    &mut (*cfg_source_name.as_mut_ptr()).header.r#type,
+                    DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                );
+                core::ptr::write(
+                    &mut (*cfg_source_name.as_mut_ptr()).header.size,
+                    core::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as _,
+                );
+                core::ptr::write(
+                    &mut (*cfg_source_name.as_mut_ptr()).header.adapterId,
+                    x.sourceInfo.adapterId,
+                );
+                core::ptr::write(
+                    &mut (*cfg_source_name.as_mut_ptr()).header.id,
+                    x.sourceInfo.id,
+                );
+
+                DisplayConfigGetDeviceInfo(cfg_source_name.as_mut_ptr() as _);
+            }
+
+            let mut cfg_target_name = MaybeUninit::<DISPLAYCONFIG_TARGET_DEVICE_NAME>::uninit();
+            unsafe {
+                core::ptr::write(
+                    &mut (*cfg_target_name.as_mut_ptr()).header.r#type,
+                    DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                );
+                core::ptr::write(
+                    &mut (*cfg_target_name.as_mut_ptr()).header.size,
+                    core::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as _,
+                );
+                core::ptr::write(
+                    &mut (*cfg_target_name.as_mut_ptr()).header.adapterId,
+                    x.targetInfo.adapterId,
+                );
+                core::ptr::write(
+                    &mut (*cfg_target_name.as_mut_ptr()).header.id,
+                    x.targetInfo.id,
+                );
+
+                DisplayConfigGetDeviceInfo(cfg_target_name.as_mut_ptr() as _);
+            }
+
+            println!(
+                "device info: {} {}",
+                unsafe {
+                    core::char::decode_utf16(
+                        cfg_source_name
+                            .assume_init_ref()
+                            .viewGdiDeviceName
+                            .iter()
+                            .copied()
+                            .take_while(|&x| x != 0),
+                    )
+                    .collect::<Result<String, _>>()
+                    .unwrap()
+                },
+                unsafe {
+                    core::char::decode_utf16(
+                        cfg_target_name
+                            .assume_init_ref()
+                            .monitorFriendlyDeviceName
+                            .iter()
+                            .copied()
+                            .take_while(|&x| x != 0),
+                    )
+                    .collect::<Result<String, _>>()
+                    .unwrap()
+                }
+            );
+
+            for (n, mode) in DisplaySettingsEnumerator::new(Some(unsafe {
+                &cfg_source_name.assume_init_ref().viewGdiDeviceName
+            }))
+            .enumerate()
+            {
+                println!(
+                    "Display Mode #{n}: {}x{}@{}hz {}bpp",
+                    mode.0.dmPelsWidth,
+                    mode.0.dmPelsHeight,
+                    mode.0.dmDisplayFrequency,
+                    mode.0.dmBitsPerPel
+                );
+            }
+        }
+
         if unsafe {
             !br::vkfn_wrapper::get_physical_device_win32_presentation_support(
                 g.adapter_raw(),

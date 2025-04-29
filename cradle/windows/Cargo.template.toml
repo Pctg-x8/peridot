@@ -28,6 +28,9 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "Presentation",
     "Implements",
     "VK_KHR_win32_surface",
+    "VK_KHR_display",
+    "VK_NV_acquire_winrt_display",
+    "VK_KHR_external_memory_capabilities",
 ] }
 peridot = { path = "../../base" }
 log = "0.4"
@@ -61,4 +64,16 @@ features = [
     'Win32_UI_Input',
     'Win32_UI_Input_KeyboardAndMouse',
     'Win32_UI_Input_XboxController',
+    "Devices_Display_Core",
+    "Foundation_Collections",
+    "Graphics",
+    "Win32_Devices_Display",
+    "Win32_System_Wmi",
+    "Win32_System_Ole",
+    "Win32_System_Rpc",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_System_Registry",
+    "Win32_Devices_Properties",
 ]
