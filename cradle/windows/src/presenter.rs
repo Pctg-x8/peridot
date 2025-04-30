@@ -1,8 +1,9 @@
-use crate::ThreadsafeWindowOps;
+use crate::{GameDriver, ThreadsafeWindowOps, LPSZCLASSNAME};
 use bedrock::{self as br, Device, Instance, ResolverInterface, VkHandle, VulkanSinkStructure};
 #[cfg(not(feature = "transparent"))]
 use bedrock::{InstanceChild, SurfaceCreateInfo};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 #[cfg(feature = "transparent")]
@@ -29,7 +30,8 @@ use windows::Win32::Devices::Properties::{
 #[cfg(feature = "transparent")]
 use windows::Win32::Foundation::GENERIC_ALL;
 use windows::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, LPARAM,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HINSTANCE, HWND, LPARAM,
+    LRESULT, RECT, WPARAM,
 };
 #[cfg(feature = "transparent")]
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
@@ -56,22 +58,36 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, DEVMODEW, DISPLAY_DEVICEW,
-    ENUM_CURRENT_SETTINGS, ENUM_DISPLAY_SETTINGS_MODE, HMONITOR,
+    ChangeDisplaySettingsExW, ChangeDisplaySettingsW, EnumDisplayDevicesW, EnumDisplayMonitors,
+    EnumDisplaySettingsW, GetMonitorInfoW, CDS_FULLSCREEN, CDS_RESET, CDS_TYPE, DEVMODEW,
+    DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE, DISPLAY_DEVICEW, DISP_CHANGE, DISP_CHANGE_SUCCESSFUL,
+    DM_DISPLAYFREQUENCY, DM_PELSHEIGHT, DM_PELSWIDTH, ENUM_CURRENT_SETTINGS,
+    ENUM_DISPLAY_SETTINGS_MODE, HMONITOR, MONITORINFOEXW,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoSetProxyBlanket, CLSCTX_INPROC_SERVER, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
     RPC_C_IMP_LEVEL_IMPERSONATE,
 };
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{SafeArrayAccessData, SafeArrayUnaccessData};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumValueW, RegGetValueW, KEY_READ, REG_BINARY, RRF_RT_REG_BINARY,
 };
 use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
+use windows::Win32::System::Threading::Sleep;
 use windows::Win32::System::Variant::{VariantClear, VariantInit};
 use windows::Win32::System::Wmi::{
     IWbemLocator, WbemLocator, WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY,
     WBEM_GENERIC_FLAG_TYPE, WBEM_INFINITE,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, GetWindowLongPtrA, GetWindowRect,
+    LoadCursorW, PostQuitMessage, RegisterClassExA, SetWindowPos, ShowWindow, CW_USEDEFAULT,
+    GWLP_USERDATA, IDC_ARROW, SW_MAXIMIZE, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_INPUT, WM_SIZE, WNDCLASSEXA, WS_BORDER,
+    WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP,
+    WS_EX_TOPMOST, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 
 #[cfg(not(feature = "transparent"))]
@@ -218,46 +234,156 @@ impl Iterator for DisplayDeviceEnumerator<'_> {
     }
 }
 
-#[cfg(not(feature = "transparent"))]
-pub struct Presenter {
-    _window: Arc<RwLock<ThreadsafeWindowOps>>,
-    sc: peridot::IntegratedSwapchain<Surface>,
+pub struct DisplayDeviceMode {
+    pub width_px: u32,
+    pub height_px: u32,
+    pub refresh_rate: u32,
 }
-#[cfg(not(feature = "transparent"))]
-impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
-        // どうやらHMONITORからだけだとモニタの正式名が取れないっぽい（Generic PnP Monitorになってしまう）のでトポロジも追ってちゃんと取得する必要がある
-        let mut path_array_elements = MaybeUninit::uninit();
-        let mut mode_info_array_elements = MaybeUninit::uninit();
+impl DisplayDeviceMode {
+    pub fn apply(&self, view_gdi_device_name: &[u16]) -> DISP_CHANGE {
+        let mut devmode = MaybeUninit::<DEVMODEW>::uninit();
         unsafe {
-            GetDisplayConfigBufferSizes(
-                QDC_ONLY_ACTIVE_PATHS,
-                path_array_elements.as_mut_ptr(),
-                mode_info_array_elements.as_mut_ptr(),
+            core::ptr::write(
+                &mut (*devmode.as_mut_ptr()).dmSize,
+                core::mem::size_of::<DEVMODEW>() as _,
+            );
+            core::ptr::write(
+                &mut (*devmode.as_mut_ptr()).dmFields,
+                DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY,
+            );
+            core::ptr::write(&mut (*devmode.as_mut_ptr()).dmPelsWidth, self.width_px);
+            core::ptr::write(&mut (*devmode.as_mut_ptr()).dmPelsHeight, self.height_px);
+            core::ptr::write(
+                &mut (*devmode.as_mut_ptr()).dmDisplayFrequency,
+                self.refresh_rate,
+            );
+            core::ptr::write(&mut (*devmode.as_mut_ptr()).dmBitsPerPel, 32);
+
+            ChangeDisplaySettingsExW(
+                PCWSTR(view_gdi_device_name.as_ptr()),
+                Some(devmode.as_ptr()),
+                None,
+                CDS_FULLSCREEN,
+                None,
+            )
+        }
+    }
+}
+
+pub struct DisplayDeviceTopologyEntry {
+    pub target_monitor_friendly_name: String,
+    pub available_modes: Vec<DisplayDeviceMode>,
+    pub view_gdi_device_name: Vec<u16>,
+    pub monitor_handle: HMONITOR,
+}
+
+pub struct DisplayDeviceTopologyCache {
+    entries: Vec<DisplayDeviceTopologyEntry>,
+}
+impl DisplayDeviceTopologyCache {
+    pub fn new() -> Self {
+        let mut this = Self {
+            entries: Vec::new(),
+        };
+
+        this.refresh();
+        this
+    }
+
+    #[inline]
+    pub fn primary(&self) -> Option<&DisplayDeviceTopologyEntry> {
+        self.entries.first()
+    }
+
+    #[inline]
+    pub fn display_at(&self, index: usize) -> Option<&DisplayDeviceTopologyEntry> {
+        self.entries.get(index)
+    }
+
+    pub fn refresh(&mut self) {
+        let mut monitor_handles_by_view_gdi_path = HashMap::new();
+        extern "system" fn edm_callback(
+            mon: HMONITOR,
+            _dc: windows::Win32::Graphics::Gdi::HDC,
+            _rect: *mut windows::Win32::Foundation::RECT,
+            lp: LPARAM,
+        ) -> windows::Win32::Foundation::BOOL {
+            let mut moninfo = MaybeUninit::<MONITORINFOEXW>::uninit();
+            unsafe {
+                core::ptr::write(
+                    &mut (*moninfo.as_mut_ptr()).monitorInfo.cbSize,
+                    core::mem::size_of::<MONITORINFOEXW>() as _,
+                );
+                GetMonitorInfoW(mon, moninfo.as_mut_ptr() as _).unwrap();
+            }
+
+            let sink = unsafe {
+                &mut *(core::ptr::with_exposed_provenance_mut::<HashMap<String, HMONITOR>>(
+                    lp.0 as _,
+                ))
+            };
+            sink.insert(
+                core::char::decode_utf16(unsafe {
+                    moninfo
+                        .assume_init_ref()
+                        .szDevice
+                        .iter()
+                        .copied()
+                        .take_while(|&x| x != 0)
+                })
+                .collect::<Result<String, _>>()
+                .unwrap(),
+                mon,
+            );
+
+            windows::Win32::Foundation::BOOL(1)
+        }
+        unsafe {
+            EnumDisplayMonitors(
+                None,
+                None,
+                Some(edm_callback),
+                LPARAM(
+                    (&mut monitor_handles_by_view_gdi_path as *mut HashMap<String, HMONITOR>)
+                        .expose_provenance() as _,
+                ),
             )
             .unwrap();
         }
-        let mut path_array = Vec::with_capacity(unsafe { path_array_elements.assume_init() as _ });
+
+        // どうやらHMONITORからだけだとモニタの正式名が取れないっぽい（Generic PnP Monitorになってしまう）のでトポロジも追ってちゃんと取得する必要がある
+        let mut path_array_element_count = MaybeUninit::uninit();
+        let mut mode_info_array_element_count = MaybeUninit::uninit();
+        unsafe {
+            GetDisplayConfigBufferSizes(
+                QDC_ONLY_ACTIVE_PATHS,
+                path_array_element_count.as_mut_ptr(),
+                mode_info_array_element_count.as_mut_ptr(),
+            )
+            .unwrap();
+        }
+        let mut path_array =
+            Vec::with_capacity(unsafe { path_array_element_count.assume_init() as _ });
         let mut mode_info =
-            Vec::with_capacity(unsafe { mode_info_array_elements.assume_init() as _ });
+            Vec::with_capacity(unsafe { mode_info_array_element_count.assume_init() as _ });
         unsafe {
             path_array.set_len(path_array.capacity());
             mode_info.set_len(mode_info.capacity());
             QueryDisplayConfig(
                 QDC_ONLY_ACTIVE_PATHS,
-                path_array_elements.as_mut_ptr(),
+                path_array_element_count.as_mut_ptr(),
                 path_array.as_mut_ptr(),
-                mode_info_array_elements.as_mut_ptr(),
+                mode_info_array_element_count.as_mut_ptr(),
                 mode_info.as_mut_ptr(),
                 None,
             )
             .unwrap();
         }
-        for x in &path_array {
-            println!(
-                "path target {:?} {}",
-                x.targetInfo.adapterId, x.targetInfo.id
-            );
+        self.entries.clear();
+        for (n, x) in path_array.iter().enumerate() {
+            if (x.flags & DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE) != 0 {
+                println!("path #{n}: this path supports virtual mode");
+            }
 
             let mut cfg_source_name = MaybeUninit::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>::uninit();
             unsafe {
@@ -303,48 +429,225 @@ impl Presenter {
                 DisplayConfigGetDeviceInfo(cfg_target_name.as_mut_ptr() as _);
             }
 
-            println!(
-                "device info: {} {}",
-                unsafe {
-                    core::char::decode_utf16(
+            let available_modes = DisplaySettingsEnumerator::new(Some(unsafe {
+                &cfg_source_name.assume_init_ref().viewGdiDeviceName
+            }))
+            .map(|x| DisplayDeviceMode {
+                width_px: x.0.dmPelsWidth,
+                height_px: x.0.dmPelsHeight,
+                refresh_rate: x.0.dmDisplayFrequency,
+            })
+            .collect::<Vec<_>>();
+
+            self.entries.push(DisplayDeviceTopologyEntry {
+                target_monitor_friendly_name: core::char::decode_utf16(unsafe {
+                    cfg_target_name
+                        .assume_init_ref()
+                        .monitorFriendlyDeviceName
+                        .iter()
+                        .copied()
+                        .take_while(|&x| x != 0)
+                })
+                .collect::<Result<String, _>>()
+                .unwrap(),
+                available_modes,
+                view_gdi_device_name: unsafe {
+                    cfg_source_name.assume_init_ref().viewGdiDeviceName.to_vec()
+                },
+                monitor_handle: monitor_handles_by_view_gdi_path[&core::char::decode_utf16(
+                    unsafe {
                         cfg_source_name
                             .assume_init_ref()
                             .viewGdiDeviceName
                             .iter()
                             .copied()
-                            .take_while(|&x| x != 0),
-                    )
-                    .collect::<Result<String, _>>()
-                    .unwrap()
-                },
-                unsafe {
-                    core::char::decode_utf16(
-                        cfg_target_name
-                            .assume_init_ref()
-                            .monitorFriendlyDeviceName
-                            .iter()
-                            .copied()
-                            .take_while(|&x| x != 0),
-                    )
-                    .collect::<Result<String, _>>()
-                    .unwrap()
-                }
-            );
+                            .take_while(|&x| x != 0)
+                    },
+                )
+                .collect::<Result<String, _>>()
+                .unwrap()],
+            });
+        }
 
-            for (n, mode) in DisplaySettingsEnumerator::new(Some(unsafe {
-                &cfg_source_name.assume_init_ref().viewGdiDeviceName
-            }))
-            .enumerate()
-            {
-                println!(
-                    "Display Mode #{n}: {}x{}@{}hz {}bpp",
-                    mode.0.dmPelsWidth,
-                    mode.0.dmPelsHeight,
-                    mode.0.dmDisplayFrequency,
-                    mode.0.dmBitsPerPel
-                );
+        self.entries.shrink_to_fit();
+    }
+}
+
+fn setup_window(
+    hinstance: HINSTANCE,
+    prefs: &peridot::PresentationPreferences,
+    display_device_topology: &peridot::mthelper::SharedRef<DisplayDeviceTopologyCache>,
+    allow_transparent: bool,
+) -> windows::core::Result<ThreadsafeWindowOps> {
+    let wca = WNDCLASSEXA {
+        cbSize: std::mem::size_of::<WNDCLASSEXA>() as _,
+        hInstance: hinstance,
+        lpszClassName: windows::core::PCSTR(LPSZCLASSNAME.as_ptr() as *const _),
+        lpfnWndProc: Some(window_callback),
+        hCursor: unsafe { LoadCursorW(None, IDC_ARROW).expect("Failed to load default cursor") },
+        ..unsafe { MaybeUninit::zeroed().assume_init() }
+    };
+    let wcatom = unsafe { RegisterClassExA(&wca) };
+    if wcatom <= 0 {
+        panic!("Register Class Failed!");
+    }
+
+    let (l, t, w, h, wsx, ws) = match prefs {
+        &peridot::PresentationPreferences::Windowed {
+            resolution_width,
+            resolution_height,
+            resizable,
+        } => (
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            resolution_width,
+            resolution_height,
+            if allow_transparent {
+                WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP
+            } else {
+                WS_EX_APPWINDOW
+            },
+            if resizable {
+                WS_OVERLAPPEDWINDOW
+            } else {
+                WS_OVERLAPPED | WS_CAPTION | WS_BORDER | WS_SYSMENU | WS_MINIMIZEBOX
+            },
+        ),
+        &peridot::PresentationPreferences::Borderless {
+            resolution_width,
+            resolution_height,
+        } => (
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            resolution_width,
+            resolution_height,
+            if allow_transparent {
+                WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP
+            } else {
+                WS_EX_APPWINDOW
+            },
+            WS_POPUP,
+        ),
+        &peridot::PresentationPreferences::Fullscreen {
+            display_index,
+            desired_resolution_width,
+            desired_resolution_height,
+            desired_refresh_rate,
+            matching_behavior,
+        } => {
+            let target_display = match display_device_topology.display_at(display_index) {
+                Some(x) => x,
+                None => match display_device_topology.primary() {
+                    Some(x) => {
+                        tracing::warn!(
+                            display_index,
+                            "No display found at the index, falling back to primary"
+                        );
+                        x
+                    }
+                    None => {
+                        tracing::error!("No display available on the system");
+                        std::process::abort();
+                    }
+                },
+            };
+            let exact_match_mode = target_display.available_modes.iter().find(|x| {
+                x.width_px == desired_resolution_width
+                    && x.height_px == desired_resolution_height
+                    && x.refresh_rate == desired_refresh_rate as u32
+            });
+
+            match exact_match_mode {
+                Some(x) => {
+                    let r = x.apply(&target_display.view_gdi_device_name);
+                    if r != DISP_CHANGE_SUCCESSFUL {
+                        tracing::error!(result = ?r, "Failed to change display mode");
+                        std::process::abort();
+                    }
+
+                    (
+                        0,
+                        0,
+                        x.width_px,
+                        x.height_px,
+                        WS_EX_TOPMOST,
+                        WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                    )
+                }
+                None => {
+                    todo!("find alternative mode using matching behavior");
+                }
             }
         }
+    };
+
+    // TODO: これコンパイル時に生成できないか？
+    let wname_c = std::ffi::CString::new(crate::userlib::APP_TITLE)
+        .expect("Unable to generate a c-style string");
+    let mut wrect = RECT {
+        left: 0,
+        top: 0,
+        right: w as _,
+        bottom: h as _,
+    };
+    unsafe {
+        AdjustWindowRectEx(&mut wrect, ws, false, wsx)
+            .expect("Failed to calculate window geometry");
+    }
+    let w = unsafe {
+        CreateWindowExA(
+            wsx,
+            windows::core::PCSTR(std::mem::transmute(wcatom as usize)),
+            windows::core::PCSTR(wname_c.as_ptr() as _),
+            ws,
+            l,
+            t,
+            wrect.right - wrect.left,
+            wrect.bottom - wrect.top,
+            None,
+            None,
+            wca.hInstance,
+            None,
+        )
+    };
+
+    if w.0 == 0 {
+        Err(windows::core::Error::from_win32())
+    } else {
+        Ok(ThreadsafeWindowOps(w))
+    }
+}
+
+#[cfg(not(feature = "transparent"))]
+pub struct Presenter {
+    pub(crate) window: Arc<RwLock<ThreadsafeWindowOps>>,
+    _display_device_topology: peridot::mthelper::SharedRef<DisplayDeviceTopologyCache>,
+    sc: peridot::IntegratedSwapchain<Surface>,
+}
+#[cfg(not(feature = "transparent"))]
+impl Presenter {
+    pub fn new(
+        g: &peridot::Graphics,
+        prefs: &peridot::PresentationPreferences,
+        display_device_topology: &peridot::mthelper::SharedRef<DisplayDeviceTopologyCache>,
+    ) -> Self {
+        let hinstance = match unsafe { GetModuleHandleW(None) } {
+            Ok(x) => unsafe { core::mem::transmute(x) },
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to get module handle");
+                std::process::abort();
+            }
+        };
+
+        let mut w = match setup_window(hinstance, prefs, display_device_topology, false) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to setup window");
+                std::process::abort();
+            }
+        };
+
+        w.show(SW_SHOWNORMAL);
 
         if unsafe {
             !br::vkfn_wrapper::get_physical_device_win32_presentation_support(
@@ -352,11 +655,12 @@ impl Presenter {
                 g.graphics_queue_family_index(),
             )
         } {
-            panic!("WindowSubsystem does not support Vulkan Rendering");
+            tracing::error!("The selected physical device does not support Vulkan Rendering");
+            std::process::abort();
         }
         let s = Surface {
             handle: unsafe {
-                br::Win32SurfaceCreateInfo::new(super::module_handle(), window.read().0)
+                br::Win32SurfaceCreateInfo::new(super::module_handle(), w.0)
                     .execute(g.device().instance(), None)
                     .expect("Failed to create Surface")
             },
@@ -367,11 +671,12 @@ impl Presenter {
             .surface_support(&s)
             .expect("Failed to query Surface Support");
         if !support {
-            panic!("Vulkan does not support this surface to render");
+            tracing::error!("Vulkan does not support this surface to render");
         }
 
         Presenter {
-            _window: window,
+            window: Arc::new(RwLock::new(w)),
+            _display_device_topology: display_device_topology.clone(),
             sc: peridot::IntegratedSwapchain::new(g, s, peridot::math::Vector2(0, 0)),
         }
     }
@@ -661,7 +966,7 @@ impl Composition {
 
 #[cfg(feature = "transparent")]
 pub struct Presenter {
-    _window: Arc<RwLock<ThreadsafeWindowOps>>,
+    pub(crate) window: Arc<RwLock<ThreadsafeWindowOps>>,
     _comp: Composition,
     device12: ID3D12Device,
     q: ID3D12CommandQueue,
@@ -684,8 +989,29 @@ unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
 #[cfg(feature = "transparent")]
 impl Presenter {
-    pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
-        let rc = window.read().get_client_rect();
+    pub fn new(
+        g: &peridot::Graphics,
+        prefs: &peridot::PresentationPreferences,
+        display_device_topology: &peridot::mthelper::SharedRef<DisplayDeviceTopologyCache>,
+    ) -> Self {
+        let hinstance = match unsafe { GetModuleHandleW(None) } {
+            Ok(x) => unsafe { core::mem::transmute(x) },
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to get module handle");
+                std::process::abort();
+            }
+        };
+
+        let mut w = match setup_window(hinstance, prefs, display_device_topology, false) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to setup window");
+                std::process::abort();
+            }
+        };
+
+        w.show(SW_SHOWNORMAL);
+        let rc = w.get_client_rect();
 
         let factory: IDXGIFactory2 = unsafe {
             CreateDXGIFactory2(if cfg!(debug_assertions) {
@@ -756,7 +1082,7 @@ impl Presenter {
         let sc = sc
             .cast::<IDXGISwapChain3>()
             .expect("Failed to get swapchain 3 interface");
-        let comp = Composition::new(&window.read(), &sc);
+        let comp = Composition::new(&w, &sc);
         let bb_size = br::vk::VkExtent2D {
             width: (rc.right - rc.left) as _,
             height: (rc.bottom - rc.top) as _,
@@ -832,7 +1158,7 @@ impl Presenter {
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
 
         Self {
-            _window: window,
+            window: Arc::new(RwLock::new(w)),
             _comp: comp,
             device12,
             q,
@@ -1044,4 +1370,49 @@ impl Drop for Presenter {
         self.present_completion_event
             .wait(windows::Win32::System::Threading::INFINITE);
     }
+}
+
+const fn loword(dw: usize) -> u16 {
+    (dw & 0xffff) as _
+}
+const fn hiword(dw: usize) -> u16 {
+    ((dw >> 16) & 0xffff) as _
+}
+
+extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_DESTROY {
+        unsafe {
+            PostQuitMessage(0);
+        }
+        return LRESULT(0);
+    }
+
+    if msg == WM_SIZE {
+        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+        if let Some(driver) = unsafe { p.as_mut() } {
+            let (w, h) = (loword(lparam.0 as _), hiword(lparam.0 as _));
+            let size = peridot::math::Vector2(w as u32, h as u32);
+            if driver.current_size != size {
+                driver.current_size = size.clone();
+                async_std::task::spawn(
+                    driver.event_sender.send(peridot::EngineEvent::Resize(size)),
+                );
+            }
+        }
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_INPUT {
+        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
+        if let Some(driver) = unsafe { p.as_mut() } {
+            driver
+                .ri_handler
+                .handle_wm_input(driver.base.input_mut(), lparam);
+        }
+
+        return LRESULT(0);
+    }
+
+    unsafe { DefWindowProcA(w, msg, wparam, lparam) }
 }

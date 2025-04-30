@@ -434,6 +434,10 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
         self.g.graphics_queue.family
     }
 
+    pub fn presenter(&self) -> &NL::Presenter {
+        &self.presenter
+    }
+
     pub fn back_buffer_format(&self) -> br::vk::VkFormat {
         self.presenter.format()
     }

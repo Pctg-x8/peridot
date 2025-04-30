@@ -7,6 +7,7 @@ use parking_lot::RwLock;
 mod input;
 mod userlib;
 use bedrock as br;
+use presenter::{DisplayDeviceMode, DisplayDeviceTopologyCache};
 use std::ffi::CStr;
 use std::sync::Arc;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
@@ -19,29 +20,22 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
-use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
+use windows::Win32::UI::HiDpi::{
+    SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE, PROCESS_SYSTEM_DPI_AWARE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
     GetWindowLongPtrA, LoadCursorW, PeekMessageA, PostQuitMessage, RegisterClassExA,
     SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, EDD_GET_DEVICE_INTERFACE_NAME,
-    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
-    WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP,
-    WS_OVERLAPPEDWINDOW,
+    GWLP_USERDATA, IDC_ARROW, PM_REMOVE, SHOW_WINDOW_CMD, SHOW_WINDOW_STATUS, SW_SHOWNORMAL,
+    WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW,
+    WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
 };
 
 mod presenter;
 use self::presenter::Presenter;
 
 const LPSZCLASSNAME: &'static str = "mainWindow\0";
-
-#[inline]
-const fn loword(dw: usize) -> u16 {
-    (dw & 0xffff) as _
-}
-#[inline]
-const fn hiword(dw: usize) -> u16 {
-    ((dw >> 16) & 0xffff) as _
-}
 
 #[inline]
 fn module_handle() -> HINSTANCE {
@@ -64,6 +58,13 @@ pub struct ThreadsafeWindowOps(HWND);
 unsafe impl Sync for ThreadsafeWindowOps {}
 unsafe impl Send for ThreadsafeWindowOps {}
 impl ThreadsafeWindowOps {
+    #[inline]
+    pub fn show(&mut self, mode: SHOW_WINDOW_CMD) {
+        unsafe {
+            let _ = ShowWindow(self.0, mode);
+        }
+    }
+
     #[inline]
     pub fn map_points_from_desktop(&self, p: &mut [POINT]) {
         unsafe {
@@ -169,8 +170,11 @@ async fn main() {
     let _co = CoScopeGuard::init(COINIT_MULTITHREADED).expect("Initializing COM");
 
     unsafe {
-        SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).expect("Failed to set dpi awareness");
+        SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).expect("Failed to set dpi awareness");
     }
+
+    let display_device_topology =
+        peridot::mthelper::SharedRef::new(DisplayDeviceTopologyCache::new());
 
     let local_preferences_file = LocalPreferencesFile::new();
     let local_preferences = if !local_preferences_file.exists() {
@@ -186,11 +190,37 @@ async fn main() {
         }
     };
     let local_preferences = local_preferences.unwrap_or_else(|| {
-        // TODO: デフォルトはプライマリディスプレイのフルスクリーン、最高解像度にあとで変える（そのあとでプロジェクトごとに変えられるようにもするかも）
         let default = peridot::EnginePreferences {
-            presentation: peridot::PresentationPreferences::Windowed {
-                resolution_width: 640,
-                resolution_height: 480,
+            presentation: {
+                let primary = display_device_topology.primary();
+                let max_resolution_data = primary.and_then(|xs| {
+                    xs.available_modes
+                        .iter()
+                        .fold(None::<&DisplayDeviceMode>, |a, x| {
+                            let needs_update = a.is_none_or(|ax| {
+                                let pixel_count = x.width_px * x.height_px;
+                                let a_pixel_count = ax.width_px * ax.height_px;
+
+                                pixel_count > a_pixel_count
+                                    || (pixel_count == a_pixel_count
+                                        && x.refresh_rate >= ax.refresh_rate)
+                            });
+
+                            if needs_update {
+                                Some(x)
+                            } else {
+                                a
+                            }
+                        })
+                });
+
+                peridot::PresentationPreferences::Fullscreen {
+                    display_index: 0,
+                    desired_resolution_width: max_resolution_data.map_or(1280, |x| x.width_px),
+                    desired_resolution_height: max_resolution_data.map_or(720, |x| x.height_px),
+                    desired_refresh_rate: max_resolution_data.map_or(60.0, |x| x.refresh_rate as _),
+                    matching_behavior: peridot::ResolutionMatchingBehavior::Nearest,
+                }
             },
         };
 
@@ -200,63 +230,6 @@ async fn main() {
 
         default
     });
-
-    let wca = WNDCLASSEXA {
-        cbSize: std::mem::size_of::<WNDCLASSEXA>() as _,
-        hInstance: module_handle(),
-        lpszClassName: windows::core::PCSTR(LPSZCLASSNAME.as_ptr() as *const _),
-        lpfnWndProc: Some(window_callback),
-        hCursor: unsafe { LoadCursorW(None, IDC_ARROW).expect("Failed to load default cursor") },
-        ..unsafe { MaybeUninit::zeroed().assume_init() }
-    };
-    let wcatom = unsafe { RegisterClassExA(&wca) };
-    if wcatom <= 0 {
-        panic!("Register Class Failed!");
-    }
-
-    let wname_c =
-        std::ffi::CString::new(userlib::APP_TITLE).expect("Unable to generate a c-style string");
-    let wsex = if cfg!(feature = "transparent") {
-        WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP
-    } else {
-        WS_EX_APPWINDOW
-    };
-    let style = WS_OVERLAPPEDWINDOW;
-    let mut wrect = RECT {
-        left: 0,
-        top: 0,
-        right: 640,
-        bottom: 480,
-    };
-    unsafe {
-        AdjustWindowRectEx(&mut wrect, style, false, WS_EX_APPWINDOW)
-            .expect("Failed to calculate window geometry");
-    }
-    let w = unsafe {
-        CreateWindowExA(
-            wsex,
-            windows::core::PCSTR(std::mem::transmute(wcatom as usize)),
-            windows::core::PCSTR(wname_c.as_ptr() as _),
-            style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            wrect.right - wrect.left,
-            wrect.bottom - wrect.top,
-            None,
-            None,
-            wca.hInstance,
-            None,
-        )
-    };
-    if w.0 == 0 {
-        panic!("Create Window Failed!");
-    }
-
-    unsafe {
-        ShowWindow(w, SW_SHOWNORMAL);
-    }
-
-    let w = Arc::new(RwLock::new(ThreadsafeWindowOps(w)));
 
     // Resizeをここに入れると詰まるので対策が必要（結局個別のイベントバスになるのか.......
     let (events_sender, events_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
@@ -269,7 +242,7 @@ async fn main() {
     let mut usercode_thread = core::pin::pin!(async move {
         let nl = NativeLink {
             al: AssetProvider::new(),
-            window: w.clone(),
+            display_device_topology,
         };
         let mut base = peridot::Engine::new(
             userlib::APP_IDENTIFIER,
@@ -283,9 +256,12 @@ async fn main() {
             event_queue_lifetime_extended,
             &local_preferences,
         );
+        let presenter_window = base.presenter().window.clone();
         let ri_handler = self::input::RawInputHandler::init();
         base.input_mut()
-            .set_nativelink(Box::new(self::input::NativeInputHandler::new(w.clone())));
+            .set_nativelink(Box::new(self::input::NativeInputHandler::new(
+                presenter_window.clone(),
+            )));
         base.post_init();
         let _snd =
             NativeAudioEngine::new(base.audio_mixer().clone()).expect("Initializing AudioEngine");
@@ -297,7 +273,8 @@ async fn main() {
             ri_handler,
             event_sender: events_sender_th,
         };
-        w.write()
+        presenter_window
+            .write()
             .set_window_long_ptr(GWLP_USERDATA, &mut driver as *mut GameDriver as _);
 
         userlib::game_main(&mut driver.base).await;
@@ -333,44 +310,6 @@ async fn main() {
             break;
         }
     }
-}
-
-extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if msg == WM_DESTROY {
-        unsafe {
-            PostQuitMessage(0);
-        }
-        return LRESULT(0);
-    }
-
-    if msg == WM_SIZE {
-        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
-        if let Some(driver) = unsafe { p.as_mut() } {
-            let (w, h) = (loword(lparam.0 as _), hiword(lparam.0 as _));
-            let size = peridot::math::Vector2(w as u32, h as u32);
-            if driver.current_size != size {
-                driver.current_size = size.clone();
-                async_std::task::spawn(
-                    driver.event_sender.send(peridot::EngineEvent::Resize(size)),
-                );
-            }
-        }
-
-        return LRESULT(0);
-    }
-
-    if msg == WM_INPUT {
-        let p = unsafe { GetWindowLongPtrA(w, GWLP_USERDATA) as *mut GameDriver };
-        if let Some(driver) = unsafe { p.as_mut() } {
-            driver
-                .ri_handler
-                .handle_wm_input(driver.base.input_mut(), lparam);
-        }
-
-        return LRESULT(0);
-    }
-
-    unsafe { DefWindowProcA(w, msg, wparam, lparam) }
 }
 
 fn process_message_all() -> bool {
@@ -467,7 +406,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
 
 struct NativeLink {
     al: AssetProvider,
-    window: Arc<RwLock<ThreadsafeWindowOps>>,
+    display_device_topology: peridot::mthelper::SharedRef<DisplayDeviceTopologyCache>,
 }
 impl peridot::NativeLinker for NativeLink {
     type AssetLoader = AssetProvider;
@@ -518,8 +457,8 @@ impl peridot::NativeLinker for NativeLink {
     fn new_presenter(
         &self,
         g: &peridot::Graphics,
-        _prefs: &peridot::PresentationPreferences,
+        prefs: &peridot::PresentationPreferences,
     ) -> Presenter {
-        Presenter::new(g, self.window.clone())
+        Presenter::new(g, prefs, &self.display_device_topology)
     }
 }

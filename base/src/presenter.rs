@@ -4,7 +4,7 @@ use bedrock::{self as br, VkRawHandle};
 
 use crate::{graphics::VulkanGfx, mthelper::SharedRef};
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionMatchingBehavior {
     SetToMax,
     Nearest,
@@ -15,7 +15,7 @@ pub enum PresentationPreferences {
     Fullscreen {
         display_index: usize,
         desired_resolution_width: u32,
-        desired_resopluion_height: u32,
+        desired_resolution_height: u32,
         desired_refresh_rate: f32,
         matching_behavior: ResolutionMatchingBehavior,
     },
