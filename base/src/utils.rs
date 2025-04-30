@@ -26,3 +26,7 @@ impl PixelGeometryProvider for br::vk::VkExtent2D {
         )
     }
 }
+
+pub(crate) const fn const_false() -> bool {
+    false
+}
