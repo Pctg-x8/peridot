@@ -26,6 +26,8 @@ pub enum PresentationPreferences {
     Windowed {
         resolution_width: u32,
         resolution_height: u32,
+        #[serde(default = "crate::utils::const_false")]
+        resizable: bool,
     },
 }
 
