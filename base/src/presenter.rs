@@ -4,6 +4,33 @@ use bedrock::{self as br, VkRawHandle};
 
 use crate::{graphics::VulkanGfx, mthelper::SharedRef};
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub enum ResolutionMatchingBehavior {
+    SetToMax,
+    Nearest,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
+pub enum PresentationPreferences {
+    Fullscreen {
+        display_index: usize,
+        desired_resolution_width: u32,
+        desired_resopluion_height: u32,
+        desired_refresh_rate: f32,
+        matching_behavior: ResolutionMatchingBehavior,
+    },
+    Borderless {
+        resolution_width: u32,
+        resolution_height: u32,
+    },
+    Windowed {
+        resolution_width: u32,
+        resolution_height: u32,
+        #[serde(default = "crate::utils::const_false")]
+        resizable: bool,
+    },
+}
+
 pub trait PlatformPresenter {
     fn format(&self) -> br::vk::VkFormat;
     fn back_buffer_size(&self) -> peridot_math::Vector2<u32>;
@@ -97,48 +124,57 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
         surface_info: &crate::SurfaceInfo,
         default_extent: peridot_math::Vector2<u32>,
     ) -> Self {
-        let si = match g.gfx_device.surface_capabilities(&surface) {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::error!(cause = ?e, "Failed to query surface capabilities");
-                std::process::abort();
-            }
-        };
-        let ew = if si.currentExtent.width == 0xffff_ffff {
+        let ew = if surface_info.caps.currentExtent.width == 0xffff_ffff {
             default_extent.0
         } else {
-            si.currentExtent.width
+            surface_info.caps.currentExtent.width
         };
-        let eh = if si.currentExtent.height == 0xffff_ffff {
+        let eh = if surface_info.caps.currentExtent.height == 0xffff_ffff {
             default_extent.1
         } else {
-            si.currentExtent.height
+            surface_info.caps.currentExtent.height
         };
-        let ew = ew.clamp(si.minImageExtent.width, si.maxImageExtent.width);
-        let eh = eh.clamp(si.minImageExtent.height, si.maxImageExtent.height);
         let ext = br::Extent2D {
-            width: ew,
-            height: eh,
+            width: ew.clamp(
+                surface_info.caps.minImageExtent.width,
+                surface_info.caps.maxImageExtent.width,
+            ),
+            height: eh.clamp(
+                surface_info.caps.minImageExtent.height,
+                surface_info.caps.maxImageExtent.height,
+            ),
         };
-        let buffer_count = 2.clamp(si.minImageCount, si.maxImageCount);
-        let pre_transform =
-            if (si.supportedTransforms & br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0 {
-                br::SurfaceTransformFlags::IDENTITY
-            } else {
-                br::SurfaceTransformFlags::INHERIT
-            };
+        let pre_transform = if (surface_info.caps.supportedTransforms
+            & br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+            != 0
+        {
+            br::SurfaceTransformFlags::IDENTITY
+        } else {
+            br::SurfaceTransformFlags::INHERIT
+        };
+        let composite_alpha = if (surface_info.caps.supportedCompositeAlpha
+            & br::vk::VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
+            != 0
+        {
+            br::CompositeAlphaFlags::INHERIT
+        } else {
+            br::CompositeAlphaFlags::OPAQUE
+        };
         let chain = unsafe {
             br::vkfn_wrapper::create_swapchain(
                 g.gfx_device.0.device,
                 &br::SwapchainCreateInfo::new(
                     &surface,
-                    buffer_count,
+                    2.clamp(
+                        surface_info.caps.minImageCount,
+                        surface_info.caps.maxImageCount,
+                    ),
                     surface_info.fmt.clone(),
                     ext,
                     br::ImageUsageFlags::COLOR_ATTACHMENT,
                 )
                 .present_mode(surface_info.pres_mode)
-                .composite_alpha(surface_info.available_composite_alpha)
+                .composite_alpha(composite_alpha)
                 .pre_transform(pre_transform),
                 None,
             )
@@ -155,12 +191,8 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             device: g.gfx_device.clone(),
         });
         #[cfg(feature = "debug")]
-        if let Err(e) = g
-            .gfx_device
-            .set_object_name(&chain, c"Peridot-Default Presenter-Swapchain")
-        {
-            tracing::warn!(cause = ?e, "Failed to set swapchain name");
-        }
+        g.gfx_device
+            .dbg_set_object_name(&chain, c"Peridot-Default Presenter-Swapchain");
 
         let n = match unsafe {
             br::vkfn_wrapper::get_swapchain_image_count(g.gfx_device.0.device, chain.handle)
@@ -193,11 +225,10 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
                     format!("Peridot-Default Presenter-BackBuffer #{n}").into_bytes(),
                 )
             };
-            if let Err(e) = unsafe {
+
+            unsafe {
                 g.gfx_device
-                    .set_object_name_raw(br::vk::VkImage::OBJECT_TYPE, v, &name)
-            } {
-                tracing::warn!(cause = ?e, "Failed to set swapchain backbuffer image name");
+                    .dbg_set_object_name_raw(br::vk::VkImage::OBJECT_TYPE, v, &name);
             }
         }
 

@@ -25,6 +25,7 @@ cfg-if.workspace = true
 async-std.workspace = true
 futures-util.workspace = true
 tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 [dependencies.bedrock]
 features = [

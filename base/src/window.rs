@@ -3,9 +3,9 @@ use bedrock as br;
 use crate::graphics::VulkanGfx;
 
 pub struct SurfaceInfo {
-    pub(crate) fmt: br::SurfaceFormat,
-    pub(crate) pres_mode: br::PresentMode,
-    pub(crate) available_composite_alpha: br::CompositeAlphaFlags,
+    pub fmt: br::SurfaceFormat,
+    pub pres_mode: br::PresentMode,
+    pub caps: br::SurfaceCapabilities,
 }
 impl SurfaceInfo {
     pub fn gather_info(
@@ -28,17 +28,11 @@ impl SurfaceInfo {
             .unwrap_or(&pres_modes[0]);
 
         let caps = device.surface_capabilities(obj)?;
-        let available_composite_alpha =
-            if (caps.supportedCompositeAlpha & br::vk::VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0 {
-                br::CompositeAlphaFlags::INHERIT
-            } else {
-                br::CompositeAlphaFlags::OPAQUE
-            };
 
         Ok(Self {
             fmt,
             pres_mode,
-            available_composite_alpha,
+            caps,
         })
     }
 
