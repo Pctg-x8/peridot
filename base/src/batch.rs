@@ -3,7 +3,7 @@
 use crate::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use bedrock::{self as br};
 use br::vk::VkBufferCopy;
-use br::{VkHandle, VulkanStructure};
+use br::{TypedVulkanStructure, VkHandle};
 use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};

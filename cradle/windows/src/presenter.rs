@@ -1,4 +1,6 @@
 use crate::{GameDriver, ThreadsafeWindowOps, LPSZCLASSNAME};
+#[cfg(feature = "transparent")]
+use bedrock::TypedVulkanSinkStructure;
 use bedrock::{self as br, Device, Instance, ResolverInterface, VkHandle, VulkanSinkStructure};
 #[cfg(not(feature = "transparent"))]
 use bedrock::{InstanceChild, SurfaceCreateInfo};
