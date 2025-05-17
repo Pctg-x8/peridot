@@ -1,4 +1,6 @@
 use crate::ThreadsafeWindowOps;
+#[cfg(feature = "transparent")]
+use bedrock::TypedVulkanSinkStructure;
 use bedrock::{self as br, Device, VkHandle};
 #[cfg(not(feature = "transparent"))]
 use bedrock::{InstanceChild, SurfaceCreateInfo};
