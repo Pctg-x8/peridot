@@ -484,7 +484,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             e.graphics()
                 .device()
                 .set_object_name(
-                    &cb[0],
+                    &cb.nth_ref(0),
                     &std::ffi::CString::new(format!("Primary Render Commands #{n}"))
                         .expect("invalid sequence?"),
                 )
@@ -611,7 +611,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 let begin_main_rp = BeginRenderPass::new(
                     &renderpass,
                     &framebuffers[fd.backbuffer_index as usize],
-                    br::Extent2D::from(screen_size).into_rect(br::vk::VkOffset2D::ZERO),
+                    br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO),
                     br::SubpassContents::Inline,
                 )
                 .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
