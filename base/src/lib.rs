@@ -558,6 +558,32 @@ impl<PL: NativeLinker> Engine<'_, PL> {
     //     }
     // }
 
+    pub unsafe fn do_render_to_custom_fence(
+        &mut self,
+        fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
+        bb_index: u32,
+        copy_submission: Option<SubmissionBatchBuilder>,
+        render_submission: SubmissionBatchBuilder,
+    ) -> br::Result<()> {
+        let pr = self.presenter.render_and_present(
+            &mut self.g,
+            fence,
+            bb_index,
+            render_submission,
+            copy_submission,
+        );
+
+        match pr {
+            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
+                // Fire resize
+                self.request_resize = true;
+
+                Ok(())
+            }
+            v => v,
+        }
+    }
+
     pub fn do_render(
         &mut self,
         bb_index: u32,

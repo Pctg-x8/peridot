@@ -1,9 +1,10 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
+use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, Fence, RenderPass, VkHandle};
 use br::resources::Image;
 use br::Device;
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
+use peridot::PlatformPresenter;
 use peridot::{
     audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, SubpassDependencyTemplates,
 };
@@ -470,58 +471,66 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .after_of(descriptor_sets.into_bind_graphics(&pl));
     let color_renders = BindGraphicsPipeline(&gp).then(render_image_plane);
 
-    let mut render_cb = CommandBundle::new(
-        e.graphics(),
-        CBSubmissionType::Graphics,
-        e.back_buffer_count(),
-    )
-    .expect("Alloc RenderCB");
-    #[allow(unused_variables)]
-    for (n, (mut cb, fb)) in render_cb.iter_mut().zip(&framebuffers).enumerate() {
-        #[cfg(feature = "debug")]
-        e.graphics()
-            .device()
-            .set_object_name(
-                &cb,
-                &std::ffi::CString::new(format!("Primary Render Commands #{n}"))
-                    .expect("invalid sequence?"),
-            )
-            .expect("Failed to set render cb name");
-
-        let begin_main_rp = BeginRenderPass::new(
-            &renderpass,
-            fb,
-            br::Extent2D::from(screen_size).into_rect(br::vk::VkOffset2D::ZERO),
-            br::SubpassContents::Inline,
-        )
-        .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
-
-        (&color_renders)
-            .between(begin_main_rp, EndRenderPass)
-            .execute_and_finish(unsafe {
-                cb.begin(&br::CommandBufferBeginInfo::new(), e.graphics().device())
-                    .expect("Failed to begin command recording")
-            })
-            .expect("Failed to record render commands");
+    struct BufferedFrameRenderingState {
+        cb: CommandBundle<peridot::VulkanGfx>,
+        completion: br::FenceObject<peridot::VulkanGfx>,
+        rendering: bool,
     }
+    let mut frame_render_states = (0..e.back_buffer_count())
+        .map(|_| {
+            let cb = CommandBundle::new(e.graphics(), CBSubmissionType::Graphics, 1)
+                .expect("Alloc RenderCB");
+            #[cfg(feature = "debug")]
+            e.graphics()
+                .device()
+                .set_object_name(
+                    &cb[0],
+                    &std::ffi::CString::new(format!("Primary Render Commands #{n}"))
+                        .expect("invalid sequence?"),
+                )
+                .expect("Failed to set render cb name");
+
+            BufferedFrameRenderingState {
+                cb,
+                completion: br::FenceObject::new(
+                    e.graphics().device().clone(),
+                    &br::FenceCreateInfo::new(0),
+                )
+                .expect("Completion Fence creation"),
+                rendering: false,
+            }
+        })
+        .collect::<Vec<_>>();
 
     bgm.write().play();
 
+    let mut frame_sec_samples = [0.0; 640];
+    let mut frame_sec_sample_pos = 0;
+    let mut frame_sec_collect_timer = std::time::Instant::now();
     let mut rot = 0.0f32;
     loop {
         match e.next_event().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
+                let t0 = std::time::Instant::now();
                 let fd = match e.prepare_frame() {
                     Ok(fd) => fd,
                     Err(peridot::PrepareFrameError::FramebufferOutOfDate) => {
                         // resize and do nothing
                         let new_size = e.back_buffer_size();
 
-                        e.wait_for_last_rendering_completion()
-                            .expect("Failed to wait last render completion");
-
-                        unsafe { render_cb.reset().expect("Resetting RenderCB") };
+                        for x in frame_render_states.iter_mut() {
+                            if x.rendering {
+                                x.completion
+                                    .wait()
+                                    .expect("Failed to wait previous rendering work");
+                                unsafe {
+                                    x.cb.reset()
+                                        .expect("Failed to reset previous rendering commands");
+                                }
+                                x.rendering = false;
+                            }
+                        }
                         drop(framebuffers);
                         drop(backbuffer_resources);
 
@@ -535,13 +544,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                                         e.graphics().device().native_ptr(),
                                         &br::ImageViewCreateInfo::new(
                                             &x,
-                                            br::vk::VkImageSubresourceRange {
-                                                aspectMask: br::AspectMask::COLOR.bits(),
-                                                baseMipLevel: 0,
-                                                levelCount: 1,
-                                                baseArrayLayer: 0,
-                                                layerCount: 1,
-                                            },
+                                            br::ImageSubresourceRange::new(
+                                                br::AspectMask::COLOR,
+                                                0..1,
+                                                0..1,
+                                            ),
                                             br::vk::VK_IMAGE_VIEW_TYPE_2D,
                                             e.back_buffer_format(),
                                         ),
@@ -568,31 +575,26 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             .collect::<Result<Vec<_>, _>>()
                             .expect("Bind Framebuffers");
 
-                        for (mut cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
-                            let begin_main_rp = BeginRenderPass::new(
-                                &renderpass,
-                                fb,
-                                br::vk::VkExtent2D::from(new_size)
-                                    .into_rect(br::vk::VkOffset2D::ZERO),
-                                br::SubpassContents::Inline,
-                            )
-                            .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
-
-                            (&color_renders)
-                                .between(begin_main_rp, EndRenderPass)
-                                .execute_and_finish(unsafe {
-                                    cb.begin(
-                                        &br::CommandBufferBeginInfo::new(),
-                                        e.graphics().device(),
-                                    )
-                                    .expect("Failed to begin command recording")
-                                })
-                                .expect("Failed to record render commands");
-                        }
-
                         continue;
                     }
                 };
+
+                let current_render_frame_state =
+                    &mut frame_render_states[fd.backbuffer_index as usize];
+
+                if current_render_frame_state.rendering {
+                    current_render_frame_state
+                        .completion
+                        .wait()
+                        .expect("Failed to wait previous rendering work");
+                    unsafe {
+                        current_render_frame_state
+                            .cb
+                            .reset()
+                            .expect("Failed to reset previous rendering commands");
+                    }
+                    current_render_frame_state.rendering = false;
+                }
 
                 let dtsec = fd.delta_time.as_secs() as f32
                     + fd.delta_time.subsec_micros() as f32 / 1000_0000.0;
@@ -606,20 +608,70 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     })
                     .expect("Update DynamicStgBuffer");
 
+                let begin_main_rp = BeginRenderPass::new(
+                    &renderpass,
+                    &framebuffers[fd.backbuffer_index as usize],
+                    br::Extent2D::from(screen_size).into_rect(br::vk::VkOffset2D::ZERO),
+                    br::SubpassContents::Inline,
+                )
+                .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+
+                (&color_renders)
+                    .between(begin_main_rp, EndRenderPass)
+                    .execute_and_finish(unsafe {
+                        current_render_frame_state
+                            .cb
+                            .nth_ref_mut(0)
+                            .begin(&br::CommandBufferBeginInfo::new(), e.graphics().device())
+                            .expect("Failed to begin command recording")
+                    })
+                    .expect("Failed to record render commands");
+
                 let update_cb = update_cb.nth_ref(0);
-                let render_cb = render_cb.nth_ref(fd.backbuffer_index as _);
+                let render_cb = current_render_frame_state.cb.nth_ref(0);
                 let mut update_batch = peridot::SubmissionBatchBuilder::new();
                 update_batch.add_command_buffers([update_cb.as_transparent_ref()]);
                 let mut render_batch = peridot::SubmissionBatchBuilder::new();
                 render_batch.add_command_buffers([render_cb.as_transparent_ref()]);
-                e.do_render(fd.backbuffer_index, Some(update_batch), render_batch)
+
+                unsafe {
+                    e.do_render_to_custom_fence(
+                        &mut current_render_frame_state.completion,
+                        fd.backbuffer_index,
+                        Some(update_batch),
+                        render_batch,
+                    )
                     .expect("Failed to present");
+                }
+                current_render_frame_state.rendering = true;
+
+                frame_sec_samples[frame_sec_sample_pos] = t0.elapsed().as_secs_f32();
+                frame_sec_sample_pos += 1;
+
+                if frame_sec_collect_timer.elapsed() >= std::time::Duration::from_secs(1) {
+                    let avg = frame_sec_samples[..frame_sec_sample_pos]
+                        .iter()
+                        .sum::<f32>()
+                        / frame_sec_sample_pos as f32;
+                    println!("frame sec avg: {avg}");
+
+                    frame_sec_collect_timer = std::time::Instant::now();
+                    frame_sec_sample_pos = 0;
+                }
             }
             peridot::Event::Resize(new_size) => {
-                e.wait_for_last_rendering_completion()
-                    .expect("Failed to wait last render completion");
-
-                unsafe { render_cb.reset().expect("Resetting RenderCB") };
+                for x in frame_render_states.iter_mut() {
+                    if x.rendering {
+                        x.completion
+                            .wait()
+                            .expect("Failed to wait previous rendering work");
+                        unsafe {
+                            x.cb.reset()
+                                .expect("Failed to reset previous rendering commands");
+                        }
+                        x.rendering = false;
+                    }
+                }
                 drop(framebuffers);
                 drop(backbuffer_resources);
 
@@ -665,24 +717,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .expect("Bind Framebuffers");
-
-                for (mut cb, fb) in render_cb.iter_mut().zip(&framebuffers) {
-                    let begin_main_rp = BeginRenderPass::new(
-                        &renderpass,
-                        fb,
-                        br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO),
-                        br::SubpassContents::Inline,
-                    )
-                    .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
-
-                    (&color_renders)
-                        .between(begin_main_rp, EndRenderPass)
-                        .execute_and_finish(unsafe {
-                            cb.begin(&br::CommandBufferBeginInfo::new(), e.graphics().device())
-                                .expect("Failed to begin command recording")
-                        })
-                        .expect("Failed to record render commands");
-                }
             }
         }
     }

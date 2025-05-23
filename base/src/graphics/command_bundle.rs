@@ -174,6 +174,11 @@ impl<Device: br::Device> CommandBundle<Device> {
     }
 
     #[inline]
+    pub fn nth_ref_mut(&mut self, n: usize) -> CommandBundleBufferRefMut<Device> {
+        CommandBundleBufferRefMut(self.buffers[n], core::marker::PhantomData)
+    }
+
+    #[inline]
     pub fn synchronized_nth(&mut self, n: usize) -> br::SynchronizedCommandBuffer {
         // self.0は必ずself.1から生成されてるのでsafe
         unsafe {
