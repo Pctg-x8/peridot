@@ -13,7 +13,7 @@ members = [
     "modules/transition",
     "modules/command-object",
     "modules/memory-manager",
-    "modules/semantic-shader",
+    "modules/semantic-shader", "modules/std-mesh",
 ]
 
 [workspace.dependencies]

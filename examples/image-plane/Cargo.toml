@@ -18,6 +18,7 @@ peridot-command-object = { path = "../../modules/command-object", features = [
     "memory-manager-interop",
 ] }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
+peridot-std-mesh.path = "../../modules/std-mesh"
 async-std = "1.7"
 parking_lot = "0.12"
 num-integer = "0.1"

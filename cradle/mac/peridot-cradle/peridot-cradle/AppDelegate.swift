@@ -11,6 +11,10 @@ import Cocoa
 @NSApplicationMain
 final class AppDelegate : NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        NSApplication.TerminateReply.terminateLater
+        return NSApplication.TerminateReply.terminateLater
+    }
+    
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        return true
     }
 }

@@ -1,0 +1,11 @@
+[package]
+name = "peridot-std-mesh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bedrock.workspace = true
+peridot-memory-manager.path = "../memory-manager"
+peridot-semantic-shader.path = "../semantic-shader"
+peridot.path = "../../base"
+num-integer = "0.1"
