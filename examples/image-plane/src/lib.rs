@@ -90,13 +90,19 @@ const fn align(x: usize, a: usize) -> usize {
     ((x + a - 1) / a) * a
 }
 
+struct MeshIndexBufferConfig {
+    buffer: MeshDataBuffer,
+    layout: br::IndexType,
+}
+
 struct Mesh {
     vertex_buffers: Vec<MeshDataBuffer>,
-    index_buffer: Option<MeshDataBuffer>,
+    vk_vertex_buffers: Vec<br::VkHandleRef<'static, br::vk::VkBuffer>>,
+    vk_vertex_buffer_offsets: Vec<br::DeviceSize>,
+    primitive_topology: br::PrimitiveTopology,
     vertex_layout: Vec<(VertexAttribute, usize)>,
-    vk_vertex_input_attributes: Vec<br::VertexInputAttributeDescription>,
     vk_vertex_input_bindings: Vec<br::VertexInputBindingDescription>,
-    index_layout: Option<br::IndexType>,
+    index: Option<MeshIndexBufferConfig>,
     submesh_ranges: Vec<core::ops::Range<usize>>,
     is_dirty: bool,
 }
@@ -111,21 +117,23 @@ impl Mesh {
     pub fn new() -> Self {
         Self {
             vertex_buffers: Vec::new(),
-            index_buffer: None,
+            vk_vertex_buffers: Vec::new(),
+            vk_vertex_buffer_offsets: Vec::new(),
+            primitive_topology: br::PrimitiveTopology::TriangleList,
             vertex_layout: Vec::new(),
-            vk_vertex_input_attributes: Vec::new(),
             vk_vertex_input_bindings: Vec::new(),
-            index_layout: None,
+            index: None,
             submesh_ranges: Vec::new(),
             is_dirty: false,
         }
     }
 
-    pub fn set_vertex_layout(
+    pub fn configure_vertex(
         &mut self,
         g: &peridot::Graphics,
         mm: &mut peridot_memory_manager::MemoryManager,
         layout: Vec<VertexAttribute>,
+        primitive_topology: br::PrimitiveTopology,
         element_count: usize,
     ) {
         let mut byte_size_per_buffer = Vec::with_capacity(4);
@@ -216,23 +224,39 @@ impl Mesh {
                 .len()
                 .saturating_sub(self.vertex_buffers.len()),
         );
+        self.vk_vertex_buffers.clear();
+        self.vk_vertex_buffers.reserve(
+            byte_size_per_buffer
+                .len()
+                .saturating_sub(self.vk_vertex_buffers.len()),
+        );
+        self.vk_vertex_buffer_offsets.clear();
+        self.vk_vertex_buffer_offsets.reserve(
+            byte_size_per_buffer
+                .len()
+                .saturating_sub(self.vk_vertex_buffer_offsets.len()),
+        );
         for (n, (x, a)) in byte_size_per_buffer.into_iter().enumerate() {
             if x == 0 {
                 eprintln!("buffer #{n} is zero-sized stride");
             }
 
             let element_size = align(x, a);
+            let device_buffer = mm
+                .allocate_device_local_buffer(
+                    g,
+                    br::BufferCreateInfo::new(
+                        element_size * element_count,
+                        br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::TRANSFER_DEST,
+                    ),
+                )
+                .expect("Failed to create device vertex buffer");
 
+            self.vk_vertex_buffers
+                .push(unsafe { br::VkHandleRef::dangling(device_buffer.native_ptr()) });
+            self.vk_vertex_buffer_offsets.push(0);
             self.vertex_buffers.push(MeshDataBuffer::Staged {
-                device_buffer: mm
-                    .allocate_device_local_buffer(
-                        g,
-                        br::BufferCreateInfo::new(
-                            element_size * element_count,
-                            br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
-                        ),
-                    )
-                    .expect("Failed to create device vertex buffer"),
+                device_buffer,
                 staging_buffer: mm
                     .allocate_upload_buffer(
                         g,
@@ -249,9 +273,13 @@ impl Mesh {
             });
         }
         self.vertex_buffers.shrink_to_fit();
+        self.vk_vertex_buffers.shrink_to_fit();
+        self.vk_vertex_buffer_offsets.shrink_to_fit();
+
+        self.primitive_topology = primitive_topology;
     }
 
-    pub fn set_index_layout(
+    pub fn configure_index(
         &mut self,
         g: &peridot::Graphics,
         mm: &mut peridot_memory_manager::MemoryManager,
@@ -263,40 +291,50 @@ impl Mesh {
             br::IndexType::U32 => element_count * 4,
         };
 
-        self.index_layout = Some(layout);
-        let old_index_buffer = self.index_buffer.replace(MeshDataBuffer::Staged {
-            device_buffer: mm
-                .allocate_device_local_buffer(
-                    g,
-                    br::BufferCreateInfo::new(
-                        byte_size,
-                        br::BufferUsage::INDEX_BUFFER.transfer_dest(),
-                    ),
-                )
-                .expect("Failed to create device index buffer"),
-            staging_buffer: mm
-                .allocate_upload_buffer(
-                    g,
-                    br::BufferCreateInfo::new(byte_size, br::BufferUsage::TRANSFER_SRC),
-                )
-                .expect("Failed to create staging index buffer"),
-            staging_mapped_ptr: None,
-            is_dirty: false,
-            byte_length: byte_size,
-            element_count,
+        let old_index = self.index.replace(MeshIndexBufferConfig {
+            buffer: MeshDataBuffer::Staged {
+                device_buffer: mm
+                    .allocate_device_local_buffer(
+                        g,
+                        br::BufferCreateInfo::new(
+                            byte_size,
+                            br::BufferUsage::INDEX_BUFFER.transfer_dest(),
+                        ),
+                    )
+                    .expect("Failed to create device index buffer"),
+                staging_buffer: mm
+                    .allocate_upload_buffer(
+                        g,
+                        br::BufferCreateInfo::new(byte_size, br::BufferUsage::TRANSFER_SRC),
+                    )
+                    .expect("Failed to create staging index buffer"),
+                staging_mapped_ptr: None,
+                is_dirty: false,
+                byte_length: byte_size,
+                element_count,
+            },
+            layout,
         });
         // pre-drop old buffers
-        match old_index_buffer {
-            Some(MeshDataBuffer::Staged {
-                mut staging_buffer,
-                staging_mapped_ptr,
+        match old_index {
+            Some(MeshIndexBufferConfig {
+                buffer:
+                    MeshDataBuffer::Staged {
+                        mut staging_buffer,
+                        staging_mapped_ptr,
+                        ..
+                    },
                 ..
             }) if staging_mapped_ptr.is_some() => unsafe {
                 staging_buffer.unmap_raw();
             },
-            Some(MeshDataBuffer::Streamed {
-                mut direct_buffer,
-                mapped_ptr,
+            Some(MeshIndexBufferConfig {
+                buffer:
+                    MeshDataBuffer::Streamed {
+                        mut direct_buffer,
+                        mapped_ptr,
+                        ..
+                    },
                 ..
             }) if mapped_ptr.is_some() => unsafe {
                 direct_buffer.unmap_raw();
@@ -305,13 +343,13 @@ impl Mesh {
         }
     }
 
-    pub fn set_submesh_ranges(&mut self, ranges: Vec<core::ops::Range<usize>>) {
+    pub fn configure_submesh(&mut self, ranges: Vec<core::ops::Range<usize>>) {
         self.submesh_ranges = ranges;
     }
 
     pub fn vk_vertex_input_attributes(
         &self,
-        semantic_resolver: &peridot_semantic_shader::ShaderPack<peridot::VulkanGfx>,
+        semantic_resolver: &peridot_semantic_shader::ShaderPack<impl br::Device>,
     ) -> Vec<br::VertexInputAttributeDescription> {
         self.vertex_layout
             .iter()
@@ -372,80 +410,6 @@ impl Mesh {
         }
     }
 
-    pub unsafe fn get_vertex_buffer_pointer<T>(
-        &mut self,
-        index: usize,
-        allow_readback: bool,
-    ) -> core::ptr::NonNull<T> {
-        match self.vertex_buffers[index] {
-            MeshDataBuffer::Staged {
-                staging_mapped_ptr: Some(ptr),
-                ..
-            } => ptr.cast(),
-            MeshDataBuffer::Staged {
-                ref mut staging_buffer,
-                ref mut staging_mapped_ptr,
-                byte_length,
-                ..
-            } => {
-                let p = unsafe {
-                    staging_buffer
-                        .map_raw(0..byte_length as _)
-                        .expect("Failed to map buffer")
-                };
-                if allow_readback && staging_buffer.requires_explicit_sync() {
-                    unsafe {
-                        staging_buffer
-                            .invalidate_ranges_raw(&[0..byte_length as _])
-                            .expect("Failed to invalidate mapped contents");
-                    }
-                }
-
-                *staging_mapped_ptr = Some(p.ptr());
-                p.ptr().cast()
-            }
-            MeshDataBuffer::Streamed {
-                mapped_ptr: Some(ptr),
-                ..
-            } => ptr.cast(),
-            MeshDataBuffer::Streamed {
-                ref mut direct_buffer,
-                ref mut mapped_ptr,
-                byte_length,
-                ..
-            } => {
-                let p = unsafe {
-                    direct_buffer
-                        .map_raw(0..byte_length as _)
-                        .expect("Faield to map buffer")
-                };
-                if allow_readback && direct_buffer.requires_explicit_sync() {
-                    unsafe {
-                        direct_buffer
-                            .invalidate_ranges_raw(&[0..byte_length as _])
-                            .expect("Faield to invalidate mapped contents");
-                    }
-                }
-
-                *mapped_ptr = Some(p.ptr());
-                p.ptr().cast()
-            }
-        }
-    }
-
-    pub fn mark_vertex_buffer_dirty(&mut self, index: usize) {
-        match self.vertex_buffers[index] {
-            MeshDataBuffer::Staged {
-                ref mut is_dirty, ..
-            } => {
-                *is_dirty = true;
-            }
-            _ => (),
-        }
-
-        self.is_dirty = true;
-    }
-
     pub fn sync_contents(&mut self, e: &mut peridot::Graphics) {
         if !self.is_dirty {
             return;
@@ -477,12 +441,16 @@ impl Mesh {
                     _ => (),
                 }
             }
-            match self.index_buffer {
-                Some(MeshDataBuffer::Staged {
-                    ref mut is_dirty,
-                    ref device_buffer,
-                    ref staging_buffer,
-                    byte_length,
+            match self.index {
+                Some(MeshIndexBufferConfig {
+                    buffer:
+                        MeshDataBuffer::Staged {
+                            ref mut is_dirty,
+                            ref device_buffer,
+                            ref staging_buffer,
+                            byte_length,
+                            ..
+                        },
                     ..
                 }) if *is_dirty => {
                     rec = rec.copy_buffer(
@@ -513,6 +481,30 @@ impl Mesh {
         .expect("Failed to sync mesh contents");
 
         self.is_dirty = false;
+    }
+
+    pub fn prepare_draw_buffers<'c, E>(&self, rec: br::CmdRecord<'c, E>) -> br::CmdRecord<'c, E> {
+        rec.bind_vertex_buffers(0, &self.vk_vertex_buffers, &self.vk_vertex_buffer_offsets)
+            .inject(|r| match self.index {
+                Some(MeshIndexBufferConfig { ref buffer, layout }) => {
+                    r.bind_index_buffer(&buffer.bound_buffer_object(), 0, layout)
+                }
+                None => r,
+            })
+    }
+
+    pub fn draw<'c, E>(
+        &self,
+        rec: br::CmdRecord<'c, E>,
+        submesh_index: usize,
+        instance_count: u32,
+    ) -> br::CmdRecord<'c, E> {
+        rec.draw(
+            self.submesh_ranges[submesh_index].len() as _,
+            instance_count,
+            self.submesh_ranges[submesh_index].start as _,
+            0,
+        )
     }
 
     pub unsafe fn unmap_if_mapped(&mut self) {
@@ -558,10 +550,14 @@ impl Mesh {
             }
         }
 
-        match self.index_buffer {
-            Some(MeshDataBuffer::Staged {
-                ref mut staging_buffer,
-                ref mut staging_mapped_ptr,
+        match self.index {
+            Some(MeshIndexBufferConfig {
+                buffer:
+                    MeshDataBuffer::Staged {
+                        ref mut staging_buffer,
+                        ref mut staging_mapped_ptr,
+                        ..
+                    },
                 ..
             }) => {
                 if staging_mapped_ptr.is_some() {
@@ -571,9 +567,13 @@ impl Mesh {
                     *staging_mapped_ptr = None;
                 }
             }
-            Some(MeshDataBuffer::Streamed {
-                ref mut direct_buffer,
-                ref mut mapped_ptr,
+            Some(MeshIndexBufferConfig {
+                buffer:
+                    MeshDataBuffer::Streamed {
+                        ref mut direct_buffer,
+                        ref mut mapped_ptr,
+                        ..
+                    },
                 ..
             }) => {
                 if mapped_ptr.is_some() {
@@ -618,7 +618,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     cam.look_at(Vector3::ZERO);
 
     let mut plane_mesh_object = Mesh::new();
-    plane_mesh_object.set_vertex_layout(
+    plane_mesh_object.configure_vertex(
         e.graphics(),
         &mut memory_manager,
         vec![
@@ -633,6 +633,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
             },
         ],
+        br::PrimitiveTopology::TriangleStrip,
         plane_mesh.vertices.len(),
     );
     plane_mesh_object.modify_vertex_buffer(0, false, |p| {
@@ -649,7 +650,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             }
         }
     });
-    plane_mesh_object.set_submesh_ranges(vec![0..plane_mesh.vertices.len()]);
+    plane_mesh_object.configure_submesh(vec![0..plane_mesh.vertices.len()]);
 
     let [vertex_buffer, cam_uniform_buffer, obj_uniform_buffer] = memory_manager
         .allocate_device_local_buffer_array(
@@ -957,7 +958,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     &plane_mesh_object.vk_vertex_input_attributes(&shader),
                 ),
                 &br::PipelineInputAssemblyStateCreateInfo::new(
-                    br::PrimitiveTopology::TriangleStrip,
+                    plane_mesh_object.primitive_topology,
                 ),
                 &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
                 &br::PipelineRasterizationStateCreateInfo::new(
@@ -1181,20 +1182,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     &[descriptor_cam, descriptor_main],
                     &[],
                 )
-                .bind_vertex_buffer_array(
-                    0,
-                    &[
-                        plane_mesh_object.vertex_buffers[0].bound_buffer_object(),
-                        plane_mesh_object.vertex_buffers[1].bound_buffer_object(),
-                    ],
-                    &[0, 0],
-                )
-                .draw(
-                    plane_mesh_object.submesh_ranges[0].len() as _,
-                    1,
-                    plane_mesh_object.submesh_ranges[0].start as _,
-                    0,
-                )
+                .inject(|r| plane_mesh_object.prepare_draw_buffers(r))
+                .inject(|r| plane_mesh_object.draw(r, 0, 1))
                 .end_render_pass()
                 .end()
                 .expect("Failed to record render commands");
