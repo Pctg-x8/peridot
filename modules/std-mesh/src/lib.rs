@@ -592,3 +592,52 @@ impl Mesh {
         }
     }
 }
+
+/// templates
+impl Mesh {
+    /// -size to size squared plane with normalized uv, rendered as triangle strip
+    pub fn uv_plane_centric_xy(
+        g: &peridot::Graphics,
+        mm: &mut peridot_memory_manager::MemoryManager,
+        size: f32,
+        z: f32,
+    ) -> Self {
+        let mut this = Self::new(
+            g,
+            mm,
+            MeshVertexConfig {
+                layout: vec![
+                    VertexAttribute {
+                        semantic: peridot_semantic_shader::VertexInputSemantic::Position(0),
+                        buffer_index: 0,
+                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                    },
+                    VertexAttribute {
+                        semantic: peridot_semantic_shader::VertexInputSemantic::Texcoord(0),
+                        buffer_index: 1,
+                        format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                    },
+                ],
+                buffer_types: vec![MeshDataBufferType::default()],
+                primitive_topology: br::PrimitiveTopology::TriangleStrip,
+                element_count: 4,
+            },
+            None,
+        );
+        this.modify_vertex_buffer(0, false, |p| unsafe {
+            p.write(peridot::math::Vector4(-size, size, z, 1.0));
+            p.add(1).write(peridot::math::Vector4(-size, -size, z, 1.0));
+            p.add(2).write(peridot::math::Vector4(size, size, z, 1.0));
+            p.add(3).write(peridot::math::Vector4(size, -size, z, 1.0));
+        });
+        this.modify_vertex_buffer(1, false, |p| unsafe {
+            p.write(peridot::math::Vector2(0.0f32, 0.0f32));
+            p.add(1).write(peridot::math::Vector2(0.0f32, 1.0f32));
+            p.add(2).write(peridot::math::Vector2(1.0f32, 0.0f32));
+            p.add(3).write(peridot::math::Vector2(1.0f32, 1.0f32));
+        });
+        this.configure_submesh(vec![0..4]);
+
+        this
+    }
+}

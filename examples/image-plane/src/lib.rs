@@ -54,7 +54,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let mut memory_manager = MemoryManager::new(e.graphics());
 
-    let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
+    let mut plane_mesh =
+        peridot_std_mesh::Mesh::uv_plane_centric_xy(e.graphics(), &mut memory_manager, 1.0, 0.0);
     let mut cam = Camera {
         projection: Some(ProjectionMethod::Perspective {
             fov: 75.0f32.to_radians(),
@@ -64,44 +65,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         depth_range: 1.0..10.0,
     };
     cam.look_at(Vector3::ZERO);
-
-    let mut plane_mesh_object = peridot_std_mesh::Mesh::new(
-        e.graphics(),
-        &mut memory_manager,
-        peridot_std_mesh::MeshVertexConfig {
-            layout: vec![
-                peridot_std_mesh::VertexAttribute {
-                    semantic: peridot_semantic_shader::VertexInputSemantic::Position(0),
-                    buffer_index: 0,
-                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                },
-                peridot_std_mesh::VertexAttribute {
-                    semantic: peridot_semantic_shader::VertexInputSemantic::Texcoord(0),
-                    buffer_index: 1,
-                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                },
-            ],
-            buffer_types: vec![peridot_std_mesh::MeshDataBufferType::default()],
-            primitive_topology: br::PrimitiveTopology::TriangleStrip,
-            element_count: plane_mesh.vertices.len(),
-        },
-        None,
-    );
-    plane_mesh_object.modify_vertex_buffer(0, false, |p| {
-        for (n, x) in plane_mesh.vertices.iter().enumerate() {
-            unsafe {
-                p.add(n).write(x.pos);
-            }
-        }
-    });
-    plane_mesh_object.modify_vertex_buffer(1, false, |p| {
-        for (n, x) in plane_mesh.vertices.iter().enumerate() {
-            unsafe {
-                p.add(n).write(x.uv);
-            }
-        }
-    });
-    plane_mesh_object.configure_submesh(vec![0..plane_mesh.vertices.len()]);
 
     let [cam_uniform_buffer, obj_uniform_buffer] = memory_manager
         .allocate_device_local_buffer_array(
@@ -377,12 +340,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     shader.pipeline_fragment_shader().expect("no fsh?"),
                 ],
                 &br::PipelineVertexInputStateCreateInfo::new(
-                    plane_mesh_object.vk_vertex_input_bindings(),
-                    &plane_mesh_object.vk_vertex_input_attributes(&shader),
+                    plane_mesh.vk_vertex_input_bindings(),
+                    &plane_mesh.vk_vertex_input_attributes(&shader),
                 ),
-                &br::PipelineInputAssemblyStateCreateInfo::new(
-                    plane_mesh_object.vk_primitive_topology(),
-                ),
+                &br::PipelineInputAssemblyStateCreateInfo::new(plane_mesh.vk_primitive_topology()),
                 &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
                 &br::PipelineRasterizationStateCreateInfo::new(
                     br::PolygonMode::Fill,
@@ -579,7 +540,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     })
                     .expect("Update DynamicStgBuffer");
 
-                plane_mesh_object.sync_contents(e.graphics_mut());
+                plane_mesh.sync_contents(e.graphics_mut());
 
                 unsafe {
                     current_render_frame_state
@@ -605,8 +566,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     &[descriptor_cam, descriptor_main],
                     &[],
                 )
-                .inject(|r| plane_mesh_object.prepare_draw_buffers(r))
-                .inject(|r| plane_mesh_object.draw(r, 0, 1))
+                .inject(|r| plane_mesh.prepare_draw_buffers(r))
+                .inject(|r| plane_mesh.draw(r, 0, 1))
                 .end_render_pass()
                 .end()
                 .expect("Failed to record render commands");

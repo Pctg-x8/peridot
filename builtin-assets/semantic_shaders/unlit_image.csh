@@ -1,6 +1,6 @@
 VertexInput {
     [Position] pos: vec4;
-    [Texcoord0] uv: vec4;
+    [Texcoord0] uv: vec2;
 }
 
 Uniform[Vertex](0, 0) CameraParameters {
@@ -13,7 +13,7 @@ Sampler2D[Fragment](1, 1) tex;
 
 VertexShader {
     gl_Position = transpose(viewProjectionMatrix) * transpose(transformMatrix) * pos;
-    uv_v = uv.xy;
+    uv_v = uv;
 }
 
 Varyings Vertex -> Fragment {
