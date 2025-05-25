@@ -47,9 +47,21 @@ const fn align(x: usize, a: usize) -> usize {
     ((x + a - 1) / a) * a
 }
 
-struct MeshIndexBufferConfig {
+struct MeshIndexBufferState {
     buffer: MeshDataBuffer,
     layout: br::IndexType,
+}
+
+pub struct MeshVertexConfig {
+    pub layout: Vec<VertexAttribute>,
+    pub buffer_types: Vec<MeshDataBufferType>,
+    pub primitive_topology: br::PrimitiveTopology,
+    pub element_count: usize,
+}
+pub struct MeshIndexConfig {
+    pub layout: br::IndexType,
+    pub buffer_type: MeshDataBufferType,
+    pub element_count: usize,
 }
 
 /// An generic mesh data. combined Vertex Buffers and Index Buffer.
@@ -60,7 +72,7 @@ pub struct Mesh {
     primitive_topology: br::PrimitiveTopology,
     vertex_layout: Vec<(VertexAttribute, usize)>,
     vk_vertex_input_bindings: Vec<br::VertexInputBindingDescription>,
-    index: Option<MeshIndexBufferConfig>,
+    index: Option<MeshIndexBufferState>,
     submesh_ranges: Vec<core::ops::Range<usize>>,
     is_dirty: bool,
 }
@@ -72,8 +84,13 @@ impl Drop for Mesh {
     }
 }
 impl Mesh {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(
+        g: &peridot::Graphics,
+        mm: &mut peridot_memory_manager::MemoryManager,
+        init_vertex_config: MeshVertexConfig,
+        init_index_config: Option<MeshIndexConfig>,
+    ) -> Self {
+        let mut this = Self {
             vertex_buffers: Vec::new(),
             vk_vertex_buffers: Vec::new(),
             vk_vertex_buffer_offsets: Vec::new(),
@@ -83,7 +100,21 @@ impl Mesh {
             index: None,
             submesh_ranges: Vec::new(),
             is_dirty: false,
+        };
+
+        this.configure_vertex(
+            g,
+            mm,
+            init_vertex_config.layout,
+            init_vertex_config.buffer_types,
+            init_vertex_config.primitive_topology,
+            init_vertex_config.element_count,
+        );
+        if let Some(x) = init_index_config {
+            this.configure_index(g, mm, x.layout, x.buffer_type, x.element_count);
         }
+
+        this
     }
 
     pub fn configure_vertex(
@@ -245,6 +276,7 @@ impl Mesh {
         g: &peridot::Graphics,
         mm: &mut peridot_memory_manager::MemoryManager,
         layout: br::IndexType,
+        _buffer_type: MeshDataBufferType,
         element_count: usize,
     ) {
         let byte_size = match layout {
@@ -252,7 +284,8 @@ impl Mesh {
             br::IndexType::U32 => element_count * 4,
         };
 
-        let old_index = self.index.replace(MeshIndexBufferConfig {
+        // TODO: streaming(direct buffer) support
+        let old_index = self.index.replace(MeshIndexBufferState {
             buffer: MeshDataBuffer::Staged {
                 device_buffer: mm
                     .allocate_device_local_buffer(
@@ -277,7 +310,7 @@ impl Mesh {
         });
         // pre-drop old buffers
         match old_index {
-            Some(MeshIndexBufferConfig {
+            Some(MeshIndexBufferState {
                 buffer:
                     MeshDataBuffer::Staged {
                         mut staging_buffer,
@@ -288,7 +321,7 @@ impl Mesh {
             }) if staging_mapped_ptr.is_some() => unsafe {
                 staging_buffer.unmap_raw();
             },
-            Some(MeshIndexBufferConfig {
+            Some(MeshIndexBufferState {
                 buffer:
                     MeshDataBuffer::Streamed {
                         mut direct_buffer,
@@ -410,7 +443,7 @@ impl Mesh {
                 }
             }
             match self.index {
-                Some(MeshIndexBufferConfig {
+                Some(MeshIndexBufferState {
                     buffer:
                         MeshDataBuffer::Staged {
                             ref mut is_dirty,
@@ -454,7 +487,7 @@ impl Mesh {
     pub fn prepare_draw_buffers<'c, E>(&self, rec: br::CmdRecord<'c, E>) -> br::CmdRecord<'c, E> {
         rec.bind_vertex_buffers(0, &self.vk_vertex_buffers, &self.vk_vertex_buffer_offsets)
             .inject(|r| match self.index {
-                Some(MeshIndexBufferConfig { ref buffer, layout }) => {
+                Some(MeshIndexBufferState { ref buffer, layout }) => {
                     r.bind_index_buffer(&buffer.bound_buffer_object(), 0, layout)
                 }
                 None => r,
@@ -523,7 +556,7 @@ impl Mesh {
         }
 
         match self.index {
-            Some(MeshIndexBufferConfig {
+            Some(MeshIndexBufferState {
                 buffer:
                     MeshDataBuffer::Staged {
                         ref mut staging_buffer,
@@ -539,7 +572,7 @@ impl Mesh {
                     *staging_mapped_ptr = None;
                 }
             }
-            Some(MeshIndexBufferConfig {
+            Some(MeshIndexBufferState {
                 buffer:
                     MeshDataBuffer::Streamed {
                         ref mut direct_buffer,

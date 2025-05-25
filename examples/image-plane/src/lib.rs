@@ -4,7 +4,6 @@ use br::Device;
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
-use peridot::PlatformPresenter;
 use peridot::{
     audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, SubpassDependencyTemplates,
 };
@@ -66,25 +65,27 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     };
     cam.look_at(Vector3::ZERO);
 
-    let mut plane_mesh_object = peridot_std_mesh::Mesh::new();
-    plane_mesh_object.configure_vertex(
+    let mut plane_mesh_object = peridot_std_mesh::Mesh::new(
         e.graphics(),
         &mut memory_manager,
-        vec![
-            peridot_std_mesh::VertexAttribute {
-                semantic: peridot_semantic_shader::VertexInputSemantic::Position(0),
-                buffer_index: 0,
-                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-            },
-            peridot_std_mesh::VertexAttribute {
-                semantic: peridot_semantic_shader::VertexInputSemantic::Texcoord(0),
-                buffer_index: 1,
-                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-            },
-        ],
-        vec![peridot_std_mesh::MeshDataBufferType::default()],
-        br::PrimitiveTopology::TriangleStrip,
-        plane_mesh.vertices.len(),
+        peridot_std_mesh::MeshVertexConfig {
+            layout: vec![
+                peridot_std_mesh::VertexAttribute {
+                    semantic: peridot_semantic_shader::VertexInputSemantic::Position(0),
+                    buffer_index: 0,
+                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                },
+                peridot_std_mesh::VertexAttribute {
+                    semantic: peridot_semantic_shader::VertexInputSemantic::Texcoord(0),
+                    buffer_index: 1,
+                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                },
+            ],
+            buffer_types: vec![peridot_std_mesh::MeshDataBufferType::default()],
+            primitive_topology: br::PrimitiveTopology::TriangleStrip,
+            element_count: plane_mesh.vertices.len(),
+        },
+        None,
     );
     plane_mesh_object.modify_vertex_buffer(0, false, |p| {
         for (n, x) in plane_mesh.vertices.iter().enumerate() {
@@ -102,14 +103,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     });
     plane_mesh_object.configure_submesh(vec![0..plane_mesh.vertices.len()]);
 
-    let [vertex_buffer, cam_uniform_buffer, obj_uniform_buffer] = memory_manager
+    let [cam_uniform_buffer, obj_uniform_buffer] = memory_manager
         .allocate_device_local_buffer_array(
             e.graphics(),
             [
-                br::BufferCreateInfo::new(
-                    plane_mesh.byte_length(),
-                    br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
-                ),
                 br::BufferCreateInfo::new_for_type::<UniformCameraParameters>(
                     br::BufferUsage::UNIFORM_BUFFER.transfer_dest(),
                 ),
@@ -119,13 +116,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             ],
         )
         .expect("Failed to allocate buffers");
-    let vertex_buffer = RangedBuffer::from(vertex_buffer);
     let cam_uniform_buffer = RangedBuffer::from(cam_uniform_buffer);
     let obj_uniform_buffer = RangedBuffer::from(obj_uniform_buffer);
-    #[cfg(feature = "debug")]
-    e.graphics_device()
-        .set_object_name(&vertex_buffer.0, c"Vertex Buffer")
-        .expect("Failed to set object name");
     #[cfg(feature = "debug")]
     e.graphics_device()
         .set_object_name(&cam_uniform_buffer.0, c"Uniform Buffer[CameraParameters]")
@@ -135,14 +127,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .set_object_name(&obj_uniform_buffer.0, c"Uniform Buffer")
         .expect("Faield to set object name");
 
-    let [vertex_buffer_stg, cam_uniform_buffer_stg, obj_uniform_mut_buffer] = memory_manager
+    let [cam_uniform_buffer_stg, obj_uniform_mut_buffer] = memory_manager
         .allocate_upload_buffer_array(
             e.graphics(),
             [
-                br::BufferCreateInfo::new(
-                    vertex_buffer.byte_length() as _,
-                    br::BufferUsage::TRANSFER_SRC,
-                ),
                 br::BufferCreateInfo::new(
                     cam_uniform_buffer.byte_length() as _,
                     br::BufferUsage::TRANSFER_SRC,
@@ -154,13 +142,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             ],
         )
         .expect("Failed to allocate upload buffer");
-    let mut vertex_buffer_stg = RangedBuffer::from(vertex_buffer_stg);
     let mut cam_uniform_buffer_stg = RangedBuffer::from(cam_uniform_buffer_stg);
     let mut obj_uniform_mut_buffer = RangedBuffer::from(obj_uniform_mut_buffer);
-    vertex_buffer_stg
-        .0
-        .clone_content_from_slice(&plane_mesh.vertices)
-        .expect("Failed to set upload content");
     cam_uniform_buffer_stg
         .0
         .write_content(UniformCameraParameters {
@@ -219,12 +202,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     cam_uniform_buffer_stg
                         .make_ref()
                         .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
-                    vertex_buffer_stg
-                        .make_ref()
-                        .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
-                    vertex_buffer
-                        .make_ref()
-                        .usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
                     image_data_stg_buffer_ranged
                         .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
                 ])
@@ -232,9 +209,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 .by_region();
             let out_barriers = PipelineBarrier::new()
                 .with_barriers([
-                    vertex_buffer
-                        .make_ref()
-                        .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_BUFFER),
                     cam_uniform_buffer_stg
                         .make_ref()
                         .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_UNIFORM),
@@ -245,7 +219,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 ])
                 .with_barrier(tex_ready_barrier)
                 .by_region();
-            let init_vertex = vertex_buffer.byref_mirror_from(&vertex_buffer_stg);
             let init_cam_uniform = cam_uniform_buffer.byref_mirror_from(&cam_uniform_buffer_stg);
             let init_obj_uniform = obj_uniform_buffer.byref_mirror_from(&obj_uniform_mut_buffer);
             let init_tex = CopyBufferToImage::new(&image_data_stg_buffer.inner, &image).with_range(
@@ -254,7 +227,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     image.size().wh().into_rect(br::vk::VkOffset2D::ZERO),
                 ),
             );
-            let copies = (init_vertex, init_cam_uniform, init_obj_uniform, init_tex);
+            let copies = (init_cam_uniform, init_obj_uniform, init_tex);
 
             copies.between(in_barriers, out_barriers).execute(r)
         })
