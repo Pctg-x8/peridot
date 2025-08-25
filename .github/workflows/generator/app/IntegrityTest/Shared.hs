@@ -49,7 +49,7 @@ checkoutHeadStep = GHA.namedAs "Checking out (HEAD commit)" $ Checkout.step $ Ju
 -- あとでlatest自動取得とかしたいけど面倒だから一旦これでいいや
 setupCargoOutputTranslator :: GHA.Step
 setupCargoOutputTranslator = GHA.namedAs "Setup cargo-json-gha-translator" $
-  GHA.runStep "curl -o /usr/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x /usr/bin/cargo-json-gha-translator"
+  GHA.runStep "curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
 
 rustCacheStep, llvmCacheStep :: GHA.Step
 rustCacheStep =
@@ -90,9 +90,9 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
               rustCacheStep,
               setupCargoOutputTranslator,
               GHA.namedAs "check" $
-                GHA.runStep "cargo check --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | cargo-json-gha-translator",
+                GHA.runStep "cargo check --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
               GHA.namedAs "check(mt)" $
-                GHA.runStep "cargo check --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | cargo-json-gha-translator"
+                GHA.runStep "cargo check --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
             ]
 
 checkTools :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job

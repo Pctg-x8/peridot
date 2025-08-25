@@ -26,13 +26,13 @@ jobs:
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "curl -o /usr/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x /usr/bin/cargo-json-gha-translator"
+        run: "curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
-        run: "cargo check --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | cargo-json-gha-translator"
+        run: "cargo check --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "check(mt)"
-        run: "cargo check --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | cargo-json-gha-translator"
+        run: "cargo check --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
