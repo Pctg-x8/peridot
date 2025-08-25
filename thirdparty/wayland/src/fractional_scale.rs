@@ -81,12 +81,12 @@ impl WpFractionalScaleV1 {
         &[message(c"preferred_scale", c"u", &[])],
     );
 
-    pub fn add_listener<'l, L: WpFractionalScaleV1EventListener + 'l>(
+    pub fn set_listener<'l, L: WpFractionalScaleV1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: WpFractionalScaleV1EventListener {
                     preferred_scale(scale: u32 => scale)
                 }) as *const _ as _,

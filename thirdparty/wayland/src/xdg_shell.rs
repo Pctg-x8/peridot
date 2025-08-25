@@ -37,12 +37,12 @@ unsafe impl Interface for XdgWmBase {
     }
 }
 impl XdgWmBase {
-    pub fn add_listener<'l, L: XdgWmBaseEventListener + 'l>(
+    pub fn set_listener<'l, L: XdgWmBaseEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: XdgWmBaseEventListener {
                     ping(serial: u32 => serial)
                 }) as *const _ as _,
@@ -172,12 +172,12 @@ impl XdgSurface {
         &mut self.0 as *mut _ as _
     }
 
-    pub fn add_listener<'l, L: XdgSurfaceEventListener + 'l>(
+    pub fn set_listener<'l, L: XdgSurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: XdgSurfaceEventListener {
                     configure(serial: u32 => serial)
                 }) as *const _ as _,
@@ -337,12 +337,12 @@ impl XdgToplevel {
         &mut self.0 as *mut _ as _
     }
 
-    pub fn add_listener<'l, L: XdgToplevelEventListener + 'l>(
+    pub fn set_listener<'l, L: XdgToplevelEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: XdgToplevelEventListener {
                     configure(
                         width: i32 => width,

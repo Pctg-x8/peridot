@@ -92,12 +92,12 @@ impl ZxdgToplevelDecorationV1 {
         &[message(c"configure", c"u", &[])],
     );
 
-    pub fn add_listener<'l, L: ZxdgToplevelDecorationV1EventListener + 'l>(
+    pub fn set_listener<'l, L: ZxdgToplevelDecorationV1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: ZxdgToplevelDecorationV1EventListener {
                     configure(mode: u32 => unsafe { core::mem::transmute(mode) })
                 }) as *const _ as _,

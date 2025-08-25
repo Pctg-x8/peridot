@@ -85,12 +85,12 @@ unsafe impl Interface for ZxdgExportedV2 {
     }
 }
 impl ZxdgExportedV2 {
-    pub fn add_listener<'l, L: ZxdgExportedV2EventListener + 'l>(
+    pub fn set_listener<'l, L: ZxdgExportedV2EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: ZxdgExportedV2EventListener {
                     handle(handle: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(handle) })
                 }) as *const _ as _,

@@ -46,12 +46,12 @@ impl GtkShell1 {
         })
     }
 
-    pub fn add_listener<'l, L: GtkShell1EventListener + 'l>(
+    pub fn set_listener<'l, L: GtkShell1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: GtkShell1EventListener {
                     capabilities(capabilities: u32 => capabilities)
                 }) as *const _ as _,
@@ -122,12 +122,12 @@ impl GtkSurface1 {
             .marshal_array_flags_void(3, 0, &mut [ffi::Argument { u: time }])
     }
 
-    pub fn add_listener<'l, L: GtkSurface1EventListener + 'l>(
+    pub fn set_listener<'l, L: GtkSurface1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
         unsafe {
-            self.0.add_listener(
+            self.0.set_listener(
                 EventFnTable!(for L: GtkSurface1EventListener {
                     configure(states: *mut ffi::Array => unsafe {
                         core::slice::from_raw_parts((*states).data as *const u32, (*states).size >> 2)

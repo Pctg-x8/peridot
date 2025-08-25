@@ -107,16 +107,19 @@ impl Proxy {
         unsafe { ffi::wl_proxy_get_display(self.0.get()) }
     }
 
+    /// Set a proxy's listener
     #[inline(always)]
-    pub unsafe fn add_listener(
+    pub unsafe fn set_listener(
         &mut self,
         function_table: *const core::ffi::c_void,
         user_data: *mut core::ffi::c_void,
     ) -> Result<(), ()> {
-        let r =
-            unsafe { ffi::wl_proxy_add_listener(self.0.get_mut() as _, function_table, user_data) };
-
-        if r == 0 { Ok(()) } else { Err(()) }
+        match unsafe {
+            ffi::wl_proxy_add_listener(self.0.get_mut() as _, function_table, user_data)
+        } {
+            -1 => Err(()),
+            _ => Ok(()),
+        }
     }
 
     #[inline]
@@ -137,7 +140,7 @@ impl Proxy {
                 flags,
                 args.as_mut_ptr(),
             ))
-            .ok_or_else(|| std::io::Error::last_os_error())
+            .ok_or_else(std::io::Error::last_os_error)
             .map(NonNull::cast)
         }
     }
@@ -304,29 +307,23 @@ impl Display {
 
     #[inline]
     pub fn get_registry(&self) -> Result<Owned<Registry>, std::io::Error> {
-        let proxy_ptr = unsafe {
-            Proxy::from_raw_ptr_unchecked(self.ffi.as_ptr() as _).marshal_array_flags(
-                1,
-                Registry::def(),
-                ffi::wl_proxy_get_version(self.ffi.as_ptr() as _),
-                0,
-                &mut [NEWID_ARG],
-            )?
-        };
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(
+                Proxy::from_raw_ptr_unchecked(self.ffi.as_ptr() as _).marshal_array_flags_typed(
+                    1,
+                    ffi::wl_proxy_get_version(self.ffi.as_ptr() as _),
+                    0,
+                    &mut [NEWID_ARG],
+                )?,
+            )
+        })
     }
 
     #[inline]
     pub fn roundtrip(&self) -> Result<u32, std::io::Error> {
-        let r = unsafe { ffi::wl_display_roundtrip(self.ffi.as_ptr()) };
-
-        if r < 0 {
-            Err(std::io::Error::from_raw_os_error(unsafe {
-                ffi::wl_display_get_error(self.ffi.as_ptr())
-            }))
-        } else {
-            Ok(r as _)
+        match unsafe { ffi::wl_display_roundtrip(self.ffi.as_ptr()) } {
+            -1 => Err(std::io::Error::last_os_error()),
+            r => Ok(r.cast_unsigned()),
         }
     }
 
@@ -337,7 +334,6 @@ impl Display {
         if r == 0 { None } else { Some(r) }
     }
 
-    #[inline]
     pub fn protocol_error(&self) -> (*const ffi::Interface, u32, u32) {
         let mut interface = core::mem::MaybeUninit::uninit();
         let mut id = core::mem::MaybeUninit::uninit();
@@ -357,26 +353,23 @@ impl Display {
     }
 
     #[inline]
-    pub fn flush(&self) -> Result<core::ffi::c_int, std::io::Error> {
-        let r = unsafe { ffi::wl_display_flush(self.ffi.as_ptr()) };
-
-        if r == -1 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r)
+    pub fn flush(&self) -> Result<u32, std::io::Error> {
+        match unsafe { ffi::wl_display_flush(self.ffi.as_ptr()) } {
+            -1 => Err(std::io::Error::last_os_error()),
+            r => Ok(r.cast_unsigned()),
         }
     }
 
     #[inline]
-    pub fn dispatch_pending(&self) -> std::io::Result<core::ffi::c_int> {
+    pub fn dispatch_pending(&self) -> Result<u32, std::io::Error> {
         match unsafe { ffi::wl_display_dispatch_pending(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
-            r => Ok(r),
+            r => Ok(r.cast_unsigned()),
         }
     }
 
     #[inline]
-    pub fn prepare_read(&self) -> std::io::Result<()> {
+    pub fn prepare_read(&self) -> Result<(), std::io::Error> {
         match unsafe { ffi::wl_display_prepare_read(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
             _ => Ok(()),
@@ -389,7 +382,7 @@ impl Display {
     }
 
     #[inline]
-    pub fn read_events(&self) -> std::io::Result<()> {
+    pub fn read_events(&self) -> Result<(), std::io::Error> {
         match unsafe { ffi::wl_display_read_events(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
             _ => Ok(()),
@@ -405,77 +398,41 @@ unsafe impl Interface for Registry {
     }
 }
 impl Registry {
-    pub fn add_listener<'l, L: RegistryListener + 'l>(
+    pub fn set_listener<'l, L: RegistryListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn global_w<L: RegistryListener>(
-            data: *mut core::ffi::c_void,
-            registry: *mut ffi::Proxy,
-            name: u32,
-            interface: *const core::ffi::c_char,
-            version: u32,
-        ) {
-            let listener_instance = unsafe { &mut *(data as *mut L) };
-
-            listener_instance.global(
-                unsafe { core::mem::transmute(Proxy::from_raw_ptr_unchecked(registry)) },
-                name,
-                unsafe { core::ffi::CStr::from_ptr(interface) },
-                version,
-            )
-        }
-        extern "C" fn global_remove_w<L: RegistryListener>(
-            data: *mut core::ffi::c_void,
-            registry: *mut ffi::Proxy,
-            name: u32,
-        ) {
-            let listener_instance = unsafe { &mut *(data as *mut L) };
-
-            listener_instance.global_remove(
-                unsafe { core::mem::transmute(Proxy::from_raw_ptr_unchecked(registry)) },
-                name,
-            )
-        }
-
-        #[repr(C)]
-        struct FunctionPointers {
-            global: extern "C" fn(
-                *mut core::ffi::c_void,
-                *mut ffi::Proxy,
-                u32,
-                *const core::ffi::c_char,
-                u32,
-            ),
-            global_remove: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointers = &FunctionPointers {
-            global: global_w::<L>,
-            global_remove: global_remove_w::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable!(for L: RegistryListener {
+                    global(
+                        name: u32 => name,
+                        interface: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(interface) },
+                        version: u32 => version
+                    ),
+                    global_remove(name: u32 => name)
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 
+    #[inline]
     pub fn bind<I: Interface>(&self, name: u32, version: u32) -> Result<Owned<I>, std::io::Error> {
-        let proxy_ptr = self.0.marshal_array_flags(
-            0,
-            I::def(),
-            version,
-            0,
-            &mut [
-                ffi::Argument { u: name },
-                // dynamically-typed new id
-                ffi::Argument { s: I::def().name },
-                ffi::Argument { u: version },
-                NEWID_ARG,
-            ],
-        )?;
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                0,
+                version,
+                0,
+                &mut [
+                    ffi::Argument { u: name },
+                    // dynamically-typed new id
+                    ffi::Argument { s: I::def().name },
+                    ffi::Argument { u: version },
+                    NEWID_ARG,
+                ],
+            )?)
+        })
     }
 }
 
@@ -498,31 +455,17 @@ unsafe impl Interface for Callback {
     }
 }
 impl Callback {
-    pub fn add_listener<'l, L: CallbackEventListener + 'l>(
+    pub fn set_listener<'l, L: CallbackEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn done<L: CallbackEventListener>(
-            data: *mut core::ffi::c_void,
-            callback: *mut ffi::Proxy,
-            callback_data: u32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.done(
-                unsafe { core::mem::transmute(&mut *callback) },
-                callback_data,
-            )
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            done: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer { done: done::<L> };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable!(for L: CallbackEventListener {
+                    done(callback_data: u32 => callback_data)
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
         }
     }
 }
@@ -582,12 +525,7 @@ impl Surface {
             1,
             0,
             &mut [
-                buffer.map_or(
-                    ffi::Argument {
-                        o: core::ptr::null_mut(),
-                    },
-                    |x| x.0.as_arg(),
-                ),
+                buffer.map_or(NULLOBJ_ARG, |x| x.0.as_arg()),
                 ffi::Argument { i: x },
                 ffi::Argument { i: y },
             ],
@@ -610,15 +548,14 @@ impl Surface {
 
     #[inline]
     pub fn frame(&self) -> Result<Owned<Callback>, std::io::Error> {
-        let proxy_ptr = self.0.marshal_array_flags(
-            3,
-            Callback::def(),
-            self.0.version(),
-            0,
-            &mut [NEWID_ARG],
-        )?;
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                3,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 
     #[inline]
@@ -644,70 +581,20 @@ impl Surface {
             .marshal_array_flags_void(8, 0, &mut [ffi::Argument { i: scale }])
     }
 
-    pub fn add_listener<'l, L: SurfaceEventListener + 'l>(
+    pub fn set_listener<'l, L: SurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn enter<L: SurfaceEventListener>(
-            data: *mut core::ffi::c_void,
-            surface: *mut ffi::Proxy,
-            output: *mut ffi::Proxy,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.enter(unsafe { core::mem::transmute(&mut *surface) }, unsafe {
-                core::mem::transmute(&mut *output)
-            })
-        }
-        extern "C" fn leave<L: SurfaceEventListener>(
-            data: *mut core::ffi::c_void,
-            surface: *mut ffi::Proxy,
-            output: *mut ffi::Proxy,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.leave(unsafe { core::mem::transmute(&mut *surface) }, unsafe {
-                core::mem::transmute(&mut *output)
-            })
-        }
-        extern "C" fn preferred_buffer_scale<L: SurfaceEventListener>(
-            data: *mut core::ffi::c_void,
-            surface: *mut ffi::Proxy,
-            factor: i32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.preferred_buffer_scale(unsafe { core::mem::transmute(&mut *surface) }, factor)
-        }
-        extern "C" fn preferred_buffer_transform<L: SurfaceEventListener>(
-            data: *mut core::ffi::c_void,
-            surface: *mut ffi::Proxy,
-            transform: u32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.preferred_buffer_transform(
-                unsafe { core::mem::transmute(&mut *surface) },
-                transform,
-            )
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            enter: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, *mut ffi::Proxy),
-            leave: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, *mut ffi::Proxy),
-            preferred_buffer_scale: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, i32),
-            preferred_buffer_transform: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer {
-            enter: enter::<L>,
-            leave: leave::<L>,
-            preferred_buffer_scale: preferred_buffer_scale::<L>,
-            preferred_buffer_transform: preferred_buffer_transform::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable!(for L: SurfaceEventListener {
+                    enter(output: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *output) }),
+                    leave(output: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *output) }),
+                    preferred_buffer_scale(factor: i32 => factor),
+                    preferred_buffer_transform(transform: u32 => transform)
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
         }
     }
 }
@@ -727,15 +614,12 @@ unsafe impl Interface for Subcompositor {
         unsafe { &wl_subcompositor_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Subcompositor as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe { ffi::wl_display_get_error(self.0.display()) };
-
-            panic!("Failed to call destroy: {de} {e:?}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl Subcompositor {
@@ -746,9 +630,8 @@ impl Subcompositor {
         parent: &Surface,
     ) -> Result<Owned<Subsurface>, std::io::Error> {
         Ok(unsafe {
-            Owned::from_untyped_unchecked(self.0.marshal_array_flags(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
-                Subsurface::def(),
                 self.0.version(),
                 0,
                 &mut [NEWID_ARG, surface.0.as_arg(), parent.0.as_arg()],
@@ -764,14 +647,12 @@ unsafe impl Interface for Subsurface {
         unsafe { &wl_subsurface_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Subsurface as Interface>::detsruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe { ffi::wl_display_get_error(self.0.display()) };
-            panic!("Failed to call destroy: {de} {e:?}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl Subsurface {
@@ -795,20 +676,12 @@ unsafe impl Interface for Shm {
         unsafe { &wl_shm_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Shm as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if self.0.version() < 2 {
-            // no destructors defined prior version 2
-            return;
-        }
-
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(1, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            panic!("Failed to call destroy: {} {e:?}", unsafe {
-                ffi::wl_display_get_error(self.0.display())
-            });
-        }
+        self.0.call_simple_dtor(1);
     }
 }
 impl Shm {
@@ -819,9 +692,8 @@ impl Shm {
         size: i32,
     ) -> Result<Owned<ShmPool>, std::io::Error> {
         Ok(unsafe {
-            Owned::from_untyped_unchecked(self.0.marshal_array_flags(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 0,
-                ShmPool::def(),
                 self.0.version(),
                 0,
                 &mut [
@@ -857,15 +729,12 @@ unsafe impl Interface for ShmPool {
         unsafe { &wl_shm_pool_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<ShmPool as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(1, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            panic!("Failed to call destroy: {} {e:?}", unsafe {
-                ffi::wl_display_get_error(self.0.display())
-            });
-        }
+        self.0.call_simple_dtor(1);
     }
 }
 impl ShmPool {
@@ -879,9 +748,8 @@ impl ShmPool {
         format: ShmFormat,
     ) -> Result<Owned<Buffer>, std::io::Error> {
         Ok(unsafe {
-            Owned::from_untyped_unchecked(self.0.marshal_array_flags(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 0,
-                Buffer::def(),
                 self.0.version(),
                 0,
                 &mut [
@@ -910,15 +778,12 @@ unsafe impl Interface for Buffer {
         unsafe { &wl_buffer_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Buffer as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            panic!("Failed to call destroy: {} {e:?}", unsafe {
-                ffi::wl_display_get_error(self.0.display())
-            });
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 
@@ -929,15 +794,12 @@ unsafe impl Interface for Region {
         unsafe { &wl_region_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Region as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            panic!("Failed to call destroy: {} {e:?}", unsafe {
-                ffi::wl_display_get_error(self.0.display())
-            })
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl Region {
@@ -963,19 +825,17 @@ unsafe impl Interface for Seat {
         unsafe { &wl_seat_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Seat as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
         if self.0.version() < 5 {
             // no destruction method implemented
             return;
         }
 
-        if let Err(e) = unsafe { self.destroy() } {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            panic!("Failed to call destroy: {de} {e:?}");
-        }
+        self.0.call_simple_dtor(3);
     }
 }
 impl Seat {
@@ -998,43 +858,18 @@ impl Seat {
         self.0.marshal_array_flags_void(3, 0, &mut [])
     }
 
-    pub fn add_listener<'l, L: SeatEventListener + 'l>(
+    pub fn set_listener<'l, L: SeatEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn capabilities<L: SeatEventListener>(
-            data: *mut core::ffi::c_void,
-            seat: *mut ffi::Proxy,
-            capabilities: u32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.capabilities(unsafe { core::mem::transmute(&mut *seat) }, capabilities)
-        }
-        extern "C" fn name<L: SeatEventListener>(
-            data: *mut core::ffi::c_void,
-            seat: *mut ffi::Proxy,
-            name: *const core::ffi::c_char,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.name(unsafe { core::mem::transmute(&mut *seat) }, unsafe {
-                core::ffi::CStr::from_ptr(name)
-            })
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            capabilities: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-            name: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, *const core::ffi::c_char),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer {
-            capabilities: capabilities::<L>,
-            name: name::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable!(for L: SeatEventListener {
+                    capabilities(capabilities: u32 => capabilities),
+                    name(name: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(name) })
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 }
@@ -1053,199 +888,40 @@ unsafe impl Interface for Pointer {
     }
 }
 impl Pointer {
-    pub fn add_listener<'l, L: PointerEventListener + 'l>(
+    pub fn set_listener<'l, L: PointerEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn enter<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            serial: u32,
-            surface: *mut ffi::Proxy,
-            surface_x: Fixed,
-            surface_y: Fixed,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.enter(
-                unsafe { core::mem::transmute(&mut *pointer) },
-                serial,
-                unsafe { core::mem::transmute(&mut *surface) },
-                surface_x,
-                surface_y,
-            )
-        }
-        extern "C" fn leave<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            serial: u32,
-            surface: *mut ffi::Proxy,
-        ) {
-            unsafe { &mut *(data as *mut L) }.leave(
-                unsafe { core::mem::transmute(&mut *pointer) },
-                serial,
-                unsafe { core::mem::transmute(&mut *surface) },
-            )
-        }
-        extern "C" fn motion<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            time: u32,
-            surface_x: Fixed,
-            surface_y: Fixed,
-        ) {
-            unsafe { &mut *(data as *mut L) }.motion(
-                unsafe { core::mem::transmute(&mut *pointer) },
-                time,
-                surface_x,
-                surface_y,
-            )
-        }
-        extern "C" fn button<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            serial: u32,
-            time: u32,
-            button: u32,
-            state: PointerButtonState,
-        ) {
-            unsafe { &mut *(data as *mut L) }.button(
-                unsafe { core::mem::transmute(&mut *pointer) },
-                serial,
-                time,
-                button,
-                state,
-            )
-        }
-        extern "C" fn axis<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            time: u32,
-            axis: u32,
-            value: Fixed,
-        ) {
-            unsafe { &mut *(data as *mut L) }.axis(
-                unsafe { core::mem::transmute(&mut *pointer) },
-                time,
-                axis,
-                value,
-            )
-        }
-        extern "C" fn frame<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-        ) {
-            unsafe { &mut *(data as *mut L) }.frame(unsafe { core::mem::transmute(&mut *pointer) })
-        }
-        extern "C" fn axis_source<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            axis_source: u32,
-        ) {
-            L::axis_source(
-                unsafe { core::mem::transmute(&mut *data) },
-                unsafe { core::mem::transmute(&mut *pointer) },
-                axis_source,
-            )
-        }
-        extern "C" fn axis_stop<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            time: u32,
-            axis: u32,
-        ) {
-            L::axis_stop(
-                unsafe { core::mem::transmute(&mut *data) },
-                unsafe { core::mem::transmute(&mut *pointer) },
-                time,
-                axis,
-            )
-        }
-        extern "C" fn axis_discrete<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            axis: u32,
-            discrete: i32,
-        ) {
-            L::axis_discrete(
-                unsafe { core::mem::transmute(&mut *data) },
-                unsafe { core::mem::transmute(&mut *pointer) },
-                axis,
-                discrete,
-            )
-        }
-        extern "C" fn axis_value120<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            axis: u32,
-            value120: i32,
-        ) {
-            L::axis_value120(
-                unsafe { core::mem::transmute(&mut *data) },
-                unsafe { core::mem::transmute(&mut *pointer) },
-                axis,
-                value120,
-            )
-        }
-        extern "C" fn axis_relative_direction<L: PointerEventListener>(
-            data: *mut core::ffi::c_void,
-            pointer: *mut ffi::Proxy,
-            axis: u32,
-            direction: u32,
-        ) {
-            L::axis_relative_direction(
-                unsafe { core::mem::transmute(&mut *data) },
-                unsafe { core::mem::transmute(&mut *pointer) },
-                axis,
-                direction,
-            )
-        }
-
-        #[repr(C)]
-        struct FunctionPointers {
-            enter: extern "C" fn(
-                *mut core::ffi::c_void,
-                *mut ffi::Proxy,
-                u32,
-                *mut ffi::Proxy,
-                Fixed,
-                Fixed,
-            ),
-            leave: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32, *mut ffi::Proxy),
-            motion: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32, Fixed, Fixed),
-            button: extern "C" fn(
-                *mut core::ffi::c_void,
-                *mut ffi::Proxy,
-                u32,
-                u32,
-                u32,
-                PointerButtonState,
-            ),
-            axis: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32, u32, Fixed),
-            frame: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy),
-            axis_source: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-            axis_stop: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32, u32),
-            axis_discrete: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32, i32),
-            axis_value120: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32, i32),
-            axis_relative_direction:
-                extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32, u32),
-        }
-        let fp: &'static FunctionPointers = &FunctionPointers {
-            enter: enter::<L>,
-            leave: leave::<L>,
-            motion: motion::<L>,
-            button: button::<L>,
-            axis: axis::<L>,
-            frame: frame::<L>,
-            axis_source: axis_source::<L>,
-            axis_stop: axis_stop::<L>,
-            axis_discrete: axis_discrete::<L>,
-            axis_value120: axis_value120::<L>,
-            axis_relative_direction: axis_relative_direction::<L>,
-        };
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable!(for L: PointerEventListener {
+                    enter(
+                        serial: u32 => serial,
+                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) },
+                        surface_x: Fixed => surface_x,
+                        surface_y: Fixed => surface_y
+                    ),
+                    leave(
+                        serial: u32 => serial,
+                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) }
+                    ),
+                    motion(time: u32 => time, surface_x: Fixed => surface_x, surface_y: Fixed => surface_y),
+                    button(
+                        serial: u32 => serial,
+                        time: u32 => time,
+                        button: u32 => button,
+                        state: PointerButtonState => state
+                    ),
+                    axis(time: u32 => time, axis: u32 => axis, value: Fixed => value),
+                    frame(),
+                    axis_source(axis_source: u32 => axis_source),
+                    axis_stop(time: u32 => time, axis: u32 => axis),
+                    axis_discrete(axis: u32 => axis, discrete: i32 => discrete),
+                    axis_value120(axis: u32 => axis, value120: i32 => value120),
+                    axis_relative_direction(axis: u32 => axis, direction: u32 => direction)
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 }
@@ -1324,15 +1000,12 @@ unsafe impl Interface for DataOffer {
         unsafe { &wl_data_offer_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<DataOffer as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(2, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            panic!("Failed to call destroy: {} {e:?}", unsafe {
-                ffi::wl_display_get_error(self.0.display())
-            });
-        }
+        self.0.call_simple_dtor(2);
     }
 }
 impl DataOffer {
@@ -1401,23 +1074,25 @@ impl DataOffer {
         )
     }
 
-    pub fn add_listener<'l, L: DataOfferEventListener + 'l>(
+    pub fn set_listener<'l, L: DataOfferEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        let fp = EventFnTable! {
-            for L: DataOfferEventListener {
-                offer(
-                    mime_type: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(mime_type) }
-                ),
-                source_actions(source_actions: u32 => DataDeviceManagerDndAction::from_bits_retain(source_actions)),
-                action(dnd_action: u32 => DataDeviceManagerDndAction::from_bits_retain(dnd_action))
-            }
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable! {
+                    for L: DataOfferEventListener {
+                        offer(
+                            mime_type: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(mime_type) }
+                        ),
+                        source_actions(
+                            source_actions: u32 => DataDeviceManagerDndAction::from_bits_retain(source_actions)
+                        ),
+                        action(dnd_action: u32 => DataDeviceManagerDndAction::from_bits_retain(dnd_action))
+                    }
+                } as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 }
@@ -1441,15 +1116,12 @@ unsafe impl Interface for DataSource {
         unsafe { &wl_data_source_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<DataSource as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(1, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            panic!("Failed to call destroy: {} {e:?}", unsafe {
-                ffi::wl_display_get_error(self.0.display())
-            });
-        }
+        self.0.call_simple_dtor(1);
     }
 }
 impl DataSource {
@@ -1484,27 +1156,31 @@ impl DataSource {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        let fp = EventFnTable! {
-            for L: DataSourceEventListener {
-                target(
-                    mime_type: *const core::ffi::c_char => if mime_type.is_null() { None } else { Some(unsafe { core::ffi::CStr::from_ptr(mime_type) }) }
-                ),
-                send(
-                    mime_type: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(mime_type) },
-                    fd: core::ffi::c_int => fd
-                ),
-                cancelled(),
-                dnd_drop_performed(),
-                dnd_finished(),
-                action(
-                    dnd_action: u32 => DataDeviceManagerDndAction::from_bits_retain(dnd_action)
-                )
-            }
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable! {
+                    for L: DataSourceEventListener {
+                        target(
+                            mime_type: *const core::ffi::c_char => if mime_type.is_null() {
+                                None
+                            } else {
+                                Some(unsafe { core::ffi::CStr::from_ptr(mime_type) })
+                            }
+                        ),
+                        send(
+                            mime_type: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(mime_type) },
+                            fd: core::ffi::c_int => fd
+                        ),
+                        cancelled(),
+                        dnd_drop_performed(),
+                        dnd_finished(),
+                        action(
+                            dnd_action: u32 => DataDeviceManagerDndAction::from_bits_retain(dnd_action)
+                        )
+                    }
+                } as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 }
@@ -1533,20 +1209,17 @@ unsafe impl Interface for DataDevice {
         unsafe { &wl_data_device_interface }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<DataDevice as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
         if self.0.version() < 2 {
             // no destructor
             return;
         }
 
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(2, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            panic!("Failed to call destroy: {} {e:?}", unsafe {
-                ffi::wl_display_get_error(self.0.display())
-            });
-        }
+        self.0.call_simple_dtor(2);
     }
 }
 impl DataDevice {
@@ -1590,32 +1263,40 @@ impl DataDevice {
         )
     }
 
-    pub fn add_listener<'l, L: DataDeviceEventListener + 'l>(
+    pub fn set_listener<'l, L: DataDeviceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        let fp = EventFnTable! {
-            for L: DataDeviceEventListener {
-                data_offer(
-                    id: *mut ffi::Proxy => unsafe { Owned::from_untyped_unchecked(NonNull::new_unchecked(id as _)) }
-                ),
-                enter(
-                    serial: u32 => serial,
-                    surface: *mut ffi::Proxy => unsafe { &*(surface as *mut _) },
-                    x: Fixed => x,
-                    y: Fixed => y,
-                    id: *mut ffi::Proxy => if id.is_null() { None } else { Some(unsafe { &*(id as *mut _) }) }
-                ),
-                leave(),
-                motion(time: u32 => time, x: Fixed => x, y: Fixed => y),
-                drop(),
-                selection(id: *mut ffi::Proxy => if id.is_null() { None } else { Some(unsafe { &*(id as *mut _) }) })
-            }
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.set_listener(
+                EventFnTable! {
+                    for L: DataDeviceEventListener {
+                        data_offer(
+                            id: *mut ffi::Proxy => unsafe {
+                                Owned::from_untyped_unchecked(NonNull::new_unchecked(id as _))
+                            }
+                        ),
+                        enter(
+                            serial: u32 => serial,
+                            surface: *mut ffi::Proxy => unsafe { &*(surface as *mut _) },
+                            x: Fixed => x,
+                            y: Fixed => y,
+                            id: *mut ffi::Proxy => if id.is_null() { None } else { Some(unsafe { &*(id as *mut _) }) }
+                        ),
+                        leave(),
+                        motion(time: u32 => time, x: Fixed => x, y: Fixed => y),
+                        drop(),
+                        selection(
+                            id: *mut ffi::Proxy => if id.is_null() {
+                                None
+                            } else {
+                                Some(unsafe { &*(id as *mut _) })
+                            }
+                        )
+                    }
+                } as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 }
