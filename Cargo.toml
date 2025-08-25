@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["extras/", "cradle/", "examples/", "tools/"]
+exclude = ["extras/", "cradle/", "examples/", "tools/", "thirdparty/"]
 members = [
     "base",
     "derive",
