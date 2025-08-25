@@ -729,11 +729,6 @@ impl VulkanGfx {
             .get_or_init(|| unsafe { self.load_function() })
     }
 }
-impl br::DeviceExtCommandFunctionProvider for VulkanGfx {
-    fn cmd_pipeline_barrier_2_khr_fn(&self) -> br::vk::PFN_vkCmdPipelineBarrier2KHR {
-        todo!("vkCmdPipelineBarrier2KHR resolve");
-    }
-}
 impl br::VkHandle for VulkanGfx {
     type Handle = br::vk::VkDevice;
 
@@ -748,31 +743,42 @@ impl br::InstanceChild for VulkanGfx {
         unsafe { core::mem::transmute(self) }
     }
 }
-impl br::Device for VulkanGfx {
-    fn bind_buffer_memory2_khr_fn(&self) -> br::vk::PFN_vkBindBufferMemory2KHR {
-        unimplemented!();
+impl br::Device for VulkanGfx {}
+impl br::DeviceBindMemory2Extension for VulkanGfx {
+    fn bind_buffer_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindBufferMemory2KHR {
+        todo!("vkBindBufferMemory2KHR resolve")
     }
 
-    fn bind_image_memory2_khr_fn(&self) -> br::vk::PFN_vkBindImageMemory2KHR {
-        unimplemented!();
+    fn bind_image_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindImageMemory2KHR {
+        todo!("vkBindImageMemory2KHR resolve")
     }
-
+}
+impl br::DeviceGetMemoryRequirements2Extension for VulkanGfx {
     fn get_buffer_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
-        unimplemented!();
+        todo!("vkGetBufferMemoryRequirements2KHR resolve");
     }
 
     fn get_image_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetImageMemoryRequirements2KHR {
-        unimplemented!();
+        todo!("vkGetImageMemoryRequirements2KHR resolve");
     }
 
     fn get_image_sparse_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetImageSparseMemoryRequirements2KHR {
-        unimplemented!();
+        todo!("vkGetImageSparseMemoryRequirements2KHR resolve");
+    }
+}
+impl br::DeviceSynchronization2Extension for VulkanGfx {
+    fn cmd_pipeline_barrier_2_khr_fn(&self) -> bedrock::vk::PFN_vkCmdPipelineBarrier2KHR {
+        todo!("vkCmdPipelineBarrier2KHR resolve")
+    }
+
+    fn queue_submit2_khr_fn(&self) -> bedrock::vk::PFN_vkQueueSubmit2KHR {
+        todo!("vkQueueSubmit2KHR resolve")
     }
 }
 
@@ -907,7 +913,7 @@ impl Graphics {
     /// Submits any commands as transient commands.
     pub fn submit_commands(
         &mut self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<()> {
         let mut buffers = [br::vk::VkCommandBuffer::NULL];
         unsafe {
@@ -932,10 +938,9 @@ impl Graphics {
                 &br::CommandBufferBeginInfo::new().onetime_submit(),
             )?
         }
-        generator(br::CmdRecord::new(
-            unsafe { br::VkHandleRefMut::dangling(cb.buffer) },
-            &self.gfx_device,
-        ))
+        generator(br::CmdRecord::new(unsafe {
+            br::VkHandleRefMut::dangling(cb.buffer)
+        }))
         .end()?;
         unsafe {
             br::vkfn_wrapper::queue_submit(

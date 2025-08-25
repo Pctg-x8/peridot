@@ -13,13 +13,52 @@ use std::io::{
 };
 use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PvpContainer {
     pub vertex_bindings: Vec<br::vk::VkVertexInputBindingDescription>,
     pub vertex_attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
     pub vertex_shader: Vec<u32>,
     pub fragment_shader: Option<Vec<u32>>,
 }
+impl PartialEq for PvpContainer {
+    fn eq(&self, other: &Self) -> bool {
+        if self.vertex_shader != other.vertex_shader {
+            return false;
+        }
+
+        if self.fragment_shader != other.fragment_shader {
+            return false;
+        }
+
+        if !self
+            .vertex_bindings
+            .iter()
+            .zip(other.vertex_bindings.iter())
+            .all(|(a, b)| {
+                a.binding == b.binding && a.inputRate == b.inputRate && a.stride == b.stride
+            })
+        {
+            return false;
+        }
+
+        if !self
+            .vertex_attributes
+            .iter()
+            .zip(other.vertex_attributes.iter())
+            .all(|(a, b)| {
+                a.binding == b.binding
+                    && a.location == b.location
+                    && a.format == b.format
+                    && a.offset == b.offset
+            })
+        {
+            return false;
+        }
+
+        true
+    }
+}
+impl Eq for PvpContainer {}
 impl PvpContainer {
     pub fn empty() -> Self {
         PvpContainer {

@@ -12,8 +12,8 @@ pub trait PlatformPresenter {
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, VulkanGfx>,
-    ) -> br::CmdRecord<'r, VulkanGfx>;
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s, 'r>(
@@ -444,8 +444,8 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
     // TODO: undefined -> anyが無条件に許可される環境だったらこれいらない気がする synchronization2拡張が有効じゃないとダメとかあったかもしれないのであとでVulkanの仕様をあたる
     pub fn emit_initialize_back_buffer_commands<'r, E: 'r + ?Sized>(
         &self,
-        recorder: br::CmdRecord<'r, E>,
-    ) -> br::CmdRecord<'r, E> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         let image_barriers = self
             .swapchain
             .get()

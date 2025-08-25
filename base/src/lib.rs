@@ -178,7 +178,7 @@ pub trait FeatureRequests {
             sparseResidency8Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample8() as _,
             sparseResidency16Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample16() as _,
             sparseResidencyAliased: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_aliased() as _,
-            ..Default::default()
+            ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
         }
     }
 }
@@ -467,7 +467,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
 
     pub fn submit_commands(
         &mut self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -783,10 +783,7 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
     }
 
     #[inline(always)]
-    pub fn bind<'r, Device: ?Sized>(
-        &self,
-        rec: br::CmdRecord<'r, Device>,
-    ) -> br::CmdRecord<'r, Device> {
+    pub fn bind<'r>(&self, rec: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         rec.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }
