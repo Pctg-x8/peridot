@@ -12,18 +12,7 @@ unsafe impl Interface for WpViewporter {
         tracing::instrument(name = "<WpViewporter as Interface>::destruct", skip(self))
     )]
     unsafe fn destruct(&mut self) {
-        #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            #[cfg(feature = "tracing")]
-            tracing::warn!(
-                reason = ?e,
-                display_error = unsafe { ffi::wl_display_get_error(self.0.display()) },
-                "Failed to call destructor"
-            );
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl WpViewporter {
@@ -72,18 +61,7 @@ unsafe impl Interface for WpViewport {
         tracing::instrument(name = "<WpViewport as Interface>::destruct", skip(self))
     )]
     unsafe fn destruct(&mut self) {
-        #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            #[cfg(feature = "tracing")]
-            tracing::warn!(
-                reason = ?e,
-                display_error = unsafe { ffi::wl_display_get_error(self.0.display()) },
-                "Failed to call destructor"
-            );
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl WpViewport {

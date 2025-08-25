@@ -15,19 +15,7 @@ unsafe impl super::Interface for WpFractionalScaleManagerV1 {
         )
     )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) =
-            self.0
-                .marshal_array_flags_void(0, super::ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            #[cfg(feature = "tracing")]
-            tracing::error!(reason = ?e, display_error = de, "Failed to call destroy");
-            #[cfg(not(feature = "tracing"))]
-            eprintln!("Failed to call destroy! reason = {e:?}, display_error = {de}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl WpFractionalScaleManagerV1 {
@@ -86,19 +74,7 @@ unsafe impl super::Interface for WpFractionalScaleV1 {
         tracing::instrument(name = "<WpFractionalScaleV1 as Interface>::destruct", skip(self))
     )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) =
-            self.0
-                .marshal_array_flags_void(0, super::ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            #[cfg(feature = "tracing")]
-            tracing::error!(reason = ?e, display_error = de, "Failed to call destroy");
-            #[cfg(not(feature = "tracing"))]
-            eprintln!("Failed to call destroy! reason = {e:?}, display_error = {de}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl WpFractionalScaleV1 {

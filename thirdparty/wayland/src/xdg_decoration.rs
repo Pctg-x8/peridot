@@ -7,10 +7,12 @@ unsafe impl Interface for ZxdgDecorationManagerV1 {
         Self::INTERFACE
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<ZxdgDecorationManagerV1 as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        self.0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-            .expect("Failed to call destroy");
+        self.0.call_simple_dtor(0);
     }
 }
 impl ZxdgDecorationManagerV1 {
@@ -65,10 +67,15 @@ unsafe impl Interface for ZxdgToplevelDecorationV1 {
         Self::INTERFACE
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "<ZxdgToplevelDecorationV1 as Interface>::destruct",
+            skip(self)
+        )
+    )]
     unsafe fn destruct(&mut self) {
-        self.0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-            .expect("Failed to call destroy");
+        self.0.call_simple_dtor(0);
     }
 }
 impl ZxdgToplevelDecorationV1 {

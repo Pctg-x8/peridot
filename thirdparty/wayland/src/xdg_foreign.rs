@@ -31,19 +31,7 @@ unsafe impl Interface for ZxdgExporterV2 {
         tracing::instrument(name = "<ZxdgExporterV2 as Interface>::destruct", skip(self))
     )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            #[cfg(feature = "tracing")]
-            tracing::error!(reason = ?e, display_error = de, "Failed to call destroy");
-            #[cfg(not(feature = "tracing"))]
-            eprintln!("Failed to call destroy! reason = {e:?}, display_error = {de}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl ZxdgExporterV2 {
@@ -92,19 +80,7 @@ unsafe impl Interface for ZxdgExportedV2 {
         tracing::instrument(name = "<ZxdgExportedV2 as Interface>::destruct", skip(self))
     )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            #[cfg(feature = "tracing")]
-            tracing::error!(reason = ?e, display_error = de, "Failed to call destroy");
-            #[cfg(not(feature = "tracing"))]
-            eprintln!("Failed to call destroy! reason = {e:?}, display_error = {de}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl ZxdgExportedV2 {

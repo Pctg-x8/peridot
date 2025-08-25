@@ -79,15 +79,18 @@ impl DerefMut for OwnedProxy {
 #[repr(transparent)]
 pub struct Proxy(UnsafeCell<ffi::Proxy>);
 impl Proxy {
+    #[inline(always)]
     pub const unsafe fn from_raw_ptr_unchecked<'a>(ptr: *mut ffi::Proxy) -> &'a mut Self {
         unsafe { Self::from_raw_ref_mut(&mut *ptr) }
     }
 
+    #[inline(always)]
     pub const unsafe fn from_raw_ref_mut<'a>(r: &'a mut ffi::Proxy) -> &'a mut Self {
         unsafe { core::mem::transmute(UnsafeCell::from_mut(r)) }
     }
 
-    pub(self) const fn as_arg(&self) -> ffi::Argument {
+    #[inline(always)]
+    pub(crate) const fn as_arg(&self) -> ffi::Argument {
         ffi::Argument {
             o: self.0.get() as _,
         }
@@ -150,7 +153,6 @@ impl Proxy {
             .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
     }
 
-    #[inline]
     fn marshal_array_flags_void(
         &self,
         opcode: u32,
@@ -179,6 +181,22 @@ impl Proxy {
         } else {
             Ok(())
         }
+    }
+
+    /// Calls the destructor with no arguments
+    ///
+    /// If any errors occured, it will be reported via tracing if enabled.
+    pub(crate) fn call_simple_dtor(&mut self, opcode: u32) {
+        #[cfg(feature = "tracing")]
+        if let Err(e) = self.marshal_array_flags_void(opcode, ffi::MARSHAL_FLAG_DESTROY, &mut []) {
+            tracing::warn!(
+                reason = ?e,
+                display_error = unsafe { ffi::wl_display_get_error(o.display()) },
+                "Failed to call destructor"
+            );
+        }
+        #[cfg(not(feature = "tracing"))]
+        let _ = self.marshal_array_flags_void(opcode, ffi::MARSHAL_FLAG_DESTROY, &mut []);
     }
 }
 

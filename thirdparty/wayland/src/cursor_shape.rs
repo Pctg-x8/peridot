@@ -7,17 +7,12 @@ unsafe impl Interface for WpCursorShapeManagerV1 {
         Self::INTERFACE
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<WpCursorShapeManagerV1 as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            panic!("Failed to call destroy: {de} {e:?}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl WpCursorShapeManagerV1 {
@@ -89,17 +84,12 @@ unsafe impl Interface for WpCursorShapeDeviceV1 {
         Self::INTERFACE
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<WpCursorShapeDeviceV1 as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            panic!("Failed to call destroy: {de} {e:?}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl WpCursorShapeDeviceV1 {

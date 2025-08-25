@@ -26,17 +26,12 @@ unsafe impl Interface for XdgWmBase {
         &XDG_WM_BASE_INTERFACE
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<XdgWmBase as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        if let Err(e) = self
-            .0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-        {
-            let de = unsafe {
-                ffi::wl_display_get_error(ffi::wl_proxy_get_display(&mut self.0 as *mut _ as _))
-            };
-
-            panic!("Failed to call destroy: {de} {e:?}");
-        }
+        self.0.call_simple_dtor(0);
     }
 }
 impl XdgWmBase {
@@ -180,10 +175,12 @@ unsafe impl Interface for XdgSurface {
         &XDG_SURFACE_INTERFACE
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<XdgSurface as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        self.0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-            .expect("Failed to destroy xdg_surface");
+        self.0.call_simple_dtor(0);
     }
 }
 impl XdgSurface {
@@ -356,10 +353,12 @@ unsafe impl Interface for XdgToplevel {
         &XDG_TOPLEVEL_INTERFACE
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<XdgToplevel as Interface>::destruct", skip(self))
+    )]
     unsafe fn destruct(&mut self) {
-        self.0
-            .marshal_array_flags_void(0, ffi::MARSHAL_FLAG_DESTROY, &mut [])
-            .expect("Failed to destroy xdg_surface");
+        self.0.call_simple_dtor(0);
     }
 }
 impl XdgToplevel {
@@ -582,5 +581,13 @@ pub struct XdgPopup(Proxy);
 unsafe impl Interface for XdgPopup {
     fn def() -> &'static ffi::Interface {
         &XDG_POPUP_INTERFACE
+    }
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<XdgPopup as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        self.0.call_simple_dtor(0);
     }
 }
