@@ -1,3 +1,5 @@
+use crate::EventFnTable;
+
 use super::{Interface, Proxy, ffi, interface, message};
 
 /// gtk_shell is a protocol extension providing additional features for clients implementing it.
@@ -35,9 +37,8 @@ impl GtkShell1 {
         surface: &super::Surface,
     ) -> Result<super::Owned<GtkSurface1>, std::io::Error> {
         Ok(unsafe {
-            super::Owned::from_untyped_unchecked(self.0.marshal_array_flags(
+            super::Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 0,
-                GtkSurface1::def(),
                 self.0.version(),
                 0,
                 &mut [super::NEWID_ARG, surface.0.as_arg()],
@@ -49,28 +50,13 @@ impl GtkShell1 {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn capabilities<L: GtkShell1EventListener>(
-            data: *mut core::ffi::c_void,
-            sender: *mut ffi::Proxy,
-            capabilities: u32,
-        ) {
-            L::capabilities(
-                unsafe { &mut *(data as *mut _) },
-                unsafe { &mut *(sender as *mut _) },
-                capabilities,
-            )
-        }
-
-        #[repr(C)]
-        struct FunctionPointers {
-            capabilities: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointers = &FunctionPointers {
-            capabilities: capabilities::<L>,
-        };
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.add_listener(
+                EventFnTable!(for L: GtkShell1EventListener {
+                    capabilities(capabilities: u32 => capabilities)
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
         }
     }
 }
@@ -140,49 +126,18 @@ impl GtkSurface1 {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn configure<L: GtkSurface1EventListener>(
-            data: *mut core::ffi::c_void,
-            sender: *mut ffi::Proxy,
-            states: *mut ffi::Array,
-        ) {
-            L::configure(
-                unsafe { &mut *(data as *mut _) },
-                unsafe { &mut *(sender as *mut _) },
-                unsafe {
-                    core::slice::from_raw_parts((*states).data as *const u32, (*states).size >> 2)
-                },
-            )
-        }
-        extern "C" fn configure_edges<L: GtkSurface1EventListener>(
-            data: *mut core::ffi::c_void,
-            sender: *mut ffi::Proxy,
-            constraints: *mut ffi::Array,
-        ) {
-            L::configure_edges(
-                unsafe { &mut *(data as *mut _) },
-                unsafe { &mut *(sender as *mut _) },
-                unsafe {
-                    core::slice::from_raw_parts(
-                        (*constraints).data as *const u32,
-                        (*constraints).size >> 2,
-                    )
-                },
-            )
-        }
-
-        #[repr(C)]
-        struct FunctionPointers {
-            configure: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, *mut ffi::Array),
-            configure_edges:
-                extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, *mut ffi::Array),
-        }
-        let fp: &'static FunctionPointers = &FunctionPointers {
-            configure: configure::<L>,
-            configure_edges: configure_edges::<L>,
-        };
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.add_listener(
+                EventFnTable!(for L: GtkSurface1EventListener {
+                    configure(states: *mut ffi::Array => unsafe {
+                        core::slice::from_raw_parts((*states).data as *const u32, (*states).size >> 2)
+                    }),
+                    configure_edges(constraints: *mut ffi::Array => unsafe {
+                        core::slice::from_raw_parts((*constraints).data as *const u32, (*constraints).size >> 2)
+                    })
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 }

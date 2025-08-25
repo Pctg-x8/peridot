@@ -1,5 +1,7 @@
 //! https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/xdg-foreign/xdg-foreign-unstable-v2.xml
 
+use crate::EventFnTable;
+
 use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 
 static ZXDG_EXPORTER_V2_INTERFACE: ffi::Interface = interface(
@@ -47,9 +49,8 @@ impl ZxdgExporterV2 {
         surface: &super::Surface,
     ) -> Result<Owned<ZxdgExportedV2>, std::io::Error> {
         Ok(unsafe {
-            Owned::from_untyped_unchecked(self.0.marshal_array_flags(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
-                ZxdgExportedV2::def(),
                 self.0.version(),
                 0,
                 &mut [NEWID_ARG, surface.0.as_arg()],
@@ -88,29 +89,13 @@ impl ZxdgExportedV2 {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn handle<L: ZxdgExportedV2EventListener>(
-            data: *mut core::ffi::c_void,
-            sender: *mut ffi::Proxy,
-            handle: *const core::ffi::c_char,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.handle(unsafe { core::mem::transmute(&mut *sender) }, unsafe {
-                core::ffi::CStr::from_ptr(handle)
-            })
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            handle:
-                extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, *const core::ffi::c_char),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer {
-            handle: handle::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.add_listener(
+                EventFnTable!(for L: ZxdgExportedV2EventListener {
+                    handle(handle: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(handle) })
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 }

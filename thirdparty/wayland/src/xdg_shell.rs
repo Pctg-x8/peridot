@@ -1,3 +1,5 @@
+use crate::EventFnTable;
+
 use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 use core::ptr::null;
 
@@ -35,17 +37,30 @@ unsafe impl Interface for XdgWmBase {
     }
 }
 impl XdgWmBase {
+    pub fn add_listener<'l, L: XdgWmBaseEventListener + 'l>(
+        &'l mut self,
+        listener: &'l mut L,
+    ) -> Result<(), ()> {
+        unsafe {
+            self.0.add_listener(
+                EventFnTable!(for L: XdgWmBaseEventListener {
+                    ping(serial: u32 => serial)
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
+        }
+    }
+
     #[inline]
     pub fn create_positioner(&self) -> Result<Owned<XdgPositioner>, std::io::Error> {
-        let proxy_ptr = self.0.marshal_array_flags(
-            1,
-            XdgPositioner::def(),
-            self.0.version(),
-            0,
-            &mut [NEWID_ARG],
-        )?;
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                1,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 
     #[inline]
@@ -53,51 +68,20 @@ impl XdgWmBase {
         &self,
         surface: &super::Surface,
     ) -> Result<Owned<XdgSurface>, std::io::Error> {
-        let proxy_ptr = self.0.marshal_array_flags(
-            2,
-            XdgSurface::def(),
-            self.0.version(),
-            0,
-            &mut [
-                NEWID_ARG,
-                ffi::Argument {
-                    o: surface.0.0.get() as _,
-                },
-            ],
-        )?;
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                2,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG, surface.0.as_arg()],
+            )?)
+        })
     }
 
     #[inline]
     pub fn pong(&mut self, token: u32) -> Result<(), std::io::Error> {
         self.0
             .marshal_array_flags_void(3, 0, &mut [ffi::Argument { u: token }])
-    }
-
-    pub fn add_listener<'l, L: XdgWmBaseEventListener + 'l>(
-        &'l mut self,
-        listener: &'l mut L,
-    ) -> Result<(), ()> {
-        extern "C" fn ping<L: XdgWmBaseEventListener>(
-            data: *mut core::ffi::c_void,
-            wm_base: *mut ffi::Proxy,
-            serial: u32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.ping(unsafe { core::mem::transmute(&mut *wm_base) }, serial)
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            ping: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer { ping: ping::<L> };
-
-        unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
-        }
     }
 }
 
@@ -192,39 +176,26 @@ impl XdgSurface {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn configure<L: XdgSurfaceEventListener>(
-            data: *mut core::ffi::c_void,
-            surface: *mut ffi::Proxy,
-            serial: u32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.configure(unsafe { core::mem::transmute(&mut *surface) }, serial)
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            configure: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer {
-            configure: configure::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.add_listener(
+                EventFnTable!(for L: XdgSurfaceEventListener {
+                    configure(serial: u32 => serial)
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
         }
     }
+
     #[inline]
     pub fn get_toplevel(&self) -> Result<Owned<XdgToplevel>, std::io::Error> {
-        let proxy_ptr = self.0.marshal_array_flags(
-            1,
-            XdgToplevel::def(),
-            self.0.version(),
-            0,
-            &mut [NEWID_ARG],
-        )?;
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                1,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 
     #[inline]
@@ -370,82 +341,26 @@ impl XdgToplevel {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn configure<L: XdgToplevelEventListener>(
-            data: *mut core::ffi::c_void,
-            toplevel: *mut ffi::Proxy,
-            width: i32,
-            height: i32,
-            states: *mut ffi::Array,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.configure(
-                unsafe { core::mem::transmute(&mut *toplevel) },
-                width,
-                height,
-                unsafe {
-                    core::slice::from_raw_parts(
-                        (*states).data as *mut u32 as *const _,
-                        (*states).size >> 2,
-                    )
-                },
-            )
-        }
-        extern "C" fn close<L: XdgToplevelEventListener>(
-            data: *mut core::ffi::c_void,
-            toplevel: *mut ffi::Proxy,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.close(unsafe { core::mem::transmute(&mut *toplevel) })
-        }
-        extern "C" fn configure_bounds<L: XdgToplevelEventListener>(
-            data: *mut core::ffi::c_void,
-            toplevel: *mut ffi::Proxy,
-            width: i32,
-            height: i32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.configure_bounds(
-                unsafe { core::mem::transmute(&mut *toplevel) },
-                width,
-                height,
-            )
-        }
-        extern "C" fn wm_capabilities<L: XdgToplevelEventListener>(
-            data: *mut core::ffi::c_void,
-            toplevel: *mut ffi::Proxy,
-            capabilities: *mut ffi::Array,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.wm_capabilities(unsafe { core::mem::transmute(&mut *toplevel) }, unsafe {
-                core::slice::from_raw_parts(
-                    (*capabilities).data as *mut u32 as *const _,
-                    (*capabilities).size >> 2,
-                )
-            })
-        }
-        #[repr(C)]
-        struct FunctionPointers {
-            configure:
-                extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, i32, i32, *mut ffi::Array),
-            close: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy),
-            configure_bounds: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, i32, i32),
-            wm_capabilities:
-                extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, *mut ffi::Array),
-        }
-        let fp: &'static FunctionPointers = &FunctionPointers {
-            configure: configure::<L>,
-            close: close::<L>,
-            configure_bounds: configure_bounds::<L>,
-            wm_capabilities: wm_capabilities::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.add_listener(
+                EventFnTable!(for L: XdgToplevelEventListener {
+                    configure(
+                        width: i32 => width,
+                        height: i32 => height,
+                        states: *mut ffi::Array => unsafe {
+                            core::slice::from_raw_parts((*states).data as *const i32, (*states).size >> 2)
+                        }
+                    ),
+                    close(),
+                    configure_bounds(width: i32 => width, height: i32 => height),
+                    wm_capabilities(
+                        capabilities: *mut ffi::Array => unsafe {
+                            core::slice::from_raw_parts((*capabilities).data as *const i32, (*capabilities).size >> 2)
+                        }
+                    )
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
         }
     }
 

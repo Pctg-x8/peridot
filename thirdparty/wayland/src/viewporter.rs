@@ -39,7 +39,7 @@ impl WpViewporter {
         surface: &super::Surface,
     ) -> Result<Owned<WpViewport>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed::<WpViewport>(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
                 self.0.version(),
                 0,

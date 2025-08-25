@@ -1,3 +1,5 @@
+use crate::EventFnTable;
+
 use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 
 #[repr(transparent)]
@@ -94,28 +96,13 @@ impl ZxdgToplevelDecorationV1 {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn configure<L: ZxdgToplevelDecorationV1EventListener>(
-            data: *mut core::ffi::c_void,
-            sender: *mut ffi::Proxy,
-            mode: u32,
-        ) {
-            L::configure(
-                unsafe { &mut *(data as *mut _) },
-                unsafe { &mut *(sender as *mut _) },
-                unsafe { core::mem::transmute(mode) },
-            )
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            configure: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer {
-            configure: configure::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.add_listener(
+                EventFnTable!(for L: ZxdgToplevelDecorationV1EventListener {
+                    configure(mode: u32 => unsafe { core::mem::transmute(mode) })
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
         }
     }
 

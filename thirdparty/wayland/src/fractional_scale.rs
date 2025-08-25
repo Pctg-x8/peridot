@@ -1,4 +1,6 @@
-use super::{Interface, ffi, interface, message};
+use crate::{EventFnTable, Owned};
+
+use super::{ffi, interface, message};
 
 #[repr(transparent)]
 pub struct WpFractionalScaleManagerV1(super::Proxy);
@@ -44,19 +46,13 @@ impl WpFractionalScaleManagerV1 {
     pub fn get_fractional_scale(
         &self,
         surface: &super::Surface,
-    ) -> Result<super::Owned<WpFractionalScaleV1>, std::io::Error> {
+    ) -> Result<Owned<WpFractionalScaleV1>, std::io::Error> {
         Ok(unsafe {
-            super::Owned::from_untyped_unchecked(self.0.marshal_array_flags(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
-                WpFractionalScaleV1::def(),
                 self.0.version(),
                 0,
-                &mut [
-                    super::NEWID_ARG,
-                    super::ffi::Argument {
-                        o: surface.0.0.get() as _,
-                    },
-                ],
+                &mut [super::NEWID_ARG, surface.0.as_arg()],
             )?)
         })
     }
@@ -89,26 +85,13 @@ impl WpFractionalScaleV1 {
         &'l mut self,
         listener: &'l mut L,
     ) -> Result<(), ()> {
-        extern "C" fn preferred_scale<L: WpFractionalScaleV1EventListener>(
-            data: *mut core::ffi::c_void,
-            object: *mut ffi::Proxy,
-            scale: u32,
-        ) {
-            let listener = unsafe { &mut *(data as *mut L) };
-
-            listener.preferred_scale(unsafe { core::mem::transmute(&mut *object) }, scale)
-        }
-        #[repr(C)]
-        struct FunctionPointer {
-            preferred_scale: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, u32),
-        }
-        let fp: &'static FunctionPointer = &FunctionPointer {
-            preferred_scale: preferred_scale::<L>,
-        };
-
         unsafe {
-            self.0
-                .add_listener(fp as *const _ as _, listener as *mut _ as _)
+            self.0.add_listener(
+                EventFnTable!(for L: WpFractionalScaleV1EventListener {
+                    preferred_scale(scale: u32 => scale)
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
         }
     }
 }

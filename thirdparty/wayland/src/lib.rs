@@ -32,6 +32,7 @@ const NULLOBJ_ARG: ffi::Argument = ffi::Argument {
     o: core::ptr::null_mut(),
 };
 
+#[macro_export]
 macro_rules! EventFnTable {
     { for $tyvar: ident : $tr: path { $($name: ident ( $($an: ident: $act: ty => $aconv: expr),* )),* } } => {
         {

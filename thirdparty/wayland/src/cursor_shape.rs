@@ -46,20 +46,14 @@ impl WpCursorShapeManagerV1 {
         &self,
         pointer: &mut super::Pointer,
     ) -> Result<Owned<WpCursorShapeDeviceV1>, std::io::Error> {
-        let proxy_ptr = self.0.marshal_array_flags(
-            1,
-            WpCursorShapeDeviceV1::def(),
-            self.0.version(),
-            0,
-            &mut [
-                NEWID_ARG,
-                ffi::Argument {
-                    o: &mut pointer.0 as *mut _ as _,
-                },
-            ],
-        )?;
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                1,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG, pointer.0.as_arg()],
+            )?)
+        })
     }
 }
 
@@ -67,7 +61,7 @@ impl WpCursorShapeManagerV1 {
 #[derive(Clone, Copy)]
 pub enum WpCursorShapeDeviceV1Shape {
     Default = 1,
-    // ContextMenu = 2,
+    ContextMenu = 2,
     Pointer = 4,
     NeResize = 20,
     NwResize = 21,
