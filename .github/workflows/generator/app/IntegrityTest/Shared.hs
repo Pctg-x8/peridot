@@ -90,9 +90,9 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
               rustCacheStep,
               setupCargoOutputTranslator,
               GHA.namedAs "check" $
-                GHA.runStep "cargo check --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+                GHA.runStep "cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
               GHA.namedAs "check(mt)" $
-                GHA.runStep "cargo check --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+                GHA.runStep "cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
             ]
 
 checkTools :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
@@ -106,8 +106,12 @@ checkModules :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job steps
   where
     steps =
-      GHA.withCondition precondition
-        <$> [checkoutHeadStep, checkoutStep, rustCacheStep, CheckBuildSubdirAction.step "./modules"]
+      GHA.withCondition precondition <$>
+        [ checkoutHeadStep
+        , checkoutStep
+        , rustCacheStep
+        , CheckBuildSubdirAction.step "./modules"
+        ]
 
 checkExamples :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
 checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job steps
