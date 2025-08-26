@@ -55,10 +55,11 @@ setupCargoOutputTranslator = GHA.namedAs "Setup cargo-json-gha-translator" $
 rustCacheStep, llvmCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
-    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target"] $
-      GHA.runnerOs <> "-cargo-" <> hash
+    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "~/.cargo/bin", "target"] $
+      GHA.runnerOs <> "-cargo-" <> hash <> rsToolchainHash
   where
     hash = GHA.mkExpression "hashFiles('**/Cargo.lock')"
+    rsToolchainHash = GHA.mkExpression "hashFiles('rust-toolchain.toml')"
 llvmCacheStep =
   GHA.namedAs "Initialize LLVM Cache" $ CacheAction.step ["./llvm"] $ GHA.runnerOs <> "-llvm-11"
 
