@@ -27,7 +27,8 @@ run_test() {
 
 for c in **/*/Cargo.toml
 do
-    cd $(dirname $c)
+    pushd $(dirname $c)
     run_test
+    popd
 done
 
