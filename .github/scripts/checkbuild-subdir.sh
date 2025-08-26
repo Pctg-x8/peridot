@@ -21,7 +21,7 @@ run_test() {
     then
         ./ci-test.sh
     else
-        cargo `test_or_check` --verbose --message-format=json | $OUTPUT_TRANSLATOR
+        cargo `test_or_check` --verbose --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
     fi
 }
 

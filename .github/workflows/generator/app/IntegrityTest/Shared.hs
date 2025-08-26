@@ -114,7 +114,6 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job s
         , setupCargoOutputTranslator
         , GHA.namedAs "check" $
             GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-              & GHA.env "OUTPUT_TRANSLATOR" "$HOME/.local/bin/cargo-json-gha-translator"
               & GHA.workAt "modules"
         ]
 
