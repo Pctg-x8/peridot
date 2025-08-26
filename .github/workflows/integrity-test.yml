@@ -458,10 +458,11 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - env:
-          TARGET_PATH: "./modules"
+          OUTPUT_TRANSLATOR: "$HOME/.local/bin/cargo-json-gha-translator"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-subdir"
+        name: check
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: modules
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"

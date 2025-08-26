@@ -4,17 +4,14 @@
 {-# LANGUAGE TypeOperators #-}
 
 module SlackNotification
-  ( SlackReport (..),
-    SlackNotificationProvider (..),
-    SlackNotifyContext,
-    withSlackNotification,
-    slackNotifySteps,
+  ( SlackNotificationProvider (..),
+    SlackReportContext(..),
+    SlackReporter(..),
+    withSlackReport,
     reportJobFailure,
   )
 where
 
-import Control.Eff (Eff, Member)
-import Control.Eff.Reader.Strict (Reader, reader, runReader)
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.Maybe (fromMaybe)
@@ -29,24 +26,33 @@ configureSlackNotification =
       & AWSConfigureCredentials.awsRegion "ap-northeast-1"
       & AWSConfigureCredentials.roleToAssume "arn:aws:iam::208140986057:role/GHALambdaInvoker"
 
-data SlackReport = ReportSuccess | ReportFailure String
+class SlackReportContext m where
+  reportSuccessSteps :: m [GHA.Step]
+  reportFailureSteps :: String -> m [GHA.Step]
+
+reportJobFailure :: SlackReportContext m => Functor m => GHA.Job -> m GHA.Job
+reportJobFailure job =
+  let jobName = fromMaybe "<unknown job>" $ GHA.nameOf job
+    in reportFailureSteps jobName <&> \reportSteps ->
+        GHA.grantWritable GHA.IDTokenPermission $ GHA.jobAppendSteps (runOnFailure <$> reportSteps) job
 
 data SlackNotificationProvider = SlackNotificationProvider
   { buildSuccessReportStep :: GHA.Step,
     buildFailureReportStep :: String -> GHA.Step
   }
 
-type SlackNotifyContext = Reader SlackNotificationProvider
+newtype SlackReporter m a = SlackReporter { runSlackReporter :: SlackNotificationProvider -> m a }
+instance Applicative m => SlackReportContext (SlackReporter m) where
+  reportSuccessSteps = SlackReporter \p -> pure [configureSlackNotification, buildSuccessReportStep p]
+  reportFailureSteps jobName = SlackReporter \p -> pure [configureSlackNotification, buildFailureReportStep p jobName]
+instance Functor m => Functor (SlackReporter m) where
+  fmap f a = SlackReporter $ fmap f . runSlackReporter a
+instance Applicative m => Applicative (SlackReporter m) where
+  pure a = SlackReporter \_ -> pure a
+  f <*> a = SlackReporter \p -> runSlackReporter f p <*> runSlackReporter a p
+instance Monad m => Monad (SlackReporter m) where
+  return = pure
+  a >>= f = SlackReporter \p -> runSlackReporter a p >>= \a' -> runSlackReporter (f a') p
 
-withSlackNotification :: SlackNotificationProvider -> Eff (SlackNotifyContext : r) a -> Eff r a
-withSlackNotification = runReader
-
-slackNotifySteps :: (Member SlackNotifyContext r) => SlackReport -> Eff r [GHA.Step]
-slackNotifySteps ReportSuccess = reader \p -> [configureSlackNotification, buildSuccessReportStep p]
-slackNotifySteps (ReportFailure jobName) = reader \p -> [configureSlackNotification, buildFailureReportStep p jobName]
-
-reportJobFailure :: (Member SlackNotifyContext r) => GHA.Job -> Eff r GHA.Job
-reportJobFailure job =
-  let jobName = fromMaybe "<unknown job>" $ GHA.nameOf job
-   in slackNotifySteps (ReportFailure jobName) <&> \reportSteps ->
-        GHA.grantWritable GHA.IDTokenPermission $ GHA.jobAppendSteps (runOnFailure <$> reportSteps) job
+withSlackReport :: SlackNotificationProvider -> SlackReporter m a -> m a
+withSlackReport = flip runSlackReporter

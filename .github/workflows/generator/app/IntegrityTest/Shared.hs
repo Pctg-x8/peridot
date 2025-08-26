@@ -1,3 +1,5 @@
+{-# LANGUAGE MultilineStrings #-}
+
 module IntegrityTest.Shared
   ( pullRequestNumberExpr,
     preconditionRecordBeginTimeStamp,
@@ -15,12 +17,11 @@ module IntegrityTest.Shared
   )
 where
 
-import Control.Eff (Eff, Member)
 import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import Data.Function ((&))
 import Data.Functor ((<&>))
-import SlackNotification (SlackNotifyContext, SlackReport (ReportSuccess), reportJobFailure, slackNotifySteps)
+import SlackNotification (SlackReportContext(..), reportJobFailure)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction
@@ -61,7 +62,7 @@ rustCacheStep =
 llvmCacheStep =
   GHA.namedAs "Initialize LLVM Cache" $ CacheAction.step ["./llvm"] $ GHA.runnerOs <> "-llvm-11"
 
-checkFormats :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkFormats :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkFormats precondition =
   reportJobFailure $
     applyModifiers [GHA.namedAs "Code Formats"] $
@@ -80,7 +81,7 @@ checkFormats precondition =
                 ]
         )
 
-checkBaseLayer :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkBaseLayer :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.job steps
   where
     steps =
@@ -95,14 +96,14 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
                 GHA.runStep "cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
             ]
 
-checkTools :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkTools :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
         <$> [checkoutHeadStep, checkoutStep, rustCacheStep, CheckBuildSubdirAction.step "./tools"]
 
-checkModules :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkModules :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job steps
   where
     steps =
@@ -110,10 +111,13 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job s
         [ checkoutHeadStep
         , checkoutStep
         , rustCacheStep
-        , CheckBuildSubdirAction.step "./modules"
+        , GHA.namedAs "check" $
+            GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+              & GHA.env "OUTPUT_TRANSLATOR" "$HOME/.local/bin/cargo-json-gha-translator"
+              & GHA.workAt "modules"
         ]
 
-checkExamples :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkExamples :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job steps
   where
     steps =
@@ -131,7 +135,7 @@ withBuilderEnv = setCradleBase . setBuiltinAssetsPath
     setBuiltinAssetsPath =
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
 
-checkCradleWindows :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleWindows :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkCradleWindows precondition =
   reportJobFailure $ GHA.namedAs "Cradle(Windows)" $ GHA.jobRunsOn ["windows-latest"] $ GHA.job steps
   where
@@ -156,7 +160,7 @@ checkCradleWindows precondition =
       \$ErrorActionPreference = \"Continue\"\n\
       \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
 
-checkCradleMacos :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleMacos :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkCradleMacos precondition =
   reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ GHA.job steps
   where
@@ -191,7 +195,7 @@ aptInstallStep packages =
     GHA.runStep $
       "sudo apt-get update && sudo apt-get install -y " <> unwords packages
 
-checkCradleLinux :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleLinux :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $ GHA.job steps
   where
     steps =
@@ -221,7 +225,7 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
-checkCradleAndroid :: (Member SlackNotifyContext r) => String -> Eff r GHA.Job
+checkCradleAndroid :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android)" $ GHA.job steps
   where
     steps =
@@ -248,9 +252,9 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
-reportSuccessJob :: (Member SlackNotifyContext r) => Eff r GHA.Job
+reportSuccessJob :: SlackReportContext m => Functor m => m GHA.Job
 reportSuccessJob =
-  slackNotifySteps ReportSuccess <&> \reportSteps ->
+  reportSuccessSteps <&> \reportSteps ->
     -- NotificationでHeadの情報見るっぽくて必要そう
     let steps = [checkoutStep, checkoutHeadStep] <> reportSteps
      in GHA.namedAs "Report as Success" $ GHA.grantWritable GHA.IDTokenPermission $ GHA.job steps
