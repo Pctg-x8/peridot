@@ -115,9 +115,6 @@ impl CommandBundle<VulkanGfx> {
             )?
         };
         let mut buffers = Vec::with_capacity(count);
-        unsafe {
-            buffers.set_len(buffers.capacity());
-        }
         match unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 g.gfx_device.0.device,
@@ -126,7 +123,7 @@ impl CommandBundle<VulkanGfx> {
                     count as _,
                     br::CommandBufferLevel::Primary,
                 ),
-                &mut buffers,
+                core::mem::transmute(buffers.spare_capacity_mut()),
             )
         } {
             Ok(_) => (),
@@ -137,6 +134,9 @@ impl CommandBundle<VulkanGfx> {
 
                 return Err(e);
             }
+        }
+        unsafe {
+            buffers.set_len(buffers.capacity());
         }
 
         Ok(Self {

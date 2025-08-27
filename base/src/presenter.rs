@@ -172,18 +172,18 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             }
         };
         let mut back_buffer_image_handles = Vec::with_capacity(n as _);
-        unsafe {
-            back_buffer_image_handles.set_len(back_buffer_image_handles.capacity());
-        }
         if let Err(e) = unsafe {
             br::vkfn_wrapper::get_swapchain_images(
                 g.gfx_device.0.device,
                 chain.handle,
-                &mut back_buffer_image_handles,
+                core::mem::transmute(back_buffer_image_handles.spare_capacity_mut()),
             )
         } {
             tracing::error!(cause = ?e, "Failed to acquire swapchain images");
             std::process::abort();
+        }
+        unsafe {
+            back_buffer_image_handles.set_len(back_buffer_image_handles.capacity());
         }
 
         #[cfg(feature = "debug")]

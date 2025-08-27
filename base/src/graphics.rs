@@ -597,14 +597,12 @@ impl VulkanGfx {
 
         let mut sink = Vec::with_capacity(x as _);
         unsafe {
-            sink.set_len(sink.capacity());
-        }
-        unsafe {
             br::vkfn_wrapper::get_physical_device_surface_formats(
                 self.0.adapter,
                 surface.native_ptr(),
-                &mut sink,
+                core::mem::transmute(sink.spare_capacity_mut()),
             )?;
+            sink.set_len(sink.capacity());
         }
 
         Ok(sink)
@@ -627,14 +625,12 @@ impl VulkanGfx {
 
         let mut sink = Vec::with_capacity(x as _);
         unsafe {
-            sink.set_len(sink.capacity());
-        }
-        unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
                 self.0.adapter,
                 surface.native_ptr(),
-                &mut sink,
+                core::mem::transmute(sink.spare_capacity_mut()),
             )?;
+            sink.set_len(sink.capacity());
         }
 
         Ok(sink)

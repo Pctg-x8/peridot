@@ -21,11 +21,12 @@ struct UniqueRawSliceMut<T> {
     length: usize,
 }
 impl<T> UniqueRawSliceMut<T> {
+    #[allow(clippy::mut_from_ref)]
     unsafe fn as_slice_mut(&self) -> &mut [T] {
-        std::slice::from_raw_parts_mut(self.ptr, self.length)
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.length) }
     }
     unsafe fn as_slice(&self) -> &[T] {
-        std::slice::from_raw_parts(self.ptr, self.length)
+        unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 }
 unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
@@ -91,6 +92,8 @@ impl Mixer {
         self.subprocess_buffers =
             Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
         unsafe {
+            // 未初期化でいいからメモリ領域がほしい 実際につかうまでには初期化されるので一旦allow
+            #[allow(clippy::uninit_vec)]
             self.subprocess_buffers
                 .set_len(frames_dup as usize * self.parallelize as usize);
         }
@@ -456,6 +459,8 @@ impl super::FromStreamingAsset for StreamingPlayableWav {
         // initial buffering
         let mut buffered_samples = Vec::with_capacity(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
         unsafe {
+            // 未初期化でいいからメモリ領域がほしい 実際につかうまでには初期化されるので一旦allow
+            #[allow(clippy::uninit_vec)]
             buffered_samples.set_len(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
         }
         let mut buffered_samples = buffered_samples.into_boxed_slice();

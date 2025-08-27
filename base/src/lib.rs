@@ -394,6 +394,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
     }
 }
 impl<'q, NL: NativeLinker> Engine<'q, NL> {
+    #[allow(clippy::mut_from_ref)]
     pub fn event_receivers(&self) -> &mut EngineEventReceiver {
         unsafe { &mut *self.receivers.get() }
     }
