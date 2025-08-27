@@ -12,8 +12,8 @@ pub trait PlatformPresenter {
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, VulkanGfx>,
-    ) -> br::CmdRecord<'r, VulkanGfx>;
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s, 'r>(
@@ -172,18 +172,18 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             }
         };
         let mut back_buffer_image_handles = Vec::with_capacity(n as _);
-        unsafe {
-            back_buffer_image_handles.set_len(back_buffer_image_handles.capacity());
-        }
         if let Err(e) = unsafe {
             br::vkfn_wrapper::get_swapchain_images(
                 g.gfx_device.0.device,
                 chain.handle,
-                &mut back_buffer_image_handles,
+                core::mem::transmute(back_buffer_image_handles.spare_capacity_mut()),
             )
         } {
             tracing::error!(cause = ?e, "Failed to acquire swapchain images");
             std::process::abort();
+        }
+        unsafe {
+            back_buffer_image_handles.set_len(back_buffer_image_handles.capacity());
         }
 
         #[cfg(feature = "debug")]
@@ -272,7 +272,7 @@ impl<'d> SubmissionBatchBuilder<'d> {
         self
     }
 
-    pub fn build(&self) -> br::SubmitInfo {
+    pub fn build<'s, 'n>(&'s self) -> br::SubmitInfo<'s, 's, 'n> {
         br::SubmitInfo::new(
             &self.wait_semaphores,
             &self.wait_dst_stages,
@@ -442,10 +442,10 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
     }
 
     // TODO: undefined -> anyが無条件に許可される環境だったらこれいらない気がする synchronization2拡張が有効じゃないとダメとかあったかもしれないのであとでVulkanの仕様をあたる
-    pub fn emit_initialize_back_buffer_commands<'r, E: 'r + ?Sized>(
+    pub fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, E>,
-    ) -> br::CmdRecord<'r, E> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         let image_barriers = self
             .swapchain
             .get()

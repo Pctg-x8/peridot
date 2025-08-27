@@ -22,8 +22,14 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-baselayer"
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
+        name: check
+        run: "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
+        name: "check(mt)"
+        run: "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -322,11 +328,13 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
-      - env:
-          TARGET_PATH: "./examples"
-        if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-subdir"
+      - if: 'true'
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
+        name: check
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: examples
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -365,23 +373,17 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: 'true'
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
         name: Running Rustfmt
         run: cargo fmt -- --check
-      - env:
-          RUN_SCRIPT: vulnerabilities_elliminator
-        if: 'true'
-        name: Running Check - Debugging Weaks
-        uses: "./.github/actions/codeform-checker"
-      - env:
-          RUN_SCRIPT: trailing_newline_checker
-        if: 'true'
+      - if: 'true'
+        name: Running Clippy
+        run: "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
         name: Running Check - Trailing Newline for Source Code Files
-        uses: "./.github/actions/codeform-checker"
-      - env:
-          RUN_SCRIPT: linefeed_checker
-        if: 'true'
-        name: Running Check - Enforce Line Feed to LF only
-        uses: "./.github/actions/codeform-checker"
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -420,11 +422,13 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
-      - env:
-          TARGET_PATH: "./modules"
-        if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-subdir"
+      - if: 'true'
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
+        name: check
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: modules
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -463,11 +467,13 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
-      - env:
-          TARGET_PATH: "./tools"
-        if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-subdir"
+      - if: 'true'
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
+        name: check
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: tools
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"

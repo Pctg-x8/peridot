@@ -140,7 +140,7 @@ impl<MainF: Future> GameDriver<MainF> {
                 al: PlatformAssetLoader::new(),
                 pp: pp.clone(),
             },
-            Default::default(),
+            unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             (event_sender.clone(), event_receiver),
             frame_timing_receiver,
             &event_queue_lifetime_extended,

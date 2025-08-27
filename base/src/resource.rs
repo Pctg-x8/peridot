@@ -66,8 +66,7 @@ impl<Image: br::Image> Texture2D<Image> {
         prealloc: &mut BufferPrealloc,
     ) -> br::Result<(UnboundedStandaloneImage, u64)> {
         let idesc = br::ImageCreateInfo::new(size.clone(), format as _)
-            .sampled()
-            .transfer_dest()
+            .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
             .init_layout(br::ImageLayout::Preinitialized);
         let bytes_per_pixel = (format.bpp() >> 3) as u64;
         let pixels_stg = prealloc.add(BufferContent::Raw(
@@ -433,7 +432,7 @@ impl DeviceWorkingTextureAllocator<'_> {
     ) -> DeviceWorkingTexture2DRef {
         self.planes.push(
             br::ImageCreateInfo::new(size, format as _)
-                .usage_with(usage)
+                .with_usage(usage)
                 .init_layout(br::ImageLayout::Preinitialized),
         );
         DeviceWorkingTexture2DRef(self.planes.len() - 1)
@@ -448,7 +447,7 @@ impl DeviceWorkingTextureAllocator<'_> {
     ) -> DeviceWorkingTexture3DRef {
         self.volumes.push(
             br::ImageCreateInfo::new(size, format as _)
-                .usage_with(usage)
+                .with_usage(usage)
                 .init_layout(br::ImageLayout::Preinitialized),
         );
         DeviceWorkingTexture3DRef(self.volumes.len() - 1)
@@ -462,7 +461,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingCubeTextureRef {
         let id = br::ImageCreateInfo::new(size, format as _)
-            .usage_with(usage)
+            .with_usage(usage)
             .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6);
@@ -480,7 +479,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         mipmaps: u32,
     ) -> DeviceWorkingCubeTextureRef {
         let id = br::ImageCreateInfo::new(size, format as _)
-            .usage_with(usage)
+            .with_usage(usage)
             .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6)

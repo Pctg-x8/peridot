@@ -145,7 +145,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let buffer = memory_manager
         .allocate_device_local_buffer(
             e.graphics(),
-            bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
+            bp.build_desc().with_usage(br::BufferUsage::TRANSFER_DEST),
         )
         .expect("Buffer Allocation");
     let buf_length = buffer.byte_length();
@@ -164,8 +164,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .allocate_device_local_image(
             e.graphics(),
             br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
-                .as_color_attachment()
-                .as_transient_attachment()
+                .with_usage(
+                    br::ImageUsageFlags::COLOR_ATTACHMENT
+                        | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+                )
                 .sample_counts(msaa_count),
         )
         .expect("Failed to create msaa render target");
@@ -450,7 +452,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         &rs,
                         &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
                     )
-                    .multisample_state(&ms),
+                    .set_multisample_state(&ms),
                     br::GraphicsPipelineCreateInfo::new(
                         &pl,
                         render_pass.subpass(0),
@@ -469,7 +471,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         &rs,
                         &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
                     )
-                    .multisample_state(&ms),
+                    .set_multisample_state(&ms),
                     br::GraphicsPipelineCreateInfo::new(
                         &pl,
                         render_pass.subpass(0),
@@ -488,7 +490,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         &rs,
                         &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
                     )
-                    .multisample_state(&ms),
+                    .set_multisample_state(&ms),
                     br::GraphicsPipelineCreateInfo::new(
                         &pl,
                         render_pass.subpass(0),
@@ -507,7 +509,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         &rs,
                         &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
                     )
-                    .multisample_state(&ms),
+                    .set_multisample_state(&ms),
                 ],
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
@@ -559,7 +561,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         (&color_renders[..])
             .between(rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                r.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
+                r.begin(&br::CommandBufferBeginInfo::new())
                     .expect("Failed to begin render command recording")
             })
             .expect("Failed to finish render commands");
@@ -599,8 +601,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     .allocate_device_local_image(
                         e.graphics(),
                         br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
-                            .as_color_attachment()
-                            .as_transient_attachment()
+                            .with_usage(
+                                br::ImageUsageFlags::COLOR_ATTACHMENT
+                                    | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+                            )
                             .sample_counts(msaa_count),
                     )
                     .expect("Failed to create msaa render target");
@@ -677,7 +681,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     (&color_renders[..])
                         .between(rp, EndRenderPass)
                         .execute_and_finish(unsafe {
-                            r.begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
+                            r.begin(&br::CommandBufferBeginInfo::new())
                                 .expect("Start Recording CB")
                         })
                         .expect("Failed to finish render commands");

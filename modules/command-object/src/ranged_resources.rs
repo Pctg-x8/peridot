@@ -97,7 +97,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn copy_to(
         self,
         dest: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -113,7 +113,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn copy_from(
         self,
         src: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -126,7 +126,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn mirror_to(
         self,
         dest: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -142,7 +142,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn mirror_from(
         self,
         src: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -157,7 +157,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
         dest: &'s RangedBuffer<
             impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>,
         >,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's
+    ) -> impl GraphicsCommand + 's
     where
         B: br::DeviceChild,
     {
@@ -174,7 +174,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
         src: &'s RangedBuffer<
             impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>,
         >,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's
+    ) -> impl GraphicsCommand + 's
     where
         B: br::DeviceChild,
     {

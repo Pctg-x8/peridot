@@ -378,8 +378,8 @@ impl peridot::PlatformPresenter for Presenter {
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: bedrock::CmdRecord<'r, peridot::VulkanGfx>,
-    ) -> bedrock::CmdRecord<'r, peridot::VulkanGfx> {
+        recorder: bedrock::CmdRecord<'r>,
+    ) -> bedrock::CmdRecord<'r> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
 

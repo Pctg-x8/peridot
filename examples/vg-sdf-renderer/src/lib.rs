@@ -348,8 +348,8 @@ impl TwoPassStencilSDFRenderer {
                         &rasterization_state,
                         &color_blend_state,
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_invert())
                             .stencil_state_back(Self::stencil_invert())
@@ -374,8 +374,8 @@ impl TwoPassStencilSDFRenderer {
                         &rasterization_state,
                         &color_blend_state,
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_invert())
                             .stencil_state_back(Self::stencil_invert())
@@ -405,8 +405,8 @@ impl TwoPassStencilSDFRenderer {
                             .into_vk(),
                         ]),
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_match())
                             .stencil_state_back(Self::stencil_match())
@@ -433,8 +433,8 @@ impl TwoPassStencilSDFRenderer {
                             ColorAttachmentBlending::MAX.into_vk(),
                         ]),
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_noop())
                             .stencil_state_back(Self::stencil_noop())
@@ -464,27 +464,33 @@ impl TwoPassStencilSDFRenderer {
         }
     }
 
-    pub const fn render_pass(&self) -> br::VkHandleRef<br::vk::VkRenderPass> {
+    pub const fn render_pass<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkRenderPass> {
         unsafe { br::VkHandleRef::dangling(self.render_pass) }
     }
 
-    pub const fn pipeline_layout(&self) -> br::VkHandleRef<br::vk::VkPipelineLayout> {
+    pub const fn pipeline_layout<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkPipelineLayout> {
         unsafe { br::VkHandleRef::dangling(self.pipeline_layout) }
     }
 
-    pub const fn triangle_fans_stencil_pipeline(&self) -> br::VkHandleRef<br::vk::VkPipeline> {
+    pub const fn triangle_fans_stencil_pipeline<'s>(
+        &'s self,
+    ) -> br::VkHandleRef<'s, br::vk::VkPipeline> {
         unsafe { br::VkHandleRef::dangling(self.triangle_fans_stencil_pipeline) }
     }
 
-    pub const fn curve_triangles_stencil_pipeline(&self) -> br::VkHandleRef<br::vk::VkPipeline> {
+    pub const fn curve_triangles_stencil_pipeline<'s>(
+        &'s self,
+    ) -> br::VkHandleRef<'s, br::vk::VkPipeline> {
         unsafe { br::VkHandleRef::dangling(self.curve_triangles_stencil_pipeline) }
     }
 
-    pub const fn invert_pipeline(&self) -> br::VkHandleRef<br::vk::VkPipeline> {
+    pub const fn invert_pipeline<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkPipeline> {
         unsafe { br::VkHandleRef::dangling(self.invert_pipeline) }
     }
 
-    pub const fn outline_distance_pipeline(&self) -> br::VkHandleRef<br::vk::VkPipeline> {
+    pub const fn outline_distance_pipeline<'s>(
+        &'s self,
+    ) -> br::VkHandleRef<'s, br::vk::VkPipeline> {
         unsafe { br::VkHandleRef::dangling(self.outline_distance_pipeline) }
     }
 
@@ -557,8 +563,8 @@ impl TwoPassStencilSDFRenderer {
                         &rasterization_state,
                         &color_blend_state,
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_invert())
                             .stencil_state_back(Self::stencil_invert())
@@ -583,8 +589,8 @@ impl TwoPassStencilSDFRenderer {
                         &rasterization_state,
                         &color_blend_state,
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_invert())
                             .stencil_state_back(Self::stencil_invert())
@@ -614,8 +620,8 @@ impl TwoPassStencilSDFRenderer {
                             .into_vk(),
                         ]),
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_match())
                             .stencil_state_back(Self::stencil_match())
@@ -642,8 +648,8 @@ impl TwoPassStencilSDFRenderer {
                             ColorAttachmentBlending::MAX.into_vk(),
                         ]),
                     )
-                    .multisample_state(&multisample_state)
-                    .depth_stencil_state(
+                    .set_multisample_state(&multisample_state)
+                    .set_depth_stencil_state(
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .stencil_state_front(Self::stencil_noop())
                             .stencil_state_back(Self::stencil_noop())
@@ -767,7 +773,7 @@ impl TwoPassStencilSDFRenderer {
         &'s self,
         framebuffer: &'s (impl br::VkHandle<Handle = br::vk::VkFramebuffer> + ?Sized),
         buffers: &'s TwoPassStencilSDFRendererBuffers,
-    ) -> impl GraphicsCommand<peridot::VulkanGfx> + 's {
+    ) -> impl GraphicsCommand + 's {
         let rp = BeginRenderPass::new(
             self.render_pass(),
             framebuffer,
@@ -877,7 +883,8 @@ impl StencilBuffer {
         let image = memory_manager
             .allocate_device_local_image(
                 g,
-                br::ImageCreateInfo::new(size, format).as_depth_stencil_attachment(),
+                br::ImageCreateInfo::new(size, format)
+                    .with_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
             )
             .expect("Failed to create stencil buffer image");
         let image_view = unsafe {
@@ -917,7 +924,8 @@ impl StencilBuffer {
         self.image = memory_manager
             .allocate_device_local_image(
                 g,
-                br::ImageCreateInfo::new(size, format).as_depth_stencil_attachment(),
+                br::ImageCreateInfo::new(size, format)
+                    .with_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
             )
             .expect("Failed to allocate stencil buffer");
         let view = unsafe {
@@ -1010,7 +1018,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         memory_manager
             .allocate_device_local_buffer(
                 e.graphics(),
-                bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
+                bp.build_desc().with_usage(br::BufferUsage::TRANSFER_DEST),
             )
             .expect("Failed to allocate buffer"),
     );
@@ -1209,7 +1217,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .commands(fb, &buffers)
             .execute_and_finish(
                 cmd.synchronized_nth(cx)
-                    .begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
+                    .begin(&br::CommandBufferBeginInfo::new())
                     .expect("Failed to begin recording commands"),
             )
             .expect("Failed to record commands");
@@ -1302,7 +1310,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     memory_manager
                         .allocate_device_local_buffer(
                             e.graphics(),
-                            bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
+                            bp.build_desc().with_usage(br::BufferUsage::TRANSFER_DEST),
                         )
                         .expect("Failed to allocate buffer"),
                 );
@@ -1499,7 +1507,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         .commands(fb, &buffers)
                         .execute_and_finish(
                             cmd.synchronized_nth(cx)
-                                .begin(&br::CommandBufferBeginInfo::new(), e.graphics_device())
+                                .begin(&br::CommandBufferBeginInfo::new())
                                 .expect("Failed to begin recording commands"),
                         )
                         .expect("Failed to record commands");

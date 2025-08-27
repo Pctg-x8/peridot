@@ -228,10 +228,10 @@ impl<'e, ExtFnProvider: br::Device + 'e> DefaultRenderCommands<'e, ExtFnProvider
     fn default_render_commands<'r, NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: br::CmdRecord<'r, ExtFnProvider>,
+        cmd: br::CmdRecord<'r>,
         buffer: &(impl br::Buffer + ?Sized),
         extras: Self::Extras,
-    ) -> br::CmdRecord<'r, ExtFnProvider> {
+    ) -> br::CmdRecord<'r> {
         let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
         let cmd = cmd
             .bind_pipeline(
@@ -353,9 +353,9 @@ impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = D
     }
 }
 impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = Device>>
-    GraphicsCommand<Device> for RenderVG<Device, Buffer>
+    GraphicsCommand for RenderVG<Device, Buffer>
 {
-    fn execute<'r>(&self, cb: br::CmdRecord<'r, Device>) -> br::CmdRecord<'r, Device> {
+    fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         let render_scale = self.target_pixels.clone() * self.rendering_precision.recip();
 
         let common_configs = (

@@ -182,7 +182,7 @@ async fn main() {
             userlib::APP_VERSION,
             nl,
             bedrock::vk::VkPhysicalDeviceFeatures {
-                ..Default::default()
+                ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
             },
             (events_sender_th.clone(), events_receiver),
             frame_timing_receiver,

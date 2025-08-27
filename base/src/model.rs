@@ -21,10 +21,10 @@ pub trait DefaultRenderCommands<'e, ExtFnProvider> {
     fn default_render_commands<'r, NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: br::CmdRecord<'r, ExtFnProvider>,
+        cmd: br::CmdRecord<'r>,
         buffer: &(impl br::Buffer + ?Sized),
         extras: Self::Extras,
-    ) -> br::CmdRecord<'r, ExtFnProvider>;
+    ) -> br::CmdRecord<'r>;
 }
 
 #[derive(Debug, Clone)]
