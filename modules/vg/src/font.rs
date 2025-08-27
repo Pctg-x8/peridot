@@ -130,7 +130,8 @@ pub trait Font {
     ) -> Result<(), GlyphLoadingError>;
 }
 
-#[cfg(any(not(doc), feature = "ci-nolib"))]
+#[cfg(not(doc))]
+#[cfg(not(feature = "ci-nolib"))]
 pub type DefaultFont = <DefaultFontProvider as FontProvider>::Font;
 
 /// An asset represents ttf blob
