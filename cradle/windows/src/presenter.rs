@@ -283,7 +283,7 @@ impl InteropBackbufferResource {
             br::vkfn_wrapper::create_image(
                 g.device().native_ptr(),
                 &br::ImageCreateInfo::new(size, format)
-                    .as_color_attachment()
+                    .with_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
                     .with_next(&exportable),
                 None,
             )
