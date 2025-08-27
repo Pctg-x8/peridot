@@ -17,7 +17,6 @@ module IntegrityTest.Shared
   )
 where
 
-import CustomAction.CheckBuildSubdirectory qualified as CheckBuildSubdirAction
 import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import Data.Function ((&))
 import Data.Functor ((<&>))
@@ -48,8 +47,8 @@ checkoutStep = GHA.namedAs "Checking out" $ Checkout.step Nothing
 checkoutHeadStep = GHA.namedAs "Checking out (HEAD commit)" $ Checkout.step $ Just pullRequestHeadHashExpr
 
 -- あとでlatest自動取得とかしたいけど面倒だから一旦これでいいや
-setupCargoOutputTranslator :: GHA.Step
-setupCargoOutputTranslator = GHA.namedAs "Setup cargo-json-gha-translator" $
+setupCargoOutputTranslatorStep :: GHA.Step
+setupCargoOutputTranslatorStep = GHA.namedAs "Setup cargo-json-gha-translator" $
   GHA.runStep "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
 
 rustCacheStep, llvmCacheStep :: GHA.Step
@@ -87,7 +86,7 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
         <$> [ checkoutHeadStep,
               checkoutStep,
               rustCacheStep,
-              setupCargoOutputTranslator,
+              setupCargoOutputTranslatorStep,
               GHA.namedAs "check" $
                 GHA.runStep "cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
               GHA.namedAs "check(mt)" $
@@ -98,8 +97,15 @@ checkTools :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
   where
     steps =
-      GHA.withCondition precondition
-        <$> [checkoutHeadStep, checkoutStep, rustCacheStep, CheckBuildSubdirAction.step "./tools"]
+      GHA.withCondition precondition <$>
+        [ checkoutHeadStep
+        , checkoutStep
+        , rustCacheStep
+        , setupCargoOutputTranslatorStep
+        , GHA.namedAs "check" $
+            GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+              & GHA.workAt "tools"
+        ]
 
 checkModules :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job steps
@@ -109,7 +115,7 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job s
         [ checkoutHeadStep
         , checkoutStep
         , rustCacheStep
-        , setupCargoOutputTranslator
+        , setupCargoOutputTranslatorStep
         , GHA.namedAs "check" $
             GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
               & GHA.workAt "modules"
@@ -119,8 +125,15 @@ checkExamples :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job steps
   where
     steps =
-      GHA.withCondition precondition
-        <$> [checkoutHeadStep, checkoutStep, rustCacheStep, CheckBuildSubdirAction.step "./examples"]
+      GHA.withCondition precondition <$>
+        [ checkoutHeadStep
+        , checkoutStep
+        , rustCacheStep
+        , setupCargoOutputTranslatorStep
+        , GHA.namedAs "check" $
+            GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+              & GHA.workAt "examples"
+        ]
 
 cliBuildStep, archiverBuildStep :: GHA.Step
 cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build"
