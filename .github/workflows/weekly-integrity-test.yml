@@ -380,7 +380,7 @@ jobs:
         run: cargo fmt -- --check
       - if: 'true'
         name: Running Clippy
-        run: "set -o pipefail; cargo clippy --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        run: "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
       - if: 'true'
         name: Running Check - Trailing Newline for Source Code Files
         run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"

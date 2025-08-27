@@ -71,7 +71,7 @@ checkFormats precondition =
                   rustCacheStep,
                   setupCargoOutputTranslatorStep,
                   GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
-                  GHA.namedAs "Running Clippy" $ GHA.runStep "set -o pipefail; cargo clippy --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+                  GHA.namedAs "Running Clippy" $ GHA.runStep "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
                     GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
                 ]

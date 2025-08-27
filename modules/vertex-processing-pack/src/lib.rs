@@ -75,12 +75,12 @@ impl PvpContainer {
         // バイナリを裏で構築しつつオフセット値を書き出す
         let mut blob = Cursor::new(Vec::new());
         self.vertex_bindings.binary_serialize(&mut blob)?;
-        VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
+        VariableUInt((blob.stream_position()?) as _).write(writer)?;
         self.vertex_attributes.binary_serialize(&mut blob)?;
-        VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
+        VariableUInt((blob.stream_position()?) as _).write(writer)?;
         SpvBinary::from_ref(&self.vertex_shader).binary_serialize(&mut blob)?;
         if let Some(ref b) = self.fragment_shader {
-            VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
+            VariableUInt((blob.stream_position()?) as _).write(writer)?;
             SpvBinary::from_ref(b).binary_serialize(&mut blob)?;
         } else {
             VariableUInt(0).write(writer)?;
@@ -305,9 +305,9 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
         let VariableUInt(va_offset) = VariableUInt::read(&mut reader)?;
         let VariableUInt(vsh_offset) = VariableUInt::read(&mut reader)?;
         let VariableUInt(fsh_offset_0) = VariableUInt::read(&mut reader)?;
-        let blob_offset = reader.seek(SeekFrom::Current(0))? as u64;
+        let blob_offset = reader.stream_position()?;
 
-        return Ok(PvpContainerReader {
+        Ok(PvpContainerReader {
             vb_offset: blob_offset,
             va_offset: va_offset as u64 + blob_offset,
             vsh_offset: vsh_offset as u64 + blob_offset,
@@ -317,7 +317,7 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
                 Some(fsh_offset_0 as u64 + blob_offset)
             },
             reader,
-        });
+        })
     }
 
     pub fn read_vertex_bindings(
@@ -404,11 +404,12 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
         let VariableUInt(input_rate) = VariableUInt::read(source)?;
         let VariableUInt(binding) = VariableUInt::read(source)?;
         let VariableUInt(stride) = VariableUInt::read(source)?;
-        return Ok(br::vk::VkVertexInputBindingDescription {
+
+        Ok(br::vk::VkVertexInputBindingDescription {
             inputRate: input_rate as _,
             binding: binding as _,
             stride: stride as _,
-        });
+        })
     }
 }
 #[cfg(feature = "async-rt-async-std")]
@@ -473,12 +474,13 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
         let VariableUInt(binding) = VariableUInt::read(source)?;
         let VariableUInt(offset) = VariableUInt::read(source)?;
         let VariableUInt(format) = VariableUInt::read(source)?;
-        return Ok(br::vk::VkVertexInputAttributeDescription {
+
+        Ok(br::vk::VkVertexInputAttributeDescription {
             location: location as _,
             binding: binding as _,
             offset: offset as _,
             format: format as _,
-        });
+        })
     }
 }
 #[cfg(feature = "async-rt-async-std")]
@@ -524,7 +526,8 @@ impl<T: BinarySerializeVkStructures> BinarySerializeVkStructures for Vec<T> {
         for x in self {
             write_bytes += x.binary_serialize(sink)?;
         }
-        return Ok(write_bytes);
+
+        Ok(write_bytes)
     }
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>
     where
@@ -535,7 +538,8 @@ impl<T: BinarySerializeVkStructures> BinarySerializeVkStructures for Vec<T> {
         for _ in 0..element_count {
             vs.push(T::binary_unserialize(source)?);
         }
-        return Ok(vs);
+
+        Ok(vs)
     }
 }
 #[cfg(feature = "async-rt-async-std")]
@@ -630,13 +634,13 @@ impl AsyncBinarySerializeVkStructures for SpvBinary {
         async move {
             let VariableUInt(len) = VariableUInt::read_async(source).await?;
             let mut buf = Vec::with_capacity(len as _);
-            unsafe {
-                buf.set_len(len as _);
-            }
             async_std::io::ReadExt::read_exact(source, unsafe {
-                core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() << 2)
+                core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.capacity() << 2)
             })
             .await?;
+            unsafe {
+                buf.set_len(buf.capacity());
+            }
 
             Ok(Self(buf))
         }
