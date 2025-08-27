@@ -150,10 +150,10 @@ impl PascalString {
     pub fn read(reader: &mut (impl BufRead + ?Sized)) -> IOResult<Self> {
         let VariableUInt(bytelength) = VariableUInt::read(reader)?;
         let mut bytes = Vec::with_capacity(bytelength as _);
+        reader.read_exact(unsafe { core::mem::transmute(bytes.spare_capacity_mut()) })?;
         unsafe {
             bytes.set_len(bytelength as _);
         }
-        reader.read_exact(&mut bytes)?;
 
         from_utf8(&bytes[..])
             .map(|s| Self(s.to_owned()))
