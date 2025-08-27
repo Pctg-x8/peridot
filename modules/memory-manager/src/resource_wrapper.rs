@@ -102,6 +102,7 @@ impl AnyPointer {
             .unwrap_unchecked()
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut_at<T>(&self, byte_offset: usize) -> &mut T {
         (self.0.as_ptr().add(byte_offset) as *mut T)
             .as_mut()
@@ -112,6 +113,7 @@ impl AnyPointer {
         core::slice::from_raw_parts(self.0.as_ptr().add(byte_offset) as _, len)
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn slice_mut<T>(&self, byte_offset: usize, len: usize) -> &mut [T] {
         core::slice::from_raw_parts_mut(self.0.as_ptr().add(byte_offset) as _, len)
     }

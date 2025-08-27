@@ -70,7 +70,7 @@ impl PvpContainer {
     }
 
     pub fn write<W: Write>(&self, writer: &mut W) -> IOResult<()> {
-        writer.write(b"PVP\x01")?; // ヘッダ(シグネチャとバージョン)
+        writer.write_all(b"PVP\x01")?; // ヘッダ(シグネチャとバージョン)
 
         // バイナリを裏で構築しつつオフセット値を書き出す
         let mut blob = Cursor::new(Vec::new());
