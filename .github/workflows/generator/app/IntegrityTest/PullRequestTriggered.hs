@@ -2,7 +2,6 @@
 
 module IntegrityTest.PullRequestTriggered (integrityTest) where
 
-import Control.Eff (run)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
 import Data.Function ((&))
 import Data.Map qualified as M
@@ -11,6 +10,7 @@ import SlackNotification
 import Utils
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.JobGroupComposer ((~=>))
+import Data.Functor.Identity (runIdentity)
 
 repositoryOwnerLoginExpr, repositoryNameExpr :: String
 repositoryOwnerLoginExpr = GHA.mkExpression "github.event.repository.owner.login"
@@ -99,7 +99,7 @@ preconditions =
     apiRequest = "curl -s -H " <> apiRequestAuthHeader <> " -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
 
 integrityTest :: GHA.Workflow
-integrityTest = run $ withSlackNotification slackNotifyProvider do
+integrityTest = runIdentity $ withSlackReport slackNotifyProvider do
   let preconditions' = M.singleton "preconditions" preconditions
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 

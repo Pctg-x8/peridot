@@ -267,8 +267,8 @@ impl TransferBatch2 {
 
     pub fn generate_commands<'r, Device: br::Device>(
         &self,
-        rec: br::CmdRecord<'r, Device>,
-    ) -> br::CmdRecord<'r, Device> {
+        rec: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         rec.pipeline_barrier(
             br::PipelineStageFlags::HOST,
             br::PipelineStageFlags::TRANSFER,
@@ -565,10 +565,7 @@ impl<Device: br::Device> TransferBatch<Device> {
 }
 /// Sinking Commands into CommandBuffers
 impl<Device: br::Device> TransferBatch<Device> {
-    pub fn sink_transfer_commands<'r>(
-        &self,
-        r: br::CmdRecord<'r, Device>,
-    ) -> br::CmdRecord<'r, Device> {
+    pub fn sink_transfer_commands<'r>(&self, r: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         let src_barriers = self.barrier_range_src.iter().map(|(b, r)| {
             br::BufferMemoryBarrier::new(
                 &b.0,
@@ -637,10 +634,7 @@ impl<Device: br::Device> TransferBatch<Device> {
         })
     }
 
-    pub fn sink_graphics_ready_commands<'r>(
-        &self,
-        r: br::CmdRecord<'r, Device>,
-    ) -> br::CmdRecord<'r, Device> {
+    pub fn sink_graphics_ready_commands<'r>(&self, r: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         self.ready_barriers.iter().fold(
             r,
             |r, (stg, ReadyResourceBarriers { buffer, image, .. })| {

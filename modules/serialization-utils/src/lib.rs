@@ -150,10 +150,10 @@ impl PascalString {
     pub fn read(reader: &mut (impl BufRead + ?Sized)) -> IOResult<Self> {
         let VariableUInt(bytelength) = VariableUInt::read(reader)?;
         let mut bytes = Vec::with_capacity(bytelength as _);
+        reader.read_exact(unsafe { core::mem::transmute(bytes.spare_capacity_mut()) })?;
         unsafe {
             bytes.set_len(bytelength as _);
         }
-        reader.read_exact(&mut bytes)?;
 
         from_utf8(&bytes[..])
             .map(|s| Self(s.to_owned()))
@@ -167,10 +167,13 @@ impl PascalString {
         let VariableUInt(byte_length) = VariableUInt::read_async(reader).await?;
 
         let mut bytes = Vec::with_capacity(byte_length as _);
+        async_std::io::ReadExt::read_exact(reader, unsafe {
+            core::mem::transmute(bytes.spare_capacity_mut())
+        })
+        .await?;
         unsafe {
-            bytes.set_len(byte_length as _);
+            bytes.set_len(bytes.capacity());
         }
-        async_std::io::ReadExt::read_exact(reader, &mut bytes).await?;
 
         from_utf8(&bytes[..])
             .map(|s| Self(s.to_owned()))

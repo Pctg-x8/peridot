@@ -178,7 +178,7 @@ pub trait FeatureRequests {
             sparseResidency8Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample8() as _,
             sparseResidency16Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample16() as _,
             sparseResidencyAliased: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_aliased() as _,
-            ..Default::default()
+            ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
         }
     }
 }
@@ -319,7 +319,7 @@ impl LastRenderingCompletionFence {
     }
 
     #[must_use]
-    pub fn r#use(&mut self) -> br::VkHandleRefMut<br::vk::VkFence> {
+    pub fn r#use<'s>(&'s mut self) -> br::VkHandleRefMut<'s, br::vk::VkFence> {
         self.used = true;
 
         unsafe { br::VkHandleRefMut::dangling(self.handle) }
@@ -394,6 +394,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
     }
 }
 impl<'q, NL: NativeLinker> Engine<'q, NL> {
+    #[allow(clippy::mut_from_ref)]
     pub fn event_receivers(&self) -> &mut EngineEventReceiver {
         unsafe { &mut *self.receivers.get() }
     }
@@ -436,7 +437,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     pub fn back_buffer_count(&self) -> usize {
         self.presenter.back_buffer_count()
     }
-    pub fn back_buffer(&self, index: usize) -> Option<br::VkHandleRef<br::vk::VkImage>> {
+    pub fn back_buffer<'s>(&'s self, index: usize) -> Option<br::VkHandleRef<'s, br::vk::VkImage>> {
         self.presenter.back_buffer(index)
     }
     pub fn iter_back_buffers<'s>(
@@ -467,7 +468,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
 
     pub fn submit_commands(
         &mut self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -485,8 +486,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>
-            + 's,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a> + 's,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
     }
@@ -641,7 +641,7 @@ impl<T> LateInit<T> {
     pub fn init(&self, v: T) {
         *self.0.borrow_mut() = v.into();
     }
-    pub fn get(&self) -> Ref<T> {
+    pub fn get<'s>(&'s self) -> Ref<'s, T> {
         Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
     }
 }
@@ -783,10 +783,7 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
     }
 
     #[inline(always)]
-    pub fn bind<'r, Device: ?Sized>(
-        &self,
-        rec: br::CmdRecord<'r, Device>,
-    ) -> br::CmdRecord<'r, Device> {
+    pub fn bind<'r>(&self, rec: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         rec.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }

@@ -228,12 +228,12 @@ impl SpirvBinary {
     fn read(reader: &mut (impl std::io::BufRead + ?Sized)) -> std::io::Result<Self> {
         let VariableUInt(len) = VariableUInt::read(reader)?;
         let mut buf = Vec::with_capacity(len as _);
-        unsafe {
-            buf.set_len(len as _);
-        }
         reader.read_exact(unsafe {
-            core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() << 2)
+            core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.capacity() << 2)
         })?;
+        unsafe {
+            buf.set_len(buf.capacity());
+        }
 
         Ok(Self(buf))
     }

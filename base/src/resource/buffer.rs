@@ -341,12 +341,12 @@ impl<'g> BufferPrealloc<'g> {
         }
     }
 
-    pub fn build_desc(&self) -> br::BufferCreateInfo {
+    pub fn build_desc(&self) -> br::BufferCreateInfo<'_> {
         br::BufferCreateInfo::new(self.total as _, self.usage)
     }
 
     /// this ignores usage flags from appended contents
-    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferCreateInfo {
+    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferCreateInfo<'_> {
         br::BufferCreateInfo::new(self.total as _, usage)
     }
 

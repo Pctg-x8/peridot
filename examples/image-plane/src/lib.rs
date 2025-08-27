@@ -143,8 +143,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .allocate_device_local_image(
             e.graphics(),
             br::ImageCreateInfo::new(image_data.0.size, image_data.0.format as _)
-                .sampled()
-                .transfer_dest()
+                .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
                 .init_layout(br::ImageLayout::Preinitialized),
         )
         .expect("Failed to allocate main image");
@@ -245,7 +244,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .execute_and_finish(
                 update_cb
                     .synchronized_nth(0)
-                    .begin(&br::CommandBufferBeginInfo::new(), e.graphics().device())
+                    .begin(&br::CommandBufferBeginInfo::new())
                     .expect("Failed to begin recording update command"),
             )
             .expect("Failed to record update commands");
@@ -410,7 +409,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     ColorAttachmentBlending::Disabled.into_vk()
                 ]),
             )
-            .multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+            .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
         )
         .expect("Create GraphicsPipeline");
@@ -499,7 +498,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         (&color_renders)
             .between(begin_main_rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                cb.begin(&br::CommandBufferBeginInfo::new(), e.graphics().device())
+                cb.begin(&br::CommandBufferBeginInfo::new())
                     .expect("Failed to begin command recording")
             })
             .expect("Failed to record render commands");
@@ -581,11 +580,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             (&color_renders)
                                 .between(begin_main_rp, EndRenderPass)
                                 .execute_and_finish(unsafe {
-                                    cb.begin(
-                                        &br::CommandBufferBeginInfo::new(),
-                                        e.graphics().device(),
-                                    )
-                                    .expect("Failed to begin command recording")
+                                    cb.begin(&br::CommandBufferBeginInfo::new())
+                                        .expect("Failed to begin command recording")
                                 })
                                 .expect("Failed to record render commands");
                         }
@@ -678,7 +674,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     (&color_renders)
                         .between(begin_main_rp, EndRenderPass)
                         .execute_and_finish(unsafe {
-                            cb.begin(&br::CommandBufferBeginInfo::new(), e.graphics().device())
+                            cb.begin(&br::CommandBufferBeginInfo::new())
                                 .expect("Failed to begin command recording")
                         })
                         .expect("Failed to record render commands");

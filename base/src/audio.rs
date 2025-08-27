@@ -21,11 +21,12 @@ struct UniqueRawSliceMut<T> {
     length: usize,
 }
 impl<T> UniqueRawSliceMut<T> {
+    #[allow(clippy::mut_from_ref)]
     unsafe fn as_slice_mut(&self) -> &mut [T] {
-        std::slice::from_raw_parts_mut(self.ptr, self.length)
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.length) }
     }
     unsafe fn as_slice(&self) -> &[T] {
-        std::slice::from_raw_parts(self.ptr, self.length)
+        unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 }
 unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
@@ -88,11 +89,15 @@ impl Mixer {
     }
     fn setup_process_frames(&mut self, frames: u32) {
         let frames_dup = frames << 1;
-        self.subprocess_buffers =
-            Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
-        unsafe {
-            self.subprocess_buffers
-                .set_len(frames_dup as usize * self.parallelize as usize);
+        // 未初期化でいいからメモリ領域がほしい 実際につかうまでには初期化されるので一旦allow
+        #[allow(clippy::uninit_vec)]
+        {
+            self.subprocess_buffers =
+                Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
+            unsafe {
+                self.subprocess_buffers
+                    .set_len(frames_dup as usize * self.parallelize as usize);
+            }
         }
         self.subprocess_buffers_refs = (0..self.parallelize)
             .map(|i| unsafe {
@@ -454,9 +459,14 @@ impl super::FromStreamingAsset for StreamingPlayableWav {
         tracing::debug!(?fmt);
         loader.seek_data()?;
         // initial buffering
-        let mut buffered_samples = Vec::with_capacity(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
-        unsafe {
-            buffered_samples.set_len(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
+        let mut buffered_samples;
+        // 未初期化でいいからメモリ領域がほしい 実際につかうまでには初期化されるので一旦allow
+        #[allow(clippy::uninit_vec)]
+        {
+            buffered_samples = Vec::with_capacity(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
+            unsafe {
+                buffered_samples.set_len(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
+            }
         }
         let mut buffered_samples = buffered_samples.into_boxed_slice();
         let buffer_length = match loader.read_data_uncompressed(&fmt, buffered_samples.len()) {
