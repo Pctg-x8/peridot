@@ -8,6 +8,7 @@ edition = "2018"
 default = []
 use-freetype = ["freetype2"]
 use-fontconfig = ["fontconfig"]
+ci-nolib = []
 
 [dependencies]
 bedrock = { workspace = true }
