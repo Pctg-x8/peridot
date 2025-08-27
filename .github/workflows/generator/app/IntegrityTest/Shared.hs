@@ -75,7 +75,7 @@ checkFormats precondition =
                   GHA.namedAs "Running Check - Debugging Weaks" $
                     CodeFormCheckerAction.step CodeFormCheckerAction.ScriptVulnerabilitiesEliminator,
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
-                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptTrailingNewlineChecker
+                    GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
                 ]
         )
 
