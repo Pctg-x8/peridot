@@ -9,73 +9,15 @@ use std::{cell::UnsafeCell, os::fd::AsRawFd};
 use bitflags::bitflags;
 use ffi::wl_proxy_destroy;
 
-mod cursor_shape;
 pub mod ffi;
-mod fractional_scale;
-mod gtk_shell;
-mod viewporter;
-mod xdg_decoration;
-mod xdg_foreign;
-mod xdg_shell;
+mod local_macros;
 
-pub use cursor_shape::*;
 pub use ffi::Fixed;
-pub use fractional_scale::*;
-pub use gtk_shell::*;
-pub use viewporter::*;
-pub use xdg_decoration::*;
-pub use xdg_foreign::*;
-pub use xdg_shell::*;
 
 const NEWID_ARG: ffi::Argument = ffi::Argument { n: 0 };
 const NULLOBJ_ARG: ffi::Argument = ffi::Argument {
     o: core::ptr::null_mut(),
 };
-
-#[macro_export]
-macro_rules! EventFnTable {
-    { for $tyvar: ident : $tr: path { $($name: ident ( $($an: ident: $act: ty => $aconv: expr),* )),* } } => {
-        {
-            $(extern "C" fn $name<L: $tr>(
-                data_: *mut core::ffi::c_void,
-                sender_: *mut ffi::Proxy,
-                $($an: $act),*
-            ) {
-                L::$name(
-                    unsafe { &mut *(data_ as *mut _) },
-                    unsafe { &mut *(sender_ as *mut _) },
-                    $($aconv),*
-                )
-            })*
-
-            #[repr(C)]
-            struct FPTable { $($name: extern "C" fn(*mut core::ffi::c_void, *mut ffi::Proxy, $($act),*)),* }
-            &const { FPTable { $($name: $name::<$tyvar>),* } } as &'static FPTable
-        }
-    }
-}
-
-#[repr(transparent)]
-pub struct OwnedProxy(NonNull<ffi::Proxy>);
-impl Drop for OwnedProxy {
-    fn drop(&mut self) {
-        unsafe { ffi::wl_proxy_destroy(self.0.as_ptr()) }
-    }
-}
-impl Deref for OwnedProxy {
-    type Target = Proxy;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        unsafe { core::mem::transmute(self.0.as_ref()) }
-    }
-}
-impl DerefMut for OwnedProxy {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { Proxy::from_raw_ref_mut(self.0.as_mut()) }
-    }
-}
 
 #[repr(transparent)]
 pub struct Proxy(UnsafeCell<ffi::Proxy>);
@@ -981,7 +923,7 @@ pub enum OutputTransform {
 pub struct Output(Proxy);
 unsafe impl Interface for Output {
     fn def() -> &'static ffi::Interface {
-        unsafe { &wl_callback_interface }
+        unsafe { &wl_output_interface }
     }
 }
 
@@ -1382,6 +1324,7 @@ unsafe extern "C" {
     static wl_data_offer_interface: ffi::Interface;
 }
 
+#[allow(dead_code)]
 const fn message(
     name: &'static core::ffi::CStr,
     signature: &'static core::ffi::CStr,
@@ -1394,6 +1337,7 @@ const fn message(
     }
 }
 
+#[allow(dead_code)]
 const fn interface(
     name: &'static core::ffi::CStr,
     version: core::ffi::c_int,
@@ -1409,3 +1353,27 @@ const fn interface(
         events: events.as_ptr(),
     }
 }
+
+macro_rules! Ext {
+    ($name: literal, $modname: ident) => {
+        #[cfg(feature = $name)]
+        mod $modname;
+        #[cfg(feature = $name)]
+        pub use self::$modname::*;
+    };
+}
+
+// stable
+Ext!("viewporter", viewporter);
+Ext!("xdg-shell", xdg_shell);
+
+// staging
+Ext!("fractional-scale-v1", fractional_scale);
+Ext!("cursor-shape-v1", cursor_shape);
+
+// unstable
+Ext!("xdg-decoration-unstable-v1", xdg_decoration);
+Ext!("xdg-foreign-unstable-v2", xdg_foreign);
+
+// external
+Ext!("gtk-shell", gtk_shell);
