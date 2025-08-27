@@ -12,5 +12,5 @@ do
     fi
 done
 
-echo $EXIT
+exit $EXIT
 
