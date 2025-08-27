@@ -277,7 +277,7 @@ impl ArchiveRead {
         reader: &mut (impl BufRead + ?Sized),
     ) -> IOResult<HashMap<String, AssetEntryHeadingPair>> {
         let VariableUInt(count) = VariableUInt::read(reader)?;
-        if count <= 0 {
+        if count == 0 {
             return Ok(HashMap::new());
         }
         let mut elements = HashMap::with_capacity(count as _);
@@ -293,11 +293,13 @@ impl ArchiveRead {
         if let Some(entry_pair) = self.find(path) {
             self.content.seek(SeekFrom::Start(entry_pair.byte_offset))?;
             let mut sink = Vec::with_capacity(entry_pair.byte_length as _);
+            self.content
+                .read_exact(unsafe { core::mem::transmute(sink.spare_capacity_mut()) })?;
             unsafe {
-                sink.set_len(entry_pair.byte_length as _);
+                sink.set_len(sink.capacity());
             }
 
-            self.content.read_exact(&mut sink).map(move |_| Some(sink))
+            Ok(Some(sink))
         } else {
             Ok(None)
         }
