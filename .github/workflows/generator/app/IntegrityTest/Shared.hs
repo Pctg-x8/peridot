@@ -88,9 +88,9 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
               rustCacheStep,
               setupCargoOutputTranslatorStep,
               GHA.namedAs "check" $
-                GHA.runStep "cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+                GHA.runStep "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
               GHA.namedAs "check(mt)" $
-                GHA.runStep "cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+                GHA.runStep "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
             ]
 
 checkTools :: SlackReportContext m => Functor m => String -> m GHA.Job
