@@ -221,7 +221,7 @@ impl InputProcessSharedState {
     }
 
     #[inline]
-    pub fn make_event_receiver(&mut self) -> NativeEventReceiver {
+    pub fn make_event_receiver<'s>(&'s mut self) -> NativeEventReceiver<'s> {
         NativeEventReceiver {
             collect_data: &mut self.collected,
             input_map: &self.input_map,
@@ -348,12 +348,16 @@ impl InputProcess {
     }
 
     #[inline]
-    pub fn state_read_lock(&self) -> parking_lot::RwLockReadGuard<InputProcessSharedState> {
+    pub fn state_read_lock<'s>(
+        &'s self,
+    ) -> parking_lot::RwLockReadGuard<'s, InputProcessSharedState> {
         self.state.read()
     }
 
     #[inline]
-    pub fn state_write_lock(&self) -> parking_lot::RwLockWriteGuard<InputProcessSharedState> {
+    pub fn state_write_lock<'s>(
+        &'s self,
+    ) -> parking_lot::RwLockWriteGuard<'s, InputProcessSharedState> {
         self.state.write()
     }
 

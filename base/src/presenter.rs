@@ -272,7 +272,7 @@ impl<'d> SubmissionBatchBuilder<'d> {
         self
     }
 
-    pub fn build(&self) -> br::SubmitInfo {
+    pub fn build<'s, 'n>(&'s self) -> br::SubmitInfo<'s, 's, 'n> {
         br::SubmitInfo::new(
             &self.wait_semaphores,
             &self.wait_dst_stages,

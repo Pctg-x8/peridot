@@ -159,22 +159,22 @@ impl<Device: br::Device> CommandBundle<Device> {
     }
 
     #[inline]
-    pub fn iter(&self) -> CommandBundleBufferIter<Device> {
+    pub fn iter<'s>(&'s self) -> CommandBundleBufferIter<'s, Device> {
         CommandBundleBufferIter(&self.buffers, 0, core::marker::PhantomData)
     }
 
     #[inline]
-    pub fn iter_mut(&mut self) -> CommandBundleBufferIterMut<Device> {
+    pub fn iter_mut<'s>(&'s mut self) -> CommandBundleBufferIterMut<'s, Device> {
         CommandBundleBufferIterMut(&mut self.buffers, 0, core::marker::PhantomData)
     }
 
     #[inline]
-    pub fn nth_ref(&self, n: usize) -> CommandBundleBufferRef<Device> {
+    pub fn nth_ref<'s>(&'s self, n: usize) -> CommandBundleBufferRef<'s, Device> {
         CommandBundleBufferRef(self.buffers[n], core::marker::PhantomData)
     }
 
     #[inline]
-    pub fn synchronized_nth(&mut self, n: usize) -> br::SynchronizedCommandBuffer {
+    pub fn synchronized_nth<'s>(&'s mut self, n: usize) -> br::SynchronizedCommandBuffer<'s, 's> {
         // self.0は必ずself.1から生成されてるのでsafe
         unsafe {
             br::SynchronizedCommandBuffer::new_unchecked(

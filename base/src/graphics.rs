@@ -978,7 +978,7 @@ impl Graphics {
     #[cfg(feature = "mt")]
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<impl core::future::Future<Output = br::Result<()>> + 's> {
         use bedrock::VkHandleMut;
 
@@ -986,6 +986,8 @@ impl Graphics {
             handle: br::vk::VkFence,
             device: VulkanGfx,
         }
+        unsafe impl Sync for StandaloneFence {}
+        unsafe impl Send for StandaloneFence {}
         impl Drop for StandaloneFence {
             fn drop(&mut self) {
                 unsafe {
@@ -1065,10 +1067,9 @@ impl Graphics {
                 &br::CommandBufferBeginInfo::new().onetime_submit(),
             )?
         };
-        generator(br::CmdRecord::new(
-            unsafe { br::VkHandleRefMut::dangling(cb.buffer) },
-            &self.gfx_device,
-        ))
+        generator(br::CmdRecord::new(unsafe {
+            br::VkHandleRefMut::dangling(cb.buffer)
+        }))
         .end()?;
         unsafe {
             br::vkfn_wrapper::queue_submit(
