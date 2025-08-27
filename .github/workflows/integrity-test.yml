@@ -22,8 +22,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -76,8 +76,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
@@ -154,8 +154,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - id: llvm-cache
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize LLVM Cache
@@ -223,8 +223,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
@@ -288,8 +288,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
@@ -349,8 +349,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - env:
           TARGET_PATH: "./examples"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -395,8 +395,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Rustfmt
         run: cargo fmt -- --check
@@ -455,8 +455,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -504,8 +504,8 @@ jobs:
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}${{ hashFiles('rust-toolchain.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('rust-toolchain.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\n~/.cargo/bin\n~/.rustup\ntarget"
       - env:
           TARGET_PATH: "./tools"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"

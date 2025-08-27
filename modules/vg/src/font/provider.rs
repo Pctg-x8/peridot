@@ -32,6 +32,81 @@ pub trait FontProvider {
     ) -> Result<Self::Font, FontConstructionError>;
 }
 
+#[cfg(test)]
+pub struct TestFont;
+#[cfg(test)]
+impl crate::Font for TestFont {
+    type GlyphID = u32;
+
+    fn advance_h(&self, _glyph: &Self::GlyphID) -> Result<f32, super::GlyphLoadingError> {
+        Ok(0.0)
+    }
+
+    fn ascent(&self) -> f32 {
+        0.0
+    }
+
+    fn bounds(
+        &self,
+        _glyph: &Self::GlyphID,
+    ) -> Result<euclid::Rect<f32>, super::GlyphLoadingError> {
+        Ok(euclid::Rect::zero())
+    }
+
+    fn glyph_id(&self, _c: char) -> Option<Self::GlyphID> {
+        None
+    }
+
+    fn outline(
+        &self,
+        _glyph: &Self::GlyphID,
+        _transform: &euclid::Transform2D<f32>,
+        _builder: &mut impl lyon_path::builder::PathBuilder,
+    ) -> Result<(), super::GlyphLoadingError> {
+        Ok(())
+    }
+
+    fn set_em_size(&mut self, _size: f32) {}
+
+    fn size(&self) -> f32 {
+        0.0
+    }
+
+    fn units_per_em(&self) -> u32 {
+        0
+    }
+}
+#[cfg(test)]
+pub struct DefaultFontProvider;
+#[cfg(test)]
+impl FontProvider for DefaultFontProvider {
+    type Font = TestFont;
+
+    fn best_match(
+        &mut self,
+        _family_name: &str,
+        _properties: &FontProperties,
+        _size: f32,
+    ) -> Result<Self::Font, FontConstructionError> {
+        Ok(TestFont)
+    }
+
+    fn load<NL: peridot::NativeLinker>(
+        &self,
+        _e: &peridot::Engine<NL>,
+        _asset_path: &str,
+        _size: f32,
+    ) -> Result<Self::Font, FontConstructionError> {
+        Ok(TestFont)
+    }
+}
+#[cfg(test)]
+impl FontProviderConstruct for DefaultFontProvider {
+    fn new() -> Result<Self, FontConstructionError> {
+        Ok(Self)
+    }
+}
+
 cfg_if! {
     if #[cfg(all(windows, not(feature = "use-freetype")))] {
         // activate DirectWrite backend
@@ -59,6 +134,7 @@ cfg_if! {
     }
 }
 
+#[cfg(not(test))]
 cfg_if! {
     if #[cfg(feature = "use-freetype")] {
         #[cfg(feature = "use-fontconfig")]
