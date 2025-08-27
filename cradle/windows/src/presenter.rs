@@ -120,8 +120,8 @@ impl peridot::PlatformPresenter for Presenter {
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
-    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
 
@@ -597,8 +597,8 @@ impl peridot::PlatformPresenter for Presenter {
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
-    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         let barriers = self
             .back_buffers
             .iter()
