@@ -18,6 +18,7 @@ pub trait EventProcessor {
 
     fn readiness_guard(&mut self) -> Self::ReadinessGuard;
     fn process_all_events(&mut self, readiness_guard: Self::ReadinessGuard);
+    fn cancel_read(&mut self);
     fn has_close_requested(&self) -> bool;
 }
 

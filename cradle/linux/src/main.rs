@@ -7,7 +7,6 @@ use sound_backend::SoundBackend;
 use std::{ffi::CStr, path::PathBuf, sync::Arc};
 use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
-use tracing::warn;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 mod sound_backend;
@@ -252,8 +251,9 @@ where
             .expect("Failed to waiting epoll");
         drop(window_backend_temporary_epoll);
 
-        // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
+        // TODO: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 {
+            window_backend.borrow_mut().cancel_read();
             drop(window_backend_readiness_guard);
             let current_geometry = window_backend.borrow().geometry();
             if last_drawn_geometry != current_geometry {
@@ -282,6 +282,10 @@ where
                     &*window_backend.borrow(),
                 );
             }
+        }
+        if rg.is_some() {
+            // no window server events processed
+            window_backend.borrow_mut().cancel_read();
         }
     }
 

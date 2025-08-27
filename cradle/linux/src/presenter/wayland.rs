@@ -1,32 +1,24 @@
-use std::{collections::HashMap, ffi::CStr};
+use std::{
+    collections::HashMap,
+    ffi::{CStr, CString},
+    os::fd::{AsRawFd, BorrowedFd},
+    pin::Pin,
+    ptr::NonNull,
+};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef};
-use wayland_backend::client::ReadEventsGuard;
-use wayland_client::{
-    protocol::{
-        wl_compositor::WlCompositor, wl_pointer::WlPointer, wl_registry::WlRegistry,
-        wl_seat::WlSeat, wl_surface::WlSurface,
-    },
-    Connection, Dispatch, EventQueue, Proxy, QueueHandle,
-};
-use wayland_protocols::xdg::{
-    decoration::zv1::client::{
-        zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
-        zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
-    },
-    shell::client::{xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel, xdg_wm_base::XdgWmBase},
-};
+use peridot_tp_wayland as wl;
 
 use crate::input::PointerPositionProvider;
 
 use super::{BorrowFd, EventProcessor, PresenterProvider, WindowBackend};
 
 #[repr(transparent)]
-pub struct ReadinessGuard(ReadEventsGuard);
+pub struct ReadinessGuard(core::ffi::c_int);
 impl BorrowFd for ReadinessGuard {
-    fn borrow_fd<'fd>(&'fd self) -> std::os::fd::BorrowedFd<'fd> {
-        self.0.connection_fd()
+    fn borrow_fd<'fd>(&'fd self) -> BorrowedFd<'fd> {
+        unsafe { BorrowedFd::borrow_raw(self.0) }
     }
 }
 
@@ -36,205 +28,356 @@ pub struct State {
     pointer_entered: bool,
     pointer_position: peridot::math::Vector2<usize>,
 }
-wayland_client::delegate_noop!(State: ignore WlCompositor);
-wayland_client::delegate_noop!(State: ignore WlSurface);
-wayland_client::delegate_noop!(State: ignore ZxdgDecorationManagerV1);
-wayland_client::delegate_noop!(State: ignore ZxdgToplevelDecorationV1);
-impl Dispatch<XdgWmBase, ()> for State {
-    fn event(
-        _state: &mut Self,
-        proxy: &XdgWmBase,
-        event: <XdgWmBase as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+impl wl::SurfaceEventListener for State {
+    fn enter(
+        &mut self,
+        _surface: &mut peridot_tp_wayland::Surface,
+        _output: &mut peridot_tp_wayland::Output,
     ) {
-        match event {
-            wayland_protocols::xdg::shell::client::xdg_wm_base::Event::Ping { serial } => {
-                proxy.pong(serial);
-            }
-            _ => (),
-        }
     }
-}
-impl Dispatch<XdgSurface, ()> for State {
-    #[tracing::instrument(skip(state, proxy, _data, _conn, _qhandle))]
-    fn event(
-        state: &mut Self,
-        proxy: &XdgSurface,
-        event: <XdgSurface as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
-    ) {
-        match event {
-            wayland_protocols::xdg::shell::client::xdg_surface::Event::Configure { serial } => {
-                tracing::trace!("configure xdgsurface");
 
-                proxy.ack_configure(serial);
-                if state.geometry.0 > 0 && state.geometry.1 > 0 {
-                    proxy.set_window_geometry(0, 0, state.geometry.0 as _, state.geometry.1 as _);
-                }
-            }
-            _ => (),
-        }
-    }
-}
-impl Dispatch<XdgToplevel, ()> for State {
-    #[tracing::instrument(skip(state, _proxy, _data, _conn, _qhandle))]
-    fn event(
-        state: &mut Self,
-        _proxy: &XdgToplevel,
-        event: <XdgToplevel as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+    fn leave(
+        &mut self,
+        _surface: &mut peridot_tp_wayland::Surface,
+        _output: &mut peridot_tp_wayland::Output,
     ) {
-        match event {
-            wayland_protocols::xdg::shell::client::xdg_toplevel::Event::Close => {
-                state.close_requested = true;
-            }
-            wayland_protocols::xdg::shell::client::xdg_toplevel::Event::Configure {
-                width,
-                height,
-                states,
-            } => {
-                tracing::trace!({ width, height, ?states }, "Configure XdgToplevel");
+    }
 
-                if width > 0 && height > 0 {
-                    state.geometry = peridot::math::Vector2(width as _, height as _);
-                }
-            }
-            _ => (),
+    fn preferred_buffer_scale(&mut self, _surface: &mut peridot_tp_wayland::Surface, _factor: i32) {
+    }
+
+    fn preferred_buffer_transform(
+        &mut self,
+        _surface: &mut peridot_tp_wayland::Surface,
+        _transform: u32,
+    ) {
+    }
+}
+impl wl::ZxdgToplevelDecorationV1EventListener for State {
+    fn configure(
+        &mut self,
+        _sender: &mut peridot_tp_wayland::ZxdgToplevelDecorationV1,
+        _mode: peridot_tp_wayland::ZxdgToplevelDecorationMode,
+    ) {
+    }
+}
+impl wl::XdgWmBaseEventListener for State {
+    #[tracing::instrument(name = "<State as XdgWmBaseEventListener>::ping", skip(self, wm_base))]
+    fn ping(&mut self, wm_base: &mut peridot_tp_wayland::XdgWmBase, serial: u32) {
+        if let Err(e) = wm_base.pong(serial) {
+            tracing::warn!(reason = ?e, "pong failed");
         }
     }
 }
-wayland_client::delegate_noop!(State: ignore WlSeat);
-impl Dispatch<WlPointer, WlSurface> for State {
-    fn event(
-        state: &mut Self,
-        _proxy: &WlPointer,
-        event: <WlPointer as Proxy>::Event,
-        data: &WlSurface,
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
-    ) {
-        match event {
-            wayland_client::protocol::wl_pointer::Event::Enter {
-                surface,
-                surface_x,
-                surface_y,
-                ..
-            } if surface == *data => {
-                state.pointer_entered = true;
-                state.pointer_position = peridot::math::Vector2(surface_x as _, surface_y as _);
-            }
-            wayland_client::protocol::wl_pointer::Event::Leave { surface, .. }
-                if surface == *data =>
+impl wl::XdgSurfaceEventListener for State {
+    #[tracing::instrument(
+        name = "<State as XdgSurfaceEventListener>::configure",
+        skip(self, surface)
+    )]
+    fn configure(&mut self, surface: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
+        tracing::trace!("configure xdgsurface");
+
+        if let Err(e) = surface.ack_configure(serial) {
+            tracing::warn!(reason = ?e, "ack_configure failed");
+            return;
+        }
+
+        if self.geometry.0 > 0 && self.geometry.1 > 0 {
+            if let Err(e) =
+                surface.set_window_geometry(0, 0, self.geometry.0 as _, self.geometry.1 as _)
             {
-                state.pointer_entered = false;
+                tracing::warn!(reason = ?e, "set_window_geometry failed");
             }
-            wayland_client::protocol::wl_pointer::Event::Motion {
-                surface_x,
-                surface_y,
-                ..
-            } => {
-                state.pointer_position = peridot::math::Vector2(surface_x as _, surface_y as _);
+        }
+    }
+}
+impl wl::XdgToplevelEventListener for State {
+    #[tracing::instrument(
+        name = "<State as XdgToplevelEventListener>::configure",
+        skip(self, _toplevel)
+    )]
+    fn configure(
+        &mut self,
+        _toplevel: &mut peridot_tp_wayland::XdgToplevel,
+        width: i32,
+        height: i32,
+        states: &[i32],
+    ) {
+        tracing::trace!(width, height, ?states, "configure xdgtoplevel");
+
+        if width > 0 && height > 0 {
+            self.geometry = peridot::math::Vector2(width as _, height as _);
+        }
+    }
+
+    fn configure_bounds(
+        &mut self,
+        _toplevel: &mut peridot_tp_wayland::XdgToplevel,
+        _width: i32,
+        _height: i32,
+    ) {
+    }
+
+    fn close(&mut self, _toplevel: &mut peridot_tp_wayland::XdgToplevel) {
+        self.close_requested = true;
+    }
+
+    fn wm_capabilities(
+        &mut self,
+        _toplevel: &mut peridot_tp_wayland::XdgToplevel,
+        _capabilities: &[i32],
+    ) {
+    }
+}
+impl wl::SeatEventListener for State {
+    fn capabilities(&mut self, _seat: &mut peridot_tp_wayland::Seat, _capabilities: u32) {}
+
+    #[tracing::instrument(name = "<State as SeatEventListener>::name", skip(self, _seat))]
+    fn name(&mut self, _seat: &mut peridot_tp_wayland::Seat, name: &core::ffi::CStr) {
+        tracing::debug!(?name);
+    }
+}
+impl wl::PointerEventListener for State {
+    fn enter(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _serial: u32,
+        _surface: &mut peridot_tp_wayland::Surface,
+        surface_x: peridot_tp_wayland::Fixed,
+        surface_y: peridot_tp_wayland::Fixed,
+    ) {
+        self.pointer_entered = true;
+        self.pointer_position =
+            peridot::math::Vector2(surface_x.to_f32() as _, surface_y.to_f32() as _);
+    }
+
+    fn leave(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _serial: u32,
+        _surface: &mut peridot_tp_wayland::Surface,
+    ) {
+        self.pointer_entered = false;
+    }
+
+    fn motion(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _time: u32,
+        surface_x: peridot_tp_wayland::Fixed,
+        surface_y: peridot_tp_wayland::Fixed,
+    ) {
+        self.pointer_position =
+            peridot::math::Vector2(surface_x.to_f32() as _, surface_y.to_f32() as _);
+    }
+
+    fn frame(&mut self, _pointer: &mut peridot_tp_wayland::Pointer) {}
+
+    fn button(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _serial: u32,
+        _time: u32,
+        _button: u32,
+        _state: peridot_tp_wayland::PointerButtonState,
+    ) {
+    }
+
+    fn axis(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _time: u32,
+        _axis: u32,
+        _value: peridot_tp_wayland::Fixed,
+    ) {
+    }
+
+    fn axis_discrete(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _axis: u32,
+        _discrete: i32,
+    ) {
+    }
+
+    fn axis_relative_direction(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _axis: u32,
+        _direction: u32,
+    ) {
+    }
+
+    fn axis_source(&mut self, _pointer: &mut peridot_tp_wayland::Pointer, _axis_source: u32) {}
+
+    fn axis_stop(&mut self, _pointer: &mut peridot_tp_wayland::Pointer, _time: u32, _axis: u32) {}
+
+    fn axis_value120(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        _axis: u32,
+        _value120: i32,
+    ) {
+    }
+}
+
+macro_rules! err_warn {
+    ($e: expr, $msg: literal) => {
+        if let Err(e) = $e {
+            tracing::warn!(reason = ?e, $msg);
+        }
+    }
+}
+
+macro_rules! err_fatal_bailout {
+    ($e: expr, $msg: literal) => {
+        match $e {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, $msg);
+                std::process::abort();
             }
-            _ => (),
+        }
+    };
+    (opt $e: expr, $msg: literal) => {
+        match $e {
+            Some(x) => x,
+            None => {
+                tracing::error!($msg);
+                std::process::abort();
+            }
         }
     }
 }
 
 pub struct Wayland {
-    con: Connection,
-    event_queue: EventQueue<State>,
-    surface: WlSurface,
-    state: State,
-    _refs: (
-        XdgSurface,
-        XdgToplevel,
-        ZxdgToplevelDecorationV1,
-        WlCompositor,
-        XdgWmBase,
-        ZxdgDecorationManagerV1,
-        WlSeat,
-        WlPointer,
-    ),
+    con: wl::Display,
+    surface: NonNull<wl::Surface>,
+    state: Pin<Box<State>>,
 }
 impl Wayland {
+    #[tracing::instrument(name = "Wayland::try_init")]
     pub fn try_init() -> Option<Self> {
-        let Ok(con) = wayland_client::Connection::connect_to_env() else {
+        let Some(con) = wl::Display::connect() else {
+            tracing::error!("Unable to connect to wayland display");
             return None;
         };
 
         tracing::info!("Using Wayland as window backend");
 
-        let mut registry_queue = con.new_event_queue();
         let mut interfaces = RegistryCollector(HashMap::new());
-        let registry = con.display().get_registry(&registry_queue.handle(), ());
-        registry_queue
-            .roundtrip(&mut interfaces)
-            .expect("Failed to roundtrip registry collection");
-        drop(registry_queue);
+        let mut registry = match con.get_registry() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "Failed to get wayland registry object");
+                std::process::abort();
+            }
+        };
+        err_warn!(
+            registry.set_listener(&mut interfaces),
+            "registry set_listener failed"
+        );
+        err_warn!(con.roundtrip(), "roundtrip failed");
 
-        let mut state = State {
+        let mut state = Box::pin(State {
             close_requested: false,
             geometry: peridot::math::Vector2(640, 480),
             pointer_entered: false,
             pointer_position: peridot::math::Vector2(0, 0),
-        };
-        let mut event_queue = con.new_event_queue();
-        let compositor: WlCompositor = interfaces
-            .bind_interface(&registry, &event_queue.handle(), ())
-            .expect("No compositor interface found");
-        let surface = compositor.create_surface(&event_queue.handle(), ());
-        let xdg_wm_base: XdgWmBase = interfaces
-            .bind_interface(&registry, &event_queue.handle(), ())
-            .expect("No xdg_wm_base interface found");
-        let xdg_surface = xdg_wm_base.get_xdg_surface(&surface, &event_queue.handle(), ());
-        let xdg_toplevel = xdg_surface.get_toplevel(&event_queue.handle(), ());
-        xdg_surface.set_window_geometry(0, 0, 640, 480);
-        xdg_toplevel.set_app_id(String::from(crate::userlib::APP_IDENTIFIER));
-        xdg_toplevel.set_title(format!(
-            "{} v{}",
-            crate::userlib::APP_TITLE,
-            crate::userlib::APP_VERSION,
-        ));
-        let xdg_decoration_manager: ZxdgDecorationManagerV1 = interfaces
-            .bind_interface(&registry, &event_queue.handle(), ())
-            .expect("No decoration manager interface found");
-        let xdg_decoration = xdg_decoration_manager.get_toplevel_decoration(
-            &xdg_toplevel,
-            &event_queue.handle(),
-            (),
+        });
+        let compositor = err_fatal_bailout!(
+            opt err_fatal_bailout!(interfaces.bind_interface::<wl::Compositor>(&registry), "Failed to bind interface"),
+            "No compositor interface found"
         );
-        surface.commit();
+        let mut surface = err_fatal_bailout!(compositor.create_surface(), "create_surface failed");
+        err_warn!(
+            surface.set_listener(&mut *state),
+            "surface set_listener failed"
+        );
+        let mut xdg_wm_base = err_fatal_bailout!(
+            opt err_fatal_bailout!(interfaces.bind_interface::<wl::XdgWmBase>(&registry), "Failed to bind interface"),
+            "No xdg_wm_base interface found"
+        );
+        err_warn!(
+            xdg_wm_base.set_listener(&mut *state),
+            "xdg_wm_base set_listener failed"
+        );
+        let mut xdg_surface = err_fatal_bailout!(
+            xdg_wm_base.get_xdg_surface(&surface),
+            "get_xdg_surface failed"
+        );
+        err_warn!(
+            xdg_surface.set_listener(&mut *state),
+            "xdg_surface set_listener failed"
+        );
+        let mut xdg_toplevel =
+            err_fatal_bailout!(xdg_surface.get_toplevel(), "get_toplevel failed");
+        err_warn!(
+            xdg_toplevel.set_listener(&mut *state),
+            "xdg_toplevel set_listener failed"
+        );
+        err_warn!(
+            xdg_surface.set_window_geometry(0, 0, 640, 480),
+            "set_window_geometry failed"
+        );
+        err_warn!(
+            xdg_toplevel.set_app_id(&unsafe {
+                CString::from_vec_unchecked(crate::userlib::APP_IDENTIFIER.as_bytes().into())
+            }),
+            "set_app_id failed"
+        );
+        err_warn!(
+            xdg_toplevel.set_title(&unsafe {
+                CString::from_vec_unchecked(
+                    format!(
+                        "{} v{}",
+                        crate::userlib::APP_TITLE,
+                        crate::userlib::APP_VERSION,
+                    )
+                    .into_bytes(),
+                )
+            }),
+            "set_title failed"
+        );
+        let xdg_decoration_manager = err_fatal_bailout!(
+            opt err_fatal_bailout!(
+                interfaces.bind_interface::<wl::ZxdgDecorationManagerV1>(&registry),
+                "Failed to bind interface"
+            ),
+            "No decoration manager interface found"
+        );
+        let xdg_decoration = err_fatal_bailout!(
+            xdg_decoration_manager.get_toplevel_decoration(&xdg_toplevel),
+            "get_toplevel_decoration failed"
+        );
+        err_warn!(surface.commit(), "surface commit failed");
 
-        let seat: WlSeat = interfaces
-            .bind_interface(&registry, &event_queue.handle(), ())
-            .expect("No seat interface found");
-        let pointer = seat.get_pointer(&event_queue.handle(), surface.clone());
+        let mut seat = err_fatal_bailout!(
+            opt err_fatal_bailout!(interfaces.bind_interface::<wl::Seat>(&registry), "Failed to bind interface"),
+            "No seat interface found"
+        );
+        err_warn!(seat.set_listener(&mut *state), "seat set_listener failed");
+        let mut pointer = err_fatal_bailout!(seat.get_pointer(), "seat get_pointer failed");
+        err_warn!(
+            pointer.set_listener(&mut *state),
+            "pointer set_listener failed"
+        );
 
-        event_queue
-            .roundtrip(&mut state)
-            .expect("Failed to final roundtrip");
+        err_warn!(con.roundtrip(), "Failed to final roundtrip");
+
+        pointer.leak();
+        seat.leak();
+        xdg_decoration.leak();
+        xdg_decoration_manager.leak();
+        xdg_toplevel.leak();
+        xdg_surface.leak();
+        xdg_wm_base.leak();
+        compositor.leak();
 
         Some(Self {
-            event_queue,
             con,
-            surface,
+            surface: surface.unwrap(),
             state,
-            _refs: (
-                xdg_surface,
-                xdg_toplevel,
-                xdg_decoration,
-                compositor,
-                xdg_wm_base,
-                xdg_decoration_manager,
-                seat,
-                pointer,
-            ),
         })
     }
 }
@@ -257,23 +400,33 @@ impl EventProcessor for Wayland {
     type ReadinessGuard = ReadinessGuard;
 
     fn readiness_guard(&mut self) -> Self::ReadinessGuard {
-        self.event_queue.flush().expect("Failed to flush queue");
-        self.event_queue
-            .dispatch_pending(&mut self.state)
-            .expect("Failed to dispatch events");
+        loop {
+            match self.con.prepare_read() {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Err(e) = self.con.dispatch_pending() {
+                        tracing::error!(reason = ?e, "Faield to dispatch pending events");
+                        std::process::abort();
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(reason = ?e, "Failed to prepare reading events");
+                    std::process::abort();
+                }
+            }
+        }
 
-        ReadinessGuard(
-            self.event_queue
-                .prepare_read()
-                .expect("Failed to lock queue for read"),
-        )
+        err_warn!(self.con.flush(), "Failed to flush outgoing events");
+        ReadinessGuard(self.con.as_raw_fd())
     }
 
-    fn process_all_events(&mut self, guard: Self::ReadinessGuard) {
-        let _ = guard.0.read().expect("Failed to read events");
-        self.event_queue
-            .dispatch_pending(&mut self.state)
-            .expect("Failed to roundtrip");
+    fn process_all_events(&mut self, _guard: Self::ReadinessGuard) {
+        err_warn!(self.con.read_events(), "Failed to read events");
+        err_warn!(self.con.dispatch_pending(), "Failed to dispatch events");
+    }
+
+    fn cancel_read(&mut self) {
+        self.con.cancel_read();
     }
 
     fn has_close_requested(&self) -> bool {
@@ -320,7 +473,7 @@ impl Presenter {
             br::vkfn_wrapper::get_physical_device_wayland_presentation_support(
                 g.adapter_raw(),
                 renderer_queue_family,
-                wlock.con.display().id().as_ptr() as _,
+                wlock.con.as_raw() as _,
             )
         } {
             panic!("Vulkan Presentation is not supported!");
@@ -328,8 +481,8 @@ impl Presenter {
         let so = Surface {
             handle: unsafe {
                 br::WaylandSurfaceCreateInfo::new(
-                    wlock.con.display().id().as_ptr() as _,
-                    wlock.surface.id().as_ptr() as _,
+                    wlock.con.as_raw() as _,
+                    wlock.surface.as_ptr() as _,
                 )
                 .execute(g.device().instance(), None)
                 .expect("Failed to create surface object")
@@ -436,46 +589,34 @@ impl PointerPositionProvider for Wayland {
     }
 }
 
-struct RegistryCollector(HashMap<String, (u32, u32)>);
+struct RegistryCollector(HashMap<CString, (u32, u32)>);
 impl RegistryCollector {
-    fn bind_interface<I, D, S>(
+    fn bind_interface<I>(
         &self,
-        registry: &WlRegistry,
-        queue_handle: &QueueHandle<D>,
-        state: S,
-    ) -> Option<I>
+        registry: &wl::Registry,
+    ) -> Result<Option<wl::Owned<I>>, std::io::Error>
     where
-        I: Proxy + 'static,
-        D: Dispatch<I, S> + 'static,
-        S: Send + Sync + 'static,
+        I: wl::Interface,
     {
         self.0
-            .get(I::interface().name)
-            .map(|&(name, version)| registry.bind(name, version, queue_handle, state))
+            .get(unsafe { core::ffi::CStr::from_ptr(I::def().name) })
+            .map(|&(name, version)| registry.bind(name, version))
+            .transpose()
     }
 }
-impl Dispatch<WlRegistry, ()> for RegistryCollector {
-    fn event(
-        state: &mut Self,
-        _proxy: &WlRegistry,
-        event: <WlRegistry as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+impl wl::RegistryListener for RegistryCollector {
+    fn global(
+        &mut self,
+        _registry: &mut peridot_tp_wayland::Registry,
+        name: u32,
+        interface: &core::ffi::CStr,
+        version: u32,
     ) {
-        match event {
-            wayland_client::protocol::wl_registry::Event::Global {
-                name,
-                interface,
-                version,
-            } => {
-                tracing::debug!({ interface, version }, "Wayland Registry collected");
-                state.0.insert(interface, (name, version));
-            }
-            wayland_client::protocol::wl_registry::Event::GlobalRemove { name } => {
-                state.0.retain(|_, &mut (n, _)| n != name)
-            }
-            _ => (),
-        }
+        tracing::debug!(?interface, version, "Wayland registry collected");
+        self.0.insert(interface.into(), (name, version));
+    }
+
+    fn global_remove(&mut self, _registry: &mut peridot_tp_wayland::Registry, name: u32) {
+        self.0.retain(|_, &mut (n, _)| n != name)
     }
 }

@@ -218,6 +218,8 @@ impl EventProcessor for X11 {
         }
     }
 
+    fn cancel_read(&mut self) {}
+
     fn has_close_requested(&self) -> bool {
         self.has_close_requested
     }

@@ -243,7 +243,7 @@ impl Display {
         Some(Self { ffi })
     }
 
-    pub const fn as_raw(&mut self) -> *mut ffi::Display {
+    pub const fn as_raw(&self) -> *mut ffi::Display {
         self.ffi.as_ptr()
     }
 
