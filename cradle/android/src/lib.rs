@@ -67,7 +67,7 @@ fn launch<F: core::future::Future>(
         userlib::APP_IDENTIFIER,
         userlib::APP_VERSION,
         nl,
-        Default::default(),
+        unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
         (event_sender.clone(), event_receiver),
         frame_timing_receiver,
         event_queue_lifetime_extended,
@@ -264,8 +264,8 @@ impl peridot::PlatformPresenter for Presenter {
     #[inline(always)]
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, peridot::VulkanGfx>,
-    ) -> br::CmdRecord<'r, peridot::VulkanGfx> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
 

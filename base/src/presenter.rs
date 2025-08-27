@@ -442,7 +442,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
     }
 
     // TODO: undefined -> anyが無条件に許可される環境だったらこれいらない気がする synchronization2拡張が有効じゃないとダメとかあったかもしれないのであとでVulkanの仕様をあたる
-    pub fn emit_initialize_back_buffer_commands<'r, E: 'r + ?Sized>(
+    pub fn emit_initialize_back_buffer_commands<'r>(
         &self,
         recorder: br::CmdRecord<'r>,
     ) -> br::CmdRecord<'r> {
