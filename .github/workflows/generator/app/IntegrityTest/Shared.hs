@@ -17,7 +17,6 @@ module IntegrityTest.Shared
   )
 where
 
-import CustomAction.CodeFormChecker qualified as CodeFormCheckerAction
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import SlackNotification (SlackReportContext(..), reportJobFailure)
@@ -70,9 +69,9 @@ checkFormats precondition =
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
+                  setupCargoOutputTranslatorStep,
                   GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
-                  GHA.namedAs "Running Check - Debugging Weaks" $
-                    CodeFormCheckerAction.step CodeFormCheckerAction.ScriptVulnerabilitiesEliminator,
+                  GHA.namedAs "Running Clippy" $ GHA.runStep "cargo clippy --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
                     GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
                 ]
