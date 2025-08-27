@@ -23,6 +23,6 @@ async-std = "1.13"
 futures-util = "0.3"
 cfg-if = "1.0"
 
-[lints.clippy]
+[workspace.lints.clippy]
 unwrap_used = "deny"
 
