@@ -1,4 +1,5 @@
 use std::{
+    cell::UnsafeCell,
     collections::HashMap,
     ffi::{CStr, CString},
     os::fd::{AsRawFd, BorrowedFd},
@@ -8,7 +9,7 @@ use std::{
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef};
-use peridot_tp_wayland as wl;
+use peridot_tp_wayland::{self as wl, Interface};
 
 use crate::input::PointerPositionProvider;
 
@@ -250,10 +251,344 @@ macro_rules! err_fatal_bailout {
     }
 }
 
+struct DisplayState {
+    head_ptr: *const wl::ZwlrOutputHeadV1,
+    original_mode_ptr: *const wl::ZwlrOutputModeV1,
+    original_scale: wl::Fixed,
+}
+impl DisplayState {
+    pub fn restore(
+        &self,
+        configuration_head: &wl::ZwlrOutputConfigurationHeadV1,
+    ) -> Result<(), std::io::Error> {
+        tracing::info!(?self.original_mode_ptr, ?self.original_scale, "Restoring Display modes");
+
+        configuration_head.set_mode(unsafe { &*self.original_mode_ptr })?;
+        configuration_head.set_scale(self.original_scale)?;
+
+        Ok(())
+    }
+}
+
+struct Listener {
+    heads: Vec<(wl::Owned<wl::ZwlrOutputHeadV1>, Pin<Box<HeadState>>)>,
+    last_done_serial: u32,
+}
+impl wl::ZwlrOutputManagerV1EventListener for Listener {
+    fn head(
+        &mut self,
+        _sender: &mut wl::ZwlrOutputManagerV1,
+        mut head: wl::Owned<wl::ZwlrOutputHeadV1>,
+    ) {
+        let mut l = Box::pin(HeadState {
+            name: None,
+            description: None,
+            physical_width: 0,
+            physical_height: 0,
+            modes: Vec::new(),
+            current_mode_ptr: core::ptr::null_mut(),
+            enabled: false,
+            position_x: 0,
+            position_y: 0,
+            transform: wl::OutputTransform::Normal,
+            scale: wl::Fixed::from_f32_lossy(1.0),
+            finished: false,
+        });
+        err_warn!(head.set_listener(&mut *l), "head set_listener failed");
+        self.heads.push((head, l));
+    }
+
+    fn done(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputManagerV1, serial: u32) {
+        println!("done {serial}");
+
+        for (_, h) in self.heads.iter() {
+            println!("head {:?}: {:?}", h.name, h.description);
+            println!("* enabled: {}", h.enabled);
+            println!(
+                "* physical size: {}x{}",
+                h.physical_width, h.physical_height
+            );
+            println!("* position: {}x{}", h.position_x, h.position_y);
+            println!("* transform: {:?}", h.transform);
+            println!("* scale: x{}", h.scale.to_f32());
+            if !h.current_mode_ptr.is_null()
+                && let Some((_, m)) = h
+                    .modes
+                    .iter()
+                    .find(|(p, _)| p.ref_eq(unsafe { &*h.current_mode_ptr }))
+            {
+                println!(
+                    "* current mode: {}x{} @ {}.{:03}hz",
+                    m.width, m.height, m.refresh_ipart, m.refresh_fpart
+                );
+            } else {
+                println!("* current mode: <unknown>");
+            }
+
+            for (_, m) in h.modes.iter() {
+                println!(
+                    "* mode: {}x{} @ {}.{:03}hz {}",
+                    m.width,
+                    m.height,
+                    m.refresh_ipart,
+                    m.refresh_fpart,
+                    if m.preferred { "[preferred]" } else { "" }
+                );
+            }
+        }
+
+        self.last_done_serial = serial;
+    }
+
+    fn finished(&mut self, _sender: &mut wl::ZwlrOutputManagerV1) {
+        println!("finished");
+    }
+}
+impl wl::ZwlrOutputConfigurationV1EventListener for Listener {
+    fn succeeded(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
+        println!("cfg ok!");
+    }
+
+    fn failed(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
+        println!("cfg failed");
+    }
+
+    fn cancelled(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
+        println!("cfg cancelled");
+    }
+}
+
+struct HeadState {
+    name: Option<std::ffi::CString>,
+    description: Option<std::ffi::CString>,
+    physical_width: i32,
+    physical_height: i32,
+    modes: Vec<(wl::Owned<wl::ZwlrOutputModeV1>, Pin<Box<ModeState>>)>,
+    current_mode_ptr: *mut wl::ZwlrOutputModeV1,
+    enabled: bool,
+    position_x: i32,
+    position_y: i32,
+    transform: wl::OutputTransform,
+    scale: wl::Fixed,
+    finished: bool,
+}
+impl wl::ZwlrOutputHeadV1EventListener for HeadState {
+    fn name(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, name: &core::ffi::CStr) {
+        self.name = Some(name.into());
+    }
+
+    fn description(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, description: &core::ffi::CStr) {
+        self.description = Some(description.into());
+    }
+
+    fn physical_size(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, width: i32, height: i32) {
+        self.physical_width = width;
+        self.physical_height = height;
+    }
+
+    fn mode(
+        &mut self,
+        _sender: &mut wl::ZwlrOutputHeadV1,
+        mut mode: wl::Owned<wl::ZwlrOutputModeV1>,
+    ) {
+        let mut state = Box::pin(ModeState {
+            width: 0,
+            height: 0,
+            refresh_ipart: 0,
+            refresh_fpart: 0,
+            preferred: false,
+            finished: false,
+        });
+        err_warn!(mode.set_listener(&mut *state), "mode set_listener failed");
+        self.modes.push((mode, state));
+    }
+
+    fn current_mode(
+        &mut self,
+        _sender: &mut wl::ZwlrOutputHeadV1,
+        mode: &mut wl::ZwlrOutputModeV1,
+    ) {
+        self.current_mode_ptr = mode;
+    }
+
+    fn enabled(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    fn position(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, x: i32, y: i32) {
+        self.position_x = x;
+        self.position_y = y;
+    }
+
+    fn transform(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, transform: wl::OutputTransform) {
+        self.transform = transform;
+    }
+
+    fn scale(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, scale: wl::Fixed) {
+        self.scale = scale;
+    }
+
+    fn finished(&mut self, _sender: &mut wl::ZwlrOutputHeadV1) {
+        self.finished = true;
+    }
+
+    fn make(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, _make: &core::ffi::CStr) {}
+
+    fn model(&mut self, _sender: &mut wl::ZwlrOutputHeadV1, _model: &core::ffi::CStr) {}
+
+    fn serial_number(
+        &mut self,
+        _sender: &mut wl::ZwlrOutputHeadV1,
+        _serial_number: &core::ffi::CStr,
+    ) {
+    }
+
+    fn adaptive_sync(
+        &mut self,
+        _sender: &mut wl::ZwlrOutputHeadV1,
+        state: wl::ZwlrOutputHeadV1AdaptiveSyncState,
+    ) {
+        println!("head adaptive sync: {state:?}");
+    }
+}
+
+struct ModeState {
+    width: i32,
+    height: i32,
+    refresh_ipart: i32,
+    refresh_fpart: i32,
+    preferred: bool,
+    finished: bool,
+}
+impl wl::ZwlrOutputModeV1EventListener for ModeState {
+    fn size(
+        &mut self,
+        _sender: &mut peridot_tp_wayland::ZwlrOutputModeV1,
+        width: i32,
+        height: i32,
+    ) {
+        self.width = width;
+        self.height = height;
+    }
+
+    fn refresh(&mut self, _sender: &mut peridot_tp_wayland::ZwlrOutputModeV1, refresh: i32) {
+        self.refresh_ipart = refresh / 1000;
+        self.refresh_fpart = refresh % 1000;
+    }
+
+    fn preferred(&mut self, _sender: &mut peridot_tp_wayland::ZwlrOutputModeV1) {
+        self.preferred = true;
+    }
+
+    fn finished(&mut self, _sender: &mut peridot_tp_wayland::ZwlrOutputModeV1) {
+        self.finished = true;
+    }
+}
+
+struct OutputConfigurationResultReceiver;
+impl wl::ZwlrOutputConfigurationV1EventListener for OutputConfigurationResultReceiver {
+    fn succeeded(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
+        println!("output cfg ok!");
+        unsafe {
+            sender.destruct();
+        }
+    }
+
+    fn failed(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
+        println!("output cfg failed");
+        unsafe {
+            sender.destruct();
+        }
+    }
+
+    fn cancelled(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
+        println!("output cfg cancelled");
+        unsafe {
+            sender.destruct();
+        }
+    }
+}
+
+struct DisplayManager {
+    mgr_objects: Pin<Box<Listener>>,
+    output_manager: wl::Owned<wl::ZwlrOutputManagerV1>,
+    preserved_state: Option<DisplayState>,
+    output_cfg_result_receiver: UnsafeCell<Pin<Box<OutputConfigurationResultReceiver>>>,
+}
+impl DisplayManager {
+    pub fn set_mode(&mut self, head_index: usize, mode_index: usize) {
+        if let Some(ref ps) = self.preserved_state
+            && !core::ptr::addr_eq(ps.head_ptr, &self.mgr_objects.heads[head_index].0)
+        {
+            // 別のheadのモードセットをするので前のをもどす
+            self.restore();
+        }
+
+        if self.preserved_state.is_none() {
+            let new_head_state_ref = self.mgr_objects.heads[head_index].1.as_ref();
+            self.preserved_state = Some(DisplayState {
+                head_ptr: &*self.mgr_objects.heads[head_index].0,
+                original_mode_ptr: new_head_state_ref.current_mode_ptr,
+                original_scale: new_head_state_ref.scale,
+            });
+        }
+
+        let head = &self.mgr_objects.heads[head_index].0;
+        let mode = &self.mgr_objects.heads[head_index].1.modes[mode_index].0;
+
+        let mut output_cfg = self
+            .output_manager
+            .create_configuration(self.mgr_objects.last_done_serial)
+            .expect("create_configuration failed");
+        output_cfg
+            .set_listener(unsafe { &mut **self.output_cfg_result_receiver.get() })
+            .expect("output_cfg set_listener failed");
+        let cfg_head = output_cfg
+            .enable_head(head)
+            .expect("output_configuration enable_head failed");
+        cfg_head
+            .set_scale(wl::Fixed::from_f32_lossy(1.0))
+            .expect("cfg_head set_scale failed");
+        cfg_head.set_mode(mode).expect("set_mode failed");
+        output_cfg.apply().expect("Failed to apply mode");
+        output_cfg.leak();
+    }
+
+    pub fn restore(&mut self) {
+        let Some(ps) = self.preserved_state.take() else {
+            // 前のがない(モードセットしてない)
+            return;
+        };
+
+        let mut output_cfg = self
+            .output_manager
+            .create_configuration(self.mgr_objects.last_done_serial)
+            .expect("Failed to create output configuration");
+        output_cfg
+            .set_listener(unsafe { &mut **self.output_cfg_result_receiver.get() })
+            .expect("output_cfg set_listener failed");
+        let cfg_head = output_cfg
+            .enable_head(unsafe { &*ps.head_ptr })
+            .expect("Failed to enable head for configuration");
+        ps.restore(&cfg_head).expect("Failed to restore");
+        output_cfg.apply().expect("Failed to apply mode");
+        output_cfg.leak();
+    }
+}
+
 pub struct Wayland {
     con: wl::Display,
     surface: NonNull<wl::Surface>,
     state: Pin<Box<State>>,
+    display_mgr: Option<DisplayManager>,
+}
+impl Drop for Wayland {
+    fn drop(&mut self) {
+        if let Some(ref mut d) = self.display_mgr {
+            d.restore();
+            err_warn!(self.con.roundtrip(), "Failed to restore roundtrip");
+        }
+    }
 }
 impl Wayland {
     #[tracing::instrument(name = "Wayland::try_init")]
@@ -362,6 +697,48 @@ impl Wayland {
             pointer.set_listener(&mut *state),
             "pointer set_listener failed"
         );
+        // err_warn!(
+        //     xdg_toplevel.set_fullscreen(),
+        //     "xdg_toplevel set_fullscreen failed"
+        // );
+        //
+
+        let mut display_mgr;
+        if let Some(mut output_manager) = err_fatal_bailout!(
+            interfaces.bind_interface::<wl::ZwlrOutputManagerV1>(&registry),
+            "Failed to bind interface"
+        ) {
+            let mut l = Box::pin(Listener {
+                heads: Vec::new(),
+                last_done_serial: 0,
+            });
+            err_warn!(
+                output_manager.set_listener(&mut *l),
+                "output_manager set_listener failed"
+            );
+            err_warn!(con.roundtrip(), "Failed to roundtrip");
+
+            display_mgr = Some(DisplayManager {
+                output_manager,
+                mgr_objects: l,
+                preserved_state: None,
+                output_cfg_result_receiver: UnsafeCell::new(Box::pin(
+                    OutputConfigurationResultReceiver,
+                )),
+            });
+        } else {
+            display_mgr = None;
+        }
+
+        if let Some(ref mut ds) = display_mgr {
+            let mode_index = ds.mgr_objects.heads[1]
+                .1
+                .modes
+                .iter()
+                .position(|(_, m)| m.width == 1920 && m.height == 1080)
+                .expect("no expected size");
+            ds.set_mode(1, mode_index);
+        }
 
         err_warn!(con.roundtrip(), "Failed to final roundtrip");
 
@@ -378,6 +755,7 @@ impl Wayland {
             con,
             surface: surface.unwrap(),
             state,
+            display_mgr,
         })
     }
 }

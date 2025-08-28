@@ -2,7 +2,7 @@
 name = "peridot-cradle-linux"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2021"
+edition = "2024"
 
 [features]
 UseExternalAssetPath = []
@@ -21,8 +21,10 @@ pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 libc = "0.2"
 regex = "1.4"
 peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
+    "tracing",
     "xdg-shell",
     "xdg-decoration-unstable-v1",
+    "wlr-output-management-unstable-v1",
 ] }
 pipewire = "0.7.0"
 libspa-sys = "0.7.0"
