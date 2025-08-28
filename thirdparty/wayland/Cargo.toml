@@ -19,6 +19,7 @@ cursor-shape-v1 = []
 # unstable
 xdg-decoration-unstable-v1 = []
 xdg-foreign-unstable-v2 = []
+wlr-output-management-unstable-v1 = []
 
 # external
 gtk-shell = []

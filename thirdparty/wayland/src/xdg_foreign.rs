@@ -51,7 +51,6 @@ impl ZxdgExporterV2 {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
-                self.0.version(),
                 0,
                 &mut [NEWID_ARG, surface.0.as_arg()],
             )?)

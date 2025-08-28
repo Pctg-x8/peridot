@@ -1,4 +1,4 @@
-use crate::EventFnTable;
+use crate::{EventFnTable, NULLOBJ_ARG};
 
 use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 use core::ptr::null;
@@ -54,12 +54,7 @@ impl XdgWmBase {
     #[inline]
     pub fn create_positioner(&self) -> Result<Owned<XdgPositioner>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(1, 0, &mut [NEWID_ARG])?)
         })
     }
 
@@ -71,7 +66,6 @@ impl XdgWmBase {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 2,
-                self.0.version(),
                 0,
                 &mut [NEWID_ARG, surface.0.as_arg()],
             )?)
@@ -189,12 +183,7 @@ impl XdgSurface {
     #[inline]
     pub fn get_toplevel(&self) -> Result<Owned<XdgToplevel>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(1, 0, &mut [NEWID_ARG])?)
         })
     }
 
@@ -437,6 +426,11 @@ impl XdgToplevel {
     #[inline]
     pub fn unset_maximized(&self) -> Result<(), std::io::Error> {
         self.0.marshal_array_flags_void(10, 0, &mut [])
+    }
+
+    #[inline]
+    pub fn set_fullscreen(&self) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(11, 0, &mut [NULLOBJ_ARG])
     }
 
     #[inline]

@@ -91,11 +91,10 @@ impl Proxy {
     fn marshal_array_flags_typed<T: Interface>(
         &self,
         opcode: u32,
-        version: u32,
         flags: u32,
         args: &mut [ffi::Argument],
     ) -> Result<NonNull<T>, std::io::Error> {
-        self.marshal_array_flags(opcode, T::def(), version, flags, args)
+        self.marshal_array_flags(opcode, T::def(), self.version(), flags, args)
             .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
     }
 
@@ -137,7 +136,7 @@ impl Proxy {
         if let Err(e) = self.marshal_array_flags_void(opcode, ffi::MARSHAL_FLAG_DESTROY, &mut []) {
             tracing::warn!(
                 reason = ?e,
-                display_error = unsafe { ffi::wl_display_get_error(o.display()) },
+                display_error = unsafe { ffi::wl_display_get_error(self.display()) },
                 "Failed to call destructor"
             );
         }
@@ -190,7 +189,17 @@ impl<T: Interface> DerefMut for Owned<T> {
         unsafe { self.0.as_mut() }
     }
 }
+impl<T: Interface> core::fmt::Pointer for Owned<T> {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <NonNull<T> as core::fmt::Pointer>::fmt(&self.0, f)
+    }
+}
 impl<T: Interface> Owned<T> {
+    pub const unsafe fn from_raw_ptr_unchecked(ptr: *mut ffi::Proxy) -> Self {
+        Self(unsafe { NonNull::new_unchecked(ptr).cast() })
+    }
+
     pub const unsafe fn from_untyped_unchecked(untyped: NonNull<Proxy>) -> Self {
         Self(untyped.cast())
     }
@@ -253,7 +262,6 @@ impl Display {
             Owned::wrap_unchecked(
                 Proxy::from_raw_ptr_unchecked(self.ffi.as_ptr() as _).marshal_array_flags_typed(
                     1,
-                    ffi::wl_proxy_get_version(self.ffi.as_ptr() as _),
                     0,
                     &mut [NEWID_ARG],
                 )?,
@@ -361,9 +369,12 @@ impl Registry {
 
     #[inline]
     pub fn bind<I: Interface>(&self, name: u32, version: u32) -> Result<Owned<I>, std::io::Error> {
+        // Note: ここは渡されたversionをつかう(wayland-client-protocols.hの定義にあわせる)
+
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+            Owned::from_untyped_unchecked(self.0.marshal_array_flags(
                 0,
+                I::def(),
                 version,
                 0,
                 &mut [
@@ -427,24 +438,14 @@ impl Compositor {
     #[inline]
     pub fn create_surface(&self) -> Result<Owned<Surface>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(0, 0, &mut [NEWID_ARG])?)
         })
     }
 
     #[inline]
     pub fn create_region(&self) -> Result<Owned<Region>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(1, 0, &mut [NEWID_ARG])?)
         })
     }
 }
@@ -491,12 +492,7 @@ impl Surface {
     #[inline]
     pub fn frame(&self) -> Result<Owned<Callback>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                3,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(3, 0, &mut [NEWID_ARG])?)
         })
     }
 
@@ -574,7 +570,6 @@ impl Subcompositor {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
-                self.0.version(),
                 0,
                 &mut [NEWID_ARG, surface.0.as_arg(), parent.0.as_arg()],
             )?)
@@ -636,7 +631,6 @@ impl Shm {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 0,
-                self.0.version(),
                 0,
                 &mut [
                     NEWID_ARG,
@@ -692,7 +686,6 @@ impl ShmPool {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 0,
-                self.0.version(),
                 0,
                 &mut [
                     NEWID_ARG,
@@ -907,7 +900,7 @@ pub enum PointerButtonState {
 }
 
 #[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputTransform {
     Normal = 0,
     Rot90 = 1,
@@ -1271,12 +1264,7 @@ impl DataDeviceManager {
     #[inline]
     pub fn create_data_source(&self) -> Result<Owned<DataSource>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(0, 0, &mut [NEWID_ARG])?)
         })
     }
 
@@ -1285,7 +1273,6 @@ impl DataDeviceManager {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
-                self.0.version(),
                 0,
                 &mut [NEWID_ARG, seat.0.as_arg()],
             )?)
@@ -1374,6 +1361,7 @@ Ext!("cursor-shape-v1", cursor_shape);
 // unstable
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
 Ext!("xdg-foreign-unstable-v2", xdg_foreign);
+Ext!("wlr-output-management-unstable-v1", wlr_output_management);
 
 // external
 Ext!("gtk-shell", gtk_shell);

@@ -39,7 +39,6 @@ impl GtkShell1 {
         Ok(unsafe {
             super::Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 0,
-                self.0.version(),
                 0,
                 &mut [super::NEWID_ARG, surface.0.as_arg()],
             )?)

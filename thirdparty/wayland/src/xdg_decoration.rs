@@ -47,7 +47,6 @@ impl ZxdgDecorationManagerV1 {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 1,
-                self.0.version(),
                 0,
                 &mut [NEWID_ARG, toplevel.0.as_arg()],
             )?)
