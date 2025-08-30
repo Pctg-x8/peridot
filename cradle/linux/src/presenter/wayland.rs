@@ -11,7 +11,7 @@ use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef};
 use peridot_tp_wayland::{self as wl, Interface};
 
-use crate::input::PointerPositionProvider;
+use crate::{Configuration, ConfigurationDisplay, input::PointerPositionProvider};
 
 use super::{BorrowFd, EventProcessor, PresenterProvider, WindowBackend};
 
@@ -231,6 +231,9 @@ macro_rules! err_warn {
 }
 
 macro_rules! err_fatal_bailout {
+    ($e: expr) => {
+        err_fatal_bailout!($e, "Fatal error")
+    };
     ($e: expr, $msg: literal) => {
         match $e {
             Ok(x) => x,
@@ -251,27 +254,8 @@ macro_rules! err_fatal_bailout {
     }
 }
 
-struct DisplayState {
-    head_ptr: *const wl::ZwlrOutputHeadV1,
-    original_mode_ptr: *const wl::ZwlrOutputModeV1,
-    original_scale: wl::Fixed,
-}
-impl DisplayState {
-    pub fn restore(
-        &self,
-        configuration_head: &wl::ZwlrOutputConfigurationHeadV1,
-    ) -> Result<(), std::io::Error> {
-        tracing::info!(?self.original_mode_ptr, ?self.original_scale, "Restoring Display modes");
-
-        configuration_head.set_mode(unsafe { &*self.original_mode_ptr })?;
-        configuration_head.set_scale(self.original_scale)?;
-
-        Ok(())
-    }
-}
-
 struct Listener {
-    heads: Vec<(wl::Owned<wl::ZwlrOutputHeadV1>, Pin<Box<HeadState>>)>,
+    heads: Vec<(NonNull<wl::ZwlrOutputHeadV1>, Pin<Box<HeadState>>)>,
     last_done_serial: u32,
 }
 impl wl::ZwlrOutputManagerV1EventListener for Listener {
@@ -295,10 +279,10 @@ impl wl::ZwlrOutputManagerV1EventListener for Listener {
             finished: false,
         });
         err_warn!(head.set_listener(&mut *l), "head set_listener failed");
-        self.heads.push((head, l));
+        self.heads.push((head.unwrap(), l));
     }
 
-    fn done(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputManagerV1, serial: u32) {
+    fn done(&mut self, _sender: &mut peridot_tp_wayland::ZwlrOutputManagerV1, serial: u32) {
         println!("done {serial}");
 
         for (_, h) in self.heads.iter() {
@@ -315,7 +299,7 @@ impl wl::ZwlrOutputManagerV1EventListener for Listener {
                 && let Some((_, m)) = h
                     .modes
                     .iter()
-                    .find(|(p, _)| p.ref_eq(unsafe { &*h.current_mode_ptr }))
+                    .find(|(p, _)| core::ptr::addr_eq(p.as_ptr(), h.current_mode_ptr))
             {
                 println!(
                     "* current mode: {}x{} @ {}.{:03}hz",
@@ -344,26 +328,13 @@ impl wl::ZwlrOutputManagerV1EventListener for Listener {
         println!("finished");
     }
 }
-impl wl::ZwlrOutputConfigurationV1EventListener for Listener {
-    fn succeeded(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
-        println!("cfg ok!");
-    }
-
-    fn failed(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
-        println!("cfg failed");
-    }
-
-    fn cancelled(&mut self, sender: &mut peridot_tp_wayland::ZwlrOutputConfigurationV1) {
-        println!("cfg cancelled");
-    }
-}
 
 struct HeadState {
     name: Option<std::ffi::CString>,
     description: Option<std::ffi::CString>,
     physical_width: i32,
     physical_height: i32,
-    modes: Vec<(wl::Owned<wl::ZwlrOutputModeV1>, Pin<Box<ModeState>>)>,
+    modes: Vec<(NonNull<wl::ZwlrOutputModeV1>, Pin<Box<ModeState>>)>,
     current_mode_ptr: *mut wl::ZwlrOutputModeV1,
     enabled: bool,
     position_x: i32,
@@ -400,7 +371,7 @@ impl wl::ZwlrOutputHeadV1EventListener for HeadState {
             finished: false,
         });
         err_warn!(mode.set_listener(&mut *state), "mode set_listener failed");
-        self.modes.push((mode, state));
+        self.modes.push((mode.unwrap(), state));
     }
 
     fn current_mode(
@@ -509,69 +480,84 @@ impl wl::ZwlrOutputConfigurationV1EventListener for OutputConfigurationResultRec
     }
 }
 
+struct PreservedDisplayState {
+    head_ptr: *const wl::ZwlrOutputHeadV1,
+    mode_ptr: *const wl::ZwlrOutputModeV1,
+    scale: wl::Fixed,
+}
+impl PreservedDisplayState {
+    pub fn restore(
+        &self,
+        configuration_head: &wl::ZwlrOutputConfigurationHeadV1,
+    ) -> Result<(), std::io::Error> {
+        tracing::info!(?self.mode_ptr, ?self.scale, "Restoring Display modes");
+
+        configuration_head.set_mode(unsafe { &*self.mode_ptr })?;
+        configuration_head.set_scale(self.scale)?;
+
+        Ok(())
+    }
+}
+
 struct DisplayManager {
     mgr_objects: Pin<Box<Listener>>,
-    output_manager: wl::Owned<wl::ZwlrOutputManagerV1>,
-    preserved_state: Option<DisplayState>,
+    output_manager: NonNull<wl::ZwlrOutputManagerV1>,
+    preserved_state: Option<PreservedDisplayState>,
     output_cfg_result_receiver: UnsafeCell<Pin<Box<OutputConfigurationResultReceiver>>>,
 }
 impl DisplayManager {
+    #[tracing::instrument(name = "DisplayManager::set_mode", skip(self))]
     pub fn set_mode(&mut self, head_index: usize, mode_index: usize) {
         if let Some(ref ps) = self.preserved_state
-            && !core::ptr::addr_eq(ps.head_ptr, &self.mgr_objects.heads[head_index].0)
+            && !core::ptr::addr_eq(ps.head_ptr, self.mgr_objects.heads[head_index].0.as_ptr())
         {
             // 別のheadのモードセットをするので前のをもどす
             self.restore();
         }
 
         if self.preserved_state.is_none() {
+            // capture original state
             let new_head_state_ref = self.mgr_objects.heads[head_index].1.as_ref();
-            self.preserved_state = Some(DisplayState {
-                head_ptr: &*self.mgr_objects.heads[head_index].0,
-                original_mode_ptr: new_head_state_ref.current_mode_ptr,
-                original_scale: new_head_state_ref.scale,
+            self.preserved_state = Some(PreservedDisplayState {
+                head_ptr: self.mgr_objects.heads[head_index].0.as_ptr(),
+                mode_ptr: new_head_state_ref.current_mode_ptr,
+                scale: new_head_state_ref.scale,
             });
         }
 
         let head = &self.mgr_objects.heads[head_index].0;
         let mode = &self.mgr_objects.heads[head_index].1.modes[mode_index].0;
 
-        let mut output_cfg = self
-            .output_manager
-            .create_configuration(self.mgr_objects.last_done_serial)
-            .expect("create_configuration failed");
-        output_cfg
-            .set_listener(unsafe { &mut **self.output_cfg_result_receiver.get() })
-            .expect("output_cfg set_listener failed");
-        let cfg_head = output_cfg
-            .enable_head(head)
-            .expect("output_configuration enable_head failed");
-        cfg_head
-            .set_scale(wl::Fixed::from_f32_lossy(1.0))
-            .expect("cfg_head set_scale failed");
-        cfg_head.set_mode(mode).expect("set_mode failed");
-        output_cfg.apply().expect("Failed to apply mode");
+        let mut output_cfg = err_fatal_bailout!(unsafe {
+            self.output_manager
+                .as_ref()
+                .create_configuration(self.mgr_objects.last_done_serial)
+        });
+        let _ = output_cfg.set_listener(unsafe { &mut **self.output_cfg_result_receiver.get() });
+        let cfg_head = err_fatal_bailout!(output_cfg.enable_head(unsafe { head.as_ref() }));
+        err_fatal_bailout!(cfg_head.set_scale(wl::Fixed::from_f32_lossy(1.0)));
+        err_fatal_bailout!(cfg_head.set_mode(unsafe { mode.as_ref() }));
+        // err_fatal_bailout!(output_cfg.disable_head(unsafe { head.as_ref() }));
+        err_fatal_bailout!(output_cfg.apply());
         output_cfg.leak();
     }
 
+    #[tracing::instrument(name = "DisplayManager::restore", skip(self))]
     pub fn restore(&mut self) {
         let Some(ps) = self.preserved_state.take() else {
             // 前のがない(モードセットしてない)
             return;
         };
 
-        let mut output_cfg = self
-            .output_manager
-            .create_configuration(self.mgr_objects.last_done_serial)
-            .expect("Failed to create output configuration");
-        output_cfg
-            .set_listener(unsafe { &mut **self.output_cfg_result_receiver.get() })
-            .expect("output_cfg set_listener failed");
-        let cfg_head = output_cfg
-            .enable_head(unsafe { &*ps.head_ptr })
-            .expect("Failed to enable head for configuration");
-        ps.restore(&cfg_head).expect("Failed to restore");
-        output_cfg.apply().expect("Failed to apply mode");
+        let mut output_cfg = err_fatal_bailout!(unsafe {
+            self.output_manager
+                .as_ref()
+                .create_configuration(self.mgr_objects.last_done_serial)
+        });
+        let _ = output_cfg.set_listener(unsafe { &mut **self.output_cfg_result_receiver.get() });
+        let cfg_head = err_fatal_bailout!(output_cfg.enable_head(unsafe { &*ps.head_ptr }));
+        err_fatal_bailout!(ps.restore(&cfg_head));
+        err_fatal_bailout!(output_cfg.apply());
         output_cfg.leak();
     }
 }
@@ -601,13 +587,8 @@ impl Wayland {
         tracing::info!("Using Wayland as window backend");
 
         let mut interfaces = RegistryCollector(HashMap::new());
-        let mut registry = match con.get_registry() {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::error!(reason = ?e, "Failed to get wayland registry object");
-                std::process::abort();
-            }
-        };
+        let mut registry =
+            err_fatal_bailout!(con.get_registry(), "Failed to get wayland registry object");
         err_warn!(
             registry.set_listener(&mut interfaces),
             "registry set_listener failed"
@@ -621,8 +602,8 @@ impl Wayland {
             pointer_position: peridot::math::Vector2(0, 0),
         });
         let compositor = err_fatal_bailout!(
-            opt err_fatal_bailout!(interfaces.bind_interface::<wl::Compositor>(&registry), "Failed to bind interface"),
-            "No compositor interface found"
+            interfaces.require_interface::<wl::Compositor>(&registry),
+            "Failed to bind interface"
         );
         let mut surface = err_fatal_bailout!(compositor.create_surface(), "create_surface failed");
         err_warn!(
@@ -630,31 +611,18 @@ impl Wayland {
             "surface set_listener failed"
         );
         let mut xdg_wm_base = err_fatal_bailout!(
-            opt err_fatal_bailout!(interfaces.bind_interface::<wl::XdgWmBase>(&registry), "Failed to bind interface"),
-            "No xdg_wm_base interface found"
+            interfaces.require_interface::<wl::XdgWmBase>(&registry),
+            "Failed to bind interface"
         );
-        err_warn!(
-            xdg_wm_base.set_listener(&mut *state),
-            "xdg_wm_base set_listener failed"
-        );
+        let _ = xdg_wm_base.set_listener(&mut *state);
         let mut xdg_surface = err_fatal_bailout!(
             xdg_wm_base.get_xdg_surface(&surface),
             "get_xdg_surface failed"
         );
-        err_warn!(
-            xdg_surface.set_listener(&mut *state),
-            "xdg_surface set_listener failed"
-        );
+        let _ = xdg_surface.set_listener(&mut *state);
         let mut xdg_toplevel =
             err_fatal_bailout!(xdg_surface.get_toplevel(), "get_toplevel failed");
-        err_warn!(
-            xdg_toplevel.set_listener(&mut *state),
-            "xdg_toplevel set_listener failed"
-        );
-        err_warn!(
-            xdg_surface.set_window_geometry(0, 0, 640, 480),
-            "set_window_geometry failed"
-        );
+        let _ = xdg_toplevel.set_listener(&mut *state);
         err_warn!(
             xdg_toplevel.set_app_id(&unsafe {
                 CString::from_vec_unchecked(crate::userlib::APP_IDENTIFIER.as_bytes().into())
@@ -674,34 +642,19 @@ impl Wayland {
             }),
             "set_title failed"
         );
+
         let xdg_decoration_manager = err_fatal_bailout!(
-            opt err_fatal_bailout!(
-                interfaces.bind_interface::<wl::ZxdgDecorationManagerV1>(&registry),
-                "Failed to bind interface"
-            ),
-            "No decoration manager interface found"
+            interfaces.bind_interface::<wl::ZxdgDecorationManagerV1>(&registry),
+            "Failed to bind interface"
         );
-        let xdg_decoration = err_fatal_bailout!(
-            xdg_decoration_manager.get_toplevel_decoration(&xdg_toplevel),
-            "get_toplevel_decoration failed"
-        );
-        err_warn!(surface.commit(), "surface commit failed");
 
         let mut seat = err_fatal_bailout!(
-            opt err_fatal_bailout!(interfaces.bind_interface::<wl::Seat>(&registry), "Failed to bind interface"),
-            "No seat interface found"
+            interfaces.require_interface::<wl::Seat>(&registry),
+            "Failed to bind interface"
         );
-        err_warn!(seat.set_listener(&mut *state), "seat set_listener failed");
+        let _ = seat.set_listener(&mut *state);
         let mut pointer = err_fatal_bailout!(seat.get_pointer(), "seat get_pointer failed");
-        err_warn!(
-            pointer.set_listener(&mut *state),
-            "pointer set_listener failed"
-        );
-        // err_warn!(
-        //     xdg_toplevel.set_fullscreen(),
-        //     "xdg_toplevel set_fullscreen failed"
-        // );
-        //
+        let _ = pointer.set_listener(&mut *state);
 
         let mut display_mgr;
         if let Some(mut output_manager) = err_fatal_bailout!(
@@ -712,14 +665,11 @@ impl Wayland {
                 heads: Vec::new(),
                 last_done_serial: 0,
             });
-            err_warn!(
-                output_manager.set_listener(&mut *l),
-                "output_manager set_listener failed"
-            );
+            let _ = output_manager.set_listener(&mut *l);
             err_warn!(con.roundtrip(), "Failed to roundtrip");
 
             display_mgr = Some(DisplayManager {
-                output_manager,
+                output_manager: output_manager.unwrap(),
                 mgr_objects: l,
                 preserved_state: None,
                 output_cfg_result_receiver: UnsafeCell::new(Box::pin(
@@ -730,22 +680,91 @@ impl Wayland {
             display_mgr = None;
         }
 
-        if let Some(ref mut ds) = display_mgr {
-            let mode_index = ds.mgr_objects.heads[1]
-                .1
-                .modes
-                .iter()
-                .position(|(_, m)| m.width == 1920 && m.height == 1080)
-                .expect("no expected size");
-            ds.set_mode(1, mode_index);
+        match Configuration::current().display {
+            None => {
+                // 指定なしの場合はとりあえずWindowed 640x480で初期化
+                err_warn!(
+                    xdg_surface.set_window_geometry(0, 0, 640, 480),
+                    "set_window_geometry failed"
+                );
+
+                if let Some(ref xdg_decoration_manager) = xdg_decoration_manager {
+                    let xdg_decoration = err_fatal_bailout!(
+                        xdg_decoration_manager.get_toplevel_decoration(&xdg_toplevel),
+                        "get_toplevel_decoration failed"
+                    );
+                    err_warn!(
+                        xdg_decoration.set_mode(wl::ZxdgToplevelDecorationMode::ServerSide),
+                        "xdg_decoration set_mode failed"
+                    );
+                }
+            }
+            Some(ConfigurationDisplay::Windowed { width, height }) => {
+                err_warn!(
+                    xdg_surface.set_window_geometry(0, 0, width as _, height as _),
+                    "set_window_geometry failed"
+                );
+
+                if let Some(ref xdg_decoration_manager) = xdg_decoration_manager {
+                    let xdg_decoration = err_fatal_bailout!(
+                        xdg_decoration_manager.get_toplevel_decoration(&xdg_toplevel),
+                        "get_toplevel_decoration failed"
+                    );
+                    err_warn!(
+                        xdg_decoration.set_mode(wl::ZxdgToplevelDecorationMode::ServerSide),
+                        "xdg_decoration set_mode failed"
+                    );
+                }
+            }
+            Some(ConfigurationDisplay::Borderless { width, height }) => {
+                err_warn!(
+                    xdg_surface.set_window_geometry(0, 0, width as _, height as _),
+                    "set_window_geometry failed"
+                );
+
+                if let Some(ref xdg_decoration_manager) = xdg_decoration_manager {
+                    let xdg_decoration = err_fatal_bailout!(
+                        xdg_decoration_manager.get_toplevel_decoration(&xdg_toplevel),
+                        "get_toplevel_decoration failed"
+                    );
+                    err_warn!(
+                        xdg_decoration.set_mode(wl::ZxdgToplevelDecorationMode::ClientSide),
+                        "xdg_decoration set_mode failed"
+                    );
+                }
+            }
+            Some(ConfigurationDisplay::Fullscreen {
+                display_index,
+                width,
+                height,
+                ref refresh_rate,
+            }) => {
+                if let Some(ref mut ds) = display_mgr {
+                    // test set
+                    let mode_index = ds.mgr_objects.heads[display_index]
+                        .1
+                        .modes
+                        .iter()
+                        .position(|(_, m)| m.width == width as _ && m.height == height as _)
+                        .expect("no expected size");
+                    ds.set_mode(display_index, mode_index);
+                }
+
+                err_warn!(
+                    xdg_toplevel.set_fullscreen(),
+                    "xdg_toplevel set_fullscreen failed"
+                );
+            }
         }
 
+        err_warn!(surface.commit(), "surface commit failed");
         err_warn!(con.roundtrip(), "Failed to final roundtrip");
 
         pointer.leak();
         seat.leak();
-        xdg_decoration.leak();
-        xdg_decoration_manager.leak();
+        if let Some(x) = xdg_decoration_manager {
+            x.leak();
+        }
         xdg_toplevel.leak();
         xdg_surface.leak();
         xdg_wm_base.leak();
@@ -980,6 +999,25 @@ impl RegistryCollector {
             .get(unsafe { core::ffi::CStr::from_ptr(I::def().name) })
             .map(|&(name, version)| registry.bind(name, version))
             .transpose()
+    }
+
+    #[tracing::instrument(
+        name = "RegistryCollector::require_interface",
+        skip(self, registry),
+        fields(interface_name = ?unsafe { core::ffi::CStr::from_ptr(I::def().name) })
+    )]
+    fn require_interface<I>(&self, registry: &wl::Registry) -> Result<wl::Owned<I>, std::io::Error>
+    where
+        I: wl::Interface,
+    {
+        match self.bind_interface(registry) {
+            Ok(Some(x)) => Ok(x),
+            Ok(None) => {
+                tracing::error!("missing required wayland global interface");
+                std::process::abort();
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 impl wl::RegistryListener for RegistryCollector {

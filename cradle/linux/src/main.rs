@@ -1,8 +1,9 @@
 use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
 use parking_lot::RwLock;
-use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
+use peridot::mthelper::{DynamicMutabilityProvider, SharedMutableRef, make_shared_mutable_ref};
 use presenter::PresenterProvider;
+use serde::{Deserialize, Serialize};
 use sound_backend::SoundBackend;
 use std::{ffi::CStr, path::PathBuf, sync::Arc};
 use std::{fs::File, os::fd::AsRawFd};
@@ -11,13 +12,89 @@ use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::Subs
 
 mod sound_backend;
 
-use crate::presenter::{wayland::Wayland, BorrowFd, EventProcessor, WindowBackend};
+use crate::presenter::{BorrowFd, EventProcessor, WindowBackend, wayland::Wayland};
 mod epoll;
 mod input;
 mod kernel_input;
 mod presenter;
 mod udev;
 mod userlib;
+
+pub mod xdg_base_directory {
+    use std::path::PathBuf;
+
+    pub fn config_home() -> PathBuf {
+        if let Some(x) = std::env::var_os("XDG_CONFIG_HOME") {
+            return x.into();
+        }
+
+        // default: $HOME/.config
+        let Some(x) = std::env::var_os("HOME") else {
+            tracing::error!("No $XDG_CONFIG_HOME and $HOME set");
+            std::process::abort();
+        };
+        PathBuf::from(x).join(".config")
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigurationLoadError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error(transparent)]
+    Deserialize(#[from] toml::de::Error),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum ConfigurationDisplay {
+    Windowed {
+        width: u32,
+        height: u32,
+    },
+    Borderless {
+        width: u32,
+        height: u32,
+    },
+    Fullscreen {
+        display_index: usize,
+        width: u32,
+        height: u32,
+        refresh_rate: String,
+    },
+}
+#[derive(Serialize, Deserialize)]
+pub struct Configuration {
+    pub display: Option<ConfigurationDisplay>,
+}
+impl Configuration {
+    fn path() -> PathBuf {
+        xdg_base_directory::config_home()
+            .join(userlib::APP_IDENTIFIER)
+            .join("config.toml")
+    }
+
+    pub fn current() -> &'static Self {
+        #[allow(static_mut_refs)]
+        unsafe {
+            &CONFIGURATION_CURRENT
+        }
+    }
+
+    fn load() -> Result<(), ConfigurationLoadError> {
+        let path = Self::path();
+        if !path.try_exists()? {
+            tracing::info!(?path, "No configuration file found, skipping to load");
+            return Ok(());
+        }
+
+        unsafe {
+            CONFIGURATION_CURRENT = toml::from_str(&std::fs::read_to_string(path)?)?;
+        }
+        Ok(())
+    }
+}
+static mut CONFIGURATION_CURRENT: Configuration = Configuration { display: None };
 
 pub struct PlatformAssetLoader {
     basedir: PathBuf,
@@ -303,6 +380,10 @@ fn main() {
         .with(fmt)
         .with(env_filter)
         .init();
+
+    if let Err(e) = Configuration::load() {
+        tracing::warn!(reason = ?e, "Failed to load configuration");
+    }
 
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
