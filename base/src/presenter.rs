@@ -155,12 +155,8 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             device: g.gfx_device.clone(),
         });
         #[cfg(feature = "debug")]
-        if let Err(e) = g
-            .gfx_device
-            .set_object_name(&chain, c"Peridot-Default Presenter-Swapchain")
-        {
-            tracing::warn!(cause = ?e, "Failed to set swapchain name");
-        }
+        g.gfx_device
+            .dbg_set_object_name(&chain, c"[Peridot.DefaultPresenter] Swapchain");
 
         let n = match unsafe {
             br::vkfn_wrapper::get_swapchain_image_count(g.gfx_device.0.device, chain.handle)
@@ -189,15 +185,13 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
         #[cfg(feature = "debug")]
         for (n, v) in back_buffer_image_handles.iter().enumerate() {
             let name = unsafe {
-                std::ffi::CString::from_vec_unchecked(
-                    format!("Peridot-Default Presenter-BackBuffer #{n}").into_bytes(),
+                std::ffi::CString::from_vec_with_nul_unchecked(
+                    format!("[Peridot.DefaultPresenter] BackBuffer #{n}\0").into_bytes(),
                 )
             };
-            if let Err(e) = unsafe {
+            unsafe {
                 g.gfx_device
-                    .set_object_name_raw(br::vk::VkImage::OBJECT_TYPE, v, &name)
-            } {
-                tracing::warn!(cause = ?e, "Failed to set swapchain backbuffer image name");
+                    .dbg_set_object_name_raw(br::vk::VkImage::OBJECT_TYPE, v, &name);
             }
         }
 
@@ -366,32 +360,26 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
 
         #[cfg(feature = "debug")]
         {
-            if let Err(e) = unsafe {
-                g.gfx_device.set_object_name_raw(
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
                     br::vk::VK_OBJECT_TYPE_SEMAPHORE,
                     &rendering_order,
-                    c"Peridot-Default Presenter-Rendering Order Semaphore",
-                )
-            } {
-                tracing::warn!(cause = ?e, "Failed to set rendering order semaphore name");
+                    c"[Peridot.DefaultPresenter] Rendering Order Semaphore",
+                );
             }
-            if let Err(e) = unsafe {
-                g.gfx_device.set_object_name_raw(
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
                     br::vk::VK_OBJECT_TYPE_SEMAPHORE,
                     &buffer_ready_order,
-                    c"Peridot-Default Presenter-BufferReady Order Semaphore",
-                )
-            } {
-                tracing::warn!(cause = ?e, "Failed to set buffer ready order semaphore name");
+                    c"[Peridot.DefaultPresenter] BufferReady Order Semaphore",
+                );
             }
-            if let Err(e) = unsafe {
-                g.gfx_device.set_object_name_raw(
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
                     br::vk::VK_OBJECT_TYPE_SEMAPHORE,
                     &present_order,
-                    c"Peridot-Default Presenter-Present Order Semaphore",
-                )
-            } {
-                tracing::warn!(cause = ?e, "Failed to set present order semaphore name");
+                    c"[Peridot.DefaultPresenter] Present Order Semaphore",
+                );
             }
         }
 
