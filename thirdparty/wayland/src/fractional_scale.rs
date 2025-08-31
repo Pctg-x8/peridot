@@ -5,9 +5,7 @@ use super::{ffi, interface, message};
 #[repr(transparent)]
 pub struct WpFractionalScaleManagerV1(super::Proxy);
 unsafe impl super::Interface for WpFractionalScaleManagerV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -61,9 +59,7 @@ impl WpFractionalScaleManagerV1 {
 #[repr(transparent)]
 pub struct WpFractionalScaleV1(super::Proxy);
 unsafe impl super::Interface for WpFractionalScaleV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

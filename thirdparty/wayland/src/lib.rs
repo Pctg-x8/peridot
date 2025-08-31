@@ -95,7 +95,7 @@ impl Proxy {
         flags: u32,
         args: &mut [ffi::Argument],
     ) -> Result<NonNull<T>, std::io::Error> {
-        self.marshal_array_flags(opcode, T::def(), version, flags, args)
+        self.marshal_array_flags(opcode, T::DEF, version, flags, args)
             .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
     }
 
@@ -137,7 +137,7 @@ impl Proxy {
         if let Err(e) = self.marshal_array_flags_void(opcode, ffi::MARSHAL_FLAG_DESTROY, &mut []) {
             tracing::warn!(
                 reason = ?e,
-                display_error = unsafe { ffi::wl_display_get_error(o.display()) },
+                display_error = unsafe { ffi::wl_display_get_error(self.display()) },
                 "Failed to call destructor"
             );
         }
@@ -148,7 +148,7 @@ impl Proxy {
 
 /// must be transparent with ffi::Proxy(or Proxy wrapper newtype)
 pub unsafe trait Interface {
-    fn def() -> &'static ffi::Interface;
+    const DEF: &'static ffi::Interface;
 
     #[inline(always)]
     unsafe fn from_proxy_ptr_unchecked(p: NonNull<Proxy>) -> NonNull<Self>
@@ -335,9 +335,7 @@ impl Display {
 #[repr(transparent)]
 pub struct Registry(Proxy);
 unsafe impl Interface for Registry {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_registry_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_registry_interface };
 }
 impl Registry {
     pub fn set_listener<'l, L: RegistryListener + 'l>(
@@ -369,7 +367,7 @@ impl Registry {
                 &mut [
                     ffi::Argument { u: name },
                     // dynamically-typed new id
-                    ffi::Argument { s: I::def().name },
+                    ffi::Argument { s: I::DEF.name },
                     ffi::Argument { u: version },
                     NEWID_ARG,
                 ],
@@ -392,9 +390,7 @@ pub trait RegistryListener {
 #[repr(transparent)]
 pub struct Callback(Proxy);
 unsafe impl Interface for Callback {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_callback_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_callback_interface };
 }
 impl Callback {
     pub fn set_listener<'l, L: CallbackEventListener + 'l>(
@@ -419,9 +415,7 @@ pub trait CallbackEventListener {
 #[repr(transparent)]
 pub struct Compositor(Proxy);
 unsafe impl Interface for Compositor {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_compositor_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_compositor_interface };
 }
 impl Compositor {
     #[inline]
@@ -452,9 +446,7 @@ impl Compositor {
 #[repr(transparent)]
 pub struct Surface(Proxy);
 unsafe impl Interface for Surface {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_surface_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_surface_interface };
 }
 impl Surface {
     pub const fn as_raw(&mut self) -> *mut ffi::Proxy {
@@ -552,9 +544,7 @@ pub trait SurfaceEventListener {
 #[repr(transparent)]
 pub struct Subcompositor(Proxy);
 unsafe impl Interface for Subcompositor {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_subcompositor_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_subcompositor_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -585,13 +575,11 @@ impl Subcompositor {
 #[repr(transparent)]
 pub struct Subsurface(Proxy);
 unsafe impl Interface for Subsurface {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_subsurface_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_subsurface_interface };
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "<Subsurface as Interface>::detsruct", skip(self))
+        tracing::instrument(name = "<Subsurface as Interface>::destruct", skip(self))
     )]
     unsafe fn destruct(&mut self) {
         self.0.call_simple_dtor(0);
@@ -614,9 +602,7 @@ impl Subsurface {
 #[repr(transparent)]
 pub struct Shm(Proxy);
 unsafe impl Interface for Shm {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_shm_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_shm_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -628,7 +614,7 @@ unsafe impl Interface for Shm {
 }
 impl Shm {
     #[inline]
-    pub fn create_pool_rawfd(
+    pub fn create_pool_raw(
         &self,
         fd: std::os::fd::RawFd,
         size: i32,
@@ -653,7 +639,7 @@ impl Shm {
         fd: &impl AsRawFd,
         size: i32,
     ) -> Result<Owned<ShmPool>, std::io::Error> {
-        self.create_pool_rawfd(fd.as_raw_fd(), size)
+        self.create_pool_raw(fd.as_raw_fd(), size)
     }
 }
 
@@ -667,9 +653,7 @@ pub enum ShmFormat {
 #[repr(transparent)]
 pub struct ShmPool(Proxy);
 unsafe impl Interface for ShmPool {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_shm_pool_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_shm_pool_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -716,9 +700,7 @@ impl ShmPool {
 #[repr(transparent)]
 pub struct Buffer(Proxy);
 unsafe impl Interface for Buffer {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_buffer_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_buffer_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -732,9 +714,7 @@ unsafe impl Interface for Buffer {
 #[repr(transparent)]
 pub struct Region(Proxy);
 unsafe impl Interface for Region {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_region_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_region_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -763,9 +743,7 @@ impl Region {
 #[repr(transparent)]
 pub struct Seat(Proxy);
 unsafe impl Interface for Seat {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_seat_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_seat_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -787,11 +765,14 @@ impl Seat {
 
     #[inline]
     pub fn get_pointer(&self) -> Result<Owned<Pointer>, std::io::Error> {
-        let proxy_ptr =
-            self.0
-                .marshal_array_flags(0, Pointer::def(), self.0.version(), 0, &mut [NEWID_ARG])?;
-
-        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                0,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 
     // v5
@@ -825,9 +806,7 @@ pub trait SeatEventListener {
 #[repr(transparent)]
 pub struct Pointer(Proxy);
 unsafe impl Interface for Pointer {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_pointer_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_pointer_interface };
 }
 impl Pointer {
     pub fn set_listener<'l, L: PointerEventListener + 'l>(
@@ -922,9 +901,7 @@ pub enum OutputTransform {
 #[repr(transparent)]
 pub struct Output(Proxy);
 unsafe impl Interface for Output {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_output_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_output_interface };
 }
 
 // pub trait OutputEventListener {
@@ -938,9 +915,7 @@ unsafe impl Interface for Output {
 #[repr(transparent)]
 pub struct DataOffer(Proxy);
 unsafe impl Interface for DataOffer {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_data_offer_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_data_offer_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -1054,9 +1029,7 @@ pub trait DataOfferEventListener {
 #[repr(transparent)]
 pub struct DataSource(Proxy);
 unsafe impl Interface for DataSource {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_data_source_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_data_source_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -1147,9 +1120,7 @@ pub trait DataSourceEventListener {
 #[repr(transparent)]
 pub struct DataDevice(Proxy);
 unsafe impl Interface for DataDevice {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_data_device_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_data_device_interface };
 
     #[cfg_attr(
         feature = "tracing",
@@ -1263,9 +1234,7 @@ pub trait DataDeviceEventListener {
 #[repr(transparent)]
 pub struct DataDeviceManager(Proxy);
 unsafe impl Interface for DataDeviceManager {
-    fn def() -> &'static ffi::Interface {
-        unsafe { &wl_data_device_manager_interface }
-    }
+    const DEF: &'static ffi::Interface = unsafe { &wl_data_device_manager_interface };
 }
 impl DataDeviceManager {
     #[inline]

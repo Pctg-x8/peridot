@@ -5,9 +5,7 @@ use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 #[repr(transparent)]
 pub struct ZxdgDecorationManagerV1(Proxy);
 unsafe impl Interface for ZxdgDecorationManagerV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -65,9 +63,7 @@ pub enum ZxdgToplevelDecorationMode {
 #[repr(transparent)]
 pub struct ZxdgToplevelDecorationV1(Proxy);
 unsafe impl Interface for ZxdgToplevelDecorationV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

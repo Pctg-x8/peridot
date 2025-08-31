@@ -3,9 +3,7 @@ use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message, wl_surf
 #[repr(transparent)]
 pub struct WpViewporter(Proxy);
 unsafe impl Interface for WpViewporter {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -52,9 +50,7 @@ impl WpViewporter {
 #[repr(transparent)]
 pub struct WpViewport(Proxy);
 unsafe impl Interface for WpViewport {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

@@ -3,9 +3,7 @@ use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 #[repr(transparent)]
 pub struct WpCursorShapeManagerV1(Proxy);
 unsafe impl Interface for WpCursorShapeManagerV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -74,9 +72,7 @@ pub enum WpCursorShapeDeviceV1Shape {
 #[repr(transparent)]
 pub struct WpCursorShapeDeviceV1(Proxy);
 unsafe impl Interface for WpCursorShapeDeviceV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: &'static ffi::Interface = Self::INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

@@ -24,9 +24,7 @@ static ZXDG_EXPORTER_V2_INTERFACE: ffi::Interface = interface(
 #[repr(transparent)]
 pub struct ZxdgExporterV2(Proxy);
 unsafe impl Interface for ZxdgExporterV2 {
-    fn def() -> &'static ffi::Interface {
-        &ZXDG_EXPORTER_V2_INTERFACE
-    }
+    const DEF: &'static ffi::Interface = &ZXDG_EXPORTER_V2_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -72,9 +70,7 @@ static ZXDG_EXPORTED_V2_INTERFACE: ffi::Interface = interface(
 #[repr(transparent)]
 pub struct ZxdgExportedV2(Proxy);
 unsafe impl Interface for ZxdgExportedV2 {
-    fn def() -> &'static ffi::Interface {
-        &ZXDG_EXPORTED_V2_INTERFACE
-    }
+    const DEF: &'static ffi::Interface = &ZXDG_EXPORTED_V2_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

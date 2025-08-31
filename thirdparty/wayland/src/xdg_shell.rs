@@ -24,9 +24,7 @@ static XDG_WM_BASE_INTERFACE: ffi::Interface = interface(
 #[repr(transparent)]
 pub struct XdgWmBase(Proxy);
 unsafe impl Interface for XdgWmBase {
-    fn def() -> &'static ffi::Interface {
-        &XDG_WM_BASE_INTERFACE
-    }
+    const DEF: &'static ffi::Interface = &XDG_WM_BASE_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -114,9 +112,7 @@ static XDG_POSITIONER_INTERFACE: ffi::Interface = interface(
 #[repr(transparent)]
 pub struct XdgPositioner(Proxy);
 unsafe impl Interface for XdgPositioner {
-    fn def() -> &'static ffi::Interface {
-        &XDG_POSITIONER_INTERFACE
-    }
+    const DEF: &'static ffi::Interface = &XDG_POSITIONER_INTERFACE;
 }
 
 static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
@@ -155,9 +151,7 @@ static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct XdgSurface(Proxy);
 unsafe impl Interface for XdgSurface {
-    fn def() -> &'static ffi::Interface {
-        &XDG_SURFACE_INTERFACE
-    }
+    const DEF: &'static ffi::Interface = &XDG_SURFACE_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -320,9 +314,7 @@ pub enum XdgToplevelResizeEdge {
 #[repr(transparent)]
 pub struct XdgToplevel(pub(super) Proxy);
 unsafe impl Interface for XdgToplevel {
-    fn def() -> &'static ffi::Interface {
-        &XDG_TOPLEVEL_INTERFACE
-    }
+    const DEF: &'static ffi::Interface = &XDG_TOPLEVEL_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -494,9 +486,7 @@ static XDG_POPUP_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct XdgPopup(Proxy);
 unsafe impl Interface for XdgPopup {
-    fn def() -> &'static ffi::Interface {
-        &XDG_POPUP_INTERFACE
-    }
+    const DEF: &'static ffi::Interface = &XDG_POPUP_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
