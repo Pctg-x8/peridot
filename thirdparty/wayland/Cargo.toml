@@ -1,3 +1,6 @@
+[workspace]
+members = ["generator"]
+
 [package]
 name = "peridot-tp-wayland"
 version = "0.1.0"

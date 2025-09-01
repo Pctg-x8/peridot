@@ -1,18 +1,15 @@
-use crate::EventFnTable;
-
-use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
-use core::ptr::null;
+use crate::{Interface, Proxy, ffi, interface, message};
 
 static XDG_WM_BASE_INTERFACE: ffi::Interface = interface(
     c"xdg_wm_base",
-    6,
+    7,
     &[
         message(c"destroy", c"", &[]),
-        message(c"create_positioner", c"n", &[XdgPositioner::DEF]),
+        message(c"create_positioner", c"n", &[crate::XdgPositioner::DEF]),
         message(
             c"get_xdg_surface",
             c"no",
-            &[XdgSurface::DEF, super::Surface::DEF],
+            &[crate::XdgSurface::DEF, crate::Surface::DEF],
         ),
         message(c"pong", c"u", &[core::ptr::null()]),
     ],
@@ -20,7 +17,7 @@ static XDG_WM_BASE_INTERFACE: ffi::Interface = interface(
 );
 
 #[repr(transparent)]
-pub struct XdgWmBase(Proxy);
+pub struct XdgWmBase(pub(crate) Proxy);
 unsafe impl Interface for XdgWmBase {
     const DEF: &'static ffi::Interface = &XDG_WM_BASE_INTERFACE;
 
@@ -32,6 +29,7 @@ unsafe impl Interface for XdgWmBase {
         self.0.call_simple_dtor(0);
     }
 }
+
 impl XdgWmBase {
     pub fn set_listener<'l, L: XdgWmBaseEventListener + 'l>(
         &'l mut self,
@@ -39,8 +37,9 @@ impl XdgWmBase {
     ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
-                EventFnTable!(for L: XdgWmBaseEventListener {
-                    ping(serial: u32 => serial)
+                crate::EventFnTable!(for L: XdgWmBaseEventListener {
+                    ping(serial: u32 => serial,),
+
                 }) as *const _ as _,
                 listener as *mut _ as _,
             )
@@ -48,68 +47,233 @@ impl XdgWmBase {
     }
 
     #[inline]
-    pub fn create_positioner(&self) -> crate::Result<Owned<XdgPositioner>> {
-        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
+    pub fn create_positioner(&self) -> crate::Result<crate::Owned<crate::XdgPositioner>> {
+        Ok(unsafe {
+            crate::Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [crate::NEWID_ARG])?)
+        })
     }
 
     #[inline]
-    pub fn get_xdg_surface(&self, surface: &super::Surface) -> crate::Result<Owned<XdgSurface>> {
+    pub fn get_xdg_surface(
+        &self,
+        surface: &crate::Surface,
+    ) -> crate::Result<crate::Owned<crate::XdgSurface>> {
         Ok(unsafe {
-            Owned::wrap_unchecked(
+            crate::Owned::wrap_unchecked(
                 self.0
-                    .marshal_array_typed(2, &mut [NEWID_ARG, surface.0.as_arg()])?,
+                    .marshal_array_typed(2, &mut [crate::NEWID_ARG, surface.0.as_arg()])?,
             )
         })
     }
 
     #[inline]
-    pub fn pong(&mut self, token: u32) -> crate::Result<()> {
+    pub fn pong(&self, serial: u32) -> crate::Result<()> {
         self.0
-            .marshal_array_void(3, &mut [ffi::Argument { u: token }])
+            .marshal_array_void(3, &mut [ffi::Argument { u: serial }])
     }
 }
 
 pub trait XdgWmBaseEventListener {
-    fn ping(&mut self, wm_base: &mut XdgWmBase, serial: u32);
+    fn ping(&mut self, sender: &mut XdgWmBase, serial: u32);
 }
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgWmBaseError {
+    Role = 0,
+    DefunctSurfaces = 1,
+    NotTheTopmostPopup = 2,
+    InvalidPopupParent = 3,
+    InvalidSurfaceState = 4,
+    InvalidPositioner = 5,
+    Unresponsive = 6,
+}
+
+static XDG_POSITIONER_INTERFACE: ffi::Interface = interface(
+    c"xdg_positioner",
+    7,
+    &[
+        message(c"destroy", c"", &[]),
+        message(c"set_size", c"ii", &[core::ptr::null(), core::ptr::null()]),
+        message(
+            c"set_anchor_rect",
+            c"iiii",
+            &[
+                core::ptr::null(),
+                core::ptr::null(),
+                core::ptr::null(),
+                core::ptr::null(),
+            ],
+        ),
+        message(c"set_anchor", c"u", &[core::ptr::null()]),
+        message(c"set_gravity", c"u", &[core::ptr::null()]),
+        message(c"set_constraint_adjustment", c"u", &[core::ptr::null()]),
+        message(
+            c"set_offset",
+            c"ii",
+            &[core::ptr::null(), core::ptr::null()],
+        ),
+        message(c"set_reactive", c"3", &[]),
+        message(
+            c"set_parent_size",
+            c"3ii",
+            &[core::ptr::null(), core::ptr::null()],
+        ),
+        message(c"set_parent_configure", c"3u", &[core::ptr::null()]),
+    ],
+    &[],
+);
 
 #[repr(transparent)]
-pub struct XdgPositioner(Proxy);
+pub struct XdgPositioner(pub(crate) Proxy);
 unsafe impl Interface for XdgPositioner {
-    const DEF: &'static ffi::Interface = &interface(
-        c"xdg_positioner",
-        6,
-        &[
-            message(c"destroy", c"", &[]),
-            message(c"set_size", c"ii", &[null(), null()]),
-            message(
-                c"set_anchor_rect",
-                c"iiii",
-                &[null(), null(), null(), null()],
-            ),
-            message(c"set_anchor", c"u", &[null()]),
-            message(c"set_gravity", c"u", &[null()]),
-            message(c"set_constraint_adjustment", c"u", &[null()]),
-            message(c"set_offset", c"ii", &[null(), null()]),
-            message(c"set_reactive", c"3", &[]),
-            message(c"set_parent_size", c"3ii", &[null(), null()]),
-            message(c"set_parent_configure", c"3u", &[null()]),
-        ],
-        &[],
-    );
+    const DEF: &'static ffi::Interface = &XDG_POSITIONER_INTERFACE;
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<XdgPositioner as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        self.0.call_simple_dtor(0);
+    }
 }
 
-static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
-    name: c"xdg_surface".as_ptr(),
-    version: 6,
-    method_count: 5,
-    methods: [
+impl XdgPositioner {
+    #[inline]
+    pub fn set_size(&self, width: i32, height: i32) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            1,
+            &mut [ffi::Argument { i: width }, ffi::Argument { i: height }],
+        )
+    }
+
+    #[inline]
+    pub fn set_anchor_rect(&self, x: i32, y: i32, width: i32, height: i32) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            2,
+            &mut [
+                ffi::Argument { i: x },
+                ffi::Argument { i: y },
+                ffi::Argument { i: width },
+                ffi::Argument { i: height },
+            ],
+        )
+    }
+
+    #[inline]
+    pub fn set_anchor(&self, anchor: XdgPositionerAnchor) -> crate::Result<()> {
+        self.0
+            .marshal_array_void(3, &mut [ffi::Argument { u: anchor as _ }])
+    }
+
+    #[inline]
+    pub fn set_gravity(&self, gravity: XdgPositionerGravity) -> crate::Result<()> {
+        self.0
+            .marshal_array_void(4, &mut [ffi::Argument { u: gravity as _ }])
+    }
+
+    #[inline]
+    pub fn set_constraint_adjustment(
+        &self,
+        constraint_adjustment: XdgPositionerConstraintAdjustment,
+    ) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            5,
+            &mut [ffi::Argument {
+                u: constraint_adjustment as _,
+            }],
+        )
+    }
+
+    #[inline]
+    pub fn set_offset(&self, x: i32, y: i32) -> crate::Result<()> {
+        self.0
+            .marshal_array_void(6, &mut [ffi::Argument { i: x }, ffi::Argument { i: y }])
+    }
+
+    #[inline]
+    pub fn set_reactive(&self) -> crate::Result<()> {
+        self.0.marshal_array_void(7, &mut [])
+    }
+
+    #[inline]
+    pub fn set_parent_size(&self, parent_width: i32, parent_height: i32) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            8,
+            &mut [
+                ffi::Argument { i: parent_width },
+                ffi::Argument { i: parent_height },
+            ],
+        )
+    }
+
+    #[inline]
+    pub fn set_parent_configure(&self, serial: u32) -> crate::Result<()> {
+        self.0
+            .marshal_array_void(9, &mut [ffi::Argument { u: serial }])
+    }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgPositionerError {
+    InvalidInput = 0,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgPositionerAnchor {
+    None = 0,
+    Top = 1,
+    Bottom = 2,
+    Left = 3,
+    Right = 4,
+    TopLeft = 5,
+    BottomLeft = 6,
+    TopRight = 7,
+    BottomRight = 8,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgPositionerGravity {
+    None = 0,
+    Top = 1,
+    Bottom = 2,
+    Left = 3,
+    Right = 4,
+    TopLeft = 5,
+    BottomLeft = 6,
+    TopRight = 7,
+    BottomRight = 8,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgPositionerConstraintAdjustment {
+    None = 0,
+    SlideX = 1,
+    SlideY = 2,
+    FlipX = 4,
+    FlipY = 8,
+    ResizeX = 16,
+    ResizeY = 32,
+}
+
+static XDG_SURFACE_INTERFACE: ffi::Interface = interface(
+    c"xdg_surface",
+    7,
+    &[
         message(c"destroy", c"", &[]),
-        message(c"get_toplevel", c"n", &[XdgToplevel::DEF]),
+        message(c"get_toplevel", c"n", &[crate::XdgToplevel::DEF]),
         message(
             c"get_popup",
             c"n?oo",
-            &[XdgPopup::DEF, &XDG_SURFACE_INTERFACE, XdgPositioner::DEF],
+            &[
+                crate::XdgPopup::DEF,
+                &XDG_SURFACE_INTERFACE,
+                crate::XdgPositioner::DEF,
+            ],
         ),
         message(
             c"set_window_geometry",
@@ -122,14 +286,12 @@ static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
             ],
         ),
         message(c"ack_configure", c"u", &[core::ptr::null()]),
-    ]
-    .as_ptr(),
-    event_count: 1,
-    events: [message(c"configure", c"u", &[core::ptr::null()])].as_ptr(),
-};
+    ],
+    &[message(c"configure", c"u", &[core::ptr::null()])],
+);
 
 #[repr(transparent)]
-pub struct XdgSurface(Proxy);
+pub struct XdgSurface(pub(crate) Proxy);
 unsafe impl Interface for XdgSurface {
     const DEF: &'static ffi::Interface = &XDG_SURFACE_INTERFACE;
 
@@ -141,19 +303,17 @@ unsafe impl Interface for XdgSurface {
         self.0.call_simple_dtor(0);
     }
 }
-impl XdgSurface {
-    pub const fn as_raw(&mut self) -> *mut ffi::Proxy {
-        &mut self.0 as *mut _ as _
-    }
 
+impl XdgSurface {
     pub fn set_listener<'l, L: XdgSurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
-                EventFnTable!(for L: XdgSurfaceEventListener {
-                    configure(serial: u32 => serial)
+                crate::EventFnTable!(for L: XdgSurfaceEventListener {
+                    configure(serial: u32 => serial,),
+
                 }) as *const _ as _,
                 listener as *mut _ as _,
             )
@@ -161,8 +321,28 @@ impl XdgSurface {
     }
 
     #[inline]
-    pub fn get_toplevel(&self) -> crate::Result<Owned<XdgToplevel>> {
-        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
+    pub fn get_toplevel(&self) -> crate::Result<crate::Owned<crate::XdgToplevel>> {
+        Ok(unsafe {
+            crate::Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [crate::NEWID_ARG])?)
+        })
+    }
+
+    #[inline]
+    pub fn get_popup(
+        &self,
+        parent: Option<&crate::XdgSurface>,
+        positioner: &crate::XdgPositioner,
+    ) -> crate::Result<crate::Owned<crate::XdgPopup>> {
+        Ok(unsafe {
+            crate::Owned::wrap_unchecked(self.0.marshal_array_typed(
+                2,
+                &mut [
+                    crate::NEWID_ARG,
+                    parent.map_or(crate::NULLOBJ_ARG, |x| x.0.as_arg()),
+                    positioner.0.as_arg(),
+                ],
+            )?)
+        })
     }
 
     #[inline]
@@ -192,59 +372,78 @@ impl XdgSurface {
 }
 
 pub trait XdgSurfaceEventListener {
-    fn configure(&mut self, surface: &mut XdgSurface, serial: u32);
+    fn configure(&mut self, sender: &mut XdgSurface, serial: u32);
 }
 
-pub(super) static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
-    name: c"xdg_toplevel".as_ptr(),
-    version: 6,
-    method_count: 14,
-    methods: [
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgSurfaceError {
+    NotConstructed = 1,
+    AlreadyConstructed = 2,
+    UnconfiguredBuffer = 3,
+    InvalidSerial = 4,
+    InvalidSize = 5,
+    DefunctRoleObject = 6,
+}
+
+static XDG_TOPLEVEL_INTERFACE: ffi::Interface = interface(
+    c"xdg_toplevel",
+    7,
+    &[
         message(c"destroy", c"", &[]),
         message(c"set_parent", c"?o", &[&XDG_TOPLEVEL_INTERFACE]),
-        message(c"set_title", c"s", &[null()]),
-        message(c"set_app_id", c"s", &[null()]),
+        message(c"set_title", c"s", &[core::ptr::null()]),
+        message(c"set_app_id", c"s", &[core::ptr::null()]),
         message(
             c"show_window_menu",
             c"ouii",
-            &[super::Seat::DEF, null(), null(), null()],
+            &[
+                crate::Seat::DEF,
+                core::ptr::null(),
+                core::ptr::null(),
+                core::ptr::null(),
+            ],
         ),
-        message(c"move", c"ou", &[super::Seat::DEF, null()]),
-        message(c"resize", c"ouu", &[super::Seat::DEF, null(), null()]),
-        message(c"set_max_size", c"ii", &[null(), null()]),
-        message(c"set_min_size", c"ii", &[null(), null()]),
+        message(c"move", c"ou", &[crate::Seat::DEF, core::ptr::null()]),
+        message(
+            c"resize",
+            c"ouu",
+            &[crate::Seat::DEF, core::ptr::null(), core::ptr::null()],
+        ),
+        message(
+            c"set_max_size",
+            c"ii",
+            &[core::ptr::null(), core::ptr::null()],
+        ),
+        message(
+            c"set_min_size",
+            c"ii",
+            &[core::ptr::null(), core::ptr::null()],
+        ),
         message(c"set_maximized", c"", &[]),
         message(c"unset_maximized", c"", &[]),
-        message(c"set_fullscreen", c"?o", &[super::Output::DEF]),
+        message(c"set_fullscreen", c"?o", &[crate::Output::DEF]),
         message(c"unset_fullscreen", c"", &[]),
         message(c"set_minimized", c"", &[]),
-    ]
-    .as_ptr(),
-    event_count: 4,
-    events: [
-        message(c"configure", c"iia", &[null(), null(), null()]),
+    ],
+    &[
+        message(
+            c"configure",
+            c"iia",
+            &[core::ptr::null(), core::ptr::null(), core::ptr::null()],
+        ),
         message(c"close", c"", &[]),
-        message(c"configure_bounds", c"4ii", &[null(), null()]),
-        message(c"wm_capabilities", c"5a", &[null()]),
-    ]
-    .as_ptr(),
-};
-
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum XdgToplevelResizeEdge {
-    Top = 1,
-    Bottom = 2,
-    Left = 4,
-    TopLeft = 5,
-    BottomLeft = 6,
-    Right = 8,
-    TopRight = 9,
-    BottomRight = 10,
-}
+        message(
+            c"configure_bounds",
+            c"4ii",
+            &[core::ptr::null(), core::ptr::null()],
+        ),
+        message(c"wm_capabilities", c"5a", &[core::ptr::null()]),
+    ],
+);
 
 #[repr(transparent)]
-pub struct XdgToplevel(pub(super) Proxy);
+pub struct XdgToplevel(pub(crate) Proxy);
 unsafe impl Interface for XdgToplevel {
     const DEF: &'static ffi::Interface = &XDG_TOPLEVEL_INTERFACE;
 
@@ -256,36 +455,32 @@ unsafe impl Interface for XdgToplevel {
         self.0.call_simple_dtor(0);
     }
 }
-impl XdgToplevel {
-    pub const fn as_raw(&mut self) -> *mut ffi::Proxy {
-        &mut self.0 as *mut _ as _
-    }
 
+impl XdgToplevel {
     pub fn set_listener<'l, L: XdgToplevelEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
     ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
-                EventFnTable!(for L: XdgToplevelEventListener {
-                    configure(
-                        width: i32 => width,
-                        height: i32 => height,
-                        states: *mut ffi::Array => unsafe {
-                            core::slice::from_raw_parts((*states).data as *const i32, (*states).size >> 2)
-                        }
-                    ),
+                crate::EventFnTable!(for L: XdgToplevelEventListener {
+                    configure(width: i32 => width,height: i32 => height,states: *mut ffi::Array => unsafe { &mut *states },),
                     close(),
-                    configure_bounds(width: i32 => width, height: i32 => height),
-                    wm_capabilities(
-                        capabilities: *mut ffi::Array => unsafe {
-                            core::slice::from_raw_parts((*capabilities).data as *const i32, (*capabilities).size >> 2)
-                        }
-                    )
+                    configure_bounds(width: i32 => width,height: i32 => height,),
+                    wm_capabilities(capabilities: *mut ffi::Array => unsafe { &mut *capabilities },),
+
                 }) as *const _ as _,
-                listener as *mut _ as _
+                listener as *mut _ as _,
             )
         }
+    }
+
+    #[inline]
+    pub fn set_parent(&self, parent: Option<&crate::XdgToplevel>) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            1,
+            &mut [parent.map_or(crate::NULLOBJ_ARG, |x| x.0.as_arg())],
+        )
     }
 
     #[inline]
@@ -295,15 +490,15 @@ impl XdgToplevel {
     }
 
     #[inline]
-    pub fn set_app_id(&self, id: &core::ffi::CStr) -> crate::Result<()> {
+    pub fn set_app_id(&self, app_id: &core::ffi::CStr) -> crate::Result<()> {
         self.0
-            .marshal_array_void(3, &mut [ffi::Argument { s: id.as_ptr() }])
+            .marshal_array_void(3, &mut [ffi::Argument { s: app_id.as_ptr() }])
     }
 
     #[inline]
     pub fn show_window_menu(
         &self,
-        seat: &super::Seat,
+        seat: &crate::Seat,
         serial: u32,
         x: i32,
         y: i32,
@@ -320,7 +515,7 @@ impl XdgToplevel {
     }
 
     #[inline]
-    pub fn r#move(&self, seat: &super::Seat, serial: u32) -> crate::Result<()> {
+    pub fn r#move(&self, seat: &crate::Seat, serial: u32) -> crate::Result<()> {
         self.0
             .marshal_array_void(5, &mut [seat.0.as_arg(), ffi::Argument { u: serial }])
     }
@@ -328,7 +523,7 @@ impl XdgToplevel {
     #[inline]
     pub fn resize(
         &self,
-        seat: &super::Seat,
+        seat: &crate::Seat,
         serial: u32,
         edges: XdgToplevelResizeEdge,
     ) -> crate::Result<()> {
@@ -339,6 +534,14 @@ impl XdgToplevel {
                 ffi::Argument { u: serial },
                 ffi::Argument { u: edges as _ },
             ],
+        )
+    }
+
+    #[inline]
+    pub fn set_max_size(&self, width: i32, height: i32) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            7,
+            &mut [ffi::Argument { i: width }, ffi::Argument { i: height }],
         )
     }
 
@@ -361,39 +564,118 @@ impl XdgToplevel {
     }
 
     #[inline]
+    pub fn set_fullscreen(&self, output: Option<&crate::Output>) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            11,
+            &mut [output.map_or(crate::NULLOBJ_ARG, |x| x.0.as_arg())],
+        )
+    }
+
+    #[inline]
+    pub fn unset_fullscreen(&self) -> crate::Result<()> {
+        self.0.marshal_array_void(12, &mut [])
+    }
+
+    #[inline]
     pub fn set_minimized(&self) -> crate::Result<()> {
         self.0.marshal_array_void(13, &mut [])
     }
 }
 
 pub trait XdgToplevelEventListener {
-    fn configure(&mut self, toplevel: &mut XdgToplevel, width: i32, height: i32, states: &[i32]);
-    fn close(&mut self, toplevel: &mut XdgToplevel);
-    fn configure_bounds(&mut self, toplevel: &mut XdgToplevel, width: i32, height: i32);
-    fn wm_capabilities(&mut self, toplevel: &mut XdgToplevel, capabilities: &[i32]);
+    fn configure(
+        &mut self,
+        sender: &mut XdgToplevel,
+        width: i32,
+        height: i32,
+        states: &mut ffi::Array,
+    );
+    fn close(&mut self, sender: &mut XdgToplevel);
+    fn configure_bounds(&mut self, sender: &mut XdgToplevel, width: i32, height: i32);
+    fn wm_capabilities(&mut self, sender: &mut XdgToplevel, capabilities: &mut ffi::Array);
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgToplevelError {
+    InvalidResizeEdge = 0,
+    InvalidParent = 1,
+    InvalidSize = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgToplevelResizeEdge {
+    None = 0,
+    Top = 1,
+    Bottom = 2,
+    Left = 4,
+    TopLeft = 5,
+    BottomLeft = 6,
+    Right = 8,
+    TopRight = 9,
+    BottomRight = 10,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgToplevelState {
+    Maximized = 1,
+    Fullscreen = 2,
+    Resizing = 3,
+    Activated = 4,
+    TiledLeft = 5,
+    TiledRight = 6,
+    TiledTop = 7,
+    TiledBottom = 8,
+    Suspended = 9,
+    ConstrainedLeft = 10,
+    ConstrainedRight = 11,
+    ConstrainedTop = 12,
+    ConstrainedBottom = 13,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgToplevelWmCapabilities {
+    WindowMenu = 1,
+    Maximize = 2,
+    Fullscreen = 3,
+    Minimize = 4,
+}
+
+static XDG_POPUP_INTERFACE: ffi::Interface = interface(
+    c"xdg_popup",
+    7,
+    &[
+        message(c"destroy", c"", &[]),
+        message(c"grab", c"ou", &[crate::Seat::DEF, core::ptr::null()]),
+        message(
+            c"reposition",
+            c"3ou",
+            &[crate::XdgPositioner::DEF, core::ptr::null()],
+        ),
+    ],
+    &[
+        message(
+            c"configure",
+            c"iiii",
+            &[
+                core::ptr::null(),
+                core::ptr::null(),
+                core::ptr::null(),
+                core::ptr::null(),
+            ],
+        ),
+        message(c"popup_done", c"", &[]),
+        message(c"repositioned", c"3u", &[core::ptr::null()]),
+    ],
+);
+
 #[repr(transparent)]
-pub struct XdgPopup(Proxy);
+pub struct XdgPopup(pub(crate) Proxy);
 unsafe impl Interface for XdgPopup {
-    const DEF: &'static ffi::Interface = &ffi::Interface {
-        name: c"xdg_popup".as_ptr(),
-        version: 6,
-        method_count: 2,
-        methods: [
-            message(c"destroy", c"", &[]),
-            message(c"grab", c"ou", &[super::Seat::DEF, null()]),
-        ]
-        .as_ptr(),
-        event_count: 4,
-        events: [
-            message(c"configure", c"iiii", &[null(), null(), null(), null()]),
-            message(c"popup_done", c"", &[]),
-            message(c"reposition", c"3ou", &[XdgPositioner::DEF, null()]),
-            message(c"repositioned", c"3u", &[null()]),
-        ]
-        .as_ptr(),
-    };
+    const DEF: &'static ffi::Interface = &XDG_POPUP_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -402,4 +684,47 @@ unsafe impl Interface for XdgPopup {
     unsafe fn destruct(&mut self) {
         self.0.call_simple_dtor(0);
     }
+}
+
+impl XdgPopup {
+    pub fn set_listener<'l, L: XdgPopupEventListener + 'l>(
+        &'l mut self,
+        listener: &'l mut L,
+    ) -> crate::SetListenerResult {
+        unsafe {
+            self.0.set_listener(
+                crate::EventFnTable!(for L: XdgPopupEventListener {
+                    configure(x: i32 => x,y: i32 => y,width: i32 => width,height: i32 => height,),
+                    popup_done(),
+                    repositioned(token: u32 => token,),
+
+                }) as *const _ as _,
+                listener as *mut _ as _,
+            )
+        }
+    }
+
+    #[inline]
+    pub fn grab(&self, seat: &crate::Seat, serial: u32) -> crate::Result<()> {
+        self.0
+            .marshal_array_void(1, &mut [seat.0.as_arg(), ffi::Argument { u: serial }])
+    }
+
+    #[inline]
+    pub fn reposition(&self, positioner: &crate::XdgPositioner, token: u32) -> crate::Result<()> {
+        self.0
+            .marshal_array_void(2, &mut [positioner.0.as_arg(), ffi::Argument { u: token }])
+    }
+}
+
+pub trait XdgPopupEventListener {
+    fn configure(&mut self, sender: &mut XdgPopup, x: i32, y: i32, width: i32, height: i32);
+    fn popup_done(&mut self, sender: &mut XdgPopup);
+    fn repositioned(&mut self, sender: &mut XdgPopup, token: u32);
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XdgPopupError {
+    InvalidGrab = 0,
 }
