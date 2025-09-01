@@ -27,7 +27,7 @@ impl GtkShell1 {
     pub fn get_gtk_surface(
         &self,
         surface: &super::Surface,
-    ) -> Result<super::Owned<GtkSurface1>, std::io::Error> {
+    ) -> crate::Result<super::Owned<GtkSurface1>> {
         Ok(unsafe {
             super::Owned::wrap_unchecked(
                 self.0
@@ -39,7 +39,7 @@ impl GtkShell1 {
     pub fn set_listener<'l, L: GtkShell1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: GtkShell1EventListener {
@@ -99,7 +99,7 @@ unsafe impl Interface for GtkSurface1 {
 }
 impl GtkSurface1 {
     #[inline]
-    pub fn present(&self, time: u32) -> Result<(), std::io::Error> {
+    pub fn present(&self, time: u32) -> crate::Result<()> {
         self.0
             .marshal_array_void(3, &mut [ffi::Argument { u: time }])
     }
@@ -107,7 +107,7 @@ impl GtkSurface1 {
     pub fn set_listener<'l, L: GtkSurface1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: GtkSurface1EventListener {

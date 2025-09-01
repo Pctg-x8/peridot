@@ -36,7 +36,7 @@ impl XdgWmBase {
     pub fn set_listener<'l, L: XdgWmBaseEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: XdgWmBaseEventListener {
@@ -48,15 +48,12 @@ impl XdgWmBase {
     }
 
     #[inline]
-    pub fn create_positioner(&self) -> Result<Owned<XdgPositioner>, std::io::Error> {
+    pub fn create_positioner(&self) -> crate::Result<Owned<XdgPositioner>> {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
-    pub fn get_xdg_surface(
-        &self,
-        surface: &super::Surface,
-    ) -> Result<Owned<XdgSurface>, std::io::Error> {
+    pub fn get_xdg_surface(&self, surface: &super::Surface) -> crate::Result<Owned<XdgSurface>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0
@@ -66,7 +63,7 @@ impl XdgWmBase {
     }
 
     #[inline]
-    pub fn pong(&mut self, token: u32) -> Result<(), std::io::Error> {
+    pub fn pong(&mut self, token: u32) -> crate::Result<()> {
         self.0
             .marshal_array_void(3, &mut [ffi::Argument { u: token }])
     }
@@ -152,7 +149,7 @@ impl XdgSurface {
     pub fn set_listener<'l, L: XdgSurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: XdgSurfaceEventListener {
@@ -164,7 +161,7 @@ impl XdgSurface {
     }
 
     #[inline]
-    pub fn get_toplevel(&self) -> Result<Owned<XdgToplevel>, std::io::Error> {
+    pub fn get_toplevel(&self) -> crate::Result<Owned<XdgToplevel>> {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
     }
 
@@ -175,7 +172,7 @@ impl XdgSurface {
         y: i32,
         width: i32,
         height: i32,
-    ) -> Result<(), std::io::Error> {
+    ) -> crate::Result<()> {
         self.0.marshal_array_void(
             3,
             &mut [
@@ -188,7 +185,7 @@ impl XdgSurface {
     }
 
     #[inline]
-    pub fn ack_configure(&self, serial: u32) -> Result<(), std::io::Error> {
+    pub fn ack_configure(&self, serial: u32) -> crate::Result<()> {
         self.0
             .marshal_array_void(4, &mut [ffi::Argument { u: serial }])
     }
@@ -267,7 +264,7 @@ impl XdgToplevel {
     pub fn set_listener<'l, L: XdgToplevelEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: XdgToplevelEventListener {
@@ -292,13 +289,13 @@ impl XdgToplevel {
     }
 
     #[inline]
-    pub fn set_title(&self, title: &core::ffi::CStr) -> Result<(), std::io::Error> {
+    pub fn set_title(&self, title: &core::ffi::CStr) -> crate::Result<()> {
         self.0
             .marshal_array_void(2, &mut [ffi::Argument { s: title.as_ptr() }])
     }
 
     #[inline]
-    pub fn set_app_id(&self, id: &core::ffi::CStr) -> Result<(), std::io::Error> {
+    pub fn set_app_id(&self, id: &core::ffi::CStr) -> crate::Result<()> {
         self.0
             .marshal_array_void(3, &mut [ffi::Argument { s: id.as_ptr() }])
     }
@@ -310,7 +307,7 @@ impl XdgToplevel {
         serial: u32,
         x: i32,
         y: i32,
-    ) -> Result<(), std::io::Error> {
+    ) -> crate::Result<()> {
         self.0.marshal_array_void(
             4,
             &mut [
@@ -323,7 +320,7 @@ impl XdgToplevel {
     }
 
     #[inline]
-    pub fn r#move(&self, seat: &super::Seat, serial: u32) -> Result<(), std::io::Error> {
+    pub fn r#move(&self, seat: &super::Seat, serial: u32) -> crate::Result<()> {
         self.0
             .marshal_array_void(5, &mut [seat.0.as_arg(), ffi::Argument { u: serial }])
     }
@@ -334,7 +331,7 @@ impl XdgToplevel {
         seat: &super::Seat,
         serial: u32,
         edges: XdgToplevelResizeEdge,
-    ) -> Result<(), std::io::Error> {
+    ) -> crate::Result<()> {
         self.0.marshal_array_void(
             6,
             &mut [
@@ -346,7 +343,7 @@ impl XdgToplevel {
     }
 
     #[inline]
-    pub fn set_min_size(&self, width: i32, height: i32) -> Result<(), std::io::Error> {
+    pub fn set_min_size(&self, width: i32, height: i32) -> crate::Result<()> {
         self.0.marshal_array_void(
             8,
             &mut [ffi::Argument { i: width }, ffi::Argument { i: height }],
@@ -354,17 +351,17 @@ impl XdgToplevel {
     }
 
     #[inline]
-    pub fn set_maximized(&self) -> Result<(), std::io::Error> {
+    pub fn set_maximized(&self) -> crate::Result<()> {
         self.0.marshal_array_void(9, &mut [])
     }
 
     #[inline]
-    pub fn unset_maximized(&self) -> Result<(), std::io::Error> {
+    pub fn unset_maximized(&self) -> crate::Result<()> {
         self.0.marshal_array_void(10, &mut [])
     }
 
     #[inline]
-    pub fn set_minimized(&self) -> Result<(), std::io::Error> {
+    pub fn set_minimized(&self) -> crate::Result<()> {
         self.0.marshal_array_void(13, &mut [])
     }
 }

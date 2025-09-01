@@ -36,7 +36,7 @@ impl ZxdgDecorationManagerV1 {
     pub fn get_toplevel_decoration(
         &self,
         toplevel: &super::XdgToplevel,
-    ) -> Result<Owned<ZxdgToplevelDecorationV1>, std::io::Error> {
+    ) -> crate::Result<Owned<ZxdgToplevelDecorationV1>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0
@@ -82,7 +82,7 @@ impl ZxdgToplevelDecorationV1 {
     pub fn set_listener<'l, L: ZxdgToplevelDecorationV1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: ZxdgToplevelDecorationV1EventListener {
@@ -94,7 +94,7 @@ impl ZxdgToplevelDecorationV1 {
     }
 
     #[inline]
-    pub fn set_mode(&self, mode: ZxdgToplevelDecorationMode) -> Result<(), std::io::Error> {
+    pub fn set_mode(&self, mode: ZxdgToplevelDecorationMode) -> crate::Result<()> {
         self.0
             .marshal_array_void(1, &mut [ffi::Argument { u: mode as _ }])
     }

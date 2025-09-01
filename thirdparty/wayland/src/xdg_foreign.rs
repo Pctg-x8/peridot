@@ -41,7 +41,7 @@ impl ZxdgExporterV2 {
     pub fn export_toplevel(
         &self,
         surface: &super::Surface,
-    ) -> Result<Owned<ZxdgExportedV2>, std::io::Error> {
+    ) -> crate::Result<Owned<ZxdgExportedV2>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0
@@ -76,7 +76,7 @@ impl ZxdgExportedV2 {
     pub fn set_listener<'l, L: ZxdgExportedV2EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: ZxdgExportedV2EventListener {

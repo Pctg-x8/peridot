@@ -37,7 +37,7 @@ impl WpCursorShapeManagerV1 {
     pub fn get_pointer(
         &self,
         pointer: &mut super::Pointer,
-    ) -> Result<Owned<WpCursorShapeDeviceV1>, std::io::Error> {
+    ) -> crate::Result<Owned<WpCursorShapeDeviceV1>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0
@@ -88,11 +88,7 @@ impl WpCursorShapeDeviceV1 {
     }
 
     #[inline]
-    pub fn set_shape(
-        &self,
-        serial: u32,
-        shape: WpCursorShapeDeviceV1Shape,
-    ) -> Result<(), std::io::Error> {
+    pub fn set_shape(&self, serial: u32, shape: WpCursorShapeDeviceV1Shape) -> crate::Result<()> {
         self.0.marshal_array_void(
             1,
             &mut [ffi::Argument { u: serial }, ffi::Argument { u: shape as _ }],

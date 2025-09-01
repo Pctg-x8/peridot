@@ -19,6 +19,24 @@ const NULLOBJ_ARG: ffi::Argument = ffi::Argument {
     o: core::ptr::null_mut(),
 };
 
+pub type Error = std::io::Error;
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[must_use = "`set_listener` will be failed when already registered another handler"]
+pub enum SetListenerResult {
+    Success,
+    Failure,
+}
+impl SetListenerResult {
+    pub const fn into_result(self) -> std::result::Result<(), ()> {
+        match self {
+            Self::Success => Ok(()),
+            Self::Failure => Err(()),
+        }
+    }
+}
+
 #[repr(transparent)]
 pub struct Proxy(UnsafeCell<ffi::Proxy>);
 impl Proxy {
@@ -33,7 +51,7 @@ impl Proxy {
     }
 
     #[inline(always)]
-    pub(crate) const fn as_arg(&self) -> ffi::Argument {
+    pub const fn as_arg(&self) -> ffi::Argument {
         ffi::Argument {
             o: self.0.get() as _,
         }
@@ -55,12 +73,12 @@ impl Proxy {
         &mut self,
         function_table: *const core::ffi::c_void,
         user_data: *mut core::ffi::c_void,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         match unsafe {
             ffi::wl_proxy_add_listener(self.0.get_mut() as _, function_table, user_data)
         } {
-            -1 => Err(()),
-            _ => Ok(()),
+            -1 => SetListenerResult::Failure,
+            _ => SetListenerResult::Success,
         }
     }
 
@@ -72,7 +90,7 @@ impl Proxy {
         version: u32,
         flags: u32,
         args: &mut [ffi::Argument],
-    ) -> Result<NonNull<Proxy>, std::io::Error> {
+    ) -> Result<NonNull<Proxy>> {
         unsafe {
             NonNull::new(ffi::wl_proxy_marshal_array_flags(
                 self.0.get(),
@@ -92,7 +110,7 @@ impl Proxy {
         opcode: u32,
         flags: u32,
         args: &mut [ffi::Argument],
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<()> {
         unsafe {
             // wl_proxy_marshal_array_flags without any interface will returns NULL
             ffi::wl_proxy_marshal_array_flags(
@@ -118,11 +136,7 @@ impl Proxy {
     }
 
     #[inline(always)]
-    pub fn marshal_array_void(
-        &self,
-        opcode: u32,
-        args: &mut [ffi::Argument],
-    ) -> Result<(), std::io::Error> {
+    pub fn marshal_array_void(&self, opcode: u32, args: &mut [ffi::Argument]) -> Result<()> {
         self.marshal_array_flags_void(opcode, 0, args)
     }
 
@@ -131,14 +145,14 @@ impl Proxy {
         &self,
         opcode: u32,
         args: &mut [ffi::Argument],
-    ) -> Result<NonNull<T>, std::io::Error> {
+    ) -> Result<NonNull<T>> {
         self.marshal_array_flags(opcode, T::DEF, self.version(), 0, args)
             .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
     }
 
     /// Calls the destructor with no arguments
     ///
-    /// If any errors occured, it will be reported via tracing if enabled.
+    /// If any errors occurred, it will be reported via tracing if enabled.
     pub(crate) fn call_simple_dtor(&mut self, opcode: u32) {
         #[cfg(feature = "tracing")]
         if let Err(e) = self.marshal_array_flags_void(opcode, ffi::MARSHAL_FLAG_DESTROY, &mut []) {
@@ -153,6 +167,8 @@ impl Proxy {
     }
 }
 
+/// ## Safety
+///
 /// must be transparent with ffi::Proxy(or Proxy wrapper newtype)
 pub unsafe trait Interface {
     const DEF: &'static ffi::Interface;
@@ -228,40 +244,38 @@ impl<T: Interface> Owned<T> {
     }
 }
 
-pub struct Display {
-    ffi: NonNull<ffi::Display>,
-}
+#[repr(transparent)]
+pub struct Display(NonNull<ffi::Display>);
 impl Drop for Display {
     fn drop(&mut self) {
-        unsafe { ffi::wl_display_disconnect(self.ffi.as_ptr()) }
+        unsafe { ffi::wl_display_disconnect(self.0.as_ptr()) }
     }
 }
 impl AsRawFd for Display {
     #[inline(always)]
     fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-        unsafe { ffi::wl_display_get_fd(self.ffi.as_ptr()) }
+        unsafe { ffi::wl_display_get_fd(self.0.as_ptr()) }
     }
 }
 impl Display {
     #[inline]
     pub fn connect() -> Option<Self> {
-        let ffi = NonNull::new(unsafe { ffi::wl_display_connect(core::ptr::null()) })?;
-
-        Some(Self { ffi })
+        NonNull::new(unsafe { ffi::wl_display_connect(core::ptr::null()) }).map(Self)
     }
 
+    #[inline(always)]
     pub const fn as_raw(&self) -> *mut ffi::Display {
-        self.ffi.as_ptr()
+        self.0.as_ptr()
     }
 
     #[inline]
-    pub fn get_registry(&self) -> Result<Owned<Registry>, std::io::Error> {
+    pub fn get_registry(&self) -> Result<Owned<Registry>> {
         Ok(unsafe {
             Owned::from_untyped_unchecked(
-                Proxy::from_raw_ptr_unchecked(self.ffi.as_ptr() as _).marshal_array_flags(
+                Proxy::from_raw_ptr_unchecked(self.as_raw() as _).marshal_array_flags(
                     1,
                     Registry::DEF,
-                    ffi::wl_proxy_get_version(self.ffi.as_ptr() as _),
+                    ffi::wl_proxy_get_version(self.as_raw() as _),
                     0,
                     &mut [NEWID_ARG],
                 )?,
@@ -270,8 +284,8 @@ impl Display {
     }
 
     #[inline]
-    pub fn roundtrip(&self) -> Result<u32, std::io::Error> {
-        match unsafe { ffi::wl_display_roundtrip(self.ffi.as_ptr()) } {
+    pub fn roundtrip(&self) -> Result<u32> {
+        match unsafe { ffi::wl_display_roundtrip(self.as_raw()) } {
             -1 => Err(std::io::Error::last_os_error()),
             r => Ok(r.cast_unsigned()),
         }
@@ -279,9 +293,10 @@ impl Display {
 
     #[inline]
     pub fn error(&self) -> Option<core::ffi::c_int> {
-        let r = unsafe { ffi::wl_display_get_error(self.ffi.as_ptr()) };
-
-        if r == 0 { None } else { Some(r) }
+        match unsafe { ffi::wl_display_get_error(self.as_raw()) } {
+            0 => None,
+            r => Some(r),
+        }
     }
 
     pub fn protocol_error(&self) -> (*const ffi::Interface, u32, u32) {
@@ -289,7 +304,7 @@ impl Display {
         let mut id = core::mem::MaybeUninit::uninit();
         let code = unsafe {
             ffi::wl_display_get_protocol_error(
-                self.ffi.as_ptr(),
+                self.as_raw(),
                 interface.as_mut_ptr(),
                 id.as_mut_ptr(),
             )
@@ -303,24 +318,24 @@ impl Display {
     }
 
     #[inline]
-    pub fn flush(&self) -> Result<u32, std::io::Error> {
-        match unsafe { ffi::wl_display_flush(self.ffi.as_ptr()) } {
+    pub fn flush(&self) -> Result<u32> {
+        match unsafe { ffi::wl_display_flush(self.as_raw()) } {
             -1 => Err(std::io::Error::last_os_error()),
             r => Ok(r.cast_unsigned()),
         }
     }
 
     #[inline]
-    pub fn dispatch_pending(&self) -> Result<u32, std::io::Error> {
-        match unsafe { ffi::wl_display_dispatch_pending(self.ffi.as_ptr()) } {
+    pub fn dispatch_pending(&self) -> Result<u32> {
+        match unsafe { ffi::wl_display_dispatch_pending(self.as_raw()) } {
             -1 => Err(std::io::Error::last_os_error()),
             r => Ok(r.cast_unsigned()),
         }
     }
 
     #[inline]
-    pub fn prepare_read(&self) -> Result<(), std::io::Error> {
-        match unsafe { ffi::wl_display_prepare_read(self.ffi.as_ptr()) } {
+    pub fn prepare_read(&self) -> Result<()> {
+        match unsafe { ffi::wl_display_prepare_read(self.as_raw()) } {
             -1 => Err(std::io::Error::last_os_error()),
             _ => Ok(()),
         }
@@ -328,12 +343,12 @@ impl Display {
 
     #[inline]
     pub fn cancel_read(&self) {
-        unsafe { ffi::wl_display_cancel_read(self.ffi.as_ptr()) }
+        unsafe { ffi::wl_display_cancel_read(self.as_raw()) }
     }
 
     #[inline]
-    pub fn read_events(&self) -> Result<(), std::io::Error> {
-        match unsafe { ffi::wl_display_read_events(self.ffi.as_ptr()) } {
+    pub fn read_events(&self) -> Result<()> {
+        match unsafe { ffi::wl_display_read_events(self.as_raw()) } {
             -1 => Err(std::io::Error::last_os_error()),
             _ => Ok(()),
         }
@@ -349,7 +364,7 @@ impl Registry {
     pub fn set_listener<'l, L: RegistryListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: RegistryListener {
@@ -366,7 +381,7 @@ impl Registry {
     }
 
     #[inline]
-    pub fn bind<I: Interface>(&self, name: u32, version: u32) -> Result<Owned<I>, std::io::Error> {
+    pub fn bind<I: Interface>(&self, name: u32, version: u32) -> Result<Owned<I>> {
         Ok(unsafe {
             Owned::from_untyped_unchecked(self.0.marshal_array_flags(
                 0,
@@ -405,7 +420,7 @@ impl Callback {
     pub fn set_listener<'l, L: CallbackEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: CallbackEventListener {
@@ -428,12 +443,12 @@ unsafe impl Interface for Compositor {
 }
 impl Compositor {
     #[inline]
-    pub fn create_surface(&self) -> Result<Owned<Surface>, std::io::Error> {
+    pub fn create_surface(&self) -> Result<Owned<Surface>> {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
-    pub fn create_region(&self) -> Result<Owned<Region>, std::io::Error> {
+    pub fn create_region(&self) -> Result<Owned<Region>> {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
     }
 }
@@ -449,7 +464,7 @@ impl Surface {
     }
 
     #[inline]
-    pub fn attach(&self, buffer: Option<&Buffer>, x: i32, y: i32) -> Result<(), std::io::Error> {
+    pub fn attach(&self, buffer: Option<&Buffer>, x: i32, y: i32) -> Result<()> {
         self.0.marshal_array_void(
             1,
             &mut [
@@ -461,7 +476,7 @@ impl Surface {
     }
 
     #[inline]
-    pub fn damage(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), std::io::Error> {
+    pub fn damage(&self, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
         self.0.marshal_array_void(
             2,
             &mut [
@@ -474,29 +489,29 @@ impl Surface {
     }
 
     #[inline]
-    pub fn frame(&self) -> Result<Owned<Callback>, std::io::Error> {
+    pub fn frame(&self) -> Result<Owned<Callback>> {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(3, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
-    pub fn set_input_region(&self, region: Option<&Region>) -> Result<(), std::io::Error> {
+    pub fn set_input_region(&self, region: Option<&Region>) -> Result<()> {
         self.0
             .marshal_array_void(5, &mut [region.map_or(NULLOBJ_ARG, |x| x.0.as_arg())])
     }
 
     #[inline]
-    pub fn commit(&self) -> Result<(), std::io::Error> {
+    pub fn commit(&self) -> Result<()> {
         self.0.marshal_array_void(6, &mut [])
     }
 
     #[inline]
-    pub fn set_buffer_transform(&self, transform: OutputTransform) -> Result<(), std::io::Error> {
+    pub fn set_buffer_transform(&self, transform: OutputTransform) -> Result<()> {
         self.0
             .marshal_array_void(7, &mut [ffi::Argument { i: transform as _ }])
     }
 
     #[inline]
-    pub fn set_buffer_scale(&self, scale: i32) -> Result<(), std::io::Error> {
+    pub fn set_buffer_scale(&self, scale: i32) -> Result<()> {
         self.0
             .marshal_array_void(8, &mut [ffi::Argument { i: scale }])
     }
@@ -504,7 +519,7 @@ impl Surface {
     pub fn set_listener<'l, L: SurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: SurfaceEventListener {
@@ -542,11 +557,7 @@ unsafe impl Interface for Subcompositor {
 }
 impl Subcompositor {
     #[inline]
-    pub fn get_subsurface(
-        &self,
-        surface: &Surface,
-        parent: &Surface,
-    ) -> Result<Owned<Subsurface>, std::io::Error> {
+    pub fn get_subsurface(&self, surface: &Surface, parent: &Surface) -> Result<Owned<Subsurface>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0.marshal_array_typed(
@@ -573,13 +584,13 @@ unsafe impl Interface for Subsurface {
 }
 impl Subsurface {
     #[inline]
-    pub fn set_position(&self, x: i32, y: i32) -> Result<(), std::io::Error> {
+    pub fn set_position(&self, x: i32, y: i32) -> Result<()> {
         self.0
             .marshal_array_flags_void(1, 0, &mut [ffi::Argument { i: x }, ffi::Argument { i: y }])
     }
 
     #[inline]
-    pub fn place_below(&self, sibling: &Surface) -> Result<(), std::io::Error> {
+    pub fn place_below(&self, sibling: &Surface) -> Result<()> {
         self.0
             .marshal_array_flags_void(3, 0, &mut [sibling.0.as_arg()])
     }
@@ -600,11 +611,7 @@ unsafe impl Interface for Shm {
 }
 impl Shm {
     #[inline]
-    pub fn create_pool_raw(
-        &self,
-        fd: std::os::fd::RawFd,
-        size: i32,
-    ) -> Result<Owned<ShmPool>, std::io::Error> {
+    pub fn create_pool_raw(&self, fd: std::os::fd::RawFd, size: i32) -> Result<Owned<ShmPool>> {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_typed(
                 0,
@@ -618,11 +625,7 @@ impl Shm {
     }
 
     #[inline(always)]
-    pub fn create_pool(
-        &self,
-        fd: &impl AsRawFd,
-        size: i32,
-    ) -> Result<Owned<ShmPool>, std::io::Error> {
+    pub fn create_pool(&self, fd: &impl AsRawFd, size: i32) -> Result<Owned<ShmPool>> {
         self.create_pool_raw(fd.as_raw_fd(), size)
     }
 }
@@ -656,7 +659,7 @@ impl ShmPool {
         height: i32,
         stride: i32,
         format: ShmFormat,
-    ) -> Result<Owned<Buffer>, std::io::Error> {
+    ) -> Result<Owned<Buffer>> {
         Ok(unsafe {
             Owned::wrap_unchecked(self.0.marshal_array_typed(
                 0,
@@ -673,7 +676,7 @@ impl ShmPool {
     }
 
     #[inline]
-    pub fn resize(&self, size: i32) -> Result<(), std::io::Error> {
+    pub fn resize(&self, size: i32) -> Result<()> {
         self.0
             .marshal_array_void(2, &mut [ffi::Argument { i: size }])
     }
@@ -708,7 +711,7 @@ unsafe impl Interface for Region {
 }
 impl Region {
     #[inline]
-    pub fn add(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), std::io::Error> {
+    pub fn add(&self, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
         self.0.marshal_array_void(
             1,
             &mut [
@@ -745,14 +748,14 @@ impl Seat {
     }
 
     #[inline]
-    pub fn get_pointer(&self) -> Result<Owned<Pointer>, std::io::Error> {
+    pub fn get_pointer(&self) -> Result<Owned<Pointer>> {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
     pub fn set_listener<'l, L: SeatEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: SeatEventListener {
@@ -780,7 +783,7 @@ impl Pointer {
     pub fn set_listener<'l, L: PointerEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: PointerEventListener {
@@ -895,11 +898,7 @@ unsafe impl Interface for DataOffer {
 }
 impl DataOffer {
     #[inline]
-    pub fn accept(
-        &self,
-        serial: u32,
-        mime_type: Option<&core::ffi::CStr>,
-    ) -> Result<(), std::io::Error> {
+    pub fn accept(&self, serial: u32, mime_type: Option<&core::ffi::CStr>) -> Result<()> {
         self.0.marshal_array_void(
             0,
             &mut [
@@ -912,11 +911,7 @@ impl DataOffer {
     }
 
     #[inline]
-    pub fn receive(
-        &self,
-        mime_type: &core::ffi::CStr,
-        fd: &(impl AsRawFd + ?Sized),
-    ) -> Result<(), std::io::Error> {
+    pub fn receive(&self, mime_type: &core::ffi::CStr, fd: &(impl AsRawFd + ?Sized)) -> Result<()> {
         self.0.marshal_array_void(
             1,
             &mut [
@@ -929,7 +924,7 @@ impl DataOffer {
     }
 
     #[inline]
-    pub fn finish(&self) -> Result<(), std::io::Error> {
+    pub fn finish(&self) -> Result<()> {
         assert!(self.0.version() >= 3, "version 3 required");
 
         self.0.marshal_array_void(3, &mut [])
@@ -940,7 +935,7 @@ impl DataOffer {
         &self,
         dnd_actions: DataDeviceManagerDndAction,
         preferred_action: DataDeviceManagerDndAction,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<()> {
         assert!(self.0.version() >= 3, "version 3 required");
 
         self.0.marshal_array_void(
@@ -959,7 +954,7 @@ impl DataOffer {
     pub fn set_listener<'l, L: DataOfferEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable! {
@@ -1006,7 +1001,7 @@ unsafe impl Interface for DataSource {
 }
 impl DataSource {
     #[inline]
-    pub fn offer(&self, mime_type: &core::ffi::CStr) -> Result<(), std::io::Error> {
+    pub fn offer(&self, mime_type: &core::ffi::CStr) -> Result<()> {
         self.0.marshal_array_void(
             0,
             &mut [ffi::Argument {
@@ -1016,10 +1011,7 @@ impl DataSource {
     }
 
     #[inline]
-    pub fn set_actions(
-        &self,
-        dnd_actions: DataDeviceManagerDndAction,
-    ) -> Result<(), std::io::Error> {
+    pub fn set_actions(&self, dnd_actions: DataDeviceManagerDndAction) -> Result<()> {
         assert!(self.0.version() >= 3, "version 3 required");
 
         self.0.marshal_array_void(
@@ -1033,7 +1025,7 @@ impl DataSource {
     pub fn add_listener<'l, L: DataSourceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable! {
@@ -1110,7 +1102,7 @@ impl DataDevice {
         origin: &Surface,
         icon: Option<&Surface>,
         serial: u32,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<()> {
         self.0.marshal_array_void(
             0,
             &mut [
@@ -1123,11 +1115,7 @@ impl DataDevice {
     }
 
     #[inline]
-    pub fn set_selection(
-        &self,
-        source: Option<&DataSource>,
-        serial: u32,
-    ) -> Result<(), std::io::Error> {
+    pub fn set_selection(&self, source: Option<&DataSource>, serial: u32) -> Result<()> {
         self.0.marshal_array_void(
             1,
             &mut [
@@ -1140,7 +1128,7 @@ impl DataDevice {
     pub fn set_listener<'l, L: DataDeviceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable! {
@@ -1199,12 +1187,12 @@ unsafe impl Interface for DataDeviceManager {
 }
 impl DataDeviceManager {
     #[inline]
-    pub fn create_data_source(&self) -> Result<Owned<DataSource>, std::io::Error> {
+    pub fn create_data_source(&self) -> Result<Owned<DataSource>> {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
-    pub fn get_data_device(&self, seat: &Seat) -> Result<Owned<DataDevice>, std::io::Error> {
+    pub fn get_data_device(&self, seat: &Seat) -> Result<Owned<DataDevice>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0

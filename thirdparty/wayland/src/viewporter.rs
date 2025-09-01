@@ -27,10 +27,7 @@ unsafe impl Interface for WpViewporter {
 }
 impl WpViewporter {
     #[inline]
-    pub fn get_viewport(
-        &self,
-        surface: &super::Surface,
-    ) -> Result<Owned<WpViewport>, std::io::Error> {
+    pub fn get_viewport(&self, surface: &super::Surface) -> crate::Result<Owned<WpViewport>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0
@@ -64,13 +61,7 @@ unsafe impl Interface for WpViewport {
 }
 impl WpViewport {
     #[inline]
-    pub fn set_source(
-        &self,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-    ) -> Result<(), std::io::Error> {
+    pub fn set_source(&self, x: f32, y: f32, width: f32, height: f32) -> crate::Result<()> {
         self.0.marshal_array_void(
             1,
             &mut [
@@ -91,7 +82,7 @@ impl WpViewport {
     }
 
     #[inline]
-    pub fn set_destination(&self, width: i32, height: i32) -> Result<(), std::io::Error> {
+    pub fn set_destination(&self, width: i32, height: i32) -> crate::Result<()> {
         self.0.marshal_array_void(
             2,
             &mut [ffi::Argument { i: width }, ffi::Argument { i: height }],

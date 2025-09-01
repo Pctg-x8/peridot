@@ -39,7 +39,7 @@ impl WpFractionalScaleManagerV1 {
     pub fn get_fractional_scale(
         &self,
         surface: &super::Surface,
-    ) -> Result<Owned<WpFractionalScaleV1>, std::io::Error> {
+    ) -> crate::Result<Owned<WpFractionalScaleV1>> {
         Ok(unsafe {
             Owned::wrap_unchecked(
                 self.0
@@ -71,7 +71,7 @@ impl WpFractionalScaleV1 {
     pub fn set_listener<'l, L: WpFractionalScaleV1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: WpFractionalScaleV1EventListener {
