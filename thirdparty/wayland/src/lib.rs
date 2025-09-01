@@ -65,7 +65,7 @@ impl Proxy {
     }
 
     #[inline]
-    fn marshal_array_flags(
+    pub fn marshal_array_flags(
         &self,
         opcode: u32,
         interface: &ffi::Interface,
@@ -87,19 +87,7 @@ impl Proxy {
         }
     }
 
-    #[inline]
-    fn marshal_array_flags_typed<T: Interface>(
-        &self,
-        opcode: u32,
-        version: u32,
-        flags: u32,
-        args: &mut [ffi::Argument],
-    ) -> Result<NonNull<T>, std::io::Error> {
-        self.marshal_array_flags(opcode, T::DEF, version, flags, args)
-            .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
-    }
-
-    fn marshal_array_flags_void(
+    pub fn marshal_array_flags_void(
         &self,
         opcode: u32,
         flags: u32,
@@ -127,6 +115,25 @@ impl Proxy {
         } else {
             Ok(())
         }
+    }
+
+    #[inline(always)]
+    pub fn marshal_array_void(
+        &self,
+        opcode: u32,
+        args: &mut [ffi::Argument],
+    ) -> Result<(), std::io::Error> {
+        self.marshal_array_flags_void(opcode, 0, args)
+    }
+
+    #[inline(always)]
+    pub fn marshal_array_typed<T: Interface>(
+        &self,
+        opcode: u32,
+        args: &mut [ffi::Argument],
+    ) -> Result<NonNull<T>, std::io::Error> {
+        self.marshal_array_flags(opcode, T::DEF, self.version(), 0, args)
+            .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
     }
 
     /// Calls the destructor with no arguments
@@ -250,9 +257,10 @@ impl Display {
     #[inline]
     pub fn get_registry(&self) -> Result<Owned<Registry>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(
-                Proxy::from_raw_ptr_unchecked(self.ffi.as_ptr() as _).marshal_array_flags_typed(
+            Owned::from_untyped_unchecked(
+                Proxy::from_raw_ptr_unchecked(self.ffi.as_ptr() as _).marshal_array_flags(
                     1,
+                    Registry::DEF,
                     ffi::wl_proxy_get_version(self.ffi.as_ptr() as _),
                     0,
                     &mut [NEWID_ARG],
@@ -360,8 +368,9 @@ impl Registry {
     #[inline]
     pub fn bind<I: Interface>(&self, name: u32, version: u32) -> Result<Owned<I>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+            Owned::from_untyped_unchecked(self.0.marshal_array_flags(
                 0,
+                I::DEF,
                 version,
                 0,
                 &mut [
@@ -420,26 +429,12 @@ unsafe impl Interface for Compositor {
 impl Compositor {
     #[inline]
     pub fn create_surface(&self) -> Result<Owned<Surface>, std::io::Error> {
-        Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
-        })
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
     pub fn create_region(&self) -> Result<Owned<Region>, std::io::Error> {
-        Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
-        })
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
     }
 }
 
@@ -455,9 +450,8 @@ impl Surface {
 
     #[inline]
     pub fn attach(&self, buffer: Option<&Buffer>, x: i32, y: i32) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             1,
-            0,
             &mut [
                 buffer.map_or(NULLOBJ_ARG, |x| x.0.as_arg()),
                 ffi::Argument { i: x },
@@ -468,9 +462,8 @@ impl Surface {
 
     #[inline]
     pub fn damage(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             2,
-            0,
             &mut [
                 ffi::Argument { i: x },
                 ffi::Argument { i: y },
@@ -482,37 +475,30 @@ impl Surface {
 
     #[inline]
     pub fn frame(&self) -> Result<Owned<Callback>, std::io::Error> {
-        Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                3,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
-        })
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(3, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
     pub fn set_input_region(&self, region: Option<&Region>) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(5, 0, &mut [region.map_or(NULLOBJ_ARG, |x| x.0.as_arg())])
+            .marshal_array_void(5, &mut [region.map_or(NULLOBJ_ARG, |x| x.0.as_arg())])
     }
 
     #[inline]
     pub fn commit(&self) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(6, 0, &mut [])
+        self.0.marshal_array_void(6, &mut [])
     }
 
     #[inline]
     pub fn set_buffer_transform(&self, transform: OutputTransform) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(7, 0, &mut [ffi::Argument { i: transform as _ }])
+            .marshal_array_void(7, &mut [ffi::Argument { i: transform as _ }])
     }
 
     #[inline]
     pub fn set_buffer_scale(&self, scale: i32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(8, 0, &mut [ffi::Argument { i: scale }])
+            .marshal_array_void(8, &mut [ffi::Argument { i: scale }])
     }
 
     pub fn set_listener<'l, L: SurfaceEventListener + 'l>(
@@ -562,12 +548,12 @@ impl Subcompositor {
         parent: &Surface,
     ) -> Result<Owned<Subsurface>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, surface.0.as_arg(), parent.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0.marshal_array_typed(
+                    1,
+                    &mut [NEWID_ARG, surface.0.as_arg(), parent.0.as_arg()],
+                )?,
+            )
         })
     }
 }
@@ -620,9 +606,7 @@ impl Shm {
         size: i32,
     ) -> Result<Owned<ShmPool>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
+            Owned::wrap_unchecked(self.0.marshal_array_typed(
                 0,
                 &mut [
                     NEWID_ARG,
@@ -674,9 +658,7 @@ impl ShmPool {
         format: ShmFormat,
     ) -> Result<Owned<Buffer>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
+            Owned::wrap_unchecked(self.0.marshal_array_typed(
                 0,
                 &mut [
                     NEWID_ARG,
@@ -693,7 +675,7 @@ impl ShmPool {
     #[inline]
     pub fn resize(&self, size: i32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(2, 0, &mut [ffi::Argument { i: size }])
+            .marshal_array_void(2, &mut [ffi::Argument { i: size }])
     }
 }
 
@@ -727,9 +709,8 @@ unsafe impl Interface for Region {
 impl Region {
     #[inline]
     pub fn add(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             1,
-            0,
             &mut [
                 ffi::Argument { i: x },
                 ffi::Argument { i: y },
@@ -765,20 +746,7 @@ impl Seat {
 
     #[inline]
     pub fn get_pointer(&self) -> Result<Owned<Pointer>, std::io::Error> {
-        Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
-        })
-    }
-
-    // v5
-    #[inline]
-    pub unsafe fn destroy(&self) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(3, 0, &mut [])
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
     pub fn set_listener<'l, L: SeatEventListener + 'l>(
@@ -932,8 +900,7 @@ impl DataOffer {
         serial: u32,
         mime_type: Option<&core::ffi::CStr>,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
-            0,
+        self.0.marshal_array_void(
             0,
             &mut [
                 ffi::Argument { u: serial },
@@ -950,9 +917,8 @@ impl DataOffer {
         mime_type: &core::ffi::CStr,
         fd: &(impl AsRawFd + ?Sized),
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             1,
-            0,
             &mut [
                 ffi::Argument {
                     s: mime_type.as_ptr(),
@@ -966,7 +932,7 @@ impl DataOffer {
     pub fn finish(&self) -> Result<(), std::io::Error> {
         assert!(self.0.version() >= 3, "version 3 required");
 
-        self.0.marshal_array_flags_void(3, 0, &mut [])
+        self.0.marshal_array_void(3, &mut [])
     }
 
     #[inline]
@@ -977,9 +943,8 @@ impl DataOffer {
     ) -> Result<(), std::io::Error> {
         assert!(self.0.version() >= 3, "version 3 required");
 
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             4,
-            0,
             &mut [
                 ffi::Argument {
                     u: dnd_actions.bits(),
@@ -1042,8 +1007,7 @@ unsafe impl Interface for DataSource {
 impl DataSource {
     #[inline]
     pub fn offer(&self, mime_type: &core::ffi::CStr) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
-            0,
+        self.0.marshal_array_void(
             0,
             &mut [ffi::Argument {
                 s: mime_type.as_ptr(),
@@ -1058,9 +1022,8 @@ impl DataSource {
     ) -> Result<(), std::io::Error> {
         assert!(self.0.version() >= 3, "version 3 required");
 
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             2,
-            0,
             &mut [ffi::Argument {
                 u: dnd_actions.bits(),
             }],
@@ -1148,8 +1111,7 @@ impl DataDevice {
         icon: Option<&Surface>,
         serial: u32,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
-            0,
+        self.0.marshal_array_void(
             0,
             &mut [
                 source.map_or(NULLOBJ_ARG, |x| x.0.as_arg()),
@@ -1166,9 +1128,8 @@ impl DataDevice {
         source: Option<&DataSource>,
         serial: u32,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             1,
-            0,
             &mut [
                 source.map_or(NULLOBJ_ARG, |x| x.0.as_arg()),
                 ffi::Argument { u: serial },
@@ -1239,25 +1200,16 @@ unsafe impl Interface for DataDeviceManager {
 impl DataDeviceManager {
     #[inline]
     pub fn create_data_source(&self) -> Result<Owned<DataSource>, std::io::Error> {
-        Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
-        })
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
     pub fn get_data_device(&self, seat: &Seat) -> Result<Owned<DataDevice>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, seat.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [NEWID_ARG, seat.0.as_arg()])?,
+            )
         })
     }
 }

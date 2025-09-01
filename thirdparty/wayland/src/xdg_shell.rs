@@ -8,13 +8,11 @@ static XDG_WM_BASE_INTERFACE: ffi::Interface = interface(
     6,
     &[
         message(c"destroy", c"", &[]),
-        message(c"create_positioner", c"n", &[&XDG_POSITIONER_INTERFACE]),
+        message(c"create_positioner", c"n", &[XdgPositioner::DEF]),
         message(
             c"get_xdg_surface",
             c"no",
-            &[&XDG_SURFACE_INTERFACE, unsafe {
-                &super::wl_surface_interface
-            }],
+            &[XdgSurface::DEF, super::Surface::DEF],
         ),
         message(c"pong", c"u", &[core::ptr::null()]),
     ],
@@ -51,14 +49,7 @@ impl XdgWmBase {
 
     #[inline]
     pub fn create_positioner(&self) -> Result<Owned<XdgPositioner>, std::io::Error> {
-        Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
-        })
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
@@ -67,19 +58,17 @@ impl XdgWmBase {
         surface: &super::Surface,
     ) -> Result<Owned<XdgSurface>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                2,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, surface.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(2, &mut [NEWID_ARG, surface.0.as_arg()])?,
+            )
         })
     }
 
     #[inline]
     pub fn pong(&mut self, token: u32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(3, 0, &mut [ffi::Argument { u: token }])
+            .marshal_array_void(3, &mut [ffi::Argument { u: token }])
     }
 }
 
@@ -87,32 +76,30 @@ pub trait XdgWmBaseEventListener {
     fn ping(&mut self, wm_base: &mut XdgWmBase, serial: u32);
 }
 
-static XDG_POSITIONER_INTERFACE: ffi::Interface = interface(
-    c"xdg_positioner",
-    6,
-    &[
-        message(c"destroy", c"", &[]),
-        message(c"set_size", c"ii", &[null(), null()]),
-        message(
-            c"set_anchor_rect",
-            c"iiii",
-            &[null(), null(), null(), null()],
-        ),
-        message(c"set_anchor", c"u", &[null()]),
-        message(c"set_gravity", c"u", &[null()]),
-        message(c"set_constraint_adjustment", c"u", &[null()]),
-        message(c"set_offset", c"ii", &[null(), null()]),
-        message(c"set_reactive", c"3", &[]),
-        message(c"set_parent_size", c"3ii", &[null(), null()]),
-        message(c"set_parent_configure", c"3u", &[null()]),
-    ],
-    &[],
-);
-
 #[repr(transparent)]
 pub struct XdgPositioner(Proxy);
 unsafe impl Interface for XdgPositioner {
-    const DEF: &'static ffi::Interface = &XDG_POSITIONER_INTERFACE;
+    const DEF: &'static ffi::Interface = &interface(
+        c"xdg_positioner",
+        6,
+        &[
+            message(c"destroy", c"", &[]),
+            message(c"set_size", c"ii", &[null(), null()]),
+            message(
+                c"set_anchor_rect",
+                c"iiii",
+                &[null(), null(), null(), null()],
+            ),
+            message(c"set_anchor", c"u", &[null()]),
+            message(c"set_gravity", c"u", &[null()]),
+            message(c"set_constraint_adjustment", c"u", &[null()]),
+            message(c"set_offset", c"ii", &[null(), null()]),
+            message(c"set_reactive", c"3", &[]),
+            message(c"set_parent_size", c"3ii", &[null(), null()]),
+            message(c"set_parent_configure", c"3u", &[null()]),
+        ],
+        &[],
+    );
 }
 
 static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
@@ -121,15 +108,11 @@ static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
     method_count: 5,
     methods: [
         message(c"destroy", c"", &[]),
-        message(c"get_toplevel", c"n", &[&XDG_TOPLEVEL_INTERFACE]),
+        message(c"get_toplevel", c"n", &[XdgToplevel::DEF]),
         message(
             c"get_popup",
             c"n?oo",
-            &[
-                &XDG_POPUP_INTERFACE,
-                &XDG_SURFACE_INTERFACE,
-                &XDG_POSITIONER_INTERFACE,
-            ],
+            &[XdgPopup::DEF, &XDG_SURFACE_INTERFACE, XdgPositioner::DEF],
         ),
         message(
             c"set_window_geometry",
@@ -182,14 +165,7 @@ impl XdgSurface {
 
     #[inline]
     pub fn get_toplevel(&self) -> Result<Owned<XdgToplevel>, std::io::Error> {
-        Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG],
-            )?)
-        })
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
     }
 
     #[inline]
@@ -200,9 +176,8 @@ impl XdgSurface {
         width: i32,
         height: i32,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             3,
-            0,
             &mut [
                 ffi::Argument { i: x },
                 ffi::Argument { i: y },
@@ -215,7 +190,7 @@ impl XdgSurface {
     #[inline]
     pub fn ack_configure(&self, serial: u32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(4, 0, &mut [ffi::Argument { u: serial }])
+            .marshal_array_void(4, &mut [ffi::Argument { u: serial }])
     }
 }
 
@@ -230,70 +205,30 @@ pub(super) static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
     methods: [
         message(c"destroy", c"", &[]),
         message(c"set_parent", c"?o", &[&XDG_TOPLEVEL_INTERFACE]),
-        message(c"set_title", c"s", &[core::ptr::null()]),
-        message(c"set_app_id", c"s", &[core::ptr::null()]),
+        message(c"set_title", c"s", &[null()]),
+        message(c"set_app_id", c"s", &[null()]),
         message(
             c"show_window_menu",
             c"ouii",
-            &[
-                const { unsafe { &super::wl_seat_interface } },
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-            ],
+            &[super::Seat::DEF, null(), null(), null()],
         ),
-        message(
-            c"move",
-            c"ou",
-            &[
-                const { unsafe { &super::wl_seat_interface } },
-                core::ptr::null(),
-            ],
-        ),
-        message(
-            c"resize",
-            c"ouu",
-            &[
-                const { unsafe { &super::wl_seat_interface } },
-                core::ptr::null(),
-                core::ptr::null(),
-            ],
-        ),
-        message(
-            c"set_max_size",
-            c"ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
-        message(
-            c"set_min_size",
-            c"ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
+        message(c"move", c"ou", &[super::Seat::DEF, null()]),
+        message(c"resize", c"ouu", &[super::Seat::DEF, null(), null()]),
+        message(c"set_max_size", c"ii", &[null(), null()]),
+        message(c"set_min_size", c"ii", &[null(), null()]),
         message(c"set_maximized", c"", &[]),
         message(c"unset_maximized", c"", &[]),
-        message(
-            c"set_fullscreen",
-            c"?o",
-            &[const { unsafe { &super::wl_output_interface } }],
-        ),
+        message(c"set_fullscreen", c"?o", &[super::Output::DEF]),
         message(c"unset_fullscreen", c"", &[]),
         message(c"set_minimized", c"", &[]),
     ]
     .as_ptr(),
     event_count: 4,
     events: [
-        message(
-            c"configure",
-            c"iia",
-            &[core::ptr::null(), core::ptr::null(), core::ptr::null()],
-        ),
+        message(c"configure", c"iia", &[null(), null(), null()]),
         message(c"close", c"", &[]),
-        message(
-            c"configure_bounds",
-            c"4ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
-        message(c"wm_capabilities", c"5a", &[core::ptr::null()]),
+        message(c"configure_bounds", c"4ii", &[null(), null()]),
+        message(c"wm_capabilities", c"5a", &[null()]),
     ]
     .as_ptr(),
 };
@@ -359,13 +294,13 @@ impl XdgToplevel {
     #[inline]
     pub fn set_title(&self, title: &core::ffi::CStr) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(2, 0, &mut [ffi::Argument { s: title.as_ptr() }])
+            .marshal_array_void(2, &mut [ffi::Argument { s: title.as_ptr() }])
     }
 
     #[inline]
     pub fn set_app_id(&self, id: &core::ffi::CStr) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(3, 0, &mut [ffi::Argument { s: id.as_ptr() }])
+            .marshal_array_void(3, &mut [ffi::Argument { s: id.as_ptr() }])
     }
 
     #[inline]
@@ -376,9 +311,8 @@ impl XdgToplevel {
         x: i32,
         y: i32,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             4,
-            0,
             &mut [
                 seat.0.as_arg(),
                 ffi::Argument { u: serial },
@@ -391,7 +325,7 @@ impl XdgToplevel {
     #[inline]
     pub fn r#move(&self, seat: &super::Seat, serial: u32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(5, 0, &mut [seat.0.as_arg(), ffi::Argument { u: serial }])
+            .marshal_array_void(5, &mut [seat.0.as_arg(), ffi::Argument { u: serial }])
     }
 
     #[inline]
@@ -401,9 +335,8 @@ impl XdgToplevel {
         serial: u32,
         edges: XdgToplevelResizeEdge,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             6,
-            0,
             &mut [
                 seat.0.as_arg(),
                 ffi::Argument { u: serial },
@@ -414,26 +347,25 @@ impl XdgToplevel {
 
     #[inline]
     pub fn set_min_size(&self, width: i32, height: i32) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             8,
-            0,
             &mut [ffi::Argument { i: width }, ffi::Argument { i: height }],
         )
     }
 
     #[inline]
     pub fn set_maximized(&self) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(9, 0, &mut [])
+        self.0.marshal_array_void(9, &mut [])
     }
 
     #[inline]
     pub fn unset_maximized(&self) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(10, 0, &mut [])
+        self.0.marshal_array_void(10, &mut [])
     }
 
     #[inline]
     pub fn set_minimized(&self) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(13, 0, &mut [])
+        self.0.marshal_array_void(13, &mut [])
     }
 }
 
@@ -444,49 +376,27 @@ pub trait XdgToplevelEventListener {
     fn wm_capabilities(&mut self, toplevel: &mut XdgToplevel, capabilities: &[i32]);
 }
 
-static XDG_POPUP_INTERFACE: ffi::Interface = ffi::Interface {
-    name: c"xdg_popup".as_ptr(),
-    version: 6,
-    method_count: 2,
-    methods: [
-        message(c"destroy", c"", &[]),
-        message(
-            c"grab",
-            c"ou",
-            &[
-                const { unsafe { &super::wl_seat_interface } },
-                core::ptr::null(),
-            ],
-        ),
-    ]
-    .as_ptr(),
-    event_count: 4,
-    events: [
-        message(
-            c"configure",
-            c"iiii",
-            &[
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-            ],
-        ),
-        message(c"popup_done", c"", &[]),
-        message(
-            c"reposition",
-            c"3ou",
-            &[&XDG_POSITIONER_INTERFACE, core::ptr::null()],
-        ),
-        message(c"repositioned", c"3u", &[core::ptr::null()]),
-    ]
-    .as_ptr(),
-};
-
 #[repr(transparent)]
 pub struct XdgPopup(Proxy);
 unsafe impl Interface for XdgPopup {
-    const DEF: &'static ffi::Interface = &XDG_POPUP_INTERFACE;
+    const DEF: &'static ffi::Interface = &ffi::Interface {
+        name: c"xdg_popup".as_ptr(),
+        version: 6,
+        method_count: 2,
+        methods: [
+            message(c"destroy", c"", &[]),
+            message(c"grab", c"ou", &[super::Seat::DEF, null()]),
+        ]
+        .as_ptr(),
+        event_count: 4,
+        events: [
+            message(c"configure", c"iiii", &[null(), null(), null(), null()]),
+            message(c"popup_done", c"", &[]),
+            message(c"reposition", c"3ou", &[XdgPositioner::DEF, null()]),
+            message(c"repositioned", c"3u", &[null()]),
+        ]
+        .as_ptr(),
+    };
 
     #[cfg_attr(
         feature = "tracing",

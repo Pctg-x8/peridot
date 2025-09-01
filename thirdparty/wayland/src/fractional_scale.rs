@@ -1,11 +1,23 @@
-use crate::{EventFnTable, Owned};
+use crate::{EventFnTable, Interface, Owned};
 
 use super::{ffi, interface, message};
 
 #[repr(transparent)]
 pub struct WpFractionalScaleManagerV1(super::Proxy);
-unsafe impl super::Interface for WpFractionalScaleManagerV1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
+unsafe impl Interface for WpFractionalScaleManagerV1 {
+    const DEF: &'static ffi::Interface = &interface(
+        c"wp_fractional_scale_manager_v1",
+        1,
+        &[
+            message(c"destroy", c"", &[]),
+            message(
+                c"get_fractional_scale",
+                c"no",
+                &[WpFractionalScaleV1::DEF, super::Surface::DEF],
+            ),
+        ],
+        &[],
+    );
 
     #[cfg_attr(
         feature = "tracing",
@@ -19,23 +31,6 @@ unsafe impl super::Interface for WpFractionalScaleManagerV1 {
     }
 }
 impl WpFractionalScaleManagerV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_fractional_scale_manager_v1",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(
-                c"get_fractional_scale",
-                c"no",
-                &[
-                    const { WpFractionalScaleV1::INTERFACE },
-                    const { unsafe { &super::wl_surface_interface } },
-                ],
-            ),
-        ],
-        &[],
-    );
-
     #[cfg_attr(feature = "tracing", tracing::instrument(
         name = "WpFractionalScaleManagerV1::get_fractional_scale",
         skip(self, surface),
@@ -46,20 +41,23 @@ impl WpFractionalScaleManagerV1 {
         surface: &super::Surface,
     ) -> Result<Owned<WpFractionalScaleV1>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [super::NEWID_ARG, surface.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [super::NEWID_ARG, surface.0.as_arg()])?,
+            )
         })
     }
 }
 
 #[repr(transparent)]
 pub struct WpFractionalScaleV1(super::Proxy);
-unsafe impl super::Interface for WpFractionalScaleV1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
+unsafe impl Interface for WpFractionalScaleV1 {
+    const DEF: &'static ffi::Interface = &interface(
+        c"wp_fractional_scale_v1",
+        1,
+        &[message(c"destroy", c"", &[])],
+        &[message(c"preferred_scale", c"u", &[])],
+    );
 
     #[cfg_attr(
         feature = "tracing",
@@ -70,13 +68,6 @@ unsafe impl super::Interface for WpFractionalScaleV1 {
     }
 }
 impl WpFractionalScaleV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_fractional_scale_v1",
-        1,
-        &[message(c"destroy", c"", &[])],
-        &[message(c"preferred_scale", c"u", &[])],
-    );
-
     pub fn set_listener<'l, L: WpFractionalScaleV1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,

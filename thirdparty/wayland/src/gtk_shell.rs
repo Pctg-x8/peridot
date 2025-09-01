@@ -6,41 +6,33 @@ use super::{Interface, Proxy, ffi, interface, message};
 #[repr(transparent)]
 pub struct GtkShell1(Proxy);
 unsafe impl Interface for GtkShell1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
-}
-impl GtkShell1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
+    const DEF: &'static ffi::Interface = &interface(
         c"gtk_shell1",
         6,
         &[
             message(
                 c"get_gtk_surface",
                 c"no",
-                &const {
-                    [GtkSurface1::INTERFACE, unsafe {
-                        &super::wl_surface_interface
-                    }]
-                },
+                &[GtkSurface1::DEF, super::Surface::DEF],
             ),
             message(c"set_startup_id", c"?s", &[core::ptr::null()]),
-            message(c"system_bell", c"o", &[GtkSurface1::INTERFACE]),
+            message(c"system_bell", c"o", &[GtkSurface1::DEF]),
             message(c"notify_launch", c"3s", &[core::ptr::null()]),
         ],
         &[message(c"capabilities", c"u", &[core::ptr::null()])],
     );
-
+}
+impl GtkShell1 {
     #[inline]
     pub fn get_gtk_surface(
         &self,
         surface: &super::Surface,
     ) -> Result<super::Owned<GtkSurface1>, std::io::Error> {
         Ok(unsafe {
-            super::Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                0,
-                self.0.version(),
-                0,
-                &mut [super::NEWID_ARG, surface.0.as_arg()],
-            )?)
+            super::Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(0, &mut [super::NEWID_ARG, surface.0.as_arg()])?,
+            )
         })
     }
 
@@ -66,23 +58,7 @@ pub trait GtkShell1EventListener {
 #[repr(transparent)]
 pub struct GtkSurface1(Proxy);
 unsafe impl Interface for GtkSurface1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
-
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "<GtkSurface1 as Interface>::destruct", skip(self))
-    )]
-    unsafe fn destruct(&mut self) {
-        if self.0.version() < 4 {
-            // no destructor defined prior version 4
-            return;
-        }
-
-        self.0.call_simple_dtor(5);
-    }
-}
-impl GtkSurface1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
+    const DEF: &'static ffi::Interface = &interface(
         c"gtk_surface1",
         6,
         &[
@@ -99,11 +75,7 @@ impl GtkSurface1 {
             message(
                 c"titlebar_gesture",
                 c"5uou",
-                &[
-                    core::ptr::null(),
-                    const { unsafe { &super::wl_seat_interface } },
-                    core::ptr::null(),
-                ],
+                &[core::ptr::null(), super::Seat::DEF, core::ptr::null()],
             ),
         ],
         &[
@@ -112,10 +84,24 @@ impl GtkSurface1 {
         ],
     );
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<GtkSurface1 as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        if self.0.version() < 4 {
+            // no destructor defined prior version 4
+            return;
+        }
+
+        self.0.call_simple_dtor(5);
+    }
+}
+impl GtkSurface1 {
     #[inline]
     pub fn present(&self, time: u32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(3, 0, &mut [ffi::Argument { u: time }])
+            .marshal_array_void(3, &mut [ffi::Argument { u: time }])
     }
 
     pub fn set_listener<'l, L: GtkSurface1EventListener + 'l>(

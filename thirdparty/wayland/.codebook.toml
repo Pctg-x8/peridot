@@ -1,1 +1,1 @@
-words = ["shm", "xdg"]
+words = ["shm", "xdg", "zxdg", "zwlr", "wlr", "subcompositor", "viewporter", "toplevel"]

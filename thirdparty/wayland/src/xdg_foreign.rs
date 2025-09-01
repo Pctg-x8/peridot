@@ -4,27 +4,23 @@ use crate::EventFnTable;
 
 use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 
-static ZXDG_EXPORTER_V2_INTERFACE: ffi::Interface = interface(
-    c"zxdg_exporter_v2",
-    1,
-    &[
-        message(c"destroy", c"", &[]),
-        message(
-            c"export_toplevel",
-            c"no",
-            &[&ZXDG_EXPORTED_V2_INTERFACE, unsafe {
-                &super::wl_surface_interface
-            }],
-        ),
-    ],
-    &[],
-);
-
 /// A global interface used for exporting surfaces that can later be imported using `xdg_importer`.
 #[repr(transparent)]
 pub struct ZxdgExporterV2(Proxy);
 unsafe impl Interface for ZxdgExporterV2 {
-    const DEF: &'static ffi::Interface = &ZXDG_EXPORTER_V2_INTERFACE;
+    const DEF: &'static ffi::Interface = &interface(
+        c"zxdg_exporter_v2",
+        1,
+        &[
+            message(c"destroy", c"", &[]),
+            message(
+                c"export_toplevel",
+                c"no",
+                &[ZxdgExportedV2::DEF, super::Surface::DEF],
+            ),
+        ],
+        &[],
+    );
 
     #[cfg_attr(
         feature = "tracing",
@@ -35,7 +31,7 @@ unsafe impl Interface for ZxdgExporterV2 {
     }
 }
 impl ZxdgExporterV2 {
-    /// The export_toplevel request exports the passed surface so that it canlater be imported via `xdg_importer`.
+    /// The export_toplevel request exports the passed surface so that it can later be imported via `xdg_importer`.
     /// When called, a new `xdg_exported` object will be created and `xdg_exported.handle` will be send immediately.
     /// See the corresponding interface and event for details.
     ///
@@ -47,30 +43,26 @@ impl ZxdgExporterV2 {
         surface: &super::Surface,
     ) -> Result<Owned<ZxdgExportedV2>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, surface.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [NEWID_ARG, surface.0.as_arg()])?,
+            )
         })
     }
 }
 
-static ZXDG_EXPORTED_V2_INTERFACE: ffi::Interface = interface(
-    c"zxdg_exported_v2",
-    1,
-    &[message(c"destroy", c"", &[])],
-    &[message(c"handle", c"s", &[])],
-);
-
-/// An `xdg_exported` object represents an exported refrence to a surface.
+/// An `xdg_exported` object represents an exported reference to a surface.
 /// The exported surface maybe references as long as the `xdg_exported` object not destroyed.
 /// Destroying the `xdg_exported` invalidates any relationship the importer may have established using `xdg_imported`.
 #[repr(transparent)]
 pub struct ZxdgExportedV2(Proxy);
 unsafe impl Interface for ZxdgExportedV2 {
-    const DEF: &'static ffi::Interface = &ZXDG_EXPORTED_V2_INTERFACE;
+    const DEF: &'static ffi::Interface = &interface(
+        c"zxdg_exported_v2",
+        1,
+        &[message(c"destroy", c"", &[])],
+        &[message(c"handle", c"s", &[])],
+    );
 
     #[cfg_attr(
         feature = "tracing",

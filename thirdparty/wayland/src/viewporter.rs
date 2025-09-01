@@ -1,9 +1,21 @@
-use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message, wl_surface_interface};
+use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 
 #[repr(transparent)]
 pub struct WpViewporter(Proxy);
 unsafe impl Interface for WpViewporter {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
+    const DEF: &'static ffi::Interface = &interface(
+        c"wp_viewporter",
+        1,
+        &[
+            message(c"destroy", c"", &[]),
+            message(
+                c"get_viewport",
+                c"no",
+                &[WpViewport::DEF, super::Surface::DEF],
+            ),
+        ],
+        &[],
+    );
 
     #[cfg_attr(
         feature = "tracing",
@@ -14,35 +26,16 @@ unsafe impl Interface for WpViewporter {
     }
 }
 impl WpViewporter {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_viewporter",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(
-                c"get_viewport",
-                c"no",
-                &[
-                    WpViewport::INTERFACE,
-                    const { unsafe { &wl_surface_interface } },
-                ],
-            ),
-        ],
-        &[],
-    );
-
     #[inline]
     pub fn get_viewport(
         &self,
         surface: &super::Surface,
     ) -> Result<Owned<WpViewport>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, surface.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [NEWID_ARG, surface.0.as_arg()])?,
+            )
         })
     }
 }
@@ -50,18 +43,7 @@ impl WpViewporter {
 #[repr(transparent)]
 pub struct WpViewport(Proxy);
 unsafe impl Interface for WpViewport {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
-
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "<WpViewport as Interface>::destruct", skip(self))
-    )]
-    unsafe fn destruct(&mut self) {
-        self.0.call_simple_dtor(0);
-    }
-}
-impl WpViewport {
-    const INTERFACE: &'static ffi::Interface = &interface(
+    const DEF: &'static ffi::Interface = &interface(
         c"wp_viewport",
         1,
         &[
@@ -72,6 +54,15 @@ impl WpViewport {
         &[],
     );
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<WpViewport as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        self.0.call_simple_dtor(0);
+    }
+}
+impl WpViewport {
     #[inline]
     pub fn set_source(
         &self,
@@ -80,9 +71,8 @@ impl WpViewport {
         width: f32,
         height: f32,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             1,
-            0,
             &mut [
                 ffi::Argument {
                     f: ffi::Fixed::from_f32_lossy(x),
@@ -102,9 +92,8 @@ impl WpViewport {
 
     #[inline]
     pub fn set_destination(&self, width: i32, height: i32) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             2,
-            0,
             &mut [ffi::Argument { i: width }, ffi::Argument { i: height }],
         )
     }

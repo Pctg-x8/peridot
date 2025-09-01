@@ -5,7 +5,19 @@ use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 #[repr(transparent)]
 pub struct ZxdgDecorationManagerV1(Proxy);
 unsafe impl Interface for ZxdgDecorationManagerV1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
+    const DEF: &'static ffi::Interface = &interface(
+        c"zxdg_decoration_manager_v1",
+        1,
+        &[
+            message(c"destroy", c"", &[]),
+            message(
+                c"get_toplevel_decoration",
+                c"no",
+                &[ZxdgToplevelDecorationV1::DEF, super::XdgToplevel::DEF],
+            ),
+        ],
+        &[],
+    );
 
     #[cfg_attr(
         feature = "tracing",
@@ -16,23 +28,6 @@ unsafe impl Interface for ZxdgDecorationManagerV1 {
     }
 }
 impl ZxdgDecorationManagerV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"zxdg_decoration_manager_v1",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(
-                c"get_toplevel_decoration",
-                c"no",
-                &[
-                    const { ZxdgToplevelDecorationV1::INTERFACE },
-                    const { &super::XDG_TOPLEVEL_INTERFACE },
-                ],
-            ),
-        ],
-        &[],
-    );
-
     #[cfg_attr(feature = "tracing", tracing::instrument(
         name = "ZxdgDecorationManagerV1::get_toplevel_decoration",
         skip(self, toplevel),
@@ -43,12 +38,10 @@ impl ZxdgDecorationManagerV1 {
         toplevel: &super::XdgToplevel,
     ) -> Result<Owned<ZxdgToplevelDecorationV1>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, toplevel.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [NEWID_ARG, toplevel.0.as_arg()])?,
+            )
         })
     }
 }
@@ -63,7 +56,16 @@ pub enum ZxdgToplevelDecorationMode {
 #[repr(transparent)]
 pub struct ZxdgToplevelDecorationV1(Proxy);
 unsafe impl Interface for ZxdgToplevelDecorationV1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
+    const DEF: &'static ffi::Interface = &interface(
+        c"zxdg_toplevel_decoration_v1",
+        1,
+        &[
+            message(c"destroy", c"", &[]),
+            message(c"set_mode", c"u", &[]),
+            message(c"unset_mode", c"", &[]),
+        ],
+        &[message(c"configure", c"u", &[])],
+    );
 
     #[cfg_attr(
         feature = "tracing",
@@ -77,17 +79,6 @@ unsafe impl Interface for ZxdgToplevelDecorationV1 {
     }
 }
 impl ZxdgToplevelDecorationV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"zxdg_toplevel_decoration_v1",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(c"set_mode", c"u", &[]),
-            message(c"unset_mode", c"", &[]),
-        ],
-        &[message(c"configure", c"u", &[])],
-    );
-
     pub fn set_listener<'l, L: ZxdgToplevelDecorationV1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
@@ -105,7 +96,7 @@ impl ZxdgToplevelDecorationV1 {
     #[inline]
     pub fn set_mode(&self, mode: ZxdgToplevelDecorationMode) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_flags_void(1, 0, &mut [ffi::Argument { u: mode as _ }])
+            .marshal_array_void(1, &mut [ffi::Argument { u: mode as _ }])
     }
 }
 

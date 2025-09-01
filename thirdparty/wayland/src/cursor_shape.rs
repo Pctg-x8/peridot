@@ -3,18 +3,7 @@ use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message};
 #[repr(transparent)]
 pub struct WpCursorShapeManagerV1(Proxy);
 unsafe impl Interface for WpCursorShapeManagerV1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
-
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "<WpCursorShapeManagerV1 as Interface>::destruct", skip(self))
-    )]
-    unsafe fn destruct(&mut self) {
-        self.0.call_simple_dtor(0);
-    }
-}
-impl WpCursorShapeManagerV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
+    const DEF: &'static ffi::Interface = &interface(
         c"wp_cursor_shape_manager_v1",
         1,
         &[
@@ -22,11 +11,7 @@ impl WpCursorShapeManagerV1 {
             message(
                 c"get_pointer",
                 c"no",
-                &const {
-                    [WpCursorShapeDeviceV1::INTERFACE, unsafe {
-                        &super::wl_pointer_interface
-                    }]
-                },
+                &[WpCursorShapeDeviceV1::DEF, super::Pointer::DEF],
             ),
             // message(
             //     c"get_tablet_tool_v2",
@@ -40,17 +25,24 @@ impl WpCursorShapeManagerV1 {
         &[],
     );
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<WpCursorShapeManagerV1 as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        self.0.call_simple_dtor(0);
+    }
+}
+impl WpCursorShapeManagerV1 {
     pub fn get_pointer(
         &self,
         pointer: &mut super::Pointer,
     ) -> Result<Owned<WpCursorShapeDeviceV1>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, pointer.0.as_arg()],
-            )?)
+            Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [NEWID_ARG, pointer.0.as_arg()])?,
+            )
         })
     }
 }
@@ -72,7 +64,15 @@ pub enum WpCursorShapeDeviceV1Shape {
 #[repr(transparent)]
 pub struct WpCursorShapeDeviceV1(Proxy);
 unsafe impl Interface for WpCursorShapeDeviceV1 {
-    const DEF: &'static ffi::Interface = Self::INTERFACE;
+    const DEF: &'static ffi::Interface = &interface(
+        c"wp_cursor_shape_device_v1",
+        1,
+        &[
+            message(c"destroy", c"", &[]),
+            message(c"set_shape", c"uu", &[]),
+        ],
+        &[],
+    );
 
     #[cfg_attr(
         feature = "tracing",
@@ -83,16 +83,6 @@ unsafe impl Interface for WpCursorShapeDeviceV1 {
     }
 }
 impl WpCursorShapeDeviceV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_cursor_shape_device_v1",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(c"set_shape", c"uu", &[]),
-        ],
-        &[],
-    );
-
     pub const fn as_raw(&self) -> *mut ffi::Proxy {
         self.0.0.get() as *mut _ as _
     }
@@ -103,9 +93,8 @@ impl WpCursorShapeDeviceV1 {
         serial: u32,
         shape: WpCursorShapeDeviceV1Shape,
     ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        self.0.marshal_array_void(
             1,
-            0,
             &mut [ffi::Argument { u: serial }, ffi::Argument { u: shape as _ }],
         )
     }
