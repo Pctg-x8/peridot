@@ -123,7 +123,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // println!("** {}.rs", proto.name);
     if let Some(ref d) = proto.description {
-        println!("//! {}\n//!\n//! {}", d.summary, d.content);
+        println!("//! {}", d.summary);
+        let lines = d.content.lines().collect::<Vec<_>>();
+        if lines.len() > 1 {
+            let common_prefix = lines
+                .iter()
+                .skip(1)
+                .fold(None, |prefix, &l| {
+                    if l.trim().is_empty() {
+                        // not account for common-prefix checking
+                        return prefix;
+                    }
+
+                    match prefix {
+                        None => Some(l),
+                        Some(prefix) => {
+                            let common_prefix_bytes = prefix
+                                .bytes()
+                                .zip(l.bytes())
+                                .take_while(|&(a, b)| a == b)
+                                .count();
+                            Some(unsafe { l.get_unchecked(..common_prefix_bytes) })
+                        }
+                    }
+                })
+                .unwrap_or("");
+
+            for l in lines {
+                println!("//! {}", l.strip_prefix(common_prefix).unwrap_or(l));
+            }
+        }
+        println!("");
     }
 
     println!("use crate::{{ffi, Proxy, Interface}};");
