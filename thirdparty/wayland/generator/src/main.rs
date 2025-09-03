@@ -85,26 +85,6 @@ fn if_name_to_typeref(if_name: &str) -> String {
     format!("crate::{}", if_name_to_type_name(if_name))
 }
 
-fn wl_typechar(t: &str) -> char {
-    if t == "uint" {
-        'u'
-    } else if t == "int" {
-        'i'
-    } else if t == "fixed" {
-        'f'
-    } else if t == "object" {
-        'o'
-    } else if t == "new_id" {
-        'n'
-    } else if t == "string" {
-        's'
-    } else if t == "array" {
-        'a'
-    } else {
-        panic!("unknown type: {t}");
-    }
-}
-
 fn kw_escape<'t>(t: &'t str) -> Cow<'t, str> {
     if t == "move" {
         format!("r#{t}").into()
@@ -188,11 +168,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     newid_if = Some(a.interface.as_deref().expect("new_id without interface?"));
                 }
 
-                if a.allow_null {
-                    type_chars.push('?');
-                }
-
-                type_chars.push(wl_typechar(&a.r#type));
                 match a.interface {
                     Some(ref t) if t == &x.name => {
                         let _ = write!(if_pointers, "&{if_static_var_name} as *const _,");
@@ -224,10 +199,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     a.allow_null,
                 ) {
                     ("uint", None, None, false) => {
+                        type_chars.push_str("u");
                         let _ = write!(wrapper_args, "{arg_name_ident}: u32,");
                         let _ = write!(marshal_args, "ffi::Argument {{ u: {arg_name_ident} }},");
                     }
                     ("uint", None, Some(t), false) => {
+                        type_chars.push_str("u");
                         let _ = write!(
                             wrapper_args,
                             "{arg_name_ident}: {type_name}{},",
@@ -239,10 +216,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     ("int", None, None, false) => {
+                        type_chars.push_str("i");
                         let _ = write!(wrapper_args, "{arg_name_ident}: i32,");
                         let _ = write!(marshal_args, "ffi::Argument {{ i: {arg_name_ident} }},");
                     }
                     ("int", None, Some(t), false) => {
+                        type_chars.push_str("i");
                         let _ = write!(
                             wrapper_args,
                             "{arg_name_ident}: {type_name}{},",
@@ -254,6 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     ("string", None, None, false) => {
+                        type_chars.push_str("s");
                         let _ = write!(wrapper_args, "{arg_name_ident}: &core::ffi::CStr,");
                         let _ = write!(
                             marshal_args,
@@ -261,10 +241,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     ("object", None, None, false) => {
+                        type_chars.push_str("o");
                         let _ = write!(wrapper_args, "{arg_name_ident}: &Proxy,");
                         let _ = write!(marshal_args, "{arg_name_ident}.as_arg(),");
                     }
                     ("object", Some(x), None, false) => {
+                        type_chars.push_str("o");
                         let _ = write!(
                             wrapper_args,
                             "{arg_name_ident}: &{},",
@@ -273,6 +255,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = write!(marshal_args, "{arg_name_ident}.0.as_arg(),");
                     }
                     ("object", None, None, true) => {
+                        type_chars.push_str("?o");
                         let _ = write!(wrapper_args, "{arg_name_ident}: Option<&Proxy>,");
                         let _ = write!(
                             marshal_args,
@@ -280,6 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     ("object", Some(x), None, true) => {
+                        type_chars.push_str("?o");
                         let _ = write!(
                             wrapper_args,
                             "{arg_name_ident}: Option<&{}>,",
@@ -291,6 +275,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     ("new_id", _, None, false) => {
+                        type_chars.push_str("n");
                         // new_id does not appear in wrapper_args(return position)
                         let _ = write!(marshal_args, "crate::NEWID_ARG,");
                     }
@@ -366,11 +351,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for a in r.args.iter() {
                 let arg_name_ident = kw_escape(&a.name);
 
-                if a.allow_null {
-                    type_chars.push('?');
-                }
-
-                type_chars.push(wl_typechar(&a.r#type));
                 match a.interface {
                     Some(ref t) if t == &if_static_var_name => {
                         let _ = write!(if_pointers, "&{if_static_var_name} as *const _,");
@@ -401,11 +381,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     a.allow_null,
                 ) {
                     (None, None, "uint", false) => {
+                        type_chars.push_str("u");
                         let _ = write!(listener_trait_args, "{arg_name_ident}: u32,");
                         let _ = write!(listener_raw_args, "{arg_name_ident}: u32,");
                         let _ = write!(listener_arg_conversions, "{arg_name_ident},");
                     }
                     (None, Some(t), "uint", false) => {
+                        type_chars.push_str("u");
                         let _ = write!(
                             listener_trait_args,
                             "{arg_name_ident}: {type_name}{},",
@@ -418,11 +400,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     (None, None, "int", false) => {
+                        type_chars.push_str("i");
                         let _ = write!(listener_trait_args, "{arg_name_ident}: i32,");
                         let _ = write!(listener_raw_args, "{arg_name_ident}: i32,");
                         let _ = write!(listener_arg_conversions, "{arg_name_ident},");
                     }
                     (None, Some(t), "int", false) => {
+                        type_chars.push_str("i");
                         let _ = write!(
                             listener_trait_args,
                             "{arg_name_ident}: {type_name}{},",
@@ -435,6 +419,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     (Some(o), None, "object", false) => {
+                        type_chars.push_str("o");
                         let _ = write!(listener_trait_args, "{arg_name_ident}: {o},");
                         let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
                         let _ = write!(
@@ -443,6 +428,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     (Some(o), None, "object", true) => {
+                        type_chars.push_str("?o");
                         let _ = write!(listener_trait_args, "{arg_name_ident}: Option<{o}>,");
                         let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
                         let _ = write!(
@@ -451,11 +437,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     (None, None, "array", false) => {
-                        let _ = write!(listener_trait_args, "{arg_name_ident}: &mut ffi::Array");
+                        type_chars.push_str("a");
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: &mut ffi::Array,");
                         let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Array,");
                         let _ = write!(
                             listener_arg_conversions,
                             "unsafe {{ &mut *{arg_name_ident} }},"
+                        );
+                    }
+                    (None, None, "string", false) => {
+                        type_chars.push_str("s");
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: &core::ffi::CStr,");
+                        let _ = write!(
+                            listener_raw_args,
+                            "{arg_name_ident}: *const core::ffi::c_char,"
+                        );
+                        let _ = write!(
+                            listener_arg_conversions,
+                            "unsafe {{ core::ffi::CStr::from_ptr({arg_name_ident}) }},"
                         );
                     }
                     _ => panic!(
