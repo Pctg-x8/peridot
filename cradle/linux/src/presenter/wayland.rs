@@ -57,7 +57,7 @@ impl wl::ZxdgToplevelDecorationV1EventListener for State {
     fn configure(
         &mut self,
         _sender: &mut peridot_tp_wayland::ZxdgToplevelDecorationV1,
-        _mode: peridot_tp_wayland::ZxdgToplevelDecorationMode,
+        _mode: peridot_tp_wayland::ZxdgToplevelDecorationV1Mode,
     ) {
     }
 }
