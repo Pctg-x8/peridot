@@ -86,7 +86,7 @@ fn if_name_to_typeref(if_name: &str) -> String {
 }
 
 fn kw_escape<'t>(t: &'t str) -> Cow<'t, str> {
-    if t == "move" {
+    if matches!(t, "move" | "type") {
         format!("r#{t}").into()
     } else {
         t.into()
