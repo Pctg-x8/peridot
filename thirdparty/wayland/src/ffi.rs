@@ -64,6 +64,27 @@ pub struct Array {
     /// Array data
     pub data: *mut core::ffi::c_void,
 }
+impl Array {
+    #[inline(always)]
+    pub const unsafe fn as_slice<T>(&self) -> &[T] {
+        unsafe {
+            core::slice::from_raw_parts(
+                self.data as *const T,
+                self.size / core::mem::size_of::<T>(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub const unsafe fn as_slice_mut<T>(&mut self) -> &mut [T] {
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                self.data as *mut T,
+                self.size / core::mem::size_of::<T>(),
+            )
+        }
+    }
+}
 
 #[repr(C)]
 pub union Argument {
