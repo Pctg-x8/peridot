@@ -582,7 +582,7 @@ impl RegistryCollector {
         I: wl::Interface,
     {
         self.0
-            .get(unsafe { core::ffi::CStr::from_ptr(I::DEF.name) })
+            .get(unsafe { core::ffi::CStr::from_ptr((*I::DEF).name) })
             .map(|&(name, version)| registry.bind(name, version))
             .transpose()
     }
