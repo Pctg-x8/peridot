@@ -23,6 +23,7 @@ regex = "1.4"
 peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
     "xdg-shell",
     "xdg-decoration-unstable-v1",
+    "content-type-v1"
 ] }
 pipewire = "0.7.0"
 libspa-sys = "0.7.0"

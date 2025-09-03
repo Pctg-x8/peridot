@@ -19,33 +19,9 @@ const NULLOBJ_ARG: ffi::Argument = ffi::Argument {
     o: core::ptr::null_mut(),
 };
 
-pub type Error = std::io::Error;
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[must_use = "`set_listener` will be failed when already registered another handler"]
-pub enum SetListenerResult {
-    Success,
-    Failure,
-}
-impl SetListenerResult {
-    pub const fn into_result(self) -> std::result::Result<(), ()> {
-        match self {
-            Self::Success => Ok(()),
-            Self::Failure => Err(()),
-        }
-    }
-}
-
 #[repr(transparent)]
 pub struct Proxy(UnsafeCell<ffi::Proxy>);
 impl Proxy {
-    /// Castable safely
-    #[inline(always)]
-    pub(crate) const fn cast_ffi_ptr(ptr: *mut ffi::Proxy) -> *mut Self {
-        ptr.cast()
-    }
-
     #[inline(always)]
     pub const unsafe fn from_raw_ptr_unchecked<'a>(ptr: *mut ffi::Proxy) -> &'a mut Self {
         unsafe { Self::from_raw_ref_mut(&mut *ptr) }
@@ -57,7 +33,7 @@ impl Proxy {
     }
 
     #[inline(always)]
-    pub const fn as_arg(&self) -> ffi::Argument {
+    pub(crate) const fn as_arg(&self) -> ffi::Argument {
         ffi::Argument {
             o: self.0.get() as _,
         }
@@ -79,24 +55,24 @@ impl Proxy {
         &mut self,
         function_table: *const core::ffi::c_void,
         user_data: *mut core::ffi::c_void,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         match unsafe {
             ffi::wl_proxy_add_listener(self.0.get_mut() as _, function_table, user_data)
         } {
-            -1 => SetListenerResult::Failure,
-            _ => SetListenerResult::Success,
+            -1 => Err(()),
+            _ => Ok(()),
         }
     }
 
     #[inline]
-    pub fn marshal_array_flags(
+    fn marshal_array_flags(
         &self,
         opcode: u32,
-        interface: *const ffi::Interface,
+        interface: &ffi::Interface,
         version: u32,
         flags: u32,
         args: &mut [ffi::Argument],
-    ) -> Result<NonNull<Proxy>> {
+    ) -> Result<NonNull<Proxy>, std::io::Error> {
         unsafe {
             NonNull::new(ffi::wl_proxy_marshal_array_flags(
                 self.0.get(),
@@ -111,12 +87,24 @@ impl Proxy {
         }
     }
 
-    pub fn marshal_array_flags_void(
+    #[inline]
+    fn marshal_array_flags_typed<T: Interface>(
+        &self,
+        opcode: u32,
+        version: u32,
+        flags: u32,
+        args: &mut [ffi::Argument],
+    ) -> Result<NonNull<T>, std::io::Error> {
+        self.marshal_array_flags(opcode, T::def(), version, flags, args)
+            .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
+    }
+
+    fn marshal_array_flags_void(
         &self,
         opcode: u32,
         flags: u32,
         args: &mut [ffi::Argument],
-    ) -> Result<()> {
+    ) -> Result<(), std::io::Error> {
         unsafe {
             // wl_proxy_marshal_array_flags without any interface will returns NULL
             ffi::wl_proxy_marshal_array_flags(
@@ -141,30 +129,15 @@ impl Proxy {
         }
     }
 
-    #[inline(always)]
-    pub fn marshal_array_void(&self, opcode: u32, args: &mut [ffi::Argument]) -> Result<()> {
-        self.marshal_array_flags_void(opcode, 0, args)
-    }
-
-    #[inline(always)]
-    pub fn marshal_array_typed<T: Interface>(
-        &self,
-        opcode: u32,
-        args: &mut [ffi::Argument],
-    ) -> Result<NonNull<T>> {
-        self.marshal_array_flags(opcode, T::DEF, self.version(), 0, args)
-            .map(|x| unsafe { T::from_proxy_ptr_unchecked(x) })
-    }
-
     /// Calls the destructor with no arguments
     ///
-    /// If any errors occurred, it will be reported via tracing if enabled.
+    /// If any errors occured, it will be reported via tracing if enabled.
     pub(crate) fn call_simple_dtor(&mut self, opcode: u32) {
         #[cfg(feature = "tracing")]
         if let Err(e) = self.marshal_array_flags_void(opcode, ffi::MARSHAL_FLAG_DESTROY, &mut []) {
             tracing::warn!(
                 reason = ?e,
-                display_error = unsafe { ffi::wl_display_get_error(self.display()) },
+                display_error = unsafe { ffi::wl_display_get_error(o.display()) },
                 "Failed to call destructor"
             );
         }
@@ -173,18 +146,16 @@ impl Proxy {
     }
 }
 
-/// ## Safety
-///
 /// must be transparent with ffi::Proxy(or Proxy wrapper newtype)
 pub unsafe trait Interface {
-    const DEF: *const ffi::Interface;
+    fn def() -> &'static ffi::Interface;
 
     #[inline(always)]
     unsafe fn from_proxy_ptr_unchecked(p: NonNull<Proxy>) -> NonNull<Self>
     where
         Self: Sized,
     {
-        p.cast()
+        unsafe { core::mem::transmute(p) }
     }
 
     unsafe fn destruct(&mut self) {
@@ -250,38 +221,39 @@ impl<T: Interface> Owned<T> {
     }
 }
 
-#[repr(transparent)]
-pub struct Display(NonNull<ffi::Display>);
+pub struct Display {
+    ffi: NonNull<ffi::Display>,
+}
 impl Drop for Display {
     fn drop(&mut self) {
-        unsafe { ffi::wl_display_disconnect(self.0.as_ptr()) }
+        unsafe { ffi::wl_display_disconnect(self.ffi.as_ptr()) }
     }
 }
 impl AsRawFd for Display {
     #[inline(always)]
     fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-        unsafe { ffi::wl_display_get_fd(self.0.as_ptr()) }
+        unsafe { ffi::wl_display_get_fd(self.ffi.as_ptr()) }
     }
 }
 impl Display {
     #[inline]
     pub fn connect() -> Option<Self> {
-        NonNull::new(unsafe { ffi::wl_display_connect(core::ptr::null()) }).map(Self)
+        let ffi = NonNull::new(unsafe { ffi::wl_display_connect(core::ptr::null()) })?;
+
+        Some(Self { ffi })
     }
 
-    #[inline(always)]
     pub const fn as_raw(&self) -> *mut ffi::Display {
-        self.0.as_ptr()
+        self.ffi.as_ptr()
     }
 
     #[inline]
-    pub fn get_registry(&self) -> Result<Owned<Registry>> {
+    pub fn get_registry(&self) -> Result<Owned<Registry>, std::io::Error> {
         Ok(unsafe {
-            Owned::from_untyped_unchecked(
-                Proxy::from_raw_ptr_unchecked(self.as_raw() as _).marshal_array_flags(
+            Owned::wrap_unchecked(
+                Proxy::from_raw_ptr_unchecked(self.ffi.as_ptr() as _).marshal_array_flags_typed(
                     1,
-                    Registry::DEF,
-                    ffi::wl_proxy_get_version(self.as_raw() as _),
+                    ffi::wl_proxy_get_version(self.ffi.as_ptr() as _),
                     0,
                     &mut [NEWID_ARG],
                 )?,
@@ -290,8 +262,8 @@ impl Display {
     }
 
     #[inline]
-    pub fn roundtrip(&self) -> Result<u32> {
-        match unsafe { ffi::wl_display_roundtrip(self.as_raw()) } {
+    pub fn roundtrip(&self) -> Result<u32, std::io::Error> {
+        match unsafe { ffi::wl_display_roundtrip(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
             r => Ok(r.cast_unsigned()),
         }
@@ -299,10 +271,9 @@ impl Display {
 
     #[inline]
     pub fn error(&self) -> Option<core::ffi::c_int> {
-        match unsafe { ffi::wl_display_get_error(self.as_raw()) } {
-            0 => None,
-            r => Some(r),
-        }
+        let r = unsafe { ffi::wl_display_get_error(self.ffi.as_ptr()) };
+
+        if r == 0 { None } else { Some(r) }
     }
 
     pub fn protocol_error(&self) -> (*const ffi::Interface, u32, u32) {
@@ -310,7 +281,7 @@ impl Display {
         let mut id = core::mem::MaybeUninit::uninit();
         let code = unsafe {
             ffi::wl_display_get_protocol_error(
-                self.as_raw(),
+                self.ffi.as_ptr(),
                 interface.as_mut_ptr(),
                 id.as_mut_ptr(),
             )
@@ -324,24 +295,24 @@ impl Display {
     }
 
     #[inline]
-    pub fn flush(&self) -> Result<u32> {
-        match unsafe { ffi::wl_display_flush(self.as_raw()) } {
+    pub fn flush(&self) -> Result<u32, std::io::Error> {
+        match unsafe { ffi::wl_display_flush(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
             r => Ok(r.cast_unsigned()),
         }
     }
 
     #[inline]
-    pub fn dispatch_pending(&self) -> Result<u32> {
-        match unsafe { ffi::wl_display_dispatch_pending(self.as_raw()) } {
+    pub fn dispatch_pending(&self) -> Result<u32, std::io::Error> {
+        match unsafe { ffi::wl_display_dispatch_pending(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
             r => Ok(r.cast_unsigned()),
         }
     }
 
     #[inline]
-    pub fn prepare_read(&self) -> Result<()> {
-        match unsafe { ffi::wl_display_prepare_read(self.as_raw()) } {
+    pub fn prepare_read(&self) -> Result<(), std::io::Error> {
+        match unsafe { ffi::wl_display_prepare_read(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
             _ => Ok(()),
         }
@@ -349,12 +320,12 @@ impl Display {
 
     #[inline]
     pub fn cancel_read(&self) {
-        unsafe { ffi::wl_display_cancel_read(self.as_raw()) }
+        unsafe { ffi::wl_display_cancel_read(self.ffi.as_ptr()) }
     }
 
     #[inline]
-    pub fn read_events(&self) -> Result<()> {
-        match unsafe { ffi::wl_display_read_events(self.as_raw()) } {
+    pub fn read_events(&self) -> Result<(), std::io::Error> {
+        match unsafe { ffi::wl_display_read_events(self.ffi.as_ptr()) } {
             -1 => Err(std::io::Error::last_os_error()),
             _ => Ok(()),
         }
@@ -364,13 +335,15 @@ impl Display {
 #[repr(transparent)]
 pub struct Registry(Proxy);
 unsafe impl Interface for Registry {
-    const DEF: *const ffi::Interface = unsafe { &wl_registry_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_registry_interface }
+    }
 }
 impl Registry {
     pub fn set_listener<'l, L: RegistryListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: RegistryListener {
@@ -387,17 +360,16 @@ impl Registry {
     }
 
     #[inline]
-    pub fn bind<I: Interface>(&self, name: u32, version: u32) -> Result<Owned<I>> {
+    pub fn bind<I: Interface>(&self, name: u32, version: u32) -> Result<Owned<I>, std::io::Error> {
         Ok(unsafe {
-            Owned::from_untyped_unchecked(self.0.marshal_array_flags(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
                 0,
-                I::DEF,
                 version,
                 0,
                 &mut [
                     ffi::Argument { u: name },
                     // dynamically-typed new id
-                    ffi::Argument { s: (*I::DEF).name },
+                    ffi::Argument { s: I::def().name },
                     ffi::Argument { u: version },
                     NEWID_ARG,
                 ],
@@ -420,13 +392,15 @@ pub trait RegistryListener {
 #[repr(transparent)]
 pub struct Callback(Proxy);
 unsafe impl Interface for Callback {
-    const DEF: *const ffi::Interface = unsafe { &wl_callback_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_callback_interface }
+    }
 }
 impl Callback {
     pub fn set_listener<'l, L: CallbackEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: CallbackEventListener {
@@ -445,24 +419,42 @@ pub trait CallbackEventListener {
 #[repr(transparent)]
 pub struct Compositor(Proxy);
 unsafe impl Interface for Compositor {
-    const DEF: *const ffi::Interface = unsafe { &wl_compositor_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_compositor_interface }
+    }
 }
 impl Compositor {
     #[inline]
-    pub fn create_surface(&self) -> Result<Owned<Surface>> {
-        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
+    pub fn create_surface(&self) -> Result<Owned<Surface>, std::io::Error> {
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                0,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 
     #[inline]
-    pub fn create_region(&self) -> Result<Owned<Region>> {
-        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
+    pub fn create_region(&self) -> Result<Owned<Region>, std::io::Error> {
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                1,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 }
 
 #[repr(transparent)]
 pub struct Surface(Proxy);
 unsafe impl Interface for Surface {
-    const DEF: *const ffi::Interface = unsafe { &wl_surface_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_surface_interface }
+    }
 }
 impl Surface {
     pub const fn as_raw(&mut self) -> *mut ffi::Proxy {
@@ -470,9 +462,10 @@ impl Surface {
     }
 
     #[inline]
-    pub fn attach(&self, buffer: Option<&Buffer>, x: i32, y: i32) -> Result<()> {
-        self.0.marshal_array_void(
+    pub fn attach(&self, buffer: Option<&Buffer>, x: i32, y: i32) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
             1,
+            0,
             &mut [
                 buffer.map_or(NULLOBJ_ARG, |x| x.0.as_arg()),
                 ffi::Argument { i: x },
@@ -482,9 +475,10 @@ impl Surface {
     }
 
     #[inline]
-    pub fn damage(&self, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
-        self.0.marshal_array_void(
+    pub fn damage(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
             2,
+            0,
             &mut [
                 ffi::Argument { i: x },
                 ffi::Argument { i: y },
@@ -495,37 +489,44 @@ impl Surface {
     }
 
     #[inline]
-    pub fn frame(&self) -> Result<Owned<Callback>> {
-        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(3, &mut [NEWID_ARG])?) })
+    pub fn frame(&self) -> Result<Owned<Callback>, std::io::Error> {
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                3,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 
     #[inline]
-    pub fn set_input_region(&self, region: Option<&Region>) -> Result<()> {
+    pub fn set_input_region(&self, region: Option<&Region>) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_void(5, &mut [region.map_or(NULLOBJ_ARG, |x| x.0.as_arg())])
+            .marshal_array_flags_void(5, 0, &mut [region.map_or(NULLOBJ_ARG, |x| x.0.as_arg())])
     }
 
     #[inline]
-    pub fn commit(&self) -> Result<()> {
-        self.0.marshal_array_void(6, &mut [])
+    pub fn commit(&self) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(6, 0, &mut [])
     }
 
     #[inline]
-    pub fn set_buffer_transform(&self, transform: OutputTransform) -> Result<()> {
+    pub fn set_buffer_transform(&self, transform: OutputTransform) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_void(7, &mut [ffi::Argument { i: transform as _ }])
+            .marshal_array_flags_void(7, 0, &mut [ffi::Argument { i: transform as _ }])
     }
 
     #[inline]
-    pub fn set_buffer_scale(&self, scale: i32) -> Result<()> {
+    pub fn set_buffer_scale(&self, scale: i32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_void(8, &mut [ffi::Argument { i: scale }])
+            .marshal_array_flags_void(8, 0, &mut [ffi::Argument { i: scale }])
     }
 
     pub fn set_listener<'l, L: SurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: SurfaceEventListener {
@@ -551,7 +552,9 @@ pub trait SurfaceEventListener {
 #[repr(transparent)]
 pub struct Subcompositor(Proxy);
 unsafe impl Interface for Subcompositor {
-    const DEF: *const ffi::Interface = unsafe { &wl_subcompositor_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_subcompositor_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -563,14 +566,18 @@ unsafe impl Interface for Subcompositor {
 }
 impl Subcompositor {
     #[inline]
-    pub fn get_subsurface(&self, surface: &Surface, parent: &Surface) -> Result<Owned<Subsurface>> {
+    pub fn get_subsurface(
+        &self,
+        surface: &Surface,
+        parent: &Surface,
+    ) -> Result<Owned<Subsurface>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(
-                self.0.marshal_array_typed(
-                    1,
-                    &mut [NEWID_ARG, surface.0.as_arg(), parent.0.as_arg()],
-                )?,
-            )
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                1,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG, surface.0.as_arg(), parent.0.as_arg()],
+            )?)
         })
     }
 }
@@ -578,11 +585,13 @@ impl Subcompositor {
 #[repr(transparent)]
 pub struct Subsurface(Proxy);
 unsafe impl Interface for Subsurface {
-    const DEF: *const ffi::Interface = unsafe { &wl_subsurface_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_subsurface_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "<Subsurface as Interface>::destruct", skip(self))
+        tracing::instrument(name = "<Subsurface as Interface>::detsruct", skip(self))
     )]
     unsafe fn destruct(&mut self) {
         self.0.call_simple_dtor(0);
@@ -590,13 +599,13 @@ unsafe impl Interface for Subsurface {
 }
 impl Subsurface {
     #[inline]
-    pub fn set_position(&self, x: i32, y: i32) -> Result<()> {
+    pub fn set_position(&self, x: i32, y: i32) -> Result<(), std::io::Error> {
         self.0
             .marshal_array_flags_void(1, 0, &mut [ffi::Argument { i: x }, ffi::Argument { i: y }])
     }
 
     #[inline]
-    pub fn place_below(&self, sibling: &Surface) -> Result<()> {
+    pub fn place_below(&self, sibling: &Surface) -> Result<(), std::io::Error> {
         self.0
             .marshal_array_flags_void(3, 0, &mut [sibling.0.as_arg()])
     }
@@ -605,7 +614,9 @@ impl Subsurface {
 #[repr(transparent)]
 pub struct Shm(Proxy);
 unsafe impl Interface for Shm {
-    const DEF: *const ffi::Interface = unsafe { &wl_shm_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_shm_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -617,9 +628,15 @@ unsafe impl Interface for Shm {
 }
 impl Shm {
     #[inline]
-    pub fn create_pool_raw(&self, fd: std::os::fd::RawFd, size: i32) -> Result<Owned<ShmPool>> {
+    pub fn create_pool_rawfd(
+        &self,
+        fd: std::os::fd::RawFd,
+        size: i32,
+    ) -> Result<Owned<ShmPool>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_typed(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                0,
+                self.0.version(),
                 0,
                 &mut [
                     NEWID_ARG,
@@ -631,8 +648,12 @@ impl Shm {
     }
 
     #[inline(always)]
-    pub fn create_pool(&self, fd: &impl AsRawFd, size: i32) -> Result<Owned<ShmPool>> {
-        self.create_pool_raw(fd.as_raw_fd(), size)
+    pub fn create_pool(
+        &self,
+        fd: &impl AsRawFd,
+        size: i32,
+    ) -> Result<Owned<ShmPool>, std::io::Error> {
+        self.create_pool_rawfd(fd.as_raw_fd(), size)
     }
 }
 
@@ -646,7 +667,9 @@ pub enum ShmFormat {
 #[repr(transparent)]
 pub struct ShmPool(Proxy);
 unsafe impl Interface for ShmPool {
-    const DEF: *const ffi::Interface = unsafe { &wl_shm_pool_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_shm_pool_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -665,9 +688,11 @@ impl ShmPool {
         height: i32,
         stride: i32,
         format: ShmFormat,
-    ) -> Result<Owned<Buffer>> {
+    ) -> Result<Owned<Buffer>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_typed(
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                0,
+                self.0.version(),
                 0,
                 &mut [
                     NEWID_ARG,
@@ -682,16 +707,18 @@ impl ShmPool {
     }
 
     #[inline]
-    pub fn resize(&self, size: i32) -> Result<()> {
+    pub fn resize(&self, size: i32) -> Result<(), std::io::Error> {
         self.0
-            .marshal_array_void(2, &mut [ffi::Argument { i: size }])
+            .marshal_array_flags_void(2, 0, &mut [ffi::Argument { i: size }])
     }
 }
 
 #[repr(transparent)]
 pub struct Buffer(Proxy);
 unsafe impl Interface for Buffer {
-    const DEF: *const ffi::Interface = unsafe { &wl_buffer_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_buffer_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -705,7 +732,9 @@ unsafe impl Interface for Buffer {
 #[repr(transparent)]
 pub struct Region(Proxy);
 unsafe impl Interface for Region {
-    const DEF: *const ffi::Interface = unsafe { &wl_region_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_region_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -717,9 +746,10 @@ unsafe impl Interface for Region {
 }
 impl Region {
     #[inline]
-    pub fn add(&self, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
-        self.0.marshal_array_void(
+    pub fn add(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
             1,
+            0,
             &mut [
                 ffi::Argument { i: x },
                 ffi::Argument { i: y },
@@ -733,7 +763,9 @@ impl Region {
 #[repr(transparent)]
 pub struct Seat(Proxy);
 unsafe impl Interface for Seat {
-    const DEF: *const ffi::Interface = unsafe { &wl_seat_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_seat_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -754,14 +786,24 @@ impl Seat {
     }
 
     #[inline]
-    pub fn get_pointer(&self) -> Result<Owned<Pointer>> {
-        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
+    pub fn get_pointer(&self) -> Result<Owned<Pointer>, std::io::Error> {
+        let proxy_ptr =
+            self.0
+                .marshal_array_flags(0, Pointer::def(), self.0.version(), 0, &mut [NEWID_ARG])?;
+
+        Ok(unsafe { Owned::from_untyped_unchecked(proxy_ptr) })
+    }
+
+    // v5
+    #[inline]
+    pub unsafe fn destroy(&self) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(3, 0, &mut [])
     }
 
     pub fn set_listener<'l, L: SeatEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: SeatEventListener {
@@ -783,13 +825,15 @@ pub trait SeatEventListener {
 #[repr(transparent)]
 pub struct Pointer(Proxy);
 unsafe impl Interface for Pointer {
-    const DEF: *const ffi::Interface = unsafe { &wl_pointer_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_pointer_interface }
+    }
 }
 impl Pointer {
     pub fn set_listener<'l, L: PointerEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: PointerEventListener {
@@ -878,7 +922,9 @@ pub enum OutputTransform {
 #[repr(transparent)]
 pub struct Output(Proxy);
 unsafe impl Interface for Output {
-    const DEF: *const ffi::Interface = unsafe { &wl_output_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_output_interface }
+    }
 }
 
 // pub trait OutputEventListener {
@@ -892,7 +938,9 @@ unsafe impl Interface for Output {
 #[repr(transparent)]
 pub struct DataOffer(Proxy);
 unsafe impl Interface for DataOffer {
-    const DEF: *const ffi::Interface = unsafe { &wl_data_offer_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_data_offer_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -904,8 +952,13 @@ unsafe impl Interface for DataOffer {
 }
 impl DataOffer {
     #[inline]
-    pub fn accept(&self, serial: u32, mime_type: Option<&core::ffi::CStr>) -> Result<()> {
-        self.0.marshal_array_void(
+    pub fn accept(
+        &self,
+        serial: u32,
+        mime_type: Option<&core::ffi::CStr>,
+    ) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
+            0,
             0,
             &mut [
                 ffi::Argument { u: serial },
@@ -917,9 +970,14 @@ impl DataOffer {
     }
 
     #[inline]
-    pub fn receive(&self, mime_type: &core::ffi::CStr, fd: &(impl AsRawFd + ?Sized)) -> Result<()> {
-        self.0.marshal_array_void(
+    pub fn receive(
+        &self,
+        mime_type: &core::ffi::CStr,
+        fd: &(impl AsRawFd + ?Sized),
+    ) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
             1,
+            0,
             &mut [
                 ffi::Argument {
                     s: mime_type.as_ptr(),
@@ -930,10 +988,10 @@ impl DataOffer {
     }
 
     #[inline]
-    pub fn finish(&self) -> Result<()> {
+    pub fn finish(&self) -> Result<(), std::io::Error> {
         assert!(self.0.version() >= 3, "version 3 required");
 
-        self.0.marshal_array_void(3, &mut [])
+        self.0.marshal_array_flags_void(3, 0, &mut [])
     }
 
     #[inline]
@@ -941,11 +999,12 @@ impl DataOffer {
         &self,
         dnd_actions: DataDeviceManagerDndAction,
         preferred_action: DataDeviceManagerDndAction,
-    ) -> Result<()> {
+    ) -> Result<(), std::io::Error> {
         assert!(self.0.version() >= 3, "version 3 required");
 
-        self.0.marshal_array_void(
+        self.0.marshal_array_flags_void(
             4,
+            0,
             &mut [
                 ffi::Argument {
                     u: dnd_actions.bits(),
@@ -960,7 +1019,7 @@ impl DataOffer {
     pub fn set_listener<'l, L: DataOfferEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable! {
@@ -995,7 +1054,9 @@ pub trait DataOfferEventListener {
 #[repr(transparent)]
 pub struct DataSource(Proxy);
 unsafe impl Interface for DataSource {
-    const DEF: *const ffi::Interface = unsafe { &wl_data_source_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_data_source_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -1007,8 +1068,9 @@ unsafe impl Interface for DataSource {
 }
 impl DataSource {
     #[inline]
-    pub fn offer(&self, mime_type: &core::ffi::CStr) -> Result<()> {
-        self.0.marshal_array_void(
+    pub fn offer(&self, mime_type: &core::ffi::CStr) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
+            0,
             0,
             &mut [ffi::Argument {
                 s: mime_type.as_ptr(),
@@ -1017,11 +1079,15 @@ impl DataSource {
     }
 
     #[inline]
-    pub fn set_actions(&self, dnd_actions: DataDeviceManagerDndAction) -> Result<()> {
+    pub fn set_actions(
+        &self,
+        dnd_actions: DataDeviceManagerDndAction,
+    ) -> Result<(), std::io::Error> {
         assert!(self.0.version() >= 3, "version 3 required");
 
-        self.0.marshal_array_void(
+        self.0.marshal_array_flags_void(
             2,
+            0,
             &mut [ffi::Argument {
                 u: dnd_actions.bits(),
             }],
@@ -1031,7 +1097,7 @@ impl DataSource {
     pub fn add_listener<'l, L: DataSourceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable! {
@@ -1081,7 +1147,9 @@ pub trait DataSourceEventListener {
 #[repr(transparent)]
 pub struct DataDevice(Proxy);
 unsafe impl Interface for DataDevice {
-    const DEF: *const ffi::Interface = unsafe { &wl_data_device_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_data_device_interface }
+    }
 
     #[cfg_attr(
         feature = "tracing",
@@ -1108,8 +1176,9 @@ impl DataDevice {
         origin: &Surface,
         icon: Option<&Surface>,
         serial: u32,
-    ) -> Result<()> {
-        self.0.marshal_array_void(
+    ) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
+            0,
             0,
             &mut [
                 source.map_or(NULLOBJ_ARG, |x| x.0.as_arg()),
@@ -1121,9 +1190,14 @@ impl DataDevice {
     }
 
     #[inline]
-    pub fn set_selection(&self, source: Option<&DataSource>, serial: u32) -> Result<()> {
-        self.0.marshal_array_void(
+    pub fn set_selection(
+        &self,
+        source: Option<&DataSource>,
+        serial: u32,
+    ) -> Result<(), std::io::Error> {
+        self.0.marshal_array_flags_void(
             1,
+            0,
             &mut [
                 source.map_or(NULLOBJ_ARG, |x| x.0.as_arg()),
                 ffi::Argument { u: serial },
@@ -1134,7 +1208,7 @@ impl DataDevice {
     pub fn set_listener<'l, L: DataDeviceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> SetListenerResult {
+    ) -> Result<(), ()> {
         unsafe {
             self.0.set_listener(
                 EventFnTable! {
@@ -1189,21 +1263,32 @@ pub trait DataDeviceEventListener {
 #[repr(transparent)]
 pub struct DataDeviceManager(Proxy);
 unsafe impl Interface for DataDeviceManager {
-    const DEF: *const ffi::Interface = unsafe { &wl_data_device_manager_interface };
+    fn def() -> &'static ffi::Interface {
+        unsafe { &wl_data_device_manager_interface }
+    }
 }
 impl DataDeviceManager {
     #[inline]
-    pub fn create_data_source(&self) -> Result<Owned<DataSource>> {
-        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
+    pub fn create_data_source(&self) -> Result<Owned<DataSource>, std::io::Error> {
+        Ok(unsafe {
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                0,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG],
+            )?)
+        })
     }
 
     #[inline]
-    pub fn get_data_device(&self, seat: &Seat) -> Result<Owned<DataDevice>> {
+    pub fn get_data_device(&self, seat: &Seat) -> Result<Owned<DataDevice>, std::io::Error> {
         Ok(unsafe {
-            Owned::wrap_unchecked(
-                self.0
-                    .marshal_array_typed(1, &mut [NEWID_ARG, seat.0.as_arg()])?,
-            )
+            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
+                1,
+                self.0.version(),
+                0,
+                &mut [NEWID_ARG, seat.0.as_arg()],
+            )?)
         })
     }
 }
@@ -1281,7 +1366,6 @@ macro_rules! Ext {
 // stable
 Ext!("viewporter", viewporter);
 Ext!("xdg-shell", xdg_shell);
-Ext!("tablet-v2", tablet);
 
 // staging
 Ext!("fractional-scale-v1", fractional_scale);

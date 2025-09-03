@@ -19,6 +19,7 @@ tablet-v2 = []
 # staging
 fractional-scale-v1 = []
 cursor-shape-v1 = ["tablet-v2"]
+content-type-v1 = []
 
 # unstable
 xdg-decoration-unstable-v1 = []
