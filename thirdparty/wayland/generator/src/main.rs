@@ -279,6 +279,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // new_id does not appear in wrapper_args(return position)
                         let _ = write!(marshal_args, "crate::NEWID_ARG,");
                     }
+                    ("fixed", None, None, false) => {
+                        type_chars.push_str("f");
+                        let _ = write!(wrapper_args, "{arg_name_ident}: crate::Fixed,");
+                        let _ = write!(marshal_args, "ffi::Argument {{ f: {arg_name_ident} }},");
+                    }
                     _ => todo!(
                         "wrapper/marshal arg: {} {:?} {:?} {}",
                         a.r#type,
