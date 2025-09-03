@@ -253,7 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             element: RsPathElement::Ident(RsIdent::Const("DEF")),
                         };
 
-                        let _ = write!(if_pointers, "{def_ref} as *const _,");
+                        let _ = write!(if_pointers, "{def_ref},");
                     }
                     None => if_pointers.push_str("core::ptr::null(),"),
                 }
@@ -452,7 +452,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             element: RsPathElement::Ident(RsIdent::Const("DEF")),
                         };
 
-                        let _ = write!(if_pointers, "{def_ref} as *const _,");
+                        let _ = write!(if_pointers, "{def_ref},");
                     }
                     None => if_pointers.push_str("core::ptr::null(),"),
                 }
@@ -611,7 +611,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("");
         println!("#[repr(transparent)] pub struct {type_name}(pub(crate) Proxy);");
         println!("unsafe impl Interface for {type_name} {{");
-        println!("    const DEF: &'static ffi::Interface = &{if_static_var_name};");
+        println!("    const DEF: *const ffi::Interface = &{if_static_var_name};");
         if let Some((opcode, use_simple_call, since)) = destructor {
             println!("");
             println!(

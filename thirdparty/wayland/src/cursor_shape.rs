@@ -14,21 +14,15 @@ static WP_CURSOR_SHAPE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"get_pointer".as_ptr(),
                 signature: c"no".as_ptr(),
-                types: const {
-                    [
-                        crate::WpCursorShapeDeviceV1::DEF as *const _,
-                        crate::Pointer::DEF as *const _,
-                    ]
-                }
-                .as_ptr(),
+                types: const { [crate::WpCursorShapeDeviceV1::DEF, crate::Pointer::DEF] }.as_ptr(),
             },
             ffi::Message {
                 name: c"get_tablet_tool_v2".as_ptr(),
                 signature: c"no".as_ptr(),
                 types: const {
                     [
-                        crate::WpCursorShapeDeviceV1::DEF as *const _,
-                        crate::ZwpTabletToolV2::DEF as *const _,
+                        crate::WpCursorShapeDeviceV1::DEF,
+                        crate::ZwpTabletToolV2::DEF,
                     ]
                 }
                 .as_ptr(),
@@ -43,7 +37,7 @@ static WP_CURSOR_SHAPE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct WpCursorShapeManagerV1(pub(crate) Proxy);
 unsafe impl Interface for WpCursorShapeManagerV1 {
-    const DEF: &'static ffi::Interface = &WP_CURSOR_SHAPE_MANAGER_V1_INTERFACE;
+    const DEF: *const ffi::Interface = &WP_CURSOR_SHAPE_MANAGER_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -108,7 +102,7 @@ static WP_CURSOR_SHAPE_DEVICE_V1_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct WpCursorShapeDeviceV1(pub(crate) Proxy);
 unsafe impl Interface for WpCursorShapeDeviceV1 {
-    const DEF: &'static ffi::Interface = &WP_CURSOR_SHAPE_DEVICE_V1_INTERFACE;
+    const DEF: *const ffi::Interface = &WP_CURSOR_SHAPE_DEVICE_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

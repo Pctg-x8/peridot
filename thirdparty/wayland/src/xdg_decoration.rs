@@ -16,8 +16,8 @@ static ZXDG_DECORATION_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface {
                 signature: c"no".as_ptr(),
                 types: const {
                     [
-                        crate::ZxdgToplevelDecorationV1::DEF as *const _,
-                        crate::XdgToplevel::DEF as *const _,
+                        crate::ZxdgToplevelDecorationV1::DEF,
+                        crate::XdgToplevel::DEF,
                     ]
                 }
                 .as_ptr(),
@@ -32,7 +32,7 @@ static ZXDG_DECORATION_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct ZxdgDecorationManagerV1(pub(crate) Proxy);
 unsafe impl Interface for ZxdgDecorationManagerV1 {
-    const DEF: &'static ffi::Interface = &ZXDG_DECORATION_MANAGER_V1_INTERFACE;
+    const DEF: *const ffi::Interface = &ZXDG_DECORATION_MANAGER_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -96,7 +96,7 @@ static ZXDG_TOPLEVEL_DECORATION_V1_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct ZxdgToplevelDecorationV1(pub(crate) Proxy);
 unsafe impl Interface for ZxdgToplevelDecorationV1 {
-    const DEF: &'static ffi::Interface = &ZXDG_TOPLEVEL_DECORATION_V1_INTERFACE;
+    const DEF: *const ffi::Interface = &ZXDG_TOPLEVEL_DECORATION_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

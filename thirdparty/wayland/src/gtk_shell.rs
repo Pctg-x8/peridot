@@ -6,7 +6,7 @@ use super::{Interface, Proxy, ffi, interface, message};
 #[repr(transparent)]
 pub struct GtkShell1(Proxy);
 unsafe impl Interface for GtkShell1 {
-    const DEF: &'static ffi::Interface = &interface(
+    const DEF: *const ffi::Interface = &interface(
         c"gtk_shell1",
         6,
         &[
@@ -58,7 +58,7 @@ pub trait GtkShell1EventListener {
 #[repr(transparent)]
 pub struct GtkSurface1(Proxy);
 unsafe impl Interface for GtkSurface1 {
-    const DEF: &'static ffi::Interface = &interface(
+    const DEF: *const ffi::Interface = &interface(
         c"gtk_surface1",
         6,
         &[

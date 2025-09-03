@@ -1,4 +1,4 @@
-//! Protocol for requesting fractional surface scales
+//! fractional_scale_v1: Protocol for requesting fractional surface scales
 //!
 //! This protocol allows a compositor to suggest for surfaces to render at
 //! fractional scales.
@@ -36,13 +36,7 @@ static WP_FRACTIONAL_SCALE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface
             ffi::Message {
                 name: c"get_fractional_scale".as_ptr(),
                 signature: c"no".as_ptr(),
-                types: const {
-                    [
-                        crate::WpFractionalScaleV1::DEF as *const _,
-                        crate::Surface::DEF as *const _,
-                    ]
-                }
-                .as_ptr(),
+                types: const { [crate::WpFractionalScaleV1::DEF, crate::Surface::DEF] }.as_ptr(),
             },
         ]
     }
@@ -54,7 +48,7 @@ static WP_FRACTIONAL_SCALE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface
 #[repr(transparent)]
 pub struct WpFractionalScaleManagerV1(pub(crate) Proxy);
 unsafe impl Interface for WpFractionalScaleManagerV1 {
-    const DEF: &'static ffi::Interface = &WP_FRACTIONAL_SCALE_MANAGER_V1_INTERFACE;
+    const DEF: *const ffi::Interface = &WP_FRACTIONAL_SCALE_MANAGER_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -115,7 +109,7 @@ static WP_FRACTIONAL_SCALE_V1_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct WpFractionalScaleV1(pub(crate) Proxy);
 unsafe impl Interface for WpFractionalScaleV1 {
-    const DEF: &'static ffi::Interface = &WP_FRACTIONAL_SCALE_V1_INTERFACE;
+    const DEF: *const ffi::Interface = &WP_FRACTIONAL_SCALE_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

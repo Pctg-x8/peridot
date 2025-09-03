@@ -1,4 +1,4 @@
-//! Protocol for exporting xdg surface handles
+//! xdg_foreign_unstable_v2: Protocol for exporting xdg surface handles
 //!
 //! This protocol specifies a way for making it possible to reference a surface
 //! of a different client. With such a reference, a client can, by using the
@@ -29,7 +29,7 @@
 //! is to be declared stable, the 'z' prefix and the version number in the
 //! protocol and interface names are removed and the interface version number is
 //! reset.
-//!   
+//!
 
 use crate::{Interface, Proxy, ffi};
 
@@ -47,13 +47,7 @@ static ZXDG_EXPORTER_V2_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"export_toplevel".as_ptr(),
                 signature: c"no".as_ptr(),
-                types: const {
-                    [
-                        crate::ZxdgExportedV2::DEF as *const _,
-                        crate::Surface::DEF as *const _,
-                    ]
-                }
-                .as_ptr(),
+                types: const { [crate::ZxdgExportedV2::DEF, crate::Surface::DEF] }.as_ptr(),
             },
         ]
     }
@@ -65,7 +59,7 @@ static ZXDG_EXPORTER_V2_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct ZxdgExporterV2(pub(crate) Proxy);
 unsafe impl Interface for ZxdgExporterV2 {
-    const DEF: &'static ffi::Interface = &ZXDG_EXPORTER_V2_INTERFACE;
+    const DEF: *const ffi::Interface = &ZXDG_EXPORTER_V2_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -111,8 +105,7 @@ static ZXDG_IMPORTER_V2_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"import_toplevel".as_ptr(),
                 signature: c"ns".as_ptr(),
-                types: const { [crate::ZxdgImportedV2::DEF as *const _, core::ptr::null()] }
-                    .as_ptr(),
+                types: const { [crate::ZxdgImportedV2::DEF, core::ptr::null()] }.as_ptr(),
             },
         ]
     }
@@ -124,7 +117,7 @@ static ZXDG_IMPORTER_V2_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct ZxdgImporterV2(pub(crate) Proxy);
 unsafe impl Interface for ZxdgImporterV2 {
-    const DEF: &'static ffi::Interface = &ZXDG_IMPORTER_V2_INTERFACE;
+    const DEF: *const ffi::Interface = &ZXDG_IMPORTER_V2_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -176,7 +169,7 @@ static ZXDG_EXPORTED_V2_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct ZxdgExportedV2(pub(crate) Proxy);
 unsafe impl Interface for ZxdgExportedV2 {
-    const DEF: &'static ffi::Interface = &ZXDG_EXPORTED_V2_INTERFACE;
+    const DEF: *const ffi::Interface = &ZXDG_EXPORTED_V2_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -243,7 +236,7 @@ static ZXDG_IMPORTED_V2_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"set_parent_of".as_ptr(),
                 signature: c"o".as_ptr(),
-                types: const { [crate::Surface::DEF as *const _] }.as_ptr(),
+                types: const { [crate::Surface::DEF] }.as_ptr(),
             },
         ]
     }
@@ -262,7 +255,7 @@ static ZXDG_IMPORTED_V2_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct ZxdgImportedV2(pub(crate) Proxy);
 unsafe impl Interface for ZxdgImportedV2 {
-    const DEF: &'static ffi::Interface = &ZXDG_IMPORTED_V2_INTERFACE;
+    const DEF: *const ffi::Interface = &ZXDG_IMPORTED_V2_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

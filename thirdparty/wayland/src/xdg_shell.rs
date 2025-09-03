@@ -14,18 +14,12 @@ static XDG_WM_BASE_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"create_positioner".as_ptr(),
                 signature: c"n".as_ptr(),
-                types: const { [crate::XdgPositioner::DEF as *const _] }.as_ptr(),
+                types: const { [crate::XdgPositioner::DEF] }.as_ptr(),
             },
             ffi::Message {
                 name: c"get_xdg_surface".as_ptr(),
                 signature: c"no".as_ptr(),
-                types: const {
-                    [
-                        crate::XdgSurface::DEF as *const _,
-                        crate::Surface::DEF as *const _,
-                    ]
-                }
-                .as_ptr(),
+                types: const { [crate::XdgSurface::DEF, crate::Surface::DEF] }.as_ptr(),
             },
             ffi::Message {
                 name: c"pong".as_ptr(),
@@ -49,7 +43,7 @@ static XDG_WM_BASE_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct XdgWmBase(pub(crate) Proxy);
 unsafe impl Interface for XdgWmBase {
-    const DEF: &'static ffi::Interface = &XDG_WM_BASE_INTERFACE;
+    const DEF: *const ffi::Interface = &XDG_WM_BASE_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -207,7 +201,7 @@ static XDG_POSITIONER_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct XdgPositioner(pub(crate) Proxy);
 unsafe impl Interface for XdgPositioner {
-    const DEF: &'static ffi::Interface = &XDG_POSITIONER_INTERFACE;
+    const DEF: *const ffi::Interface = &XDG_POSITIONER_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -354,16 +348,16 @@ static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"get_toplevel".as_ptr(),
                 signature: c"n".as_ptr(),
-                types: const { [crate::XdgToplevel::DEF as *const _] }.as_ptr(),
+                types: const { [crate::XdgToplevel::DEF] }.as_ptr(),
             },
             ffi::Message {
                 name: c"get_popup".as_ptr(),
                 signature: c"n?oo".as_ptr(),
                 types: const {
                     [
-                        crate::XdgPopup::DEF as *const _,
+                        crate::XdgPopup::DEF,
                         &XDG_SURFACE_INTERFACE as *const _,
-                        crate::XdgPositioner::DEF as *const _,
+                        crate::XdgPositioner::DEF,
                     ]
                 }
                 .as_ptr(),
@@ -403,7 +397,7 @@ static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct XdgSurface(pub(crate) Proxy);
 unsafe impl Interface for XdgSurface {
-    const DEF: &'static ffi::Interface = &XDG_SURFACE_INTERFACE;
+    const DEF: *const ffi::Interface = &XDG_SURFACE_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -545,7 +539,7 @@ static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
                 signature: c"ouii".as_ptr(),
                 types: const {
                     [
-                        crate::Seat::DEF as *const _,
+                        crate::Seat::DEF,
                         core::ptr::null(),
                         core::ptr::null(),
                         core::ptr::null(),
@@ -556,19 +550,12 @@ static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"move".as_ptr(),
                 signature: c"ou".as_ptr(),
-                types: const { [crate::Seat::DEF as *const _, core::ptr::null()] }.as_ptr(),
+                types: const { [crate::Seat::DEF, core::ptr::null()] }.as_ptr(),
             },
             ffi::Message {
                 name: c"resize".as_ptr(),
                 signature: c"ouu".as_ptr(),
-                types: const {
-                    [
-                        crate::Seat::DEF as *const _,
-                        core::ptr::null(),
-                        core::ptr::null(),
-                    ]
-                }
-                .as_ptr(),
+                types: const { [crate::Seat::DEF, core::ptr::null(), core::ptr::null()] }.as_ptr(),
             },
             ffi::Message {
                 name: c"set_max_size".as_ptr(),
@@ -593,7 +580,7 @@ static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"set_fullscreen".as_ptr(),
                 signature: c"?o".as_ptr(),
-                types: const { [crate::Output::DEF as *const _] }.as_ptr(),
+                types: const { [crate::Output::DEF] }.as_ptr(),
             },
             ffi::Message {
                 name: c"unset_fullscreen".as_ptr(),
@@ -639,7 +626,7 @@ static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct XdgToplevel(pub(crate) Proxy);
 unsafe impl Interface for XdgToplevel {
-    const DEF: &'static ffi::Interface = &XDG_TOPLEVEL_INTERFACE;
+    const DEF: *const ffi::Interface = &XDG_TOPLEVEL_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -923,13 +910,12 @@ static XDG_POPUP_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"grab".as_ptr(),
                 signature: c"ou".as_ptr(),
-                types: const { [crate::Seat::DEF as *const _, core::ptr::null()] }.as_ptr(),
+                types: const { [crate::Seat::DEF, core::ptr::null()] }.as_ptr(),
             },
             ffi::Message {
                 name: c"reposition".as_ptr(),
                 signature: c"3ou".as_ptr(),
-                types: const { [crate::XdgPositioner::DEF as *const _, core::ptr::null()] }
-                    .as_ptr(),
+                types: const { [crate::XdgPositioner::DEF, core::ptr::null()] }.as_ptr(),
             },
         ]
     }
@@ -968,7 +954,7 @@ static XDG_POPUP_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct XdgPopup(pub(crate) Proxy);
 unsafe impl Interface for XdgPopup {
-    const DEF: &'static ffi::Interface = &XDG_POPUP_INTERFACE;
+    const DEF: *const ffi::Interface = &XDG_POPUP_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",

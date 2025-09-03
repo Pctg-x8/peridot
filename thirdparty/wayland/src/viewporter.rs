@@ -14,13 +14,7 @@ static WP_VIEWPORTER_INTERFACE: ffi::Interface = ffi::Interface {
             ffi::Message {
                 name: c"get_viewport".as_ptr(),
                 signature: c"no".as_ptr(),
-                types: const {
-                    [
-                        crate::WpViewport::DEF as *const _,
-                        crate::Surface::DEF as *const _,
-                    ]
-                }
-                .as_ptr(),
+                types: const { [crate::WpViewport::DEF, crate::Surface::DEF] }.as_ptr(),
             },
         ]
     }
@@ -32,7 +26,7 @@ static WP_VIEWPORTER_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct WpViewporter(pub(crate) Proxy);
 unsafe impl Interface for WpViewporter {
-    const DEF: &'static ffi::Interface = &WP_VIEWPORTER_INTERFACE;
+    const DEF: *const ffi::Interface = &WP_VIEWPORTER_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -103,7 +97,7 @@ static WP_VIEWPORT_INTERFACE: ffi::Interface = ffi::Interface {
 #[repr(transparent)]
 pub struct WpViewport(pub(crate) Proxy);
 unsafe impl Interface for WpViewport {
-    const DEF: &'static ffi::Interface = &WP_VIEWPORT_INTERFACE;
+    const DEF: *const ffi::Interface = &WP_VIEWPORT_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
