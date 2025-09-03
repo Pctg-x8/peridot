@@ -1,6 +1,6 @@
 #[macro_export]
 macro_rules! EventFnTable {
-    { for $tyvar: ident : $tr: path { $($name: ident ( $($an: ident: $act: ty => $aconv: expr),* )),* } } => {
+    { for $tyvar: ident : $tr: path { $($name: ident ( $($an: ident: $act: ty => $aconv: expr),* $(,)? )),* $(,)? } } => {
         {
             $(extern "C" fn $name<L: $tr>(
                 data_: *mut core::ffi::c_void,

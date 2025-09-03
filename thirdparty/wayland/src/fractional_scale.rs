@@ -1,13 +1,54 @@
-use crate::{EventFnTable, Owned};
+//! fractional_scale_v1: Protocol for requesting fractional surface scales
+//!
+//! This protocol allows a compositor to suggest for surfaces to render at
+//! fractional scales.
+//!
+//! A client can submit scaled content by utilizing wp_viewport. This is done by
+//! creating a wp_viewport object for the surface and setting the destination
+//! rectangle to the surface size before the scale factor is applied.
+//!
+//! The buffer size is calculated by multiplying the surface size by the
+//! intended scale.
+//!
+//! The wl_surface buffer scale should remain set to 1.
+//!
+//! If a surface has a surface-local size of 100 px by 50 px and wishes to
+//! submit buffers with a scale of 1.5, then a buffer of 150px by 75 px should
+//! be used and the wp_viewport destination rectangle should be 100 px by 50 px.
+//!
+//! For toplevel surfaces, the size is rounded halfway away from zero. The
+//! rounding algorithm for subsurface position and size is not defined.
+//!
 
-use super::{ffi, interface, message};
+use crate::{Interface, Proxy, ffi};
+
+static WP_FRACTIONAL_SCALE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"wp_fractional_scale_manager_v1".as_ptr(),
+    version: 1,
+    method_count: 2,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"get_fractional_scale".as_ptr(),
+                signature: c"no".as_ptr(),
+                types: const { [crate::WpFractionalScaleV1::DEF, crate::Surface::DEF] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 0,
+    events: const { [] }.as_ptr(),
+};
 
 #[repr(transparent)]
-pub struct WpFractionalScaleManagerV1(super::Proxy);
-unsafe impl super::Interface for WpFractionalScaleManagerV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+pub struct WpFractionalScaleManagerV1(pub(crate) Proxy);
+unsafe impl Interface for WpFractionalScaleManagerV1 {
+    const DEF: *const ffi::Interface = &WP_FRACTIONAL_SCALE_MANAGER_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -20,50 +61,55 @@ unsafe impl super::Interface for WpFractionalScaleManagerV1 {
         self.0.call_simple_dtor(0);
     }
 }
-impl WpFractionalScaleManagerV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_fractional_scale_manager_v1",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(
-                c"get_fractional_scale",
-                c"no",
-                &[
-                    const { WpFractionalScaleV1::INTERFACE },
-                    const { unsafe { &super::wl_surface_interface } },
-                ],
-            ),
-        ],
-        &[],
-    );
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(
-        name = "WpFractionalScaleManagerV1::get_fractional_scale",
-        skip(self, surface),
-        err(level = tracing::Level::WARN)
-    ))]
+impl WpFractionalScaleManagerV1 {
+    #[inline]
     pub fn get_fractional_scale(
         &self,
-        surface: &super::Surface,
-    ) -> Result<Owned<WpFractionalScaleV1>, std::io::Error> {
+        surface: &crate::Surface,
+    ) -> crate::Result<crate::Owned<crate::WpFractionalScaleV1>> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [super::NEWID_ARG, surface.0.as_arg()],
-            )?)
+            crate::Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [crate::NEWID_ARG, surface.0.as_arg()])?,
+            )
         })
     }
 }
 
-#[repr(transparent)]
-pub struct WpFractionalScaleV1(super::Proxy);
-unsafe impl super::Interface for WpFractionalScaleV1 {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WpFractionalScaleManagerV1Error {
+    FractionalScaleExists = 0,
+}
+
+static WP_FRACTIONAL_SCALE_V1_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"wp_fractional_scale_v1".as_ptr(),
+    version: 1,
+    method_count: 1,
+    methods: const {
+        [ffi::Message {
+            name: c"destroy".as_ptr(),
+            signature: c"".as_ptr(),
+            types: const { [] }.as_ptr(),
+        }]
     }
+    .as_ptr(),
+    event_count: 1,
+    events: const {
+        [ffi::Message {
+            name: c"preferred_scale".as_ptr(),
+            signature: c"u".as_ptr(),
+            types: const { [core::ptr::null()] }.as_ptr(),
+        }]
+    }
+    .as_ptr(),
+};
+
+#[repr(transparent)]
+pub struct WpFractionalScaleV1(pub(crate) Proxy);
+unsafe impl Interface for WpFractionalScaleV1 {
+    const DEF: *const ffi::Interface = &WP_FRACTIONAL_SCALE_V1_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -73,23 +119,36 @@ unsafe impl super::Interface for WpFractionalScaleV1 {
         self.0.call_simple_dtor(0);
     }
 }
-impl WpFractionalScaleV1 {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_fractional_scale_v1",
-        1,
-        &[message(c"destroy", c"", &[])],
-        &[message(c"preferred_scale", c"u", &[])],
-    );
 
+impl WpFractionalScaleV1 {
     pub fn set_listener<'l, L: WpFractionalScaleV1EventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
-    ) -> Result<(), ()> {
+    ) -> crate::SetListenerResult {
+        extern "C" fn preferred_scale<L: WpFractionalScaleV1EventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            scale: u32,
+        ) {
+            L::preferred_scale(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                scale,
+            )
+        }
+
+        #[repr(C)]
+        struct FPTable {
+            preferred_scale:
+                extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy, scale: u32),
+        }
         unsafe {
             self.0.set_listener(
-                EventFnTable!(for L: WpFractionalScaleV1EventListener {
-                    preferred_scale(scale: u32 => scale)
-                }) as *const _ as _,
+                &const {
+                    FPTable {
+                        preferred_scale: preferred_scale::<L>,
+                    }
+                } as &'static FPTable as *const _ as _,
                 listener as *mut _ as _,
             )
         }
@@ -97,8 +156,5 @@ impl WpFractionalScaleV1 {
 }
 
 pub trait WpFractionalScaleV1EventListener {
-    /// Notification of a new preferred scale for this surface that the compositor suggests that the client should use.
-    ///
-    /// The sent scale is the numerator of a fraction with a denominator of 120.
-    fn preferred_scale(&mut self, object: &mut WpFractionalScaleV1, scale: u32);
+    fn preferred_scale(&mut self, sender: &mut WpFractionalScaleV1, scale: u32);
 }

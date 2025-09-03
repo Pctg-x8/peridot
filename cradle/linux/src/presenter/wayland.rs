@@ -57,7 +57,7 @@ impl wl::ZxdgToplevelDecorationV1EventListener for State {
     fn configure(
         &mut self,
         _sender: &mut peridot_tp_wayland::ZxdgToplevelDecorationV1,
-        _mode: peridot_tp_wayland::ZxdgToplevelDecorationMode,
+        _mode: peridot_tp_wayland::ZxdgToplevelDecorationV1Mode,
     ) {
     }
 }
@@ -94,15 +94,16 @@ impl wl::XdgSurfaceEventListener for State {
 impl wl::XdgToplevelEventListener for State {
     #[tracing::instrument(
         name = "<State as XdgToplevelEventListener>::configure",
-        skip(self, _toplevel)
+        skip(self, _toplevel, states)
     )]
     fn configure(
         &mut self,
         _toplevel: &mut peridot_tp_wayland::XdgToplevel,
         width: i32,
         height: i32,
-        states: &[i32],
+        states: &mut wl::ffi::Array,
     ) {
+        let states = unsafe { core::slice::from_raw_parts(states.data as _, states.size) };
         tracing::trace!(width, height, ?states, "configure xdgtoplevel");
 
         if width > 0 && height > 0 {
@@ -125,7 +126,7 @@ impl wl::XdgToplevelEventListener for State {
     fn wm_capabilities(
         &mut self,
         _toplevel: &mut peridot_tp_wayland::XdgToplevel,
-        _capabilities: &[i32],
+        _capabilities: &mut wl::ffi::Array,
     ) {
     }
 }
@@ -273,10 +274,7 @@ impl Wayland {
                 std::process::abort();
             }
         };
-        err_warn!(
-            registry.set_listener(&mut interfaces),
-            "registry set_listener failed"
-        );
+        let _ = registry.set_listener(&mut interfaces);
         err_warn!(con.roundtrip(), "roundtrip failed");
 
         let mut state = Box::pin(State {
@@ -290,32 +288,20 @@ impl Wayland {
             "No compositor interface found"
         );
         let mut surface = err_fatal_bailout!(compositor.create_surface(), "create_surface failed");
-        err_warn!(
-            surface.set_listener(&mut *state),
-            "surface set_listener failed"
-        );
+        let _ = surface.set_listener(&mut *state);
         let mut xdg_wm_base = err_fatal_bailout!(
             opt err_fatal_bailout!(interfaces.bind_interface::<wl::XdgWmBase>(&registry), "Failed to bind interface"),
             "No xdg_wm_base interface found"
         );
-        err_warn!(
-            xdg_wm_base.set_listener(&mut *state),
-            "xdg_wm_base set_listener failed"
-        );
+        let _ = xdg_wm_base.set_listener(&mut *state);
         let mut xdg_surface = err_fatal_bailout!(
             xdg_wm_base.get_xdg_surface(&surface),
             "get_xdg_surface failed"
         );
-        err_warn!(
-            xdg_surface.set_listener(&mut *state),
-            "xdg_surface set_listener failed"
-        );
+        let _ = xdg_surface.set_listener(&mut *state);
         let mut xdg_toplevel =
             err_fatal_bailout!(xdg_surface.get_toplevel(), "get_toplevel failed");
-        err_warn!(
-            xdg_toplevel.set_listener(&mut *state),
-            "xdg_toplevel set_listener failed"
-        );
+        let _ = xdg_toplevel.set_listener(&mut *state);
         err_warn!(
             xdg_surface.set_window_geometry(0, 0, 640, 480),
             "set_window_geometry failed"
@@ -356,12 +342,9 @@ impl Wayland {
             opt err_fatal_bailout!(interfaces.bind_interface::<wl::Seat>(&registry), "Failed to bind interface"),
             "No seat interface found"
         );
-        err_warn!(seat.set_listener(&mut *state), "seat set_listener failed");
+        let _ = seat.set_listener(&mut *state);
         let mut pointer = err_fatal_bailout!(seat.get_pointer(), "seat get_pointer failed");
-        err_warn!(
-            pointer.set_listener(&mut *state),
-            "pointer set_listener failed"
-        );
+        let _ = pointer.set_listener(&mut *state);
 
         err_warn!(con.roundtrip(), "Failed to final roundtrip");
 
@@ -599,7 +582,7 @@ impl RegistryCollector {
         I: wl::Interface,
     {
         self.0
-            .get(unsafe { core::ffi::CStr::from_ptr(I::def().name) })
+            .get(unsafe { core::ffi::CStr::from_ptr((*I::DEF).name) })
             .map(|&(name, version)| registry.bind(name, version))
             .transpose()
     }
@@ -607,7 +590,7 @@ impl RegistryCollector {
 impl wl::RegistryListener for RegistryCollector {
     fn global(
         &mut self,
-        _registry: &mut peridot_tp_wayland::Registry,
+        _registry: &mut wl::Registry,
         name: u32,
         interface: &core::ffi::CStr,
         version: u32,

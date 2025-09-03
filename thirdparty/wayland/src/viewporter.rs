@@ -1,11 +1,32 @@
-use super::{Interface, NEWID_ARG, Owned, Proxy, ffi, interface, message, wl_surface_interface};
+use crate::{Interface, Proxy, ffi};
+
+static WP_VIEWPORTER_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"wp_viewporter".as_ptr(),
+    version: 1,
+    method_count: 2,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"get_viewport".as_ptr(),
+                signature: c"no".as_ptr(),
+                types: const { [crate::WpViewport::DEF, crate::Surface::DEF] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 0,
+    events: const { [] }.as_ptr(),
+};
 
 #[repr(transparent)]
-pub struct WpViewporter(Proxy);
+pub struct WpViewporter(pub(crate) Proxy);
 unsafe impl Interface for WpViewporter {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
-    }
+    const DEF: *const ffi::Interface = &WP_VIEWPORTER_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -15,46 +36,68 @@ unsafe impl Interface for WpViewporter {
         self.0.call_simple_dtor(0);
     }
 }
-impl WpViewporter {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_viewporter",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(
-                c"get_viewport",
-                c"no",
-                &[
-                    WpViewport::INTERFACE,
-                    const { unsafe { &wl_surface_interface } },
-                ],
-            ),
-        ],
-        &[],
-    );
 
+impl WpViewporter {
     #[inline]
     pub fn get_viewport(
         &self,
-        surface: &super::Surface,
-    ) -> Result<Owned<WpViewport>, std::io::Error> {
+        surface: &crate::Surface,
+    ) -> crate::Result<crate::Owned<crate::WpViewport>> {
         Ok(unsafe {
-            Owned::wrap_unchecked(self.0.marshal_array_flags_typed(
-                1,
-                self.0.version(),
-                0,
-                &mut [NEWID_ARG, surface.0.as_arg()],
-            )?)
+            crate::Owned::wrap_unchecked(
+                self.0
+                    .marshal_array_typed(1, &mut [crate::NEWID_ARG, surface.0.as_arg()])?,
+            )
         })
     }
 }
 
-#[repr(transparent)]
-pub struct WpViewport(Proxy);
-unsafe impl Interface for WpViewport {
-    fn def() -> &'static ffi::Interface {
-        Self::INTERFACE
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WpViewporterError {
+    ViewportExists = 0,
+}
+
+static WP_VIEWPORT_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"wp_viewport".as_ptr(),
+    version: 1,
+    method_count: 3,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_source".as_ptr(),
+                signature: c"ffff".as_ptr(),
+                types: const {
+                    [
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_destination".as_ptr(),
+                signature: c"ii".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+        ]
     }
+    .as_ptr(),
+    event_count: 0,
+    events: const { [] }.as_ptr(),
+};
+
+#[repr(transparent)]
+pub struct WpViewport(pub(crate) Proxy);
+unsafe impl Interface for WpViewport {
+    const DEF: *const ffi::Interface = &WP_VIEWPORT_INTERFACE;
 
     #[cfg_attr(
         feature = "tracing",
@@ -64,52 +107,41 @@ unsafe impl Interface for WpViewport {
         self.0.call_simple_dtor(0);
     }
 }
-impl WpViewport {
-    const INTERFACE: &'static ffi::Interface = &interface(
-        c"wp_viewport",
-        1,
-        &[
-            message(c"destroy", c"", &[]),
-            message(c"set_source", c"ffff", &[]),
-            message(c"set_destination", c"ii", &[]),
-        ],
-        &[],
-    );
 
+impl WpViewport {
     #[inline]
     pub fn set_source(
         &self,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-    ) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+        x: crate::Fixed,
+        y: crate::Fixed,
+        width: crate::Fixed,
+        height: crate::Fixed,
+    ) -> crate::Result<()> {
+        self.0.marshal_array_void(
             1,
-            0,
             &mut [
-                ffi::Argument {
-                    f: ffi::Fixed::from_f32_lossy(x),
-                },
-                ffi::Argument {
-                    f: ffi::Fixed::from_f32_lossy(y),
-                },
-                ffi::Argument {
-                    f: ffi::Fixed::from_f32_lossy(width),
-                },
-                ffi::Argument {
-                    f: ffi::Fixed::from_f32_lossy(height),
-                },
+                ffi::Argument { f: x },
+                ffi::Argument { f: y },
+                ffi::Argument { f: width },
+                ffi::Argument { f: height },
             ],
         )
     }
 
     #[inline]
-    pub fn set_destination(&self, width: i32, height: i32) -> Result<(), std::io::Error> {
-        self.0.marshal_array_flags_void(
+    pub fn set_destination(&self, width: i32, height: i32) -> crate::Result<()> {
+        self.0.marshal_array_void(
             2,
-            0,
             &mut [ffi::Argument { i: width }, ffi::Argument { i: height }],
         )
     }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WpViewportError {
+    BadValue = 0,
+    BadSize = 1,
+    OutOfBuffer = 2,
+    NoSurface = 3,
 }
