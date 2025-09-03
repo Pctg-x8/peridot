@@ -14,10 +14,11 @@ tracing = ["dep:tracing"]
 # stable
 viewporter = []
 xdg-shell = []
+tablet-v2 = []
 
 # staging
 fractional-scale-v1 = []
-cursor-shape-v1 = []
+cursor-shape-v1 = ["tablet-v2"]
 
 # unstable
 xdg-decoration-unstable-v1 = []

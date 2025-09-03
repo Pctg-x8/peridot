@@ -40,6 +40,12 @@ impl SetListenerResult {
 #[repr(transparent)]
 pub struct Proxy(UnsafeCell<ffi::Proxy>);
 impl Proxy {
+    /// Castable safely
+    #[inline(always)]
+    pub(crate) const fn cast_ffi_ptr(ptr: *mut ffi::Proxy) -> *mut Self {
+        ptr.cast()
+    }
+
     #[inline(always)]
     pub const unsafe fn from_raw_ptr_unchecked<'a>(ptr: *mut ffi::Proxy) -> &'a mut Self {
         unsafe { Self::from_raw_ref_mut(&mut *ptr) }
@@ -178,7 +184,7 @@ pub unsafe trait Interface {
     where
         Self: Sized,
     {
-        unsafe { core::mem::transmute(p) }
+        p.cast()
     }
 
     unsafe fn destruct(&mut self) {
@@ -1275,6 +1281,7 @@ macro_rules! Ext {
 // stable
 Ext!("viewporter", viewporter);
 Ext!("xdg-shell", xdg_shell);
+Ext!("tablet-v2", tablet);
 
 // staging
 Ext!("fractional-scale-v1", fractional_scale);

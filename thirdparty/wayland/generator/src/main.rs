@@ -103,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // println!("** {}.rs", proto.name);
     if let Some(ref d) = proto.description {
-        println!("//! {}", d.summary);
+        println!("//! {}: {}", proto.name, d.summary);
         let lines = d.content.lines().collect::<Vec<_>>();
         if lines.len() > 1 {
             let common_prefix = lines
@@ -425,29 +425,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     (Some(o), None, "object", false) => {
                         type_chars.push_str("o");
-                        let _ = write!(listener_trait_args, "{arg_name_ident}: {o},");
+                        let _ = write!(
+                            listener_trait_args,
+                            "{arg_name_ident}: &mut {},",
+                            if_name_to_typeref(o)
+                        );
                         let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
                         let _ = write!(
                             listener_arg_conversions,
-                            "unsafe {{ {o}::from_proxy_ptr_unchecked(core::ptr::NonNull::new_unchecked({arg_name_ident})) }},"
+                            "unsafe {{ &mut *({arg_name_ident} as *mut _) }},"
                         );
                     }
                     (Some(o), None, "object", true) => {
                         type_chars.push_str("?o");
-                        let _ = write!(listener_trait_args, "{arg_name_ident}: Option<{o}>,");
+                        let _ = write!(
+                            listener_trait_args,
+                            "{arg_name_ident}: Option<&mut {}>,",
+                            if_name_to_typeref(o)
+                        );
                         let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
                         let _ = write!(
                             listener_arg_conversions,
-                            "core::ptr::NonNull::new({arg_name_ident}).map(|p| unsafe {{ {o}::from_proxy_ptr_unchecked(p) }}),"
+                            "if {arg_name_ident}.is_null() {{ None }} else {{ Some(unsafe {{ &mut *({arg_name_ident} as *mut _) }}) }},",
                         );
                     }
                     (Some(o), None, "new_id", false) => {
                         type_chars.push_str("n");
-                        let _ = write!(listener_trait_args, "{arg_name_ident}: crate::Owned<{o}>,");
+                        let _ = write!(
+                            listener_trait_args,
+                            "{arg_name_ident}: crate::Owned<{}>,",
+                            if_name_to_typeref(o)
+                        );
                         let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
                         let _ = write!(
                             listener_arg_conversions,
-                            "unsafe {{ crate::Owned::from_untyped_unchecked(core::ptr::NonNull::new_unchecked({arg_name_ident})) }},"
+                            "unsafe {{ crate::Owned::from_untyped_unchecked(core::ptr::NonNull::new_unchecked(crate::Proxy::cast_ffi_ptr({arg_name_ident}))) }},"
                         );
                     }
                     (None, None, "array", false) => {
