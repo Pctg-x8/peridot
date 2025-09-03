@@ -1,20 +1,50 @@
-use crate::{Interface, Proxy, ffi, interface, message};
+use crate::{Interface, Proxy, ffi};
 
-static XDG_WM_BASE_INTERFACE: ffi::Interface = interface(
-    c"xdg_wm_base",
-    7,
-    &[
-        message(c"destroy", c"", &[]),
-        message(c"create_positioner", c"n", &[crate::XdgPositioner::DEF]),
-        message(
-            c"get_xdg_surface",
-            c"no",
-            &[crate::XdgSurface::DEF, crate::Surface::DEF],
-        ),
-        message(c"pong", c"u", &[core::ptr::null()]),
-    ],
-    &[message(c"ping", c"u", &[core::ptr::null()])],
-);
+static XDG_WM_BASE_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"xdg_wm_base".as_ptr(),
+    version: 7,
+    method_count: 4,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"create_positioner".as_ptr(),
+                signature: c"n".as_ptr(),
+                types: const { [crate::XdgPositioner::DEF as *const _] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"get_xdg_surface".as_ptr(),
+                signature: c"no".as_ptr(),
+                types: const {
+                    [
+                        crate::XdgSurface::DEF as *const _,
+                        crate::Surface::DEF as *const _,
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"pong".as_ptr(),
+                signature: c"u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 1,
+    events: const {
+        [ffi::Message {
+            name: c"ping".as_ptr(),
+            signature: c"u".as_ptr(),
+            types: const { [core::ptr::null()] }.as_ptr(),
+        }]
+    }
+    .as_ptr(),
+};
 
 #[repr(transparent)]
 pub struct XdgWmBase(pub(crate) Proxy);
@@ -35,12 +65,26 @@ impl XdgWmBase {
         &'l mut self,
         listener: &'l mut L,
     ) -> crate::SetListenerResult {
+        extern "C" fn ping<L: XdgWmBaseEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            serial: u32,
+        ) {
+            L::ping(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                serial,
+            )
+        }
+
+        #[repr(C)]
+        struct FPTable {
+            ping:
+                extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy, serial: u32),
+        }
         unsafe {
             self.0.set_listener(
-                crate::EventFnTable!(for L: XdgWmBaseEventListener {
-                    ping(serial: u32 => serial,),
-
-                }) as *const _ as _,
+                &const { FPTable { ping: ping::<L> } } as &'static FPTable as *const _ as _,
                 listener as *mut _ as _,
             )
         }
@@ -89,40 +133,76 @@ pub enum XdgWmBaseError {
     Unresponsive = 6,
 }
 
-static XDG_POSITIONER_INTERFACE: ffi::Interface = interface(
-    c"xdg_positioner",
-    7,
-    &[
-        message(c"destroy", c"", &[]),
-        message(c"set_size", c"ii", &[core::ptr::null(), core::ptr::null()]),
-        message(
-            c"set_anchor_rect",
-            c"iiii",
-            &[
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-            ],
-        ),
-        message(c"set_anchor", c"u", &[core::ptr::null()]),
-        message(c"set_gravity", c"u", &[core::ptr::null()]),
-        message(c"set_constraint_adjustment", c"u", &[core::ptr::null()]),
-        message(
-            c"set_offset",
-            c"ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
-        message(c"set_reactive", c"3", &[]),
-        message(
-            c"set_parent_size",
-            c"3ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
-        message(c"set_parent_configure", c"3u", &[core::ptr::null()]),
-    ],
-    &[],
-);
+static XDG_POSITIONER_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"xdg_positioner".as_ptr(),
+    version: 7,
+    method_count: 10,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_size".as_ptr(),
+                signature: c"ii".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_anchor_rect".as_ptr(),
+                signature: c"iiii".as_ptr(),
+                types: const {
+                    [
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_anchor".as_ptr(),
+                signature: c"u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_gravity".as_ptr(),
+                signature: c"u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_constraint_adjustment".as_ptr(),
+                signature: c"u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_offset".as_ptr(),
+                signature: c"ii".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_reactive".as_ptr(),
+                signature: c"3".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_parent_size".as_ptr(),
+                signature: c"3ii".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_parent_configure".as_ptr(),
+                signature: c"3u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 0,
+    events: const { [] }.as_ptr(),
+};
 
 #[repr(transparent)]
 pub struct XdgPositioner(pub(crate) Proxy);
@@ -260,35 +340,65 @@ pub enum XdgPositionerConstraintAdjustment {
     ResizeY = 32,
 }
 
-static XDG_SURFACE_INTERFACE: ffi::Interface = interface(
-    c"xdg_surface",
-    7,
-    &[
-        message(c"destroy", c"", &[]),
-        message(c"get_toplevel", c"n", &[crate::XdgToplevel::DEF]),
-        message(
-            c"get_popup",
-            c"n?oo",
-            &[
-                crate::XdgPopup::DEF,
-                &XDG_SURFACE_INTERFACE,
-                crate::XdgPositioner::DEF,
-            ],
-        ),
-        message(
-            c"set_window_geometry",
-            c"iiii",
-            &[
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-            ],
-        ),
-        message(c"ack_configure", c"u", &[core::ptr::null()]),
-    ],
-    &[message(c"configure", c"u", &[core::ptr::null()])],
-);
+static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"xdg_surface".as_ptr(),
+    version: 7,
+    method_count: 5,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"get_toplevel".as_ptr(),
+                signature: c"n".as_ptr(),
+                types: const { [crate::XdgToplevel::DEF as *const _] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"get_popup".as_ptr(),
+                signature: c"n?oo".as_ptr(),
+                types: const {
+                    [
+                        crate::XdgPopup::DEF as *const _,
+                        &XDG_SURFACE_INTERFACE as *const _,
+                        crate::XdgPositioner::DEF as *const _,
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_window_geometry".as_ptr(),
+                signature: c"iiii".as_ptr(),
+                types: const {
+                    [
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"ack_configure".as_ptr(),
+                signature: c"u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 1,
+    events: const {
+        [ffi::Message {
+            name: c"configure".as_ptr(),
+            signature: c"u".as_ptr(),
+            types: const { [core::ptr::null()] }.as_ptr(),
+        }]
+    }
+    .as_ptr(),
+};
 
 #[repr(transparent)]
 pub struct XdgSurface(pub(crate) Proxy);
@@ -309,12 +419,30 @@ impl XdgSurface {
         &'l mut self,
         listener: &'l mut L,
     ) -> crate::SetListenerResult {
+        extern "C" fn configure<L: XdgSurfaceEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            serial: u32,
+        ) {
+            L::configure(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                serial,
+            )
+        }
+
+        #[repr(C)]
+        struct FPTable {
+            configure:
+                extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy, serial: u32),
+        }
         unsafe {
             self.0.set_listener(
-                crate::EventFnTable!(for L: XdgSurfaceEventListener {
-                    configure(serial: u32 => serial,),
-
-                }) as *const _ as _,
+                &const {
+                    FPTable {
+                        configure: configure::<L>,
+                    }
+                } as &'static FPTable as *const _ as _,
                 listener as *mut _ as _,
             )
         }
@@ -386,61 +514,127 @@ pub enum XdgSurfaceError {
     DefunctRoleObject = 6,
 }
 
-static XDG_TOPLEVEL_INTERFACE: ffi::Interface = interface(
-    c"xdg_toplevel",
-    7,
-    &[
-        message(c"destroy", c"", &[]),
-        message(c"set_parent", c"?o", &[&XDG_TOPLEVEL_INTERFACE]),
-        message(c"set_title", c"s", &[core::ptr::null()]),
-        message(c"set_app_id", c"s", &[core::ptr::null()]),
-        message(
-            c"show_window_menu",
-            c"ouii",
-            &[
-                crate::Seat::DEF,
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-            ],
-        ),
-        message(c"move", c"ou", &[crate::Seat::DEF, core::ptr::null()]),
-        message(
-            c"resize",
-            c"ouu",
-            &[crate::Seat::DEF, core::ptr::null(), core::ptr::null()],
-        ),
-        message(
-            c"set_max_size",
-            c"ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
-        message(
-            c"set_min_size",
-            c"ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
-        message(c"set_maximized", c"", &[]),
-        message(c"unset_maximized", c"", &[]),
-        message(c"set_fullscreen", c"?o", &[crate::Output::DEF]),
-        message(c"unset_fullscreen", c"", &[]),
-        message(c"set_minimized", c"", &[]),
-    ],
-    &[
-        message(
-            c"configure",
-            c"iia",
-            &[core::ptr::null(), core::ptr::null(), core::ptr::null()],
-        ),
-        message(c"close", c"", &[]),
-        message(
-            c"configure_bounds",
-            c"4ii",
-            &[core::ptr::null(), core::ptr::null()],
-        ),
-        message(c"wm_capabilities", c"5a", &[core::ptr::null()]),
-    ],
-);
+static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"xdg_toplevel".as_ptr(),
+    version: 7,
+    method_count: 14,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_parent".as_ptr(),
+                signature: c"?o".as_ptr(),
+                types: const { [&XDG_TOPLEVEL_INTERFACE as *const _] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_title".as_ptr(),
+                signature: c"s".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_app_id".as_ptr(),
+                signature: c"s".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"show_window_menu".as_ptr(),
+                signature: c"ouii".as_ptr(),
+                types: const {
+                    [
+                        crate::Seat::DEF as *const _,
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"move".as_ptr(),
+                signature: c"ou".as_ptr(),
+                types: const { [crate::Seat::DEF as *const _, core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"resize".as_ptr(),
+                signature: c"ouu".as_ptr(),
+                types: const {
+                    [
+                        crate::Seat::DEF as *const _,
+                        core::ptr::null(),
+                        core::ptr::null(),
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_max_size".as_ptr(),
+                signature: c"ii".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_min_size".as_ptr(),
+                signature: c"ii".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_maximized".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"unset_maximized".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_fullscreen".as_ptr(),
+                signature: c"?o".as_ptr(),
+                types: const { [crate::Output::DEF as *const _] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"unset_fullscreen".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"set_minimized".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 4,
+    events: const {
+        [
+            ffi::Message {
+                name: c"configure".as_ptr(),
+                signature: c"iia".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"close".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"configure_bounds".as_ptr(),
+                signature: c"4ii".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"wm_capabilities".as_ptr(),
+                signature: c"5a".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+};
 
 #[repr(transparent)]
 pub struct XdgToplevel(pub(crate) Proxy);
@@ -461,15 +655,86 @@ impl XdgToplevel {
         &'l mut self,
         listener: &'l mut L,
     ) -> crate::SetListenerResult {
+        extern "C" fn configure<L: XdgToplevelEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            width: i32,
+            height: i32,
+            states: *mut ffi::Array,
+        ) {
+            L::configure(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                width,
+                height,
+                unsafe { &mut *states },
+            )
+        }
+        extern "C" fn close<L: XdgToplevelEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+        ) {
+            L::close(unsafe { &mut *(data0 as *mut _) }, unsafe {
+                &mut *(sender0 as *mut _)
+            })
+        }
+        extern "C" fn configure_bounds<L: XdgToplevelEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            width: i32,
+            height: i32,
+        ) {
+            L::configure_bounds(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                width,
+                height,
+            )
+        }
+        extern "C" fn wm_capabilities<L: XdgToplevelEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            capabilities: *mut ffi::Array,
+        ) {
+            L::wm_capabilities(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                unsafe { &mut *capabilities },
+            )
+        }
+
+        #[repr(C)]
+        struct FPTable {
+            configure: extern "C" fn(
+                data0: *mut core::ffi::c_void,
+                sender0: *mut ffi::Proxy,
+                width: i32,
+                height: i32,
+                states: *mut ffi::Array,
+            ),
+            close: extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy),
+            configure_bounds: extern "C" fn(
+                data0: *mut core::ffi::c_void,
+                sender0: *mut ffi::Proxy,
+                width: i32,
+                height: i32,
+            ),
+            wm_capabilities: extern "C" fn(
+                data0: *mut core::ffi::c_void,
+                sender0: *mut ffi::Proxy,
+                capabilities: *mut ffi::Array,
+            ),
+        }
         unsafe {
             self.0.set_listener(
-                crate::EventFnTable!(for L: XdgToplevelEventListener {
-                    configure(width: i32 => width,height: i32 => height,states: *mut ffi::Array => unsafe { &mut *states },),
-                    close(),
-                    configure_bounds(width: i32 => width,height: i32 => height,),
-                    wm_capabilities(capabilities: *mut ffi::Array => unsafe { &mut *capabilities },),
-
-                }) as *const _ as _,
+                &const {
+                    FPTable {
+                        configure: configure::<L>,
+                        close: close::<L>,
+                        configure_bounds: configure_bounds::<L>,
+                        wm_capabilities: wm_capabilities::<L>,
+                    }
+                } as &'static FPTable as *const _ as _,
                 listener as *mut _ as _,
             )
         }
@@ -644,33 +909,61 @@ pub enum XdgToplevelWmCapabilities {
     Minimize = 4,
 }
 
-static XDG_POPUP_INTERFACE: ffi::Interface = interface(
-    c"xdg_popup",
-    7,
-    &[
-        message(c"destroy", c"", &[]),
-        message(c"grab", c"ou", &[crate::Seat::DEF, core::ptr::null()]),
-        message(
-            c"reposition",
-            c"3ou",
-            &[crate::XdgPositioner::DEF, core::ptr::null()],
-        ),
-    ],
-    &[
-        message(
-            c"configure",
-            c"iiii",
-            &[
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-                core::ptr::null(),
-            ],
-        ),
-        message(c"popup_done", c"", &[]),
-        message(c"repositioned", c"3u", &[core::ptr::null()]),
-    ],
-);
+static XDG_POPUP_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"xdg_popup".as_ptr(),
+    version: 7,
+    method_count: 3,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"grab".as_ptr(),
+                signature: c"ou".as_ptr(),
+                types: const { [crate::Seat::DEF as *const _, core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"reposition".as_ptr(),
+                signature: c"3ou".as_ptr(),
+                types: const { [crate::XdgPositioner::DEF as *const _, core::ptr::null()] }
+                    .as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 3,
+    events: const {
+        [
+            ffi::Message {
+                name: c"configure".as_ptr(),
+                signature: c"iiii".as_ptr(),
+                types: const {
+                    [
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                    ]
+                }
+                .as_ptr(),
+            },
+            ffi::Message {
+                name: c"popup_done".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"repositioned".as_ptr(),
+                signature: c"3u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+};
 
 #[repr(transparent)]
 pub struct XdgPopup(pub(crate) Proxy);
@@ -691,14 +984,66 @@ impl XdgPopup {
         &'l mut self,
         listener: &'l mut L,
     ) -> crate::SetListenerResult {
+        extern "C" fn configure<L: XdgPopupEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+        ) {
+            L::configure(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                x,
+                y,
+                width,
+                height,
+            )
+        }
+        extern "C" fn popup_done<L: XdgPopupEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+        ) {
+            L::popup_done(unsafe { &mut *(data0 as *mut _) }, unsafe {
+                &mut *(sender0 as *mut _)
+            })
+        }
+        extern "C" fn repositioned<L: XdgPopupEventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            token: u32,
+        ) {
+            L::repositioned(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                token,
+            )
+        }
+
+        #[repr(C)]
+        struct FPTable {
+            configure: extern "C" fn(
+                data0: *mut core::ffi::c_void,
+                sender0: *mut ffi::Proxy,
+                x: i32,
+                y: i32,
+                width: i32,
+                height: i32,
+            ),
+            popup_done: extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy),
+            repositioned:
+                extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy, token: u32),
+        }
         unsafe {
             self.0.set_listener(
-                crate::EventFnTable!(for L: XdgPopupEventListener {
-                    configure(x: i32 => x,y: i32 => y,width: i32 => width,height: i32 => height,),
-                    popup_done(),
-                    repositioned(token: u32 => token,),
-
-                }) as *const _ as _,
+                &const {
+                    FPTable {
+                        configure: configure::<L>,
+                        popup_done: popup_done::<L>,
+                        repositioned: repositioned::<L>,
+                    }
+                } as &'static FPTable as *const _ as _,
                 listener as *mut _ as _,
             )
         }

@@ -126,21 +126,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("//! {}\n//!\n//! {}", d.summary, d.content);
     }
 
-    println!("use crate::{{ffi, Proxy, Interface, interface, message}};");
+    println!("use crate::{{ffi, Proxy, Interface}};");
     println!("");
 
     for x in proto.interfaces.iter() {
         let if_static_var_name = if_static_name(&x.name);
         let type_name = if_name_to_type_name(&x.name);
+        let event_listener_trait_name = format!("{type_name}EventListener");
 
         let mut if_request_messages = String::new();
         let mut request_wrappers = String::new();
-        let mut if_event_messages = String::new();
-        let mut listener_trait_members = String::new();
-        let mut listener_fn_table_members = String::new();
         let mut destructor = None;
         for (n, r) in x.requests.iter().enumerate() {
-            let request_name_ident = kw_escape(&r.name);
+            let request_name = &r.name;
+            let request_name_ident = kw_escape(request_name);
 
             let mut type_chars = String::with_capacity(r.args.len());
             let mut if_pointers = String::new();
@@ -166,14 +165,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 type_chars.push(wl_typechar(&a.r#type));
                 match a.interface {
                     Some(ref t) if t == &x.name => {
-                        let _ = write!(if_pointers, "&{if_static_var_name},");
+                        let _ = write!(if_pointers, "&{if_static_var_name} as *const _,");
                     }
                     Some(ref t) => {
                         if let Some(s) = t.strip_prefix("wl_") {
                             // special case for base interfaces
-                            let _ = write!(if_pointers, "crate::{}::DEF,", if_name_to_type_name(s));
+                            let _ = write!(
+                                if_pointers,
+                                "crate::{}::DEF as *const _,",
+                                if_name_to_type_name(s)
+                            );
                         } else {
-                            let _ = write!(if_pointers, "crate::{}::DEF,", if_name_to_type_name(t));
+                            let _ = write!(
+                                if_pointers,
+                                "crate::{}::DEF as *const _,",
+                                if_name_to_type_name(t)
+                            );
                         }
                     }
                     None => if_pointers.push_str("core::ptr::null(),"),
@@ -269,8 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let _ = write!(
                 if_request_messages,
-                "message(c\"{}\", c\"{type_chars}\", &[{if_pointers}]),",
-                r.name
+                r#"ffi::Message {{ name: c"{request_name}".as_ptr(), signature: c"{type_chars}".as_ptr(), types: const {{ [{if_pointers}] }}.as_ptr() }},"#,
             );
 
             if r.r#type.as_deref().is_some_and(|x| x == "destructor") {
@@ -309,8 +315,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = writeln!(request_wrappers, "    }}\n");
             }
         }
+
+        let mut if_event_messages = String::new();
+        let mut listener_trait_members = String::new();
+        let mut listener_fn_wrappers = String::new();
+        let mut listener_fn_table_member_defs = String::new();
+        let mut listener_fn_table_construct_members = String::new();
         for r in x.events.iter() {
-            let event_name_ident = kw_escape(&r.name);
+            let event_name = &r.name;
+            let event_name_ident = kw_escape(event_name);
 
             let mut type_chars = String::with_capacity(r.args.len());
             let mut if_pointers = String::new();
@@ -318,8 +331,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = write!(type_chars, "{v}");
             }
             let mut listener_trait_args = String::new();
-            let mut listener_arg_bridges = String::new();
+            let mut listener_raw_args = String::new();
+            let mut listener_arg_conversions = String::new();
             for a in r.args.iter() {
+                let arg_name_ident = kw_escape(&a.name);
+
                 if a.allow_null {
                     type_chars.push('?');
                 }
@@ -327,14 +343,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 type_chars.push(wl_typechar(&a.r#type));
                 match a.interface {
                     Some(ref t) if t == &if_static_var_name => {
-                        let _ = write!(if_pointers, "&{if_static_var_name},");
+                        let _ = write!(if_pointers, "&{if_static_var_name} as *const _,");
                     }
                     Some(ref t) => {
                         if let Some(s) = t.strip_prefix("wl_") {
                             // special case for base interfaces
-                            let _ = write!(if_pointers, "crate::{}::DEF,", if_name_to_type_name(s));
+                            let _ = write!(
+                                if_pointers,
+                                "crate::{}::DEF as *const _,",
+                                if_name_to_type_name(s)
+                            );
                         } else {
-                            let _ = write!(if_pointers, "crate::{}::DEF,", if_name_to_type_name(t));
+                            let _ = write!(
+                                if_pointers,
+                                "crate::{}::DEF as *const _,",
+                                if_name_to_type_name(t)
+                            );
                         }
                     }
                     None => if_pointers.push_str("core::ptr::null(),"),
@@ -347,61 +371,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     a.allow_null,
                 ) {
                     (None, None, "uint", false) => {
-                        let _ = write!(listener_trait_args, "{}: u32,", a.name);
-                        let _ = write!(listener_arg_bridges, "{n}: u32 => {n},", n = a.name);
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: u32,");
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: u32,");
+                        let _ = write!(listener_arg_conversions, "{arg_name_ident},");
                     }
                     (None, Some(t), "uint", false) => {
                         let _ = write!(
                             listener_trait_args,
-                            "{}: {type_name}{},",
-                            a.name,
+                            "{arg_name_ident}: {type_name}{},",
                             enum_type_name(t)
                         );
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: u32,");
                         let _ = write!(
-                            listener_arg_bridges,
-                            "{n}: u32 => unsafe {{ core::mem::transmute({n}) }},",
-                            n = a.name
+                            listener_arg_conversions,
+                            "unsafe {{ core::mem::transmute({arg_name_ident}) }},"
                         );
                     }
                     (None, None, "int", false) => {
-                        let _ = write!(listener_trait_args, "{}: i32,", a.name);
-                        let _ = write!(listener_arg_bridges, "{n}: i32 => {n},", n = a.name);
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: i32,");
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: i32,");
+                        let _ = write!(listener_arg_conversions, "{arg_name_ident},");
                     }
                     (None, Some(t), "int", false) => {
                         let _ = write!(
                             listener_trait_args,
-                            "{}: {type_name}{},",
-                            a.name,
+                            "{arg_name_ident}: {type_name}{},",
                             enum_type_name(t)
                         );
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: i32,");
                         let _ = write!(
-                            listener_arg_bridges,
-                            "{n}: u32 => unsafe {{ core::mem::transmute({n}) }},",
-                            n = a.name
+                            listener_arg_conversions,
+                            "unsafe {{ core::mem::transmute({arg_name_ident}) }},"
                         );
                     }
                     (Some(o), None, "object", false) => {
-                        let _ = write!(listener_trait_args, "{}: {o},", a.name);
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: {o},");
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
                         let _ = write!(
-                            listener_arg_bridges,
-                            "{n}: *mut ffi::Proxy => unsafe {{ {o}::from_proxy_ptr_unchecked(core::ptr::NonNull::new_unchecked({n}))) }},",
-                            n = a.name
+                            listener_arg_conversions,
+                            "unsafe {{ {o}::from_proxy_ptr_unchecked(core::ptr::NonNull::new_unchecked({arg_name_ident})) }},"
                         );
                     }
                     (Some(o), None, "object", true) => {
-                        let _ = write!(listener_trait_args, "{}: Option<{o}>,", a.name);
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: Option<{o}>,");
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
                         let _ = write!(
-                            listener_arg_bridges,
-                            "{n}: *mut ffi::Proxy => core::ptr::NonNull::new({n}).map(|p| unsafe {{ {o}::from_proxy_ptr_unchecked(p)) }}),",
-                            n = a.name
+                            listener_arg_conversions,
+                            "core::ptr::NonNull::new({arg_name_ident}).map(|p| unsafe {{ {o}::from_proxy_ptr_unchecked(p) }}),"
                         );
                     }
                     (None, None, "array", false) => {
-                        let _ = write!(listener_trait_args, "{}: &mut ffi::Array", a.name);
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: &mut ffi::Array");
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Array,");
                         let _ = write!(
-                            listener_arg_bridges,
-                            "{n}: *mut ffi::Array => unsafe {{ &mut *{n} }},",
-                            n = a.name
+                            listener_arg_conversions,
+                            "unsafe {{ &mut *{arg_name_ident} }},"
                         );
                     }
                     _ => panic!(
@@ -413,22 +437,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let _ = write!(
                 if_event_messages,
-                "message(c\"{}\", c\"{type_chars}\", &[{if_pointers}]),",
-                r.name
+                r#"ffi::Message {{ name: c"{event_name}".as_ptr(), signature: c"{type_chars}".as_ptr(), types: const {{ [{if_pointers}] }}.as_ptr() }},"#,
+            );
+
+            let _ = writeln!(
+                listener_fn_wrappers,
+                r#"extern "C" fn {event_name_ident}<L: {event_listener_trait_name}>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,{listener_raw_args}) {{ L::{event_name_ident}(unsafe {{ &mut *(data0 as *mut _) }}, unsafe {{ &mut *(sender0 as *mut _) }},{listener_arg_conversions}) }}"#
+            );
+            let _ = writeln!(
+                listener_fn_table_member_defs,
+                r#"{event_name_ident}: extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy, {listener_raw_args}),"#
+            );
+            let _ = writeln!(
+                listener_fn_table_construct_members,
+                "{event_name_ident}: {event_name_ident}::<L>,"
             );
             let _ = writeln!(
                 listener_trait_members,
                 "    fn {event_name_ident}(&mut self, sender: &mut {type_name}, {listener_trait_args});",
             );
-            let _ = writeln!(
-                listener_fn_table_members,
-                "                    {event_name_ident}({listener_arg_bridges}),",
-            );
         }
 
         println!(
-            "static {if_static_var_name}: ffi::Interface = interface(c\"{}\", {}, &[{if_request_messages}], &[{if_event_messages}]);",
-            x.name, x.version,
+            r#"static {if_static_var_name}: ffi::Interface = ffi::Interface {{ name: c"{}".as_ptr(), version: {}, method_count: {method_count}, methods: const {{ [{if_request_messages}] }}.as_ptr(), event_count: {event_count}, events: const {{ [{if_event_messages}] }}.as_ptr() }};"#,
+            x.name,
+            x.version,
+            method_count = x.requests.len(),
+            event_count = x.events.len(),
         );
         println!("");
         println!("#[repr(transparent)]");
@@ -457,15 +492,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("}}");
         println!("");
         println!("impl {type_name} {{");
-        if !listener_fn_table_members.is_empty() {
+        if !listener_fn_table_member_defs.is_empty() {
             println!(
                 "    pub fn set_listener<'l, L: {type_name}EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {{"
             );
+            println!("        {listener_fn_wrappers}");
+            println!("        #[repr(C)] struct FPTable {{ {listener_fn_table_member_defs} }}");
             println!("        unsafe {{");
             println!("            self.0.set_listener(");
-            println!("                crate::EventFnTable!(for L: {type_name}EventListener {{");
-            println!("{listener_fn_table_members}");
-            println!("                }}) as *const _ as _,");
+            println!(
+                "                &const {{ FPTable {{ {listener_fn_table_construct_members} }} }} as &'static FPTable as *const _ as _,"
+            );
             println!("                listener as *mut _ as _,");
             println!("            )");
             println!("        }}");
