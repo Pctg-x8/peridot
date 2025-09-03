@@ -940,11 +940,13 @@ impl XmlEntry {
             if a.key.0 == b"name" {
                 name = Some(a.decode_and_unescape_value(reader.decoder())?.into_owned());
             } else if a.key.0 == b"value" {
-                value = Some(
-                    a.decode_and_unescape_value(reader.decoder())?
-                        .parse()
-                        .expect("invalid enum value"),
-                );
+                let s = a.decode_and_unescape_value(reader.decoder())?;
+                if let Some(h) = s.strip_prefix("0x") {
+                    // hex-number
+                    value = Some(usize::from_str_radix(h, 16).expect("invalid enum value"));
+                } else {
+                    value = Some(s.parse().expect("invalid enum value"));
+                }
             } else if a.key.0 == b"summary" {
                 summary = Some(a.decode_and_unescape_value(reader.decoder())?.into_owned());
             } else if a.key.0 == b"since" {
