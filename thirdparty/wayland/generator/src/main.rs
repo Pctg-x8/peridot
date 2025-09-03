@@ -441,6 +441,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "core::ptr::NonNull::new({arg_name_ident}).map(|p| unsafe {{ {o}::from_proxy_ptr_unchecked(p) }}),"
                         );
                     }
+                    (Some(o), None, "new_id", false) => {
+                        type_chars.push_str("n");
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: crate::Owned<{o}>,");
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: *mut ffi::Proxy,");
+                        let _ = write!(
+                            listener_arg_conversions,
+                            "unsafe {{ crate::Owned::from_untyped_unchecked(core::ptr::NonNull::new_unchecked({arg_name_ident})) }},"
+                        );
+                    }
                     (None, None, "array", false) => {
                         type_chars.push_str("a");
                         let _ = write!(listener_trait_args, "{arg_name_ident}: &mut ffi::Array,");
@@ -461,6 +470,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             listener_arg_conversions,
                             "unsafe {{ core::ffi::CStr::from_ptr({arg_name_ident}) }},"
                         );
+                    }
+                    (None, None, "fixed", false) => {
+                        type_chars.push_str("f");
+                        let _ = write!(listener_trait_args, "{arg_name_ident}: crate::Fixed,");
+                        let _ = write!(listener_raw_args, "{arg_name_ident}: ffi::Fixed,");
+                        let _ = write!(listener_arg_conversions, "{arg_name_ident},");
                     }
                     _ => panic!(
                         "unhandled combination: {:?} {:?} {} {}",
