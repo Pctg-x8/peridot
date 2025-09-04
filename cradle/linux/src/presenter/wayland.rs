@@ -336,6 +336,36 @@ impl Wayland {
             xdg_decoration_manager.get_toplevel_decoration(&xdg_toplevel),
             "get_toplevel_decoration failed"
         );
+
+        'optin_content_type: {
+            let ct = match interfaces.bind_interface::<wl::WpContentTypeManagerV1>(&registry) {
+                Ok(Some(x)) => x,
+                Ok(None) => {
+                    // no content type extension
+                    break 'optin_content_type;
+                }
+                Err(e) => {
+                    tracing::error!(cause = ?e, "Failed to bind interface");
+                    break 'optin_content_type;
+                }
+            };
+
+            let ct_state = match ct.get_surface_content_type(&surface) {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::error!(cause = ?e, "get_surface_content_type failed");
+                    break 'optin_content_type;
+                }
+            };
+            if let Err(e) = ct_state.set_content_type(wl::WpContentTypeV1Type::Game) {
+                tracing::error!(cause = ?e, "ct_state set_content_type failed");
+                break 'optin_content_type;
+            }
+
+            // destroyで状態もどっちゃうのでleakさせておく
+            ct_state.leak();
+        }
+
         err_warn!(surface.commit(), "surface commit failed");
 
         let mut seat = err_fatal_bailout!(

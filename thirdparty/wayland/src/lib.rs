@@ -1286,6 +1286,7 @@ Ext!("tablet-v2", tablet);
 // staging
 Ext!("fractional-scale-v1", fractional_scale);
 Ext!("cursor-shape-v1", cursor_shape);
+Ext!("content-type-v1", content_type);
 
 // unstable
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
