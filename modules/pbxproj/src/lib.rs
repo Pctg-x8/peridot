@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 pub struct ParserState<'s> {
     source: &'s [u8],
@@ -100,11 +100,64 @@ pub enum ParseError {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value<'s> {
-    Single(&'s str),
+    Single(Cow<'s, str>),
     Array(Vec<Value<'s>>),
     Map(HashMap<&'s str, Value<'s>>),
+}
+impl<'s> Value<'s> {
+    #[inline(always)]
+    pub fn try_into_single_str(self) -> Result<Cow<'s, str>, Self> {
+        match self {
+            Self::Single(x) => Ok(x),
+            x => Err(x),
+        }
+    }
+
+    fn single_requires_quoted(v: &str) -> bool {
+        v.is_empty()
+            || v.contains([
+                '"', '(', ')', '{', '}', '/', '*', '<', '>', '-', ' ', ';', '=', ',', '+',
+            ])
+    }
+
+    pub fn write_oneline(&self, sink: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        match self {
+            Self::Single(v) if Self::single_requires_quoted(v) => {
+                sink.write_all(b"\"")?;
+                for c in v.chars() {
+                    if c == '"' {
+                        sink.write_all(b"\"")?;
+                    }
+
+                    write!(sink, "{c}")?
+                }
+                sink.write_all(b"\"")?;
+            }
+            Self::Single(v) => sink.write_all(v.as_bytes())?,
+            Self::Array(xs) => {
+                sink.write_all(b"(")?;
+                for x in xs {
+                    x.write_oneline(sink)?;
+                    sink.write_all(b", ")?;
+                }
+                sink.write_all(b")")?;
+            }
+            Self::Map(xs) => {
+                sink.write_all(b"{")?;
+                for (k, v) in xs {
+                    sink.write_all(k.as_bytes())?;
+                    sink.write_all(b" = ")?;
+                    v.write_oneline(sink)?;
+                    sink.write_all(b"; ")?;
+                }
+                sink.write_all(b"}")?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub fn parse_oneline_comment<'s>(state: &mut ParserState<'s>) -> &'s str {
@@ -202,10 +255,9 @@ pub fn parse_string<'s>(state: &mut ParserState<'s>) -> Result<&'s str, ParseErr
                 slice_length += 1;
                 state.forward(1);
 
-                println!("sl: {}", unsafe {
-                    core::str::from_utf8_unchecked(&input_slice[..slice_length])
+                break Ok(unsafe {
+                    core::str::from_utf8_unchecked(&input_slice[1..slice_length - 1])
                 });
-                break Ok(unsafe { core::str::from_utf8_unchecked(&input_slice[..slice_length]) });
             }
             Some(x) if x.get(1) == Some(&b'\\') || x.get(1) == Some(&b'"') => {
                 state.consume_bytes(1);
@@ -229,7 +281,6 @@ pub fn parse_string<'s>(state: &mut ParserState<'s>) -> Result<&'s str, ParseErr
 }
 
 pub fn parse_single_val<'s>(state: &mut ParserState<'s>) -> Result<&'s str, ParseError> {
-    println!("sv head {:?}", state.source.first());
     if state.is_head_char(b'"') {
         return parse_string(state);
     }
@@ -292,7 +343,7 @@ pub fn parse_value<'s>(state: &mut ParserState<'s>) -> Result<Value<'s>, ParseEr
 
             Ok(Value::Map(xs))
         }
-        _ => Ok(Value::Single(parse_single_val(state)?)),
+        _ => Ok(Value::Single(parse_single_val(state)?.into())),
     }
 }
 
