@@ -1,5 +1,8 @@
 use std::{borrow::Cow, collections::HashMap};
 
+mod pbxproj;
+pub use self::pbxproj::*;
+
 pub struct ParserState<'s> {
     source: &'s [u8],
     line: usize,
