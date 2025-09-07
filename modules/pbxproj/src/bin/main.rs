@@ -2,6 +2,98 @@ use std::{borrow::Cow, collections::HashMap};
 
 use pbxproj::{ParserState, Value, parse_value};
 
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PBXObjectIDRef<'s>(Cow<'s, str>);
+impl<'s> PBXObjectIDRef<'s> {
+    pub fn decode(x: Value<'s>) -> Result<Self, DecodeError<'s>> {
+        match x {
+            Value::Single(x) => Ok(Self(x)),
+            x => Err(DecodeError::Unexpected(x)),
+        }
+    }
+
+    #[inline(always)]
+    pub fn encode(self) -> Value<'s> {
+        Value::Single(self.0)
+    }
+
+    #[inline(always)]
+    pub fn entity<'f>(&self, file: &'f PBXProjectFile<'s>) -> Option<&'f PBXObject<'s>> {
+        file.object_ref(self)
+    }
+
+    #[inline(always)]
+    pub fn entity_mut<'f>(
+        &self,
+        file: &'f mut PBXProjectFile<'s>,
+    ) -> Option<&'f mut PBXObject<'s>> {
+        file.object_ref_mut(self)
+    }
+
+    #[inline(always)]
+    pub fn entity_of<'id, 'f, T>(
+        &'id self,
+        file: &'f PBXProjectFile<'s>,
+    ) -> Result<&'f T, TypedObjectReferenceError<'id, 'f, 's>>
+    where
+        T: PBXObjectType<'s>,
+    {
+        file.object_ref_of(self)
+    }
+
+    #[inline(always)]
+    pub fn entity_mut_of<'id, 'f, T>(
+        &'id self,
+        file: &'f mut PBXProjectFile<'s>,
+    ) -> Result<&'f mut T, TypedObjectMutableReferenceError<'id, 'f, 's>>
+    where
+        T: PBXObjectType<'s>,
+    {
+        file.object_ref_mut_of(self)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DecodeError<'s> {
+    #[error("unexpected value: {0:?}")]
+    Unexpected(Value<'s>),
+    #[error("missing `{0}`")]
+    MissingRequiredAttr(&'static str),
+    #[error("Failed parsing `{0}`: {1}")]
+    FailedParsingTypedObject(&'static str, Box<DecodeError<'s>>),
+    #[error("invalid `{0}` value: {1}")]
+    InvalidAttributeValue(&'static str, Box<DecodeError<'s>>),
+    #[error("invalid `{0}` element value: {1}")]
+    InvalidAttributeElementValue(&'static str, Box<DecodeError<'s>>),
+}
+impl<'s> DecodeError<'s> {
+    #[inline(always)]
+    pub const fn failed_parsing_typed_object(isa: &'static str) -> impl FnOnce(Self) -> Self {
+        move |e| Self::FailedParsingTypedObject(isa, Box::new(e))
+    }
+
+    #[inline(always)]
+    pub const fn invalid_attr_value(attr_name: &'static str) -> impl FnOnce(Self) -> Self {
+        move |e| Self::InvalidAttributeValue(attr_name, Box::new(e))
+    }
+
+    #[inline(always)]
+    pub const fn invalid_attr_element_value(attr_name: &'static str) -> impl FnOnce(Self) -> Self {
+        move |e| Self::InvalidAttributeElementValue(attr_name, Box::new(e))
+    }
+
+    #[inline(always)]
+    pub fn unexpected_attr_value(attr_name: &'static str, value: Value<'s>) -> Self {
+        Self::InvalidAttributeValue(attr_name, Box::new(Self::Unexpected(value)))
+    }
+
+    #[inline(always)]
+    pub fn unexpected_attr_element_value(attr_name: &'static str, value: Value<'s>) -> Self {
+        Self::InvalidAttributeElementValue(attr_name, Box::new(Self::Unexpected(value)))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PBXProjectFile<'s> {
     pub objects: HashMap<&'s str, PBXObject<'s>>,
@@ -9,35 +101,36 @@ pub struct PBXProjectFile<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXProjectFile<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
-        let objects = match xs.remove("objects").expect("no objects defined on root") {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
+        let objects = match xs
+            .remove("objects")
+            .ok_or(DecodeError::MissingRequiredAttr("objects"))?
+        {
             Value::Map(xs) => xs
                 .into_iter()
                 .map(|(k, v)| {
-                    (
-                        k,
-                        match v {
-                            Value::Map(xs) => {
-                                PBXObject::decode(xs).expect("Failed decoding PBXObject")
-                            }
-                            x => unreachable!("unknown {x:?}"),
-                        },
-                    )
+                    let v = match v {
+                        Value::Map(xs) => PBXObject::decode(xs)
+                            .map_err(DecodeError::invalid_attr_element_value("objects")),
+                        x => Err(DecodeError::unexpected_attr_element_value("objects", x)),
+                    }?;
+
+                    Ok((k, v))
                 })
-                .collect::<HashMap<_, _>>(),
+                .collect::<Result<_, _>>()?,
             x => unreachable!("unknown {x:?}"),
         };
         let root_object = PBXObjectIDRef::decode(
             xs.remove("rootObject")
-                .expect("no rootObject defined on root"),
+                .ok_or(DecodeError::MissingRequiredAttr("rootObject"))?,
         )
-        .expect("invalid rootObject value");
+        .map_err(DecodeError::invalid_attr_value("rootObject"))?;
 
-        Self {
+        Ok(Self {
             objects,
             root_object,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -68,19 +161,37 @@ impl<'s> PBXProjectFile<'s> {
     }
 
     #[inline(always)]
-    pub fn object_ref_of<T>(&self, id: &PBXObjectIDRef<'_>) -> Option<&T>
+    pub fn object_ref_of<'id, 'x, T>(
+        &'x self,
+        id: &'id PBXObjectIDRef<'s>,
+    ) -> Result<&'x T, TypedObjectReferenceError<'id, 'x, 's>>
     where
         T: PBXObjectType<'s>,
     {
-        self.object_ref(id)?.downcast_ref()
+        match self.object_ref(id) {
+            None => Err(TypedObjectReferenceError::Missing(id)),
+            Some(x) => match x.downcast_ref() {
+                None => Err(TypedObjectReferenceError::Mismatch(x)),
+                Some(t) => Ok(t),
+            },
+        }
     }
 
     #[inline(always)]
-    pub fn object_ref_mut_of<T>(&mut self, id: &PBXObjectIDRef<'_>) -> Option<&mut T>
+    pub fn object_ref_mut_of<'id, 'x, T>(
+        &'x mut self,
+        id: &'id PBXObjectIDRef<'s>,
+    ) -> Result<&'x mut T, TypedObjectMutableReferenceError<'id, 'x, 's>>
     where
         T: PBXObjectType<'s>,
     {
-        self.object_ref_mut(id)?.downcast_ref_mut()
+        match self.object_ref_mut(id) {
+            None => Err(TypedObjectMutableReferenceError::Missing(id)),
+            Some(x) => match x.downcast_ref_mut() {
+                Err(x) => Err(TypedObjectMutableReferenceError::Mismatch(x)),
+                Ok(t) => Ok(t),
+            },
+        }
     }
 
     pub fn root_project(&self) -> &PBXProject<'s> {
@@ -96,63 +207,19 @@ impl<'s> PBXProjectFile<'s> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ValueDecodeError<'s> {
-    #[error("unexpected value: {0:?}")]
-    Unexpected(Value<'s>),
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PBXObjectIDRef<'s>(Cow<'s, str>);
-impl<'s> PBXObjectIDRef<'s> {
-    pub fn decode(x: Value<'s>) -> Result<Self, ValueDecodeError<'s>> {
-        match x {
-            Value::Single(x) => Ok(Self(x)),
-            x => Err(ValueDecodeError::Unexpected(x)),
-        }
-    }
-
-    #[inline(always)]
-    pub fn encode(self) -> Value<'s> {
-        Value::Single(self.0)
-    }
+pub enum TypedObjectReferenceError<'id, 'x, 's> {
+    #[error("missing object for id {:?}", .0 .0)]
+    Missing(&'id PBXObjectIDRef<'s>),
+    #[error("object type is not as expected: found {0:?}")]
+    Mismatch(&'x PBXObject<'s>),
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ObjectDecodeError<'s> {
-    #[error("missing `{0}`")]
-    MissingRequiredAttr(&'static str),
-    #[error("Failed parsing `{0}`: {1}")]
-    FailedParsingTypedObject(&'static str, Box<ObjectDecodeError<'s>>),
-    #[error("invalid `{0}` value: {1}")]
-    InvalidAttributeValue(&'static str, ValueDecodeError<'s>),
-    #[error("invalid `{0}` element value: {1}")]
-    InvalidAttributeElementValue(&'static str, ValueDecodeError<'s>),
-}
-impl<'s> ObjectDecodeError<'s> {
-    #[inline(always)]
-    pub const fn failed_parsing_typed_object(isa: &'static str) -> impl FnOnce(Self) -> Self {
-        move |e| Self::FailedParsingTypedObject(isa, Box::new(e))
-    }
-
-    #[inline(always)]
-    pub const fn invalid_attr_value(
-        attr_name: &'static str,
-    ) -> impl FnOnce(ValueDecodeError<'s>) -> Self {
-        move |e| Self::InvalidAttributeValue(attr_name, e)
-    }
-
-    #[inline(always)]
-    pub const fn invalid_attr_element_value(
-        attr_name: &'static str,
-    ) -> impl FnOnce(ValueDecodeError<'s>) -> Self {
-        move |e| Self::InvalidAttributeElementValue(attr_name, e)
-    }
-
-    #[inline(always)]
-    pub const fn unexpected_attr_value(attr_name: &'static str, value: Value<'s>) -> Self {
-        Self::InvalidAttributeValue(attr_name, ValueDecodeError::Unexpected(value))
-    }
+pub enum TypedObjectMutableReferenceError<'id, 'x, 's> {
+    #[error("missing object for id {:?}", .0 .0)]
+    Missing(&'id PBXObjectIDRef<'s>),
+    #[error("object type is not as expected: found {0:?}")]
+    Mismatch(&'x mut PBXObject<'s>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,33 +242,67 @@ pub enum PBXObject<'s> {
     },
 }
 impl<'s> PBXObject<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, ObjectDecodeError<'s>> {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
         let isa = match xs.remove("isa") {
-            None => panic!("cannot determine object type"),
             Some(Value::Single(x)) => x,
-            Some(x) => panic!("isa is not an value: {x:?}"),
+            None => return Err(DecodeError::MissingRequiredAttr("isa")),
+            Some(x) => return Err(DecodeError::unexpected_attr_value("isa", x)),
         };
 
         Ok(match &isa as &str {
-            "PBXBuildFile" => Self::BuildFile(PBXBuildFile::decode(xs)),
-            "PBXFileReference" => Self::FileReference(PBXFileReference::decode(xs)),
+            "PBXBuildFile" => Self::BuildFile(
+                PBXBuildFile::decode(xs)
+                    .map_err(DecodeError::failed_parsing_typed_object("PBXBuildFile"))?,
+            ),
+            "PBXFileReference" => Self::FileReference(
+                PBXFileReference::decode(xs)
+                    .map_err(DecodeError::failed_parsing_typed_object("PBXFileReference"))?,
+            ),
             "PBXFrameworksBuildPhase" => {
-                Self::FrameworksBuildPhase(PBXFrameworksBuildPhase::decode(xs))
+                Self::FrameworksBuildPhase(PBXFrameworksBuildPhase::decode(xs).map_err(
+                    DecodeError::failed_parsing_typed_object("PBXFrawmeworksBuildPhase"),
+                )?)
             }
-            "PBXGroup" => Self::Group(PBXGroup::decode(xs)),
-            "PBXNativeTarget" => Self::NativeTarget(PBXNativeTarget::decode(xs).map_err(
-                ObjectDecodeError::failed_parsing_typed_object("PBXNativeTarget"),
-            )?),
-            "PBXProject" => Self::Project(PBXProject::decode(xs)),
+            "PBXGroup" => Self::Group(
+                PBXGroup::decode(xs)
+                    .map_err(DecodeError::failed_parsing_typed_object("PBXGroup"))?,
+            ),
+            "PBXNativeTarget" => Self::NativeTarget(
+                PBXNativeTarget::decode(xs)
+                    .map_err(DecodeError::failed_parsing_typed_object("PBXNativeTarget"))?,
+            ),
+            "PBXProject" => Self::Project(
+                PBXProject::decode(xs)
+                    .map_err(DecodeError::failed_parsing_typed_object("PBXProject"))?,
+            ),
             "PBXResourcesBuildPhase" => {
-                Self::ResourcesBuildPhase(PBXResourcesBuildPhase::decode(xs))
+                Self::ResourcesBuildPhase(PBXResourcesBuildPhase::decode(xs).map_err(
+                    DecodeError::failed_parsing_typed_object("PBXResourcesBuildPhase"),
+                )?)
             }
-            "PBXSourcesBuildPhase" => Self::SourcesBuildPhase(PBXSourcesBuildPhase::decode(xs)),
-            "PBXVariantGroup" => PBXObject::VariantGroup(PBXVariantGroup::decode(xs)),
-            "XCBuildConfiguration" => Self::BuildConfiguration(XCBuildConfiguration::decode(xs)),
-            "XCConfigurationList" => Self::ConfigurationList(XCConfigurationList::decode(xs)),
+            "PBXSourcesBuildPhase" => {
+                Self::SourcesBuildPhase(PBXSourcesBuildPhase::decode(xs).map_err(
+                    DecodeError::failed_parsing_typed_object("PBXSourcesBuildPhase"),
+                )?)
+            }
+            "PBXVariantGroup" => PBXObject::VariantGroup(
+                PBXVariantGroup::decode(xs)
+                    .map_err(DecodeError::failed_parsing_typed_object("PBXVariantGroup"))?,
+            ),
+            "XCBuildConfiguration" => {
+                Self::BuildConfiguration(XCBuildConfiguration::decode(xs).map_err(
+                    DecodeError::failed_parsing_typed_object("XCBuildConfiguration"),
+                )?)
+            }
+            "XCConfigurationList" => {
+                Self::ConfigurationList(XCConfigurationList::decode(xs).map_err(
+                    DecodeError::failed_parsing_typed_object("XCConfigurationList"),
+                )?)
+            }
             "PBXCopyFilesBuildPhase" => {
-                Self::CopyFilesBuildPhase(PBXCopyFilesBuildPhase::decode(xs))
+                Self::CopyFilesBuildPhase(PBXCopyFilesBuildPhase::decode(xs).map_err(
+                    DecodeError::failed_parsing_typed_object("PBXCopyFilesBuildPhase"),
+                )?)
             }
             _ => Self::Unknown {
                 isa: Value::Single(isa),
@@ -243,7 +344,7 @@ impl<'s> PBXObject<'s> {
     }
 
     #[inline(always)]
-    pub fn downcast_ref_mut<T>(&mut self) -> Option<&mut T>
+    pub fn downcast_ref_mut<T>(&mut self) -> Result<&mut T, &mut Self>
     where
         T: PBXObjectType<'s>,
     {
@@ -253,25 +354,37 @@ impl<'s> PBXObject<'s> {
 
 pub trait PBXObjectType<'s> {
     fn from_object_enum<'e>(e: &'e PBXObject<'s>) -> Option<&'e Self>;
-    fn from_object_enum_mut<'e>(e: &'e mut PBXObject<'s>) -> Option<&'e mut Self>;
+    fn from_object_enum_mut<'e>(
+        e: &'e mut PBXObject<'s>,
+    ) -> Result<&'e mut Self, &'e mut PBXObject<'s>>;
 }
-impl<'s> PBXObjectType<'s> for XCBuildConfiguration<'s> {
-    fn from_object_enum<'e>(e: &'e PBXObject<'s>) -> Option<&'e Self> {
-        if let PBXObject::BuildConfiguration(x) = e {
-            Some(x)
-        } else {
-            None
-        }
-    }
+macro_rules! DefinePBXObjectType {
+    (for $t: ty, $extraction: pat => $take: expr) => {
+        impl<'s> PBXObjectType<'s> for $t {
+            fn from_object_enum<'e>(e: &'e PBXObject<'s>) -> Option<&'e Self> {
+                if let $extraction = e {
+                    Some($take)
+                } else {
+                    None
+                }
+            }
 
-    fn from_object_enum_mut<'e>(e: &'e mut PBXObject<'s>) -> Option<&'e mut Self> {
-        if let PBXObject::BuildConfiguration(x) = e {
-            Some(x)
-        } else {
-            None
+            fn from_object_enum_mut<'e>(
+                e: &'e mut PBXObject<'s>,
+            ) -> Result<&'e mut Self, &'e mut PBXObject<'s>> {
+                if let $extraction = e {
+                    Ok($take)
+                } else {
+                    Err(e)
+                }
+            }
         }
-    }
+    };
 }
+DefinePBXObjectType!(for PBXGroup<'s>, PBXObject::Group(x) => x);
+DefinePBXObjectType!(for PBXNativeTarget<'s>, PBXObject::NativeTarget(x) => x);
+DefinePBXObjectType!(for XCConfigurationList<'s>, PBXObject::ConfigurationList(x) => x);
+DefinePBXObjectType!(for XCBuildConfiguration<'s>, PBXObject::BuildConfiguration(x) => x);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PBXBuildFile<'s> {
@@ -280,17 +393,19 @@ pub struct PBXBuildFile<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXBuildFile<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
         let file_ref = PBXObjectIDRef::decode(xs.remove("fileRef").expect("fileRef required"))
-            .map_err(ObjectDecodeError::invalid_attr_value("fileRef"))
-            .unwrap();
-        let settings = xs.remove("settings").map(PBXBuildFileSettings::decode);
+            .map_err(DecodeError::invalid_attr_value("fileRef"))?;
+        let settings = xs
+            .remove("settings")
+            .map(PBXBuildFileSettings::decode)
+            .transpose()?;
 
-        Self {
+        Ok(Self {
             file_ref,
             settings,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -310,27 +425,30 @@ pub struct PBXBuildFileSettings<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXBuildFileSettings<'s> {
-    pub fn decode(v: Value<'s>) -> Self {
+    pub fn decode(v: Value<'s>) -> Result<Self, DecodeError<'s>> {
         match v {
             Value::Map(mut xs) => {
                 let attributes = match xs.remove("ATTRIBUTES") {
-                    None => Vec::new(),
+                    None => Ok(Vec::new()),
                     Some(Value::Array(xs)) => xs
                         .into_iter()
                         .map(|x| match x {
-                            Value::Single(x) => x,
-                            x => panic!("invalid PBXBuildFileSettings.ATTRIBUTE value: {x:?}"),
+                            Value::Single(x) => Ok(x),
+                            x => Err(DecodeError::unexpected_attr_element_value("ATTRIBUTES", x)),
                         })
-                        .collect::<Vec<_>>(),
-                    Some(x) => panic!("invalid PBXBuildFileSettings.ATTRIBUTE: {x:?}"),
-                };
+                        .collect::<Result<_, _>>(),
+                    Some(x) => Err(DecodeError::unexpected_attr_value("ATTRIBUTES", x)),
+                }?;
 
-                Self {
+                Ok(Self {
                     attributes,
                     extras: xs,
-                }
+                })
             }
-            x => unreachable!("invalid PBXBuildFileSettings: {x:?}"),
+            x => Err(DecodeError::unexpected_attr_value(
+                "PBXBuildFile.settings",
+                x,
+            )),
         }
     }
 
@@ -357,35 +475,35 @@ pub struct PBXFileReference<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXFileReference<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
         let last_known_file_type = match xs.remove("lastKnownFileType") {
             Some(Value::Single(x)) => Some(x),
-            Some(x) => unreachable!("invalid PBXFileReference.lastKnownFileType value: {x:?}"),
+            Some(x) => return Err(DecodeError::unexpected_attr_value("lastKnownFileType", x)),
             None => None,
         };
         let name = match xs.remove("name") {
             Some(Value::Single(x)) => Some(x),
-            Some(x) => unreachable!("invalid PBXFileReference.name value: {x:?}"),
+            Some(x) => return Err(DecodeError::unexpected_attr_value("name", x)),
             None => None,
         };
         let path = match xs.remove("path") {
             Some(Value::Single(x)) => x,
-            Some(x) => unreachable!("invalid PBXFileReference.path value: {x:?}"),
-            None => unreachable!("PBXFileReference.path missing"),
+            Some(x) => return Err(DecodeError::unexpected_attr_value("path", x)),
+            None => return Err(DecodeError::MissingRequiredAttr("path")),
         };
         let source_tree = match xs.remove("sourceTree") {
             Some(Value::Single(x)) => x,
-            Some(x) => unreachable!("invalid PBXFileReference.sourceTree value: {x:?}"),
-            None => unreachable!("PBXFileReference.sourceTree missing"),
+            Some(x) => return Err(DecodeError::unexpected_attr_value("sourceTree", x)),
+            None => return Err(DecodeError::MissingRequiredAttr("sourceTree")),
         };
 
-        Self {
+        Ok(Self {
             last_known_file_type,
             name,
             path,
             source_tree,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -411,29 +529,29 @@ pub struct PBXFrameworksBuildPhase<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXFrameworksBuildPhase<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
         let build_action_mask = match xs.remove("buildActionMask") {
             Some(Value::Single(x)) => x.parse::<u32>().expect("cannot parse as u32"),
-            Some(x) => unreachable!("invalid PBXFrameworksBuildPhase.buildActionMask: {x:?}"),
-            None => unreachable!("missing PBXFrameworkBuildPhase.buildActionMask"),
+            Some(x) => return Err(DecodeError::unexpected_attr_value("buildActionMask", x)),
+            None => return Err(DecodeError::MissingRequiredAttr("buildActionMask")),
         };
         let files = match xs.remove("files") {
+            None => Ok(Vec::new()),
             Some(Value::Array(xs)) => xs
                 .into_iter()
                 .map(|x| match x {
-                    Value::Single(x) => x,
-                    x => unreachable!("invalid PBXFrameworksBuildPhase.files element: {x:?}"),
+                    Value::Single(x) => Ok(x),
+                    x => Err(DecodeError::unexpected_attr_element_value("files", x)),
                 })
-                .collect::<Vec<_>>(),
-            Some(x) => unreachable!("invalid PBXFrameworksBuildPhase.files: {x:?}"),
-            None => panic!("missing PBXFrameworksBuildPhase.files"),
-        };
+                .collect::<Result<_, _>>(),
+            Some(x) => Err(DecodeError::unexpected_attr_value("files", x)),
+        }?;
 
-        Self {
+        Ok(Self {
             build_action_mask,
             files,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -462,39 +580,43 @@ pub struct PBXGroup<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXGroup<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
         let children = match xs.remove("children") {
-            None => Vec::new(),
+            None => Ok(Vec::new()),
             Some(Value::Array(xs)) => xs
                 .into_iter()
                 .map(|x| {
-                    PBXObjectIDRef::decode(x).expect("invalid PBXGroup.children element value")
+                    PBXObjectIDRef::decode(x)
+                        .map_err(DecodeError::invalid_attr_element_value("children"))
                 })
-                .collect::<Vec<_>>(),
-            Some(x) => panic!("invalid PBXGroup.children: {x:?}"),
-        };
+                .collect::<Result<_, _>>(),
+            Some(x) => Err(DecodeError::unexpected_attr_value("children", x)),
+        }?;
         let source_tree = match xs.remove("sourceTree") {
-            Some(Value::Single(x)) => x,
-            Some(x) => panic!("invalid PBXGroup.sourceTree value: {x:?}"),
-            None => panic!("missing PBXGroup.sourceTree"),
-        };
+            Some(Value::Single(x)) => Ok(x),
+            Some(x) => Err(DecodeError::unexpected_attr_value("sourceTree", x)),
+            None => Err(DecodeError::MissingRequiredAttr("sourceTree")),
+        }?;
         let name = match xs.remove("name") {
-            Some(Value::Single(x)) => Some(x),
-            Some(x) => panic!("invalid PBXGroup.name value: {x:?}"),
-            None => None,
-        };
-        let path = xs.remove("path").map(|x| match x {
-            Value::Single(x) => x,
-            x => unreachable!("invalid PBXGroup.path value: {x:?}"),
-        });
+            Some(Value::Single(x)) => Ok(Some(x)),
+            None => Ok(None),
+            Some(x) => Err(DecodeError::unexpected_attr_value("name", x)),
+        }?;
+        let path = xs
+            .remove("path")
+            .map(|x| match x {
+                Value::Single(x) => Ok(x),
+                x => Err(DecodeError::unexpected_attr_value("path", x)),
+            })
+            .transpose()?;
 
-        Self {
+        Ok(Self {
             children,
             source_tree,
             name,
             path,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -526,21 +648,21 @@ pub struct PBXNativeTarget<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXNativeTarget<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, ObjectDecodeError<'s>> {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
         let name = match xs.remove("name") {
-            None => Err(ObjectDecodeError::MissingRequiredAttr("name")),
             Some(Value::Single(x)) => Ok(x),
-            Some(x) => Err(ObjectDecodeError::unexpected_attr_value("name", x)),
+            None => Err(DecodeError::MissingRequiredAttr("name")),
+            Some(x) => Err(DecodeError::unexpected_attr_value("name", x)),
         }?;
         let product_reference = PBXObjectIDRef::decode(
             xs.remove("productReference")
-                .ok_or(ObjectDecodeError::MissingRequiredAttr("productReference"))?,
+                .ok_or(DecodeError::MissingRequiredAttr("productReference"))?,
         )
-        .map_err(ObjectDecodeError::invalid_attr_value("productReference"))?;
+        .map_err(DecodeError::invalid_attr_value("productReference"))?;
         let product_type = match xs.remove("productType") {
-            None => Err(ObjectDecodeError::MissingRequiredAttr("productType")),
             Some(Value::Single(x)) => Ok(x),
-            Some(x) => Err(ObjectDecodeError::unexpected_attr_value("productType", x)),
+            None => Err(DecodeError::MissingRequiredAttr("productType")),
+            Some(x) => Err(DecodeError::unexpected_attr_value("productType", x)),
         }?;
         let build_phases = match xs.remove("buildPhases") {
             None => Ok(Vec::new()),
@@ -548,10 +670,10 @@ impl<'s> PBXNativeTarget<'s> {
                 .into_iter()
                 .map(|x| {
                     PBXObjectIDRef::decode(x)
-                        .map_err(ObjectDecodeError::invalid_attr_element_value("buildPhases"))
+                        .map_err(DecodeError::invalid_attr_element_value("buildPhases"))
                 })
                 .collect::<Result<_, _>>(),
-            Some(x) => Err(ObjectDecodeError::unexpected_attr_value("buildPhaess", x)),
+            Some(x) => Err(DecodeError::unexpected_attr_value("buildPhaess", x)),
         }?;
         let build_rules = match xs.remove("buildRules") {
             None => Ok(Vec::new()),
@@ -559,34 +681,31 @@ impl<'s> PBXNativeTarget<'s> {
                 .into_iter()
                 .map(|x| {
                     PBXObjectIDRef::decode(x)
-                        .map_err(ObjectDecodeError::invalid_attr_element_value("buildRules"))
+                        .map_err(DecodeError::invalid_attr_element_value("buildRules"))
                 })
                 .collect::<Result<_, _>>(),
-            Some(x) => Err(ObjectDecodeError::unexpected_attr_value("buildRules", x)),
+            Some(x) => Err(DecodeError::unexpected_attr_value("buildRules", x)),
         }?;
-        let build_configuration_list =
-            PBXObjectIDRef::decode(xs.remove("buildConfigurationList").ok_or(
-                ObjectDecodeError::MissingRequiredAttr("buildConfigurationList"),
-            )?)
-            .map_err(ObjectDecodeError::invalid_attr_value(
-                "buildConfigurationList",
-            ))?;
+        let build_configuration_list = PBXObjectIDRef::decode(
+            xs.remove("buildConfigurationList")
+                .ok_or(DecodeError::MissingRequiredAttr("buildConfigurationList"))?,
+        )
+        .map_err(DecodeError::invalid_attr_value("buildConfigurationList"))?;
         let product_name = match xs.remove("productName") {
-            None => Err(ObjectDecodeError::MissingRequiredAttr("productName")),
+            None => Err(DecodeError::MissingRequiredAttr("productName")),
             Some(Value::Single(x)) => Ok(x),
-            Some(x) => Err(ObjectDecodeError::unexpected_attr_value("productName", x)),
+            Some(x) => Err(DecodeError::unexpected_attr_value("productName", x)),
         }?;
         let dependencies = match xs.remove("dependencies") {
             None => Ok(Vec::new()),
             Some(Value::Array(xs)) => xs
                 .into_iter()
                 .map(|x| {
-                    PBXObjectIDRef::decode(x).map_err(
-                        ObjectDecodeError::invalid_attr_element_value("dependencies"),
-                    )
+                    PBXObjectIDRef::decode(x)
+                        .map_err(DecodeError::invalid_attr_element_value("dependencies"))
                 })
                 .collect::<Result<_, _>>(),
-            Some(x) => Err(ObjectDecodeError::unexpected_attr_value("dependencies", x)),
+            Some(x) => Err(DecodeError::unexpected_attr_value("dependencies", x)),
         }?;
 
         Ok(Self {
@@ -643,41 +762,56 @@ pub struct PBXProject<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXProject<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
-        let build_configuration_list = xs
-            .remove("buildConfigurationList")
-            .map(|x| PBXObjectIDRef::decode(x).expect("invalid buildConfigurationList value"))
-            .expect("no buildConfigurationList");
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
+        let build_configuration_list = PBXObjectIDRef::decode(
+            xs.remove("buildConfigurationList")
+                .ok_or(DecodeError::MissingRequiredAttr("buildConfigurationList"))?,
+        )
+        .map_err(DecodeError::invalid_attr_value("buildConfigurationList"))?;
         let targets = match xs.remove("targets") {
-            None => Vec::new(),
+            None => Ok(Vec::new()),
             Some(Value::Array(xs)) => xs
                 .into_iter()
-                .map(|x| PBXObjectIDRef::decode(x).expect("invalid target element value"))
+                .map(|x| {
+                    PBXObjectIDRef::decode(x)
+                        .map_err(DecodeError::invalid_attr_element_value("targets"))
+                })
                 .collect(),
-            Some(x) => unreachable!("invalid targets value: {x:?}"),
-        };
-        let project_dir_path = xs.remove("projectDirPath").map(|x| match x {
-            Value::Single(x) => x,
-            x => unreachable!("invalid projectDirPath value: {x:?}"),
-        });
-        let main_group = xs
-            .remove("mainGroup")
-            .map(|x| PBXObjectIDRef::decode(x).expect("invalid mainGroup value"))
-            .expect("no mainGroup");
-        let development_region = xs.remove("developmentRegion").map(|x| match x {
-            Value::Single(x) => x,
-            x => unreachable!("invalid developmentRegion value: {x:?}"),
-        });
-        let product_ref_group = xs
-            .remove("productRefGroup")
-            .map(|x| PBXObjectIDRef::decode(x).expect("invalid productRefGroup value"))
-            .expect("no projectRefGroup");
-        let project_root = xs.remove("projectRoot").map(|x| match x {
-            Value::Single(x) => x,
-            x => unreachable!("invalid projectRoot value: {x:?}"),
-        });
+            Some(x) => Err(DecodeError::unexpected_attr_value("targets", x)),
+        }?;
+        let project_dir_path = xs
+            .remove("projectDirPath")
+            .map(|x| match x {
+                Value::Single(x) => Ok(x),
+                x => Err(DecodeError::unexpected_attr_value("projectDirPath", x)),
+            })
+            .transpose()?;
+        let main_group = PBXObjectIDRef::decode(
+            xs.remove("mainGroup")
+                .ok_or(DecodeError::MissingRequiredAttr("mainGroup"))?,
+        )
+        .map_err(DecodeError::invalid_attr_value("mainGroup"))?;
+        let development_region = xs
+            .remove("developmentRegion")
+            .map(|x| match x {
+                Value::Single(x) => Ok(x),
+                x => Err(DecodeError::unexpected_attr_value("developmentRegion", x)),
+            })
+            .transpose()?;
+        let product_ref_group = PBXObjectIDRef::decode(
+            xs.remove("productRefGroup")
+                .ok_or(DecodeError::MissingRequiredAttr("productRefGroup"))?,
+        )
+        .map_err(DecodeError::invalid_attr_value("productRefGroup"))?;
+        let project_root = xs
+            .remove("projectRoot")
+            .map(|x| match x {
+                Value::Single(x) => Ok(x),
+                x => Err(DecodeError::unexpected_attr_value("projectRoot value", x)),
+            })
+            .transpose()?;
 
-        Self {
+        Ok(Self {
             build_configuration_list,
             targets,
             project_dir_path,
@@ -686,7 +820,7 @@ impl<'s> PBXProject<'s> {
             product_ref_group,
             project_root,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -722,8 +856,8 @@ pub struct PBXResourcesBuildPhase<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXResourcesBuildPhase<'s> {
-    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Self {
-        Self { extras: xs }
+    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
+        Ok(Self { extras: xs })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -740,8 +874,8 @@ pub struct PBXSourcesBuildPhase<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXSourcesBuildPhase<'s> {
-    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Self {
-        Self { extras: xs }
+    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
+        Ok(Self { extras: xs })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -758,8 +892,8 @@ pub struct PBXVariantGroup<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXVariantGroup<'s> {
-    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Self {
-        Self { extras: xs }
+    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
+        Ok(Self { extras: xs })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -778,22 +912,25 @@ pub struct XCBuildConfiguration<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> XCBuildConfiguration<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
-        let name = match xs.remove("name").expect("no name") {
-            Value::Single(x) => x,
-            x => unreachable!("invalid XCBuildConfiguration.name value: {x:?}"),
-        };
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
+        let name = match xs
+            .remove("name")
+            .ok_or(DecodeError::MissingRequiredAttr("name"))?
+        {
+            Value::Single(x) => Ok(x),
+            x => Err(DecodeError::unexpected_attr_value("name", x)),
+        }?;
         let build_settings = match xs.remove("buildSettings") {
-            None => HashMap::new(),
-            Some(Value::Map(xs)) => xs,
-            Some(x) => unreachable!("invalid XCBuildConfiguration.buildSettings value: {x:?}"),
-        };
+            None => Ok(HashMap::new()),
+            Some(Value::Map(xs)) => Ok(xs),
+            Some(x) => Err(DecodeError::unexpected_attr_value("buildSettings", x)),
+        }?;
 
-        Self {
+        Ok(Self {
             name,
             build_settings,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -814,28 +951,35 @@ pub struct XCConfigurationList<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> XCConfigurationList<'s> {
-    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Self {
+    pub fn decode(mut xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
         let default_configuration_name = match xs
             .remove("defaultConfigurationName")
-            .expect("no defaultConfigurationName")
+            .ok_or(DecodeError::MissingRequiredAttr("defaultConfigurationName"))?
         {
-            Value::Single(x) => x,
-            x => unreachable!("invalid defaultConfigurationName value: {x:?}"),
-        };
+            Value::Single(x) => Ok(x),
+            x => Err(DecodeError::unexpected_attr_value(
+                "defaultConfigurationName",
+                x,
+            )),
+        }?;
         let build_configurations = match xs.remove("buildConfigurations") {
-            None => Vec::new(),
+            None => Ok(Vec::new()),
             Some(Value::Array(xs)) => xs
                 .into_iter()
-                .map(|x| PBXObjectIDRef::decode(x).expect("invalid buildConfigurations element"))
+                .map(|x| {
+                    PBXObjectIDRef::decode(x).map_err(DecodeError::invalid_attr_element_value(
+                        "buildConfigurations",
+                    ))
+                })
                 .collect(),
-            Some(x) => unreachable!("invalid buildConfigurations value: {x:?}"),
-        };
+            Some(x) => Err(DecodeError::unexpected_attr_value("buildConfigurations", x)),
+        }?;
 
-        Self {
+        Ok(Self {
             default_configuration_name,
             build_configurations,
             extras: xs,
-        }
+        })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -865,8 +1009,8 @@ pub struct PBXCopyFilesBuildPhase<'s> {
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> PBXCopyFilesBuildPhase<'s> {
-    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Self {
-        Self { extras: xs }
+    pub fn decode(xs: HashMap<&'s str, Value<'s>>) -> Result<Self, DecodeError<'s>> {
+        Ok(Self { extras: xs })
     }
 
     pub fn encode(self) -> Value<'s> {
@@ -885,21 +1029,16 @@ fn main() {
     ps.skip_spaces();
     let v = parse_value(&mut ps).unwrap();
     let mut pbxproj = match v {
-        Value::Map(xs) => PBXProjectFile::decode(xs),
+        Value::Map(xs) => PBXProjectFile::decode(xs).expect("Failed to parse pbxproj"),
         x => unreachable!("invalid pbxproj root type: {x:?}"),
     };
     eprintln!("pbxproj: {pbxproj:#?}");
     let root_project = pbxproj.root_project();
     eprintln!("rootObject: {root_project:#?}");
-    let PBXObject::Group(main_group) = pbxproj
-        .object_ref(&root_project.main_group)
-        .expect("missing main group object")
-    else {
-        unreachable!(
-            "invalid mainGroup: {:?}",
-            pbxproj.object_ref(&root_project.main_group)
-        );
-    };
+    let main_group = root_project
+        .main_group
+        .entity_of::<PBXGroup>(&pbxproj)
+        .expect("invalid mainGroup");
     eprintln!("main group: {main_group:#?}");
     for c in main_group.children.iter() {
         eprintln!("main: {:#?}", pbxproj.object_ref(c));
@@ -908,44 +1047,31 @@ fn main() {
         "product ref group: {:#?}",
         pbxproj.object_ref(&root_project.product_ref_group)
     );
-    let PBXObject::ConfigurationList(build_configuration_list) = pbxproj
-        .object_ref(&root_project.build_configuration_list)
-        .expect("no buildConfigurationList")
-    else {
-        unreachable!(
-            "invalid buildConfigurationList: {:?}",
-            pbxproj.object_ref(&root_project.build_configuration_list)
-        );
-    };
+    let build_configuration_list = root_project
+        .build_configuration_list
+        .entity_of::<XCConfigurationList>(&pbxproj)
+        .expect("invalid buildConfiguration");
     eprintln!("build configuration list: {build_configuration_list:#?}");
     for c in build_configuration_list.build_configurations.iter() {
         eprintln!("build cfg: {:#?}", pbxproj.object_ref(c));
     }
     for c in root_project.targets.clone().into_iter() {
-        eprintln!("target: {:#?}", pbxproj.object_ref(&c));
-        match pbxproj.object_ref(&c).expect("no target object found") {
+        eprintln!("target: {:#?}", c.entity(&pbxproj));
+        match c.entity(&pbxproj).expect("no target object found") {
             PBXObject::NativeTarget(nt) => {
-                let PBXObject::ConfigurationList(build_cfg_list) = pbxproj
-                    .object_ref(&nt.build_configuration_list)
-                    .expect("no buildConfigurationList")
-                else {
-                    unreachable!(
-                        "expected cfg list: {:?}",
-                        pbxproj.object_ref(&nt.build_configuration_list)
-                    );
-                };
+                let build_cfg_list = nt
+                    .build_configuration_list
+                    .entity_of::<XCConfigurationList>(&pbxproj)
+                    .expect("invalid buildConfigurationList");
                 eprintln!("target build cfg list: {build_cfg_list:#?}");
 
                 for c in build_cfg_list.build_configurations.clone().into_iter() {
-                    let PBXObject::BuildConfiguration(cfg) =
-                        pbxproj.object_ref(&c).expect("missing buildConfiguration")
-                    else {
-                        unreachable!("expected build cfg: {:?}", pbxproj.object_ref(&c));
-                    };
+                    let cfg = c
+                        .entity_of::<XCBuildConfiguration>(&pbxproj)
+                        .expect("invalid buildConfiguration");
                     eprintln!("target build cfg: {cfg:#?}");
 
-                    pbxproj
-                        .object_ref_mut_of::<XCBuildConfiguration>(&c)
+                    c.entity_mut_of::<XCBuildConfiguration>(&mut pbxproj)
                         .unwrap()
                         .build_settings
                         .insert(
@@ -970,7 +1096,7 @@ fn main() {
     ps.skip_spaces();
     let v = parse_value(&mut ps).unwrap();
     let pbxproj2 = match v {
-        Value::Map(xs) => PBXProjectFile::decode(xs),
+        Value::Map(xs) => PBXProjectFile::decode(xs).expect("Failed to parse pbxproj"),
         x => unreachable!("invalid pbxproj root type: {x:?}"),
     };
     for (o, v) in p1.objects.iter() {
