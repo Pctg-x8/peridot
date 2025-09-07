@@ -54,6 +54,43 @@ impl<'s> PBXObjectIDRef<'s> {
     }
 }
 
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PBXTypedObjectIDRef<'s, T>(PBXObjectIDRef<'s>, core::marker::PhantomData<T>);
+impl<'s, T> PBXTypedObjectIDRef<'s, T> {
+    #[inline(always)]
+    pub fn decode(v: Value<'s>) -> Result<Self, DecodeError<'s>> {
+        Ok(Self(PBXObjectIDRef::decode(v)?, core::marker::PhantomData))
+    }
+
+    #[inline(always)]
+    pub fn encode(self) -> Value<'s> {
+        self.0.encode()
+    }
+
+    #[inline(always)]
+    pub fn entity<'id, 'f>(
+        &'id self,
+        file: &'f PBXProjectFile<'s>,
+    ) -> Result<&'f T, TypedObjectReferenceError<'id, 'f, 's>>
+    where
+        T: PBXObjectType<'s>,
+    {
+        self.0.entity_of::<T>(file)
+    }
+
+    #[inline(always)]
+    pub fn entity_mut<'id, 'f>(
+        &'id self,
+        file: &'f mut PBXProjectFile<'s>,
+    ) -> Result<&'f mut T, TypedObjectMutableReferenceError<'id, 'f, 's>>
+    where
+        T: PBXObjectType<'s>,
+    {
+        self.0.entity_mut_of::<T>(file)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError<'s> {
     #[error("unexpected value: {0:?}")]
@@ -642,7 +679,7 @@ pub struct PBXNativeTarget<'s> {
     pub product_type: Cow<'s, str>,
     pub build_phases: Vec<PBXObjectIDRef<'s>>,
     pub build_rules: Vec<PBXObjectIDRef<'s>>,
-    pub build_configuration_list: PBXObjectIDRef<'s>,
+    pub build_configuration_list: PBXTypedObjectIDRef<'s, XCConfigurationList<'s>>,
     pub product_name: Cow<'s, str>,
     pub dependencies: Vec<PBXObjectIDRef<'s>>,
     pub extras: HashMap<&'s str, Value<'s>>,
@@ -686,7 +723,7 @@ impl<'s> PBXNativeTarget<'s> {
                 .collect::<Result<_, _>>(),
             Some(x) => Err(DecodeError::unexpected_attr_value("buildRules", x)),
         }?;
-        let build_configuration_list = PBXObjectIDRef::decode(
+        let build_configuration_list = PBXTypedObjectIDRef::decode(
             xs.remove("buildConfigurationList")
                 .ok_or(DecodeError::MissingRequiredAttr("buildConfigurationList"))?,
         )
@@ -755,9 +792,9 @@ pub struct PBXProject<'s> {
     pub build_configuration_list: PBXObjectIDRef<'s>,
     pub targets: Vec<PBXObjectIDRef<'s>>,
     pub project_dir_path: Option<Cow<'s, str>>,
-    pub main_group: PBXObjectIDRef<'s>,
+    pub main_group: PBXTypedObjectIDRef<'s, PBXGroup<'s>>,
     pub development_region: Option<Cow<'s, str>>,
-    pub product_ref_group: PBXObjectIDRef<'s>,
+    pub product_ref_group: PBXTypedObjectIDRef<'s, PBXGroup<'s>>,
     pub project_root: Option<Cow<'s, str>>,
     pub extras: HashMap<&'s str, Value<'s>>,
 }
@@ -786,7 +823,7 @@ impl<'s> PBXProject<'s> {
                 x => Err(DecodeError::unexpected_attr_value("projectDirPath", x)),
             })
             .transpose()?;
-        let main_group = PBXObjectIDRef::decode(
+        let main_group = PBXTypedObjectIDRef::decode(
             xs.remove("mainGroup")
                 .ok_or(DecodeError::MissingRequiredAttr("mainGroup"))?,
         )
@@ -798,7 +835,7 @@ impl<'s> PBXProject<'s> {
                 x => Err(DecodeError::unexpected_attr_value("developmentRegion", x)),
             })
             .transpose()?;
-        let product_ref_group = PBXObjectIDRef::decode(
+        let product_ref_group = PBXTypedObjectIDRef::decode(
             xs.remove("productRefGroup")
                 .ok_or(DecodeError::MissingRequiredAttr("productRefGroup"))?,
         )
@@ -947,7 +984,7 @@ impl<'s> XCBuildConfiguration<'s> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XCConfigurationList<'s> {
     pub default_configuration_name: Cow<'s, str>,
-    pub build_configurations: Vec<PBXObjectIDRef<'s>>,
+    pub build_configurations: Vec<PBXTypedObjectIDRef<'s, XCBuildConfiguration<'s>>>,
     pub extras: HashMap<&'s str, Value<'s>>,
 }
 impl<'s> XCConfigurationList<'s> {
@@ -967,7 +1004,7 @@ impl<'s> XCConfigurationList<'s> {
             Some(Value::Array(xs)) => xs
                 .into_iter()
                 .map(|x| {
-                    PBXObjectIDRef::decode(x).map_err(DecodeError::invalid_attr_element_value(
+                    PBXTypedObjectIDRef::decode(x).map_err(DecodeError::invalid_attr_element_value(
                         "buildConfigurations",
                     ))
                 })
@@ -1037,7 +1074,7 @@ fn main() {
     eprintln!("rootObject: {root_project:#?}");
     let main_group = root_project
         .main_group
-        .entity_of::<PBXGroup>(&pbxproj)
+        .entity(&pbxproj)
         .expect("invalid mainGroup");
     eprintln!("main group: {main_group:#?}");
     for c in main_group.children.iter() {
@@ -1045,7 +1082,7 @@ fn main() {
     }
     eprintln!(
         "product ref group: {:#?}",
-        pbxproj.object_ref(&root_project.product_ref_group)
+        root_project.product_ref_group.entity(&pbxproj)
     );
     let build_configuration_list = root_project
         .build_configuration_list
@@ -1053,7 +1090,7 @@ fn main() {
         .expect("invalid buildConfiguration");
     eprintln!("build configuration list: {build_configuration_list:#?}");
     for c in build_configuration_list.build_configurations.iter() {
-        eprintln!("build cfg: {:#?}", pbxproj.object_ref(c));
+        eprintln!("build cfg: {:#?}", c.entity(&pbxproj));
     }
     for c in root_project.targets.clone().into_iter() {
         eprintln!("target: {:#?}", c.entity(&pbxproj));
@@ -1061,18 +1098,16 @@ fn main() {
             PBXObject::NativeTarget(nt) => {
                 let build_cfg_list = nt
                     .build_configuration_list
-                    .entity_of::<XCConfigurationList>(&pbxproj)
+                    .entity(&pbxproj)
                     .expect("invalid buildConfigurationList");
                 eprintln!("target build cfg list: {build_cfg_list:#?}");
 
                 for c in build_cfg_list.build_configurations.clone().into_iter() {
-                    let cfg = c
-                        .entity_of::<XCBuildConfiguration>(&pbxproj)
-                        .expect("invalid buildConfiguration");
+                    let cfg = c.entity(&pbxproj).expect("invalid buildConfiguration");
                     eprintln!("target build cfg: {cfg:#?}");
 
-                    c.entity_mut_of::<XCBuildConfiguration>(&mut pbxproj)
-                        .unwrap()
+                    c.entity_mut(&mut pbxproj)
+                        .expect("invalid buildConfiguration")
                         .build_settings
                         .insert(
                             "VULKAN_SDK",
