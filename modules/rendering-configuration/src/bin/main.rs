@@ -1,20 +1,18 @@
-use rendering_configuration::next_token;
+use rendering_configuration::tokenizer;
 
 fn main() {
     let content = std::fs::read_to_string(&std::env::args_os().nth(1).unwrap()).unwrap();
 
-    let mut current: &str = &content;
+    let mut ctx = tokenizer::Context::new(&content);
     loop {
-        match next_token(&current) {
-            (Some(t), rest) => {
+        match tokenizer::next_token(&mut ctx) {
+            Some(t) => {
                 println!("{t:?}");
-                current = rest;
             }
-            (None, rest) if rest.is_empty() => {
-                break;
-            }
-            (None, rest) => {
-                println!("no token: left {rest}");
+            None => {
+                if !ctx.is_finished() {
+                    println!("no token: left {}", ctx.src());
+                }
                 break;
             }
         }
