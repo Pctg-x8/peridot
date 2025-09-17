@@ -9,16 +9,11 @@ End
 Pass "Visibility" = Use "Visibility"
 Pass "Visibility.Lighting"
   VertexBindings
-    pos : POSITION0
-    uv : TEXCOORD0
+    pos: Float4 [POSITION0]
+    uv: Float2 [TEXCOORD0]
   End
 
   Shader
-struct Vertex {
-    float4 pos : POSITION;
-    float2 uv : TEXCOORD0;
-}
-
 struct VertexOutput {
     FragmentInput fragmentInput : Varyings;
     float4 pos : SV_Position;
@@ -40,7 +35,7 @@ VertexOutput vert(Vertex v) {
 
 [shader("fragment")]
 float4 frag(FragmentInput input : Varyings) : SV_Target {
-    return mainTexture.Sample(input.uv) * colorTint;
+    return PeridotMaterialParameters::mainTexture.Sample(input.uv) * PeridotMaterialParameters::colorTint;
 }
   End
 End

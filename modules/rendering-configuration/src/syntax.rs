@@ -54,7 +54,7 @@ impl<'s> Attribute<'s> {
 pub struct Property<'s> {
     pub name: Identifier<'s>,
     pub colon: Colon,
-    pub r#type: Identifier<'s>,
+    pub r#type: Type<'s>,
     pub equal: Equal,
     pub default: Expression<'s>,
 }
@@ -68,10 +68,7 @@ impl<'s> Property<'s> {
             Some(Token::Colon(x)) => x,
             x => panic!("unexpected token: {x:?}"),
         };
-        let r#type = match state.next() {
-            Some(Token::Identifier(x)) => x,
-            x => panic!("invalid property type: {x:?}"),
-        };
+        let r#type = Type::parse(state);
         let equal = match state.next() {
             Some(Token::Equal(x)) => x,
             x => panic!("unexpected token: {x:?}"),
@@ -84,6 +81,31 @@ impl<'s> Property<'s> {
             r#type,
             equal,
             default,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Type<'s> {
+    Float4(Identifier<'s>),
+    Float2(Identifier<'s>),
+    Texture2D(Identifier<'s>),
+    RGB(Identifier<'s>),
+}
+impl<'s> Type<'s> {
+    pub fn parse(state: &mut ParserState<'s>) -> Self {
+        Self::parse_factor(state)
+    }
+
+    pub fn parse_factor(state: &mut ParserState<'s>) -> Self {
+        match state.next() {
+            Some(Token::Identifier(ident)) if ident.as_str() == "Float2" => Self::Float2(ident),
+            Some(Token::Identifier(ident)) if ident.as_str() == "Float4" => Self::Float4(ident),
+            Some(Token::Identifier(ident)) if ident.as_str() == "Texture2D" => {
+                Self::Texture2D(ident)
+            }
+            Some(Token::Identifier(ident)) if ident.as_str() == "RGB" => Self::RGB(ident),
+            x => panic!("invalid factor type: {x:?}"),
         }
     }
 }
@@ -213,7 +235,14 @@ impl<'s> PropertiesBlock<'s> {
 pub enum PassBlockContent<'s> {
     VertexBindingsBlock {
         vertex_bindings: KwVertexBindings,
-        entries: Vec<(Identifier<'s>, Colon, Identifier<'s>)>,
+        entries: Vec<(
+            Identifier<'s>,
+            Colon,
+            Type<'s>,
+            OpenBracket,
+            Identifier<'s>,
+            CloseBracket,
+        )>,
         end: KwEnd,
     },
     ShaderBlock {
@@ -241,11 +270,21 @@ impl<'s> PassBlockContent<'s> {
                                 Some(Token::Colon(x)) => x,
                                 x => panic!("invalid vertex binding entry colon: {x:?}"),
                             };
-                            let ty = match state.next() {
-                                Some(Token::Identifier(ty)) => ty,
-                                x => panic!("invalid vertex binding type: {x:?}"),
+                            let ty = Type::parse(state);
+                            let semantic_start = match state.next() {
+                                Some(Token::OpenBracket(x)) => x,
+                                x => panic!("invalid start of semantic name: {x:?}"),
                             };
-                            entries.push((name, colon, ty));
+                            let semantic = match state.next() {
+                                Some(Token::Identifier(x)) => x,
+                                x => panic!("invalid semantic name: {x:?}"),
+                            };
+                            let semantic_end = match state.next() {
+                                Some(Token::CloseBracket(x)) => x,
+                                x => panic!("invalid end of semantic name: {x:?}"),
+                            };
+
+                            entries.push((name, colon, ty, semantic_start, semantic, semantic_end));
                         }
                         Some(x) => panic!("invalid vertex binding entry: {x:?}"),
                         None => panic!("unexpected end of tokens in vertex bindings block"),

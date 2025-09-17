@@ -1,12 +1,26 @@
 #[derive(Debug, Clone)]
-
 pub struct Identifier<'s>(&'s str, Location);
+impl<'s> Identifier<'s> {
+    pub(crate) const fn as_str(&self) -> &'s str {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct StrLit<'s>(&'s str, Location);
+impl<'s> StrLit<'s> {
+    pub(crate) const fn as_str(&self) -> &'s str {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct NumLit<'s>(&'s str, Location);
+impl<'s> NumLit<'s> {
+    pub(crate) const fn as_str(&self) -> &'s str {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
