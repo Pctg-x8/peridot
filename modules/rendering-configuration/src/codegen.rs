@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use crate::syntax;
+use crate::{PropertyDestinationVk, PropertyMappingVk, syntax};
 
 #[derive(Debug)]
 pub struct RenderingConfiguration {
@@ -120,7 +120,7 @@ impl RenderingConfiguration {
     }
 
     // いったんターゲットをVulkanに限定する(他API対応もでてきたらそのときに対応する)
-    pub fn gen_vk_prelude(&self) -> (String, HashMap<String, (Type, PropertyVkMapping)>) {
+    pub fn gen_vk_prelude(&self) -> (String, HashMap<String, (Type, PropertyMappingVk)>) {
         let mut specialized_constants = Vec::<(Cow<str>, &Type)>::new();
         let mut combined_constants = Vec::new();
         let mut push_constant_block_members = Vec::new();
@@ -133,11 +133,11 @@ impl RenderingConfiguration {
                 PropertyUpdateFrequency::Immutable => match p.r#type {
                     Type::Float2 => {
                         let r_dest =
-                            PropertyVkDestination::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants
                             .push((format!("{name}_R", name = p.name).into(), &Type::Float));
                         let g_dest =
-                            PropertyVkDestination::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants
                             .push((format!("{name}_G", name = p.name).into(), &Type::Float));
                         combined_constants.push(format!(
@@ -148,7 +148,7 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyVkMapping::Splitted(vec![r_dest, g_dest]),
+                                    PropertyMappingVk::Splitted(vec![r_dest, g_dest]),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -158,19 +158,19 @@ impl RenderingConfiguration {
                     }
                     Type::Float4 | Type::RGB => {
                         let r_dest =
-                            PropertyVkDestination::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants
                             .push((format!("{name}_R", name = p.name).into(), &Type::Float));
                         let g_dest =
-                            PropertyVkDestination::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants
                             .push((format!("{name}_G", name = p.name).into(), &Type::Float));
                         let b_dest =
-                            PropertyVkDestination::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants
                             .push((format!("{name}_B", name = p.name).into(), &Type::Float));
                         let a_dest =
-                            PropertyVkDestination::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants
                             .push((format!("{name}_A", name = p.name).into(), &Type::Float));
                         combined_constants.push(format!(
@@ -180,7 +180,7 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyVkMapping::Splitted(vec![
+                                    PropertyMappingVk::Splitted(vec![
                                         r_dest, g_dest, b_dest, a_dest,
                                     ]),
                                 ));
@@ -196,7 +196,7 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyVkMapping::Direct(PropertyVkDestination::SpecConstant(
+                                    PropertyMappingVk::Direct(PropertyDestinationVk::SpecConstant(
                                         specialized_constants.len() - 1,
                                     )),
                                 ));
@@ -213,8 +213,8 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                PropertyVkMapping::Direct(
-                                    PropertyVkDestination::PushConstantBlockOffset(
+                                PropertyMappingVk::Direct(
+                                    PropertyDestinationVk::PushConstantBlockOffset(
                                         push_constant_block_members.len() - 1,
                                     ),
                                 ),
@@ -231,7 +231,7 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                PropertyVkMapping::Direct(PropertyVkDestination::DescriptorSet(
+                                PropertyMappingVk::Direct(PropertyDestinationVk::DescriptorSet(
                                     descriptor_sets.len() - 1,
                                 )),
                             ));
@@ -247,8 +247,8 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                PropertyVkMapping::Direct(
-                                    PropertyVkDestination::RealtimeBufferOffset(
+                                PropertyMappingVk::Direct(
+                                    PropertyDestinationVk::RealtimeBufferOffset(
                                         realtime_buffer_members.len() - 1,
                                     ),
                                 ),
@@ -323,34 +323,12 @@ impl RenderingConfiguration {
         (code, property_mapping)
     }
 
-    pub fn vk_vertex_semantic_to_location_map(&self, name: &str) -> HashMap<String, usize> {
+    pub fn gen_vk_code_for_pass(&self, name: &str) -> (String, HashMap<String, usize>) {
         let Some(p) = self.passes.get(name) else {
             panic!("no pass: {name}");
         };
 
-        let mut map = HashMap::with_capacity(p.vertex_bindings.len());
-        for (n, vb) in p.vertex_bindings.iter().enumerate() {
-            match map.entry(vb.semantic_name.clone()) {
-                std::collections::hash_map::Entry::Occupied(x) => {
-                    panic!(
-                        "conflicting semantic {} with location {}",
-                        vb.semantic_name,
-                        x.get()
-                    );
-                }
-                std::collections::hash_map::Entry::Vacant(x) => {
-                    x.insert(n);
-                }
-            }
-        }
-
-        map
-    }
-
-    pub fn gen_vk_code_for_pass(&self, name: &str) -> String {
-        let Some(p) = self.passes.get(name) else {
-            panic!("no pass: {name}");
-        };
+        let mut semantic_to_location_map = HashMap::with_capacity(p.vertex_bindings.len());
 
         let mut code = String::new();
         if let Some(ref d) = p.deriving {
@@ -359,6 +337,19 @@ impl RenderingConfiguration {
         if !p.vertex_bindings.is_empty() {
             code.push_str("struct Vertex {\n");
             for (n, vb) in p.vertex_bindings.iter().enumerate() {
+                match semantic_to_location_map.entry(vb.semantic_name.clone()) {
+                    std::collections::hash_map::Entry::Vacant(x) => {
+                        x.insert(n);
+                    }
+                    std::collections::hash_map::Entry::Occupied(x) => {
+                        panic!(
+                            "conflicting vertex semantic {} with location {}",
+                            x.key(),
+                            x.get()
+                        );
+                    }
+                }
+
                 code.push_str("    [vk::location(");
                 code.push_str(&n.to_string());
                 code.push_str(")]\n    ");
@@ -375,22 +366,8 @@ impl RenderingConfiguration {
             code.push_str(s);
         }
 
-        code
+        (code, semantic_to_location_map)
     }
-}
-
-#[derive(Debug)]
-pub enum PropertyVkMapping {
-    Direct(PropertyVkDestination),
-    Splitted(Vec<PropertyVkDestination>),
-}
-
-#[derive(Debug)]
-pub enum PropertyVkDestination {
-    SpecConstant(usize),
-    PushConstantBlockOffset(usize),
-    DescriptorSet(usize),
-    RealtimeBufferOffset(usize),
 }
 
 #[derive(Debug)]

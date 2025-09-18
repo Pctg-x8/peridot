@@ -22,8 +22,7 @@ fn main() {
     // println!("asset: {rc:#?}");
 
     let (prelude, property_mapping) = rc.gen_vk_prelude();
-    let code = rc.gen_vk_code_for_pass("Visibility.Lighting");
-    let semantic_to_location = rc.vk_vertex_semantic_to_location_map("Visibility.Lighting");
+    let (code, semantic_to_location) = rc.gen_vk_code_for_pass("Visibility.Lighting");
     eprintln!("semantic -> vertex location: {semantic_to_location:#?}");
     eprintln!("property mapping: {property_mapping:#?}");
 
