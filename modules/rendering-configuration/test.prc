@@ -4,6 +4,10 @@ Properties
   mainTexture: Texture2D = Use "Texture2D.white"
   [Immutable]
   colorTint: RGB = (1, 1, 1, 1)
+  [PerDrawCall]
+  colorTintOverride: RGB = (1, 1, 1, 1)
+  [PerDrawCall]
+  mode: UInt = 0
 End
 
 Pass "Visibility" = Use "Visibility"
@@ -35,7 +39,7 @@ VertexOutput vert(Vertex v) {
 
 [shader("fragment")]
 float4 frag(FragmentInput input : Varyings) : SV_Target {
-    return PeridotMaterialParameters::mainTexture.Sample(input.uv) * PeridotMaterialParameters::colorTint;
+    return PeridotMaterialParameters::mainTexture.Sample(input.uv) * PeridotMaterialParameters::colorTint * PeridotMaterialParameters::perDrawCall.colorTintOverride;
 }
   End
 End

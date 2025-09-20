@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use crate::{PropertyDestinationVk, PropertyMappingVk, syntax};
+use crate::{PropertyDestinationVk, PropertyMappingVk, PropertyType, syntax};
 
 #[derive(Debug)]
 pub struct RenderingConfiguration {
@@ -17,10 +17,14 @@ impl RenderingConfiguration {
                 syntax::ToplevelElement::PropertiesBlock(ps) => {
                     struct Attributes {
                         immutable: bool,
+                        per_draw_call: bool,
                     }
                     impl Default for Attributes {
                         fn default() -> Self {
-                            Self { immutable: false }
+                            Self {
+                                immutable: false,
+                                per_draw_call: false,
+                            }
                         }
                     }
 
@@ -30,6 +34,8 @@ impl RenderingConfiguration {
                             syntax::PropertiesBlockElement::Attribute(a) => {
                                 if a.name.as_str() == "Immutable" {
                                     attr.immutable = true;
+                                } else if a.name.as_str() == "PerDrawCall" {
+                                    attr.per_draw_call = true;
                                 } else {
                                     panic!("unknown attribute: {:?}", a.name);
                                 }
@@ -37,13 +43,15 @@ impl RenderingConfiguration {
                             syntax::PropertiesBlockElement::Property(p) => {
                                 let update_frequency = if attr.immutable {
                                     PropertyUpdateFrequency::Immutable
+                                } else if attr.per_draw_call {
+                                    PropertyUpdateFrequency::PerDrawCall
                                 } else {
                                     PropertyUpdateFrequency::default()
                                 };
 
                                 properties.push(PropertyData {
                                     name: p.name.as_str().into(),
-                                    r#type: Type::from_syntax(p.r#type),
+                                    r#type: PropertyType::from_syntax(p.r#type),
                                     default: fold_expr(p.default),
                                     update_frequency,
                                 });
@@ -87,7 +95,7 @@ impl RenderingConfiguration {
                                         .map(|(name, _, ty, _, semantic_name, _)| {
                                             PassVertexBindingData {
                                                 name: name.as_str().into(),
-                                                r#type: Type::from_syntax(ty),
+                                                r#type: PropertyType::from_syntax(ty),
                                                 semantic_name: semantic_name.as_str().into(),
                                             }
                                         })
@@ -120,8 +128,8 @@ impl RenderingConfiguration {
     }
 
     // いったんターゲットをVulkanに限定する(他API対応もでてきたらそのときに対応する)
-    pub fn gen_vk_prelude(&self) -> (String, HashMap<String, (Type, PropertyMappingVk)>) {
-        let mut specialized_constants = Vec::<(Cow<str>, &Type)>::new();
+    pub fn gen_vk_prelude(&self) -> (String, HashMap<String, (PropertyType, PropertyMappingVk)>) {
+        let mut specialized_constants = Vec::<(Cow<str>, &PropertyType)>::new();
         let mut combined_constants = Vec::new();
         let mut push_constant_block_members = Vec::new();
         let mut descriptor_sets = Vec::new();
@@ -130,16 +138,21 @@ impl RenderingConfiguration {
 
         for p in self.properties.iter() {
             match p.update_frequency {
+                // compound typeはそのままspecialized constantsにできないのでスカラ型に分解
                 PropertyUpdateFrequency::Immutable => match p.r#type {
-                    Type::Float2 => {
+                    PropertyType::Float2 => {
                         let r_dest =
                             PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants
-                            .push((format!("{name}_R", name = p.name).into(), &Type::Float));
+                        specialized_constants.push((
+                            format!("{name}_R", name = p.name).into(),
+                            &PropertyType::Float,
+                        ));
                         let g_dest =
                             PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants
-                            .push((format!("{name}_G", name = p.name).into(), &Type::Float));
+                        specialized_constants.push((
+                            format!("{name}_G", name = p.name).into(),
+                            &PropertyType::Float,
+                        ));
                         combined_constants.push(format!(
                             "static const float2 {name} = float2({name}_R, {name}_G);",
                             name = p.name
@@ -156,23 +169,31 @@ impl RenderingConfiguration {
                             }
                         }
                     }
-                    Type::Float4 | Type::RGB => {
+                    PropertyType::Float4 | PropertyType::RGB => {
                         let r_dest =
                             PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants
-                            .push((format!("{name}_R", name = p.name).into(), &Type::Float));
+                        specialized_constants.push((
+                            format!("{name}_R", name = p.name).into(),
+                            &PropertyType::Float,
+                        ));
                         let g_dest =
                             PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants
-                            .push((format!("{name}_G", name = p.name).into(), &Type::Float));
+                        specialized_constants.push((
+                            format!("{name}_G", name = p.name).into(),
+                            &PropertyType::Float,
+                        ));
                         let b_dest =
                             PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants
-                            .push((format!("{name}_B", name = p.name).into(), &Type::Float));
+                        specialized_constants.push((
+                            format!("{name}_B", name = p.name).into(),
+                            &PropertyType::Float,
+                        ));
                         let a_dest =
                             PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants
-                            .push((format!("{name}_A", name = p.name).into(), &Type::Float));
+                        specialized_constants.push((
+                            format!("{name}_A", name = p.name).into(),
+                            &PropertyType::Float,
+                        ));
                         combined_constants.push(format!(
                             "static const float4 {name} = float4({name}_R, {name}_G, {name}_B, {name}_A);", name = p.name
                         ));
@@ -214,7 +235,7 @@ impl RenderingConfiguration {
                             x.insert((
                                 p.r#type.clone(),
                                 PropertyMappingVk::Direct(
-                                    PropertyDestinationVk::PushConstantBlockOffset(
+                                    PropertyDestinationVk::PushConstantBlock(
                                         push_constant_block_members.len() - 1,
                                     ),
                                 ),
@@ -247,11 +268,9 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                PropertyMappingVk::Direct(
-                                    PropertyDestinationVk::RealtimeBufferOffset(
-                                        realtime_buffer_members.len() - 1,
-                                    ),
-                                ),
+                                PropertyMappingVk::Direct(PropertyDestinationVk::RealtimeBuffer(
+                                    realtime_buffer_members.len() - 1,
+                                )),
                             ));
                         }
                         std::collections::hash_map::Entry::Occupied(x) => {
@@ -282,7 +301,7 @@ impl RenderingConfiguration {
         }
 
         if !push_constant_block_members.is_empty() {
-            code.push_str("struct PerDraw {\n");
+            code.push_str("struct PerDrawCall {\n");
             for (name, ty) in push_constant_block_members {
                 code.push_str("    ");
                 ty.print(&mut code);
@@ -290,7 +309,7 @@ impl RenderingConfiguration {
                 code.push_str(name);
                 code.push_str(";\n");
             }
-            code.push_str("}\n[vk::push_constant]\nPerDraw perDraw;\n");
+            code.push_str("}\n[vk::push_constant]\nPerDrawCall perDrawCall;\n");
         }
 
         let realtime_buffer_binding_index = descriptor_sets.len();
@@ -322,58 +341,12 @@ impl RenderingConfiguration {
         code.push_str("}\n");
         (code, property_mapping)
     }
-
-    pub fn gen_vk_code_for_pass(&self, name: &str) -> (String, HashMap<String, usize>) {
-        let Some(p) = self.passes.get(name) else {
-            panic!("no pass: {name}");
-        };
-
-        let mut semantic_to_location_map = HashMap::with_capacity(p.vertex_bindings.len());
-
-        let mut code = String::new();
-        if let Some(ref d) = p.deriving {
-            eprintln!("todo: deriving: {d}");
-        }
-        if !p.vertex_bindings.is_empty() {
-            code.push_str("struct Vertex {\n");
-            for (n, vb) in p.vertex_bindings.iter().enumerate() {
-                match semantic_to_location_map.entry(vb.semantic_name.clone()) {
-                    std::collections::hash_map::Entry::Vacant(x) => {
-                        x.insert(n);
-                    }
-                    std::collections::hash_map::Entry::Occupied(x) => {
-                        panic!(
-                            "conflicting vertex semantic {} with location {}",
-                            x.key(),
-                            x.get()
-                        );
-                    }
-                }
-
-                code.push_str("    [vk::location(");
-                code.push_str(&n.to_string());
-                code.push_str(")]\n    ");
-                vb.r#type.print(&mut code);
-                code.push_str(" ");
-                code.push_str(&vb.name);
-                code.push_str(" : ");
-                code.push_str(&vb.semantic_name);
-                code.push_str(";\n");
-            }
-            code.push_str("}\n\n");
-        }
-        if let Some(ref s) = p.shader_code {
-            code.push_str(s);
-        }
-
-        (code, semantic_to_location_map)
-    }
 }
 
 #[derive(Debug)]
 pub struct PropertyData {
     pub name: String,
-    pub r#type: Type,
+    pub r#type: PropertyType,
     pub default: Value,
     pub update_frequency: PropertyUpdateFrequency,
 }
@@ -397,27 +370,64 @@ pub struct PassData {
     pub vertex_bindings: Vec<PassVertexBindingData>,
     pub shader_code: Option<String>,
 }
+impl PassData {
+    pub fn gen_vk_code(&self) -> (String, HashMap<String, u32>) {
+        let mut semantic_to_location_map = HashMap::with_capacity(self.vertex_bindings.len());
+
+        let mut code = String::new();
+        if let Some(ref d) = self.deriving {
+            eprintln!("todo: deriving: {d}");
+        }
+        if !self.vertex_bindings.is_empty() {
+            code.push_str("struct Vertex {\n");
+            for (n, vb) in self.vertex_bindings.iter().enumerate() {
+                match semantic_to_location_map.entry(vb.semantic_name.clone()) {
+                    std::collections::hash_map::Entry::Vacant(x) => {
+                        x.insert(n as _);
+                    }
+                    std::collections::hash_map::Entry::Occupied(x) => {
+                        panic!(
+                            "conflicting vertex semantic {} with location {}",
+                            x.key(),
+                            x.get()
+                        );
+                    }
+                }
+
+                code.push_str("    [vk::location(");
+                code.push_str(&n.to_string());
+                code.push_str(")]\n    ");
+                vb.r#type.print(&mut code);
+                code.push_str(" ");
+                code.push_str(&vb.name);
+                code.push_str(" : ");
+                code.push_str(&vb.semantic_name);
+                code.push_str(";\n");
+            }
+            code.push_str("}\n\n");
+        }
+        if let Some(ref s) = self.shader_code {
+            code.push_str(s);
+        }
+
+        (code, semantic_to_location_map)
+    }
+}
 
 #[derive(Debug)]
 pub struct PassVertexBindingData {
     pub name: String,
-    pub r#type: Type,
+    pub r#type: PropertyType,
     pub semantic_name: String,
 }
 
-#[derive(Debug, Clone)]
-pub enum Type {
-    Texture2D,
-    RGB,
-    Float,
-    Float2,
-    Float4,
-}
-impl Type {
+impl PropertyType {
     fn from_syntax(x: syntax::Type) -> Self {
         match x {
             syntax::Type::Texture2D(_) => Self::Texture2D,
             syntax::Type::RGB(_) => Self::RGB,
+            syntax::Type::UInt(_) => Self::UInt,
+            syntax::Type::Int(_) => Self::Int,
             syntax::Type::Float2(_) => Self::Float2,
             syntax::Type::Float4(_) => Self::Float4,
         }
@@ -428,6 +438,8 @@ impl Type {
             // Texture: treated as combined image sampler
             Self::Texture2D => sink.push_str("Sampler2D"),
             Self::RGB => sink.push_str("float4"),
+            Self::UInt => sink.push_str("uint"),
+            Self::Int => sink.push_str("int"),
             Self::Float => sink.push_str("float"),
             Self::Float2 => sink.push_str("float2"),
             Self::Float4 => sink.push_str("float4"),

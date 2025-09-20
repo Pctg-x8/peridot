@@ -3,7 +3,13 @@ name = "rendering-configuration"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+with-loader-impl = ["dep:peridot"]
+
 [dependencies]
+slang = { git = "https://github.com/Pctg-x8/slang-binding-rs" }
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot = { path = "../../base", optional = true }
 
 [lints]
 workspace = true

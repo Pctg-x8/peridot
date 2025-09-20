@@ -1,6 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{BufRead, Seek, SeekFrom, Write},
+};
 
 pub mod codegen;
+mod file;
 pub mod syntax;
 pub mod tokenizer;
 
@@ -9,7 +13,7 @@ pub enum ShadingPassVk {
         name: String,
     },
     Custom {
-        vertex_semantic_to_location: HashMap<String, usize>,
+        vertex_semantic_to_location: HashMap<String, u32>,
         code: Vec<u32>,
     },
 }
@@ -23,13 +27,156 @@ pub enum PropertyMappingVk {
 #[derive(Debug)]
 pub enum PropertyDestinationVk {
     SpecConstant(usize),
-    PushConstantBlockOffset(usize),
+    PushConstantBlock(usize),
     DescriptorSet(usize),
-    RealtimeBufferOffset(usize),
+    RealtimeBuffer(usize),
 }
 
 /// converted asset data
 pub struct CompiledRenderingConfigurationVk {
-    pub property_mappings: HashMap<String, PropertyMappingVk>,
+    pub property_mappings: HashMap<String, (PropertyType, PropertyMappingVk)>,
     pub passes: HashMap<String, ShadingPassVk>,
+}
+
+#[cfg(feature = "with-loader-impl")]
+impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
+    const EXT: &'static str = "prcc";
+}
+#[cfg(feature = "with-loader-impl")]
+impl peridot::FromAsset for CompiledRenderingConfigurationVk {
+    type Error = std::io::Error;
+
+    fn from_asset<Asset: std::io::Read + Seek + 'static>(
+        asset: Asset,
+    ) -> Result<Self, Self::Error> {
+        read(&mut std::io::BufReader::new(asset))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum PropertyType {
+    Texture2D,
+    RGB,
+    UInt,
+    Int,
+    Float,
+    Float2,
+    Float4,
+}
+
+pub fn write(
+    sink: &mut impl Write,
+    compiled: CompiledRenderingConfigurationVk,
+) -> std::io::Result<usize> {
+    let mut writes = 0;
+
+    let mut header = file::Header {
+        shading_pass_directory_offset: 0,
+    };
+
+    writes += file::PropertyDirectory {
+        entries: compiled
+            .property_mappings
+            .into_iter()
+            .map(|(n, (t, m))| (n, t, m))
+            .collect(),
+    }
+    .write(sink)?;
+
+    let mut shading_pass_directory = file::ShadingPassDirectory {
+        entries: Vec::with_capacity(compiled.passes.len()),
+    };
+    for (n, p) in compiled.passes {
+        match p {
+            ShadingPassVk::SimpleDeriveBuiltinPass { name } => {
+                shading_pass_directory.entries.push((
+                    n,
+                    file::ShadingPassDirectoryEntry::SimpleDeriveBuiltin(name),
+                ));
+            }
+            ShadingPassVk::Custom {
+                vertex_semantic_to_location,
+                code,
+            } => {
+                shading_pass_directory
+                    .entries
+                    .push((n, file::ShadingPassDirectoryEntry::Located(writes as _)));
+                writes += file::ShadingPassVk {
+                    vertex_semantic_to_location: vertex_semantic_to_location
+                        .into_iter()
+                        .map(|(n, l)| (n, l))
+                        .collect(),
+                    code,
+                }
+                .write(sink)?;
+            }
+        }
+    }
+    header.shading_pass_directory_offset = writes as _;
+    writes += shading_pass_directory.write(sink)?;
+
+    writes += header.write(sink)?;
+    Ok(writes)
+}
+
+pub fn read(
+    source: &mut (impl BufRead + Seek),
+) -> std::io::Result<CompiledRenderingConfigurationVk> {
+    source.seek(file::Header::READ_SEEK_POS)?;
+    let (header, _swap_bytes) = file::Header::read(source)?;
+    source.seek(SeekFrom::Start(0))?;
+    let property_directory = file::PropertyDirectory::read(source)?;
+    source.seek(SeekFrom::Start(header.shading_pass_directory_offset))?;
+    let shading_pass_directory = file::ShadingPassDirectory::read(source)?;
+
+    let mut result = CompiledRenderingConfigurationVk {
+        property_mappings: HashMap::with_capacity(property_directory.entries.len()),
+        passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
+    };
+    for (n, t, m) in property_directory.entries {
+        match result.property_mappings.entry(n) {
+            std::collections::hash_map::Entry::Vacant(x) => {
+                x.insert((t, m));
+            }
+            std::collections::hash_map::Entry::Occupied(x) => {
+                panic!("conflicting property: {}", x.key());
+            }
+        }
+    }
+    for (n, p) in shading_pass_directory.entries {
+        match result.passes.entry(n) {
+            std::collections::hash_map::Entry::Vacant(x) => match p {
+                file::ShadingPassDirectoryEntry::SimpleDeriveBuiltin(name) => {
+                    x.insert(ShadingPassVk::SimpleDeriveBuiltinPass { name });
+                }
+                file::ShadingPassDirectoryEntry::Located(loc) => {
+                    source.seek(SeekFrom::Start(loc))?;
+                    let pass_data = file::ShadingPassVk::read(source)?;
+
+                    let mut vertex_semantic_to_location =
+                        HashMap::with_capacity(pass_data.vertex_semantic_to_location.len());
+                    for (n, l) in pass_data.vertex_semantic_to_location {
+                        match vertex_semantic_to_location.entry(n) {
+                            std::collections::hash_map::Entry::Vacant(x) => {
+                                x.insert(l);
+                            }
+                            std::collections::hash_map::Entry::Occupied(x) => {
+                                panic!("conflicting vertex semantic: {}", x.key());
+                            }
+                        }
+                    }
+
+                    x.insert(ShadingPassVk::Custom {
+                        vertex_semantic_to_location,
+                        code: pass_data.code,
+                    });
+                }
+            },
+            std::collections::hash_map::Entry::Occupied(x) => {
+                panic!("conflicting pass: {}", x.key());
+            }
+        }
+    }
+
+    Ok(result)
 }

@@ -91,6 +91,8 @@ pub enum Type<'s> {
     Float2(Identifier<'s>),
     Texture2D(Identifier<'s>),
     RGB(Identifier<'s>),
+    UInt(Identifier<'s>),
+    Int(Identifier<'s>),
 }
 impl<'s> Type<'s> {
     pub fn parse(state: &mut ParserState<'s>) -> Self {
@@ -99,6 +101,8 @@ impl<'s> Type<'s> {
 
     pub fn parse_factor(state: &mut ParserState<'s>) -> Self {
         match state.next() {
+            Some(Token::Identifier(ident)) if ident.as_str() == "UInt" => Self::UInt(ident),
+            Some(Token::Identifier(ident)) if ident.as_str() == "Int" => Self::Int(ident),
             Some(Token::Identifier(ident)) if ident.as_str() == "Float2" => Self::Float2(ident),
             Some(Token::Identifier(ident)) if ident.as_str() == "Float4" => Self::Float4(ident),
             Some(Token::Identifier(ident)) if ident.as_str() == "Texture2D" => {
