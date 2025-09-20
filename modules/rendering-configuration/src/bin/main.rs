@@ -9,7 +9,8 @@ use rendering_configuration::{
 use slang::{IBlob, IComponentType, IGlobalSession, IModule, ISession, IUnknown};
 
 fn main() {
-    let content = std::fs::read_to_string(&std::env::args_os().nth(1).unwrap()).unwrap();
+    let content = std::fs::read_to_string(&std::env::args_os().nth(1).expect("missing arg"))
+        .expect("failed to read input");
 
     let ctx = tokenizer::Context::new(&content);
     let mut state = ParserState::new(ctx);
