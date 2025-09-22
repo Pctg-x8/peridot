@@ -134,11 +134,13 @@ impl RenderingConfiguration {
     ) -> (
         String,
         HashMap<String, (prc::PropertyType, prc::PropertyMappingVk)>,
+        Vec<prc::DescriptorTypeVk>,
     ) {
         let mut specialized_constants = Vec::<(Cow<str>, &prc::PropertyType)>::new();
         let mut combined_constants = Vec::new();
         let mut push_constant_block_members = Vec::new();
         let mut descriptor_sets = Vec::new();
+        let mut descriptor_set_layouts = Vec::new();
         let mut realtime_buffer_members = Vec::new();
         let mut property_mapping = HashMap::new();
 
@@ -256,6 +258,12 @@ impl RenderingConfiguration {
                 }
                 PropertyUpdateFrequency::Dynamic => {
                     descriptor_sets.push((&p.name, &p.r#type));
+                    descriptor_set_layouts.push(match p.r#type {
+                        prc::PropertyType::Texture2D => prc::DescriptorTypeVk::CombinedImageSampler,
+                        ref x => todo!(
+                            "non-texture dynamic properties(constructs single uniform block): {x:?}"
+                        ),
+                    });
                     match property_mapping.entry(p.name.clone()) {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
@@ -377,11 +385,11 @@ static inline float4x4 transformMatrix() {
             }
             code.push_str("}\n[vk::binding(");
             code.push_str(&realtime_buffer_binding_index.to_string());
-            code.push_str(", 2)]\nRealtimeBuffer realtime;\n");
+            code.push_str(", 2)]\nConstantBuffer<RealtimeBuffer> realtime;\n");
         }
 
         code.push_str("}\n");
-        (code, property_mapping)
+        (code, property_mapping, descriptor_set_layouts)
     }
 }
 

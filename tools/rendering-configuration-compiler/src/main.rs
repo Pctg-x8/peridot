@@ -49,11 +49,15 @@ fn main() {
 
     let mut asset = prc::CompiledRenderingConfigurationVk {
         property_mappings: HashMap::new(),
+        descriptor_set_layouts: Vec::new(),
+        push_constant_buffer_size_bytes: 0,
+        realtime_buffer_size_bytes: 0,
         passes: HashMap::new(),
     };
-    let (prelude, property_mapping) = rc.gen_vk_prelude();
+    let (prelude, property_mapping, descriptor_set_layouts) = rc.gen_vk_prelude();
     eprintln!("property mapping: {property_mapping:#?}");
-    asset.property_mappings.extend(property_mapping);
+    asset.property_mappings = property_mapping;
+    asset.descriptor_set_layouts = descriptor_set_layouts;
     for (n, p) in rc.passes {
         if p.shader_code.is_none() && p.vertex_bindings.is_empty() {
             // simple derive
@@ -164,11 +168,21 @@ fn main() {
             aligned_code.set_len(aligned_code.capacity());
         }
 
-        // TODO: slang v2025.17だとISession由来のオブジェクトをreleaseするとISession::releaseでおちるので、他オブジェクトはあえてreleaseしない(どうせSessionが消えたらこれらも消えるはず)
-        // ただ解放するのが正解だとはおもう......(slang側のバグのようにみえるが、詳細なドキュメントがないので不明)
-        core::mem::forget(linked);
-        core::mem::forget(program);
-        core::mem::forget(module);
+        let refl = program.get_layout(0, None);
+        if let Some(t) = refl.find_type_by_name(c"PeridotMaterialParameters.PerDrawCall") {
+            let tl = refl
+                .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
+                .expect("no type layout for uniform block");
+            asset.push_constant_buffer_size_bytes =
+                tl.size(slang::reflection::ParameterCategory::PushConstantBuffer);
+        }
+        if let Some(t) = refl.find_type_by_name(c"PeridotMaterialParameters.RealtimeBuffer") {
+            let tl = refl
+                .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
+                .expect("no type layout for realtime buffer");
+            asset.realtime_buffer_size_bytes =
+                tl.size(slang::reflection::ParameterCategory::Uniform);
+        }
 
         asset.passes.insert(
             n,
@@ -177,6 +191,12 @@ fn main() {
                 code: aligned_code,
             },
         );
+
+        // TODO: slang v2025.17だとISession由来のオブジェクトをreleaseするとISession::releaseでおちるので、他オブジェクトはあえてreleaseしない(どうせSessionが消えたらこれらも消えるはず)
+        // ただ解放するのが正解だとはおもう......(slang側のバグのようにみえるが、詳細なドキュメントがないので不明)
+        core::mem::forget(linked);
+        core::mem::forget(program);
+        core::mem::forget(module);
     }
 
     let mut total_time = core::mem::MaybeUninit::uninit();

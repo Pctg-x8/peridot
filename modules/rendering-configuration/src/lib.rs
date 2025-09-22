@@ -29,9 +29,18 @@ pub enum PropertyDestinationVk {
     RealtimeBuffer(usize),
 }
 
+#[derive(Debug)]
+pub enum DescriptorTypeVk {
+    UniformBuffer { size_bytes: usize },
+    CombinedImageSampler,
+}
+
 /// converted asset data
 pub struct CompiledRenderingConfigurationVk {
     pub property_mappings: HashMap<String, (PropertyType, PropertyMappingVk)>,
+    pub descriptor_set_layouts: Vec<DescriptorTypeVk>,
+    pub push_constant_buffer_size_bytes: usize,
+    pub realtime_buffer_size_bytes: usize,
     pub passes: HashMap<String, ShadingPassVk>,
 }
 
@@ -77,6 +86,9 @@ pub fn write(
             .into_iter()
             .map(|(n, (t, m))| (n, t, m))
             .collect(),
+        descriptor_set_layouts: compiled.descriptor_set_layouts,
+        push_constant_buffer_size_bytes: compiled.push_constant_buffer_size_bytes,
+        realtime_buffer_size_bytes: compiled.realtime_buffer_size_bytes,
     }
     .write(sink)?;
 
@@ -128,6 +140,9 @@ pub fn read(
 
     let mut result = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::with_capacity(property_directory.entries.len()),
+        descriptor_set_layouts: property_directory.descriptor_set_layouts,
+        push_constant_buffer_size_bytes: property_directory.push_constant_buffer_size_bytes,
+        realtime_buffer_size_bytes: property_directory.realtime_buffer_size_bytes,
         passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
     };
     for (n, t, m) in property_directory.entries {

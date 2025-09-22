@@ -2,7 +2,7 @@ use std::io::{BufRead, IoSlice, IoSliceMut, Read, SeekFrom, Write};
 
 use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt};
 
-use crate::{PropertyDestinationVk, PropertyMappingVk, PropertyType};
+use crate::{DescriptorTypeVk, PropertyDestinationVk, PropertyMappingVk, PropertyType};
 
 #[inline(always)]
 fn b32<'x>(v: &'x u32) -> &'x [u8] {
@@ -77,6 +77,9 @@ impl Header {
 
 pub struct PropertyDirectory {
     pub entries: Vec<(String, PropertyType, PropertyMappingVk)>,
+    pub descriptor_set_layouts: Vec<DescriptorTypeVk>,
+    pub push_constant_buffer_size_bytes: usize,
+    pub realtime_buffer_size_bytes: usize,
 }
 impl PropertyDirectory {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
@@ -86,6 +89,14 @@ impl PropertyDirectory {
             writes += r#type.write(sink)?;
             writes += mapping_vk.write(sink)?;
         }
+
+        writes += VariableUInt(self.descriptor_set_layouts.len() as _).write(sink)?;
+        for t in self.descriptor_set_layouts.iter() {
+            writes += t.write(sink)?;
+        }
+
+        writes += VariableUInt(self.push_constant_buffer_size_bytes as _).write(sink)?;
+        writes += VariableUInt(self.realtime_buffer_size_bytes as _).write(sink)?;
 
         Ok(writes)
     }
@@ -101,7 +112,23 @@ impl PropertyDirectory {
             entries.push((name, r#type, mapping_vk));
         }
 
-        Ok(Self { entries })
+        let descriptor_set_layout_count = VariableUInt::read(source)?.0 as usize;
+        let mut descriptor_set_layouts = Vec::with_capacity(descriptor_set_layout_count);
+        for _ in 0..descriptor_set_layout_count {
+            let t = DescriptorTypeVk::read(source)?;
+
+            descriptor_set_layouts.push(t);
+        }
+
+        let push_constant_buffer_size_bytes = VariableUInt::read(source)?.0 as usize;
+        let realtime_buffer_size_bytes = VariableUInt::read(source)?.0 as usize;
+
+        Ok(Self {
+            entries,
+            descriptor_set_layouts,
+            push_constant_buffer_size_bytes,
+            realtime_buffer_size_bytes,
+        })
     }
 }
 
@@ -305,6 +332,34 @@ impl PropertyDestinationVk {
             2 => Ok(Self::DescriptorSet(VariableUInt::read(source)?.0 as _)),
             3 => Ok(Self::RealtimeBuffer(VariableUInt::read(source)?.0 as _)),
             x => panic!("invalid PropertyDestinationVk first byte: 0x{x:02x}"),
+        }
+    }
+}
+
+impl DescriptorTypeVk {
+    fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        match self {
+            &Self::UniformBuffer { size_bytes } => {
+                sink.write_all(&[0])?;
+                Ok(1 + VariableUInt(size_bytes as _).write(sink)?)
+            }
+            Self::CombinedImageSampler => {
+                sink.write_all(&[1])?;
+                Ok(1)
+            }
+        }
+    }
+
+    fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
+        let mut first_byte = [0u8];
+        source.read_exact(&mut first_byte)?;
+
+        match first_byte[0] {
+            0 => Ok(Self::UniformBuffer {
+                size_bytes: VariableUInt::read(source)?.0 as _,
+            }),
+            1 => Ok(Self::CombinedImageSampler),
+            x => panic!("invalid DescriptorTypeVk first byte: 0x{x:02x}"),
         }
     }
 }

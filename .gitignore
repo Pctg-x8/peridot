@@ -7,6 +7,7 @@ android-build/
 **/*.pvp
 **/*.pss
 **/*.spv
+**/*.prcc
 
 ## other artifacts
 peridot-sdk/
