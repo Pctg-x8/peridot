@@ -295,6 +295,36 @@ impl RenderingConfiguration {
 
         let mut code = String::new();
 
+        // builtin prelude
+        code.push_str(
+            r#"namespace PeridotCameraParameters {
+struct UniformBlock {
+    float4x4 viewProjectionMatrix;
+}
+[vk::binding(0, 0)]
+ConstantBuffer<UniformBlock> uniformBlock;
+
+static inline float4x4 viewProjectionMatrix() {
+    return uniformBlock.viewProjectionMatrix;
+}
+}
+"#,
+        );
+        code.push_str(
+            r#"namespace PeridotObjectParameters {
+struct UniformBlock {
+    float4x4 transformMatrix;
+}
+[vk::binding(0, 1)]
+ConstantBuffer<UniformBlock> uniformBlock;
+
+static inline float4x4 transformMatrix() {
+    return uniformBlock.transformMatrix;
+}
+}
+"#,
+        );
+
         // material prelude
         code.push_str("namespace PeridotMaterialParameters {\n");
         for (n, (name, ty)) in specialized_constants.into_iter().enumerate() {
