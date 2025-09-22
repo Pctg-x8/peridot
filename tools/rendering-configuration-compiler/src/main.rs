@@ -85,7 +85,7 @@ fn main() {
             &CString::new(format!("{prelude}\n{code}")).expect("invalid code generated"),
             Some(&mut diag),
         );
-        if let Some(d) = unsafe { diag.assume_init_ref() } {
+        if let Some(d) = unsafe { diag.assume_init() } {
             let ds = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) };
             for d in ds.to_string_lossy().lines() {
                 eprintln!("diag: {d}");
@@ -108,7 +108,7 @@ fn main() {
         }));
         let mut diag = core::mem::MaybeUninit::new(None);
         let program = session.create_composite_component_type(&program_components, Some(&mut diag));
-        if let Some(d) = unsafe { diag.assume_init_ref() } {
+        if let Some(d) = unsafe { diag.assume_init() } {
             let ds = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) };
             for d in ds.to_string_lossy().lines() {
                 eprintln!("diag[program]: {d}");
@@ -118,7 +118,7 @@ fn main() {
 
         let mut diag = core::mem::MaybeUninit::new(None);
         let layout = program.get_layout(0, Some(&mut diag));
-        if let Some(d) = unsafe { diag.assume_init_ref() } {
+        if let Some(d) = unsafe { diag.assume_init() } {
             let ds = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) };
             for d in ds.to_string_lossy().lines() {
                 eprintln!("diag[reflection]: {d}");
@@ -135,7 +135,7 @@ fn main() {
 
         let mut diag = core::mem::MaybeUninit::new(None);
         let linked = program.link(Some(&mut diag));
-        if let Some(d) = unsafe { diag.assume_init_ref() } {
+        if let Some(d) = unsafe { diag.assume_init() } {
             let ds = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) };
             for d in ds.to_string_lossy().lines() {
                 eprintln!("diag[link]: {d}");
@@ -145,7 +145,7 @@ fn main() {
 
         let mut diag = core::mem::MaybeUninit::new(None);
         let code = linked.get_target_code(0, Some(&mut diag));
-        if let Some(d) = unsafe { diag.assume_init_ref() } {
+        if let Some(d) = unsafe { diag.assume_init() } {
             let ds = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) };
             for d in ds.to_string_lossy().lines() {
                 eprintln!("diag[codegen]: {d}");
@@ -163,6 +163,12 @@ fn main() {
             );
             aligned_code.set_len(aligned_code.capacity());
         }
+
+        // TODO: slang v2025.17だとISession由来のオブジェクトをreleaseするとISession::releaseでおちるので、他オブジェクトはあえてreleaseしない(どうせSessionが消えたらこれらも消えるはず)
+        // ただ解放するのが正解だとはおもう......(slang側のバグのようにみえる)
+        core::mem::forget(linked);
+        core::mem::forget(program);
+        core::mem::forget(module);
 
         asset.passes.insert(
             n,
