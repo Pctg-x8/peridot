@@ -1,5 +1,5 @@
 [package]
-name = "rendering-configuration"
+name = "peridot-rendering-configuration"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,7 +7,6 @@ edition = "2024"
 with-loader-impl = ["dep:peridot"]
 
 [dependencies]
-slang = { git = "https://github.com/Pctg-x8/slang-binding-rs" }
 peridot-serialization-utils = { path = "../serialization-utils" }
 peridot = { path = "../../base", optional = true }
 

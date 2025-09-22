@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use crate::{PropertyDestinationVk, PropertyMappingVk, PropertyType, syntax};
+use crate::syntax;
+use peridot_rendering_configuration as prc;
 
 #[derive(Debug)]
 pub struct RenderingConfiguration {
@@ -51,7 +52,7 @@ impl RenderingConfiguration {
 
                                 properties.push(PropertyData {
                                     name: p.name.as_str().into(),
-                                    r#type: PropertyType::from_syntax(p.r#type),
+                                    r#type: property_type_from_syntax(p.r#type),
                                     default: fold_expr(p.default),
                                     update_frequency,
                                 });
@@ -95,7 +96,7 @@ impl RenderingConfiguration {
                                         .map(|(name, _, ty, _, semantic_name, _)| {
                                             PassVertexBindingData {
                                                 name: name.as_str().into(),
-                                                r#type: PropertyType::from_syntax(ty),
+                                                r#type: property_type_from_syntax(ty),
                                                 semantic_name: semantic_name.as_str().into(),
                                             }
                                         })
@@ -128,8 +129,13 @@ impl RenderingConfiguration {
     }
 
     // いったんターゲットをVulkanに限定する(他API対応もでてきたらそのときに対応する)
-    pub fn gen_vk_prelude(&self) -> (String, HashMap<String, (PropertyType, PropertyMappingVk)>) {
-        let mut specialized_constants = Vec::<(Cow<str>, &PropertyType)>::new();
+    pub fn gen_vk_prelude(
+        &self,
+    ) -> (
+        String,
+        HashMap<String, (prc::PropertyType, prc::PropertyMappingVk)>,
+    ) {
+        let mut specialized_constants = Vec::<(Cow<str>, &prc::PropertyType)>::new();
         let mut combined_constants = Vec::new();
         let mut push_constant_block_members = Vec::new();
         let mut descriptor_sets = Vec::new();
@@ -140,18 +146,18 @@ impl RenderingConfiguration {
             match p.update_frequency {
                 // compound typeはそのままspecialized constantsにできないのでスカラ型に分解
                 PropertyUpdateFrequency::Immutable => match p.r#type {
-                    PropertyType::Float2 => {
+                    prc::PropertyType::Float2 => {
                         let r_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_R", name = p.name).into(),
-                            &PropertyType::Float,
+                            &prc::PropertyType::Float,
                         ));
                         let g_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_G", name = p.name).into(),
-                            &PropertyType::Float,
+                            &prc::PropertyType::Float,
                         ));
                         combined_constants.push(format!(
                             "static const float2 {name} = float2({name}_R, {name}_G);",
@@ -161,7 +167,7 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyMappingVk::Splitted(vec![r_dest, g_dest]),
+                                    prc::PropertyMappingVk::Splitted(vec![r_dest, g_dest]),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -169,30 +175,30 @@ impl RenderingConfiguration {
                             }
                         }
                     }
-                    PropertyType::Float4 | PropertyType::RGB => {
+                    prc::PropertyType::Float4 | prc::PropertyType::RGB => {
                         let r_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_R", name = p.name).into(),
-                            &PropertyType::Float,
+                            &prc::PropertyType::Float,
                         ));
                         let g_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_G", name = p.name).into(),
-                            &PropertyType::Float,
+                            &prc::PropertyType::Float,
                         ));
                         let b_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_B", name = p.name).into(),
-                            &PropertyType::Float,
+                            &prc::PropertyType::Float,
                         ));
                         let a_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_A", name = p.name).into(),
-                            &PropertyType::Float,
+                            &prc::PropertyType::Float,
                         ));
                         combined_constants.push(format!(
                             "static const float4 {name} = float4({name}_R, {name}_G, {name}_B, {name}_A);", name = p.name
@@ -201,7 +207,7 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyMappingVk::Splitted(vec![
+                                    prc::PropertyMappingVk::Splitted(vec![
                                         r_dest, g_dest, b_dest, a_dest,
                                     ]),
                                 ));
@@ -217,9 +223,11 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyMappingVk::Direct(PropertyDestinationVk::SpecConstant(
-                                        specialized_constants.len() - 1,
-                                    )),
+                                    prc::PropertyMappingVk::Direct(
+                                        prc::PropertyDestinationVk::SpecConstant(
+                                            specialized_constants.len() - 1,
+                                        ),
+                                    ),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -234,8 +242,8 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                PropertyMappingVk::Direct(
-                                    PropertyDestinationVk::PushConstantBlock(
+                                prc::PropertyMappingVk::Direct(
+                                    prc::PropertyDestinationVk::PushConstantBlock(
                                         push_constant_block_members.len() - 1,
                                     ),
                                 ),
@@ -252,9 +260,11 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                PropertyMappingVk::Direct(PropertyDestinationVk::DescriptorSet(
-                                    descriptor_sets.len() - 1,
-                                )),
+                                prc::PropertyMappingVk::Direct(
+                                    prc::PropertyDestinationVk::DescriptorSet(
+                                        descriptor_sets.len() - 1,
+                                    ),
+                                ),
                             ));
                         }
                         std::collections::hash_map::Entry::Occupied(x) => {
@@ -268,9 +278,11 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                PropertyMappingVk::Direct(PropertyDestinationVk::RealtimeBuffer(
-                                    realtime_buffer_members.len() - 1,
-                                )),
+                                prc::PropertyMappingVk::Direct(
+                                    prc::PropertyDestinationVk::RealtimeBuffer(
+                                        realtime_buffer_members.len() - 1,
+                                    ),
+                                ),
                             ));
                         }
                         std::collections::hash_map::Entry::Occupied(x) => {
@@ -289,7 +301,7 @@ impl RenderingConfiguration {
             code.push_str("[vk::constant_id(");
             code.push_str(&n.to_string());
             code.push_str(")]\nconst ");
-            ty.print(&mut code);
+            print_property_type(ty, &mut code);
             code.push_str(" ");
             code.push_str(&name);
             code.push_str(" = 0;\n");
@@ -304,7 +316,7 @@ impl RenderingConfiguration {
             code.push_str("struct PerDrawCall {\n");
             for (name, ty) in push_constant_block_members {
                 code.push_str("    ");
-                ty.print(&mut code);
+                print_property_type(ty, &mut code);
                 code.push_str(" ");
                 code.push_str(name);
                 code.push_str(";\n");
@@ -318,7 +330,7 @@ impl RenderingConfiguration {
             code.push_str("[vk::binding(");
             code.push_str(&n.to_string());
             code.push_str(", 2)]\n");
-            ty.print(&mut code);
+            print_property_type(ty, &mut code);
             code.push_str(" ");
             code.push_str(name);
             code.push_str(";\n");
@@ -328,7 +340,7 @@ impl RenderingConfiguration {
             code.push_str("struct RealtimeBuffer {\n");
             for (name, ty) in realtime_buffer_members {
                 code.push_str("    ");
-                ty.print(&mut code);
+                print_property_type(ty, &mut code);
                 code.push_str(" ");
                 code.push_str(name);
                 code.push_str(";\n");
@@ -346,7 +358,7 @@ impl RenderingConfiguration {
 #[derive(Debug)]
 pub struct PropertyData {
     pub name: String,
-    pub r#type: PropertyType,
+    pub r#type: prc::PropertyType,
     pub default: Value,
     pub update_frequency: PropertyUpdateFrequency,
 }
@@ -397,7 +409,7 @@ impl PassData {
                 code.push_str("    [vk::location(");
                 code.push_str(&n.to_string());
                 code.push_str(")]\n    ");
-                vb.r#type.print(&mut code);
+                print_property_type(&vb.r#type, &mut code);
                 code.push_str(" ");
                 code.push_str(&vb.name);
                 code.push_str(" : ");
@@ -417,33 +429,31 @@ impl PassData {
 #[derive(Debug)]
 pub struct PassVertexBindingData {
     pub name: String,
-    pub r#type: PropertyType,
+    pub r#type: prc::PropertyType,
     pub semantic_name: String,
 }
 
-impl PropertyType {
-    fn from_syntax(x: syntax::Type) -> Self {
-        match x {
-            syntax::Type::Texture2D(_) => Self::Texture2D,
-            syntax::Type::RGB(_) => Self::RGB,
-            syntax::Type::UInt(_) => Self::UInt,
-            syntax::Type::Int(_) => Self::Int,
-            syntax::Type::Float2(_) => Self::Float2,
-            syntax::Type::Float4(_) => Self::Float4,
-        }
+fn property_type_from_syntax(x: syntax::Type) -> prc::PropertyType {
+    match x {
+        syntax::Type::Texture2D(_) => prc::PropertyType::Texture2D,
+        syntax::Type::RGB(_) => prc::PropertyType::RGB,
+        syntax::Type::UInt(_) => prc::PropertyType::UInt,
+        syntax::Type::Int(_) => prc::PropertyType::Int,
+        syntax::Type::Float2(_) => prc::PropertyType::Float2,
+        syntax::Type::Float4(_) => prc::PropertyType::Float4,
     }
+}
 
-    fn print(&self, sink: &mut String) {
-        match self {
-            // Texture: treated as combined image sampler
-            Self::Texture2D => sink.push_str("Sampler2D"),
-            Self::RGB => sink.push_str("float4"),
-            Self::UInt => sink.push_str("uint"),
-            Self::Int => sink.push_str("int"),
-            Self::Float => sink.push_str("float"),
-            Self::Float2 => sink.push_str("float2"),
-            Self::Float4 => sink.push_str("float4"),
-        }
+fn print_property_type(pt: &prc::PropertyType, sink: &mut String) {
+    match pt {
+        // Texture: treated as combined image sampler
+        prc::PropertyType::Texture2D => sink.push_str("Sampler2D"),
+        prc::PropertyType::RGB => sink.push_str("float4"),
+        prc::PropertyType::UInt => sink.push_str("uint"),
+        prc::PropertyType::Int => sink.push_str("int"),
+        prc::PropertyType::Float => sink.push_str("float"),
+        prc::PropertyType::Float2 => sink.push_str("float2"),
+        prc::PropertyType::Float4 => sink.push_str("float4"),
     }
 }
 

@@ -1,16 +1,28 @@
-use std::{collections::HashMap, ffi::CString};
+use std::{collections::HashMap, ffi::CString, path::PathBuf};
 
-use rendering_configuration::{
-    CompiledRenderingConfigurationVk, ShadingPassVk,
-    codegen::RenderingConfiguration,
-    syntax::{ParserState, ToplevelElement},
-    tokenizer,
-};
+mod codegen;
+mod syntax;
+mod tokenizer;
+
+use clap::Parser;
+use peridot_rendering_configuration as prc;
 use slang::{IBlob, IComponentType, IGlobalSession, IModule, ISession, IUnknown};
 
+use crate::{
+    codegen::RenderingConfiguration,
+    syntax::{ParserState, ToplevelElement},
+};
+
+#[derive(Parser)]
+pub struct App {
+    input: PathBuf,
+    output: Option<PathBuf>,
+}
+
 fn main() {
-    let content = std::fs::read_to_string(&std::env::args_os().nth(1).expect("missing arg"))
-        .expect("failed to read input");
+    let args = App::parse();
+
+    let content = std::fs::read_to_string(&args.input).expect("failed to read input");
 
     let ctx = tokenizer::Context::new(&content);
     let mut state = ParserState::new(ctx);
@@ -35,7 +47,7 @@ fn main() {
         ..Default::default()
     }];
 
-    let mut asset = CompiledRenderingConfigurationVk {
+    let mut asset = prc::CompiledRenderingConfigurationVk {
         property_mappings: HashMap::new(),
         passes: HashMap::new(),
     };
@@ -48,9 +60,10 @@ fn main() {
             let deriving = p
                 .deriving
                 .expect("no deriving specified (completely empty?)");
-            asset
-                .passes
-                .insert(n, ShadingPassVk::SimpleDeriveBuiltinPass { name: deriving });
+            asset.passes.insert(
+                n,
+                prc::ShadingPassVk::SimpleDeriveBuiltinPass { name: deriving },
+            );
             continue;
         }
 
@@ -78,6 +91,7 @@ fn main() {
                 eprintln!("diag: {d}");
             }
         }
+        let module = module.expect("session.load_module_from_source_string failed");
 
         let mut program_components = Vec::<slang::IComponentTypePtr>::with_capacity(
             1 + module.get_defined_entry_point_count() as usize,
@@ -152,7 +166,7 @@ fn main() {
 
         asset.passes.insert(
             n,
-            ShadingPassVk::Custom {
+            prc::ShadingPassVk::Custom {
                 vertex_semantic_to_location: semantic_to_location,
                 code: aligned_code,
             },
@@ -168,12 +182,15 @@ fn main() {
         unsafe { downstream_time.assume_init() }
     );
 
+    let opath = args
+        .output
+        .unwrap_or_else(|| args.input.with_extension("prcc"));
     let mut o = std::fs::File::options()
         .write(true)
         .truncate(true)
         .create(true)
-        .open("out.prcc")
+        .open(opath)
         .expect("Failed to open write file");
-    let writes = rendering_configuration::write(&mut o, asset).expect("failed to write asset");
+    let writes = prc::write(&mut o, asset).expect("failed to write asset");
     println!("asset write {writes} bytes");
 }

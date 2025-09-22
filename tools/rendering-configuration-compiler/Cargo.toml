@@ -1,0 +1,10 @@
+[package]
+name = "peridot-rendering-configuration-compiler"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+peridot-rendering-configuration = { path  = "../../modules/rendering-configuration" }
+slang = { git = "https://github.com/Pctg-x8/slang-binding-rs" }

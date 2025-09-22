@@ -3,10 +3,7 @@ use std::{
     io::{BufRead, Seek, SeekFrom, Write},
 };
 
-pub mod codegen;
 mod file;
-pub mod syntax;
-pub mod tokenizer;
 
 pub enum ShadingPassVk {
     SimpleDeriveBuiltinPass {
