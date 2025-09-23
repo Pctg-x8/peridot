@@ -11,6 +11,8 @@ pub enum ShadingPassVk {
     },
     Custom {
         vertex_semantic_to_location: HashMap<String, u32>,
+        vertex_entry_point_name: Option<String>,
+        fragment_entry_point_name: Option<String>,
         code: Vec<u32>,
     },
 }
@@ -38,9 +40,8 @@ pub enum DescriptorTypeVk {
 /// converted asset data
 pub struct CompiledRenderingConfigurationVk {
     pub property_mappings: HashMap<String, (PropertyType, PropertyMappingVk)>,
-    pub descriptor_set_layouts: Vec<DescriptorTypeVk>,
+    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
     pub push_constant_buffer_size_bytes: usize,
-    pub realtime_buffer_size_bytes: usize,
     pub passes: HashMap<String, ShadingPassVk>,
 }
 
@@ -86,9 +87,8 @@ pub fn write(
             .into_iter()
             .map(|(n, (t, m))| (n, t, m))
             .collect(),
-        descriptor_set_layouts: compiled.descriptor_set_layouts,
+        descriptor_set_bindings: compiled.descriptor_set_bindings,
         push_constant_buffer_size_bytes: compiled.push_constant_buffer_size_bytes,
-        realtime_buffer_size_bytes: compiled.realtime_buffer_size_bytes,
     }
     .write(sink)?;
 
@@ -105,6 +105,8 @@ pub fn write(
             }
             ShadingPassVk::Custom {
                 vertex_semantic_to_location,
+                vertex_entry_point_name,
+                fragment_entry_point_name,
                 code,
             } => {
                 shading_pass_directory
@@ -115,6 +117,8 @@ pub fn write(
                         .into_iter()
                         .map(|(n, l)| (n, l))
                         .collect(),
+                    vertex_entry_point_name,
+                    fragment_entry_point_name,
                     code,
                 }
                 .write(sink)?;
@@ -140,9 +144,8 @@ pub fn read(
 
     let mut result = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::with_capacity(property_directory.entries.len()),
-        descriptor_set_layouts: property_directory.descriptor_set_layouts,
+        descriptor_set_bindings: property_directory.descriptor_set_bindings,
         push_constant_buffer_size_bytes: property_directory.push_constant_buffer_size_bytes,
-        realtime_buffer_size_bytes: property_directory.realtime_buffer_size_bytes,
         passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
     };
     for (n, t, m) in property_directory.entries {
@@ -180,6 +183,8 @@ pub fn read(
 
                     x.insert(ShadingPassVk::Custom {
                         vertex_semantic_to_location,
+                        vertex_entry_point_name: pass_data.vertex_entry_point_name,
+                        fragment_entry_point_name: pass_data.fragment_entry_point_name,
                         code: pass_data.code,
                     });
                 }

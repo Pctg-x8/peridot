@@ -22,7 +22,7 @@ struct FragmentInput {
 VertexOutput vertMain(Vertex v) {
     VertexOutput vo;
 
-    vo.pos = mul(mul(v.pos, PeridotObjectParameters::transformMatrix()), PeridotCameraParameters::viewProjectionMatrix());
+    vo.pos = mul(PeridotCameraParameters::viewProjectionMatrix(), mul(PeridotObjectParameters::transformMatrix(), v.pos));
     vo.fragmentInput.uv = v.uv.xy;
 
     return vo;

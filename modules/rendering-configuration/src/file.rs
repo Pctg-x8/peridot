@@ -77,9 +77,8 @@ impl Header {
 
 pub struct PropertyDirectory {
     pub entries: Vec<(String, PropertyType, PropertyMappingVk)>,
-    pub descriptor_set_layouts: Vec<DescriptorTypeVk>,
+    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
     pub push_constant_buffer_size_bytes: usize,
-    pub realtime_buffer_size_bytes: usize,
 }
 impl PropertyDirectory {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
@@ -90,13 +89,12 @@ impl PropertyDirectory {
             writes += mapping_vk.write(sink)?;
         }
 
-        writes += VariableUInt(self.descriptor_set_layouts.len() as _).write(sink)?;
-        for t in self.descriptor_set_layouts.iter() {
+        writes += VariableUInt(self.descriptor_set_bindings.len() as _).write(sink)?;
+        for t in self.descriptor_set_bindings.iter() {
             writes += t.write(sink)?;
         }
 
         writes += VariableUInt(self.push_constant_buffer_size_bytes as _).write(sink)?;
-        writes += VariableUInt(self.realtime_buffer_size_bytes as _).write(sink)?;
 
         Ok(writes)
     }
@@ -112,22 +110,20 @@ impl PropertyDirectory {
             entries.push((name, r#type, mapping_vk));
         }
 
-        let descriptor_set_layout_count = VariableUInt::read(source)?.0 as usize;
-        let mut descriptor_set_layouts = Vec::with_capacity(descriptor_set_layout_count);
-        for _ in 0..descriptor_set_layout_count {
+        let descriptor_set_binding_count = VariableUInt::read(source)?.0 as usize;
+        let mut descriptor_set_bindings = Vec::with_capacity(descriptor_set_binding_count);
+        for _ in 0..descriptor_set_binding_count {
             let t = DescriptorTypeVk::read(source)?;
 
-            descriptor_set_layouts.push(t);
+            descriptor_set_bindings.push(t);
         }
 
         let push_constant_buffer_size_bytes = VariableUInt::read(source)?.0 as usize;
-        let realtime_buffer_size_bytes = VariableUInt::read(source)?.0 as usize;
 
         Ok(Self {
             entries,
-            descriptor_set_layouts,
+            descriptor_set_bindings,
             push_constant_buffer_size_bytes,
-            realtime_buffer_size_bytes,
         })
     }
 }
@@ -192,6 +188,8 @@ impl ShadingPassDirectoryEntry {
 
 pub struct ShadingPassVk {
     pub vertex_semantic_to_location: Vec<(String, u32)>,
+    pub vertex_entry_point_name: Option<String>,
+    pub fragment_entry_point_name: Option<String>,
     pub code: Vec<u32>,
 }
 impl ShadingPassVk {
@@ -201,6 +199,23 @@ impl ShadingPassVk {
             writes += PascalStr(n).write(sink)?;
             writes += VariableUInt(*l).write(sink)?;
         }
+
+        let mut stage_flags = 0u8;
+        if self.vertex_entry_point_name.is_some() {
+            stage_flags |= 0x01;
+        }
+        if self.fragment_entry_point_name.is_some() {
+            stage_flags |= 0x02;
+        }
+        sink.write_all(&[stage_flags])?;
+        writes += 1;
+        if let Some(ref x) = self.vertex_entry_point_name {
+            writes += PascalStr(x).write(sink)?;
+        }
+        if let Some(ref x) = self.fragment_entry_point_name {
+            writes += PascalStr(x).write(sink)?;
+        }
+
         writes += VariableUInt(self.code.len() as _).write(sink)?;
         sink.write_all(unsafe {
             core::slice::from_raw_parts(self.code.as_ptr() as *const u8, self.code.len() << 2)
@@ -218,6 +233,19 @@ impl ShadingPassVk {
             vertex_semantic_to_location.push((name, location));
         }
 
+        let mut stage_flags = [0u8];
+        source.read_exact(&mut stage_flags);
+        let vertex_entry_point_name = if (stage_flags[0] & 0x01) == 0x01 {
+            Some(PascalString::read(source)?.0)
+        } else {
+            None
+        };
+        let fragment_entry_point_name = if (stage_flags[0] & 0x02) == 0x02 {
+            Some(PascalString::read(source)?.0)
+        } else {
+            None
+        };
+
         let code_word_count = VariableUInt::read(source)?.0 as usize;
         let mut code = Vec::<u32>::with_capacity(code_word_count);
         source.read_exact(unsafe {
@@ -232,6 +260,8 @@ impl ShadingPassVk {
 
         Ok(Self {
             vertex_semantic_to_location,
+            vertex_entry_point_name,
+            fragment_entry_point_name,
             code,
         })
     }

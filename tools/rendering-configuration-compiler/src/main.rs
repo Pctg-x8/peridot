@@ -49,15 +49,14 @@ fn main() {
 
     let mut asset = prc::CompiledRenderingConfigurationVk {
         property_mappings: HashMap::new(),
-        descriptor_set_layouts: Vec::new(),
+        descriptor_set_bindings: Vec::new(),
         push_constant_buffer_size_bytes: 0,
-        realtime_buffer_size_bytes: 0,
         passes: HashMap::new(),
     };
-    let (prelude, property_mapping, descriptor_set_layouts) = rc.gen_vk_prelude();
+    let (prelude, property_mapping, descriptor_set_bindings) = rc.gen_vk_prelude();
     eprintln!("property mapping: {property_mapping:#?}");
     asset.property_mappings = property_mapping;
-    asset.descriptor_set_layouts = descriptor_set_layouts;
+    asset.descriptor_set_bindings = descriptor_set_bindings;
     for (n, p) in rc.passes {
         if p.shader_code.is_none() && p.vertex_bindings.is_empty() {
             // simple derive
@@ -180,14 +179,43 @@ fn main() {
             let tl = refl
                 .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                 .expect("no type layout for realtime buffer");
-            asset.realtime_buffer_size_bytes =
-                tl.size(slang::reflection::ParameterCategory::Uniform);
+            // Realtime Bufferのbindingは一番最後に生える(ようにcodegenではなってる)
+            asset
+                .descriptor_set_bindings
+                .push(prc::DescriptorTypeVk::UniformBuffer {
+                    size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                });
+        }
+        let mut vertex_entry_point_name = None::<String>;
+        let mut fragment_entry_point_name = None::<String>;
+        for ep in refl.iter_entry_point() {
+            let stage = ep.stage();
+
+            if stage == slang::ffi::SLANG_STAGE_VERTEX {
+                if let Some(ref x) = vertex_entry_point_name {
+                    panic!("conflicting entry point for vertex stage: {x:?}");
+                }
+
+                vertex_entry_point_name =
+                    Some(ep.name().to_str().expect("invalid entry name").into());
+            } else if stage == slang::ffi::SLANG_STAGE_FRAGMENT {
+                if let Some(ref x) = fragment_entry_point_name {
+                    panic!("conflicting entry point for fragment stage: {x:?}");
+                }
+
+                fragment_entry_point_name =
+                    Some(ep.name().to_str().expect("invalid entry name").into());
+            } else {
+                eprintln!("warn: unimplemented entry point stage: {stage}");
+            }
         }
 
         asset.passes.insert(
             n,
             prc::ShadingPassVk::Custom {
                 vertex_semantic_to_location: semantic_to_location,
+                vertex_entry_point_name,
+                fragment_entry_point_name,
                 code: aligned_code,
             },
         );
