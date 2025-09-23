@@ -48,9 +48,9 @@ impl Header {
         let mut magic_buf = 0u32;
         source.read_exact(b32m(&mut magic_buf))?;
         let needs_swap = if magic_buf == Self::MAGIC {
-            !cfg!(target_endian = "big")
+            cfg!(target_endian = "big")
         } else if magic_buf.swap_bytes() == Self::MAGIC {
-            !cfg!(target_endian = "little")
+            cfg!(target_endian = "little")
         } else {
             panic!("magic mismatching");
         };
@@ -201,12 +201,12 @@ impl ShadingPassVk {
             writes += PascalStr(n).write(sink)?;
             writes += VariableUInt(*l).write(sink)?;
         }
-        VariableUInt(self.code.len() as _).write(sink)?;
+        writes += VariableUInt(self.code.len() as _).write(sink)?;
         sink.write_all(unsafe {
             core::slice::from_raw_parts(self.code.as_ptr() as *const u8, self.code.len() << 2)
         })?;
 
-        Ok(writes + self.code.len() << 2)
+        Ok(writes + (self.code.len() << 2))
     }
 
     pub fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
