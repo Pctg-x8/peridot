@@ -221,8 +221,14 @@ impl ShadingPassVk {
         let code_word_count = VariableUInt::read(source)?.0 as usize;
         let mut code = Vec::<u32>::with_capacity(code_word_count);
         source.read_exact(unsafe {
-            core::slice::from_raw_parts_mut(code.as_mut_ptr() as *mut u8, code_word_count << 2)
+            core::slice::from_raw_parts_mut(
+                code.spare_capacity_mut().as_mut_ptr() as *mut u8,
+                code_word_count << 2,
+            )
         })?;
+        unsafe {
+            code.set_len(code.capacity());
+        }
 
         Ok(Self {
             vertex_semantic_to_location,
