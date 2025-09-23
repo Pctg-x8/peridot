@@ -3,6 +3,8 @@ use std::{
     io::{BufRead, Seek, SeekFrom, Write},
 };
 
+pub use peridot_semantic_shader::VertexInputSemantic;
+
 mod file;
 
 pub enum ShadingPassVk {
@@ -10,7 +12,7 @@ pub enum ShadingPassVk {
         name: String,
     },
     Custom {
-        vertex_semantic_to_location: HashMap<String, u32>,
+        vertex_semantic_to_location: HashMap<VertexInputSemantic, u32>,
         vertex_entry_point_name: Option<String>,
         fragment_entry_point_name: Option<String>,
         code: Vec<u32>,
@@ -176,7 +178,7 @@ pub fn read(
                                 x.insert(l);
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
-                                panic!("conflicting vertex semantic: {}", x.key());
+                                panic!("conflicting vertex semantic: {:?}", x.key());
                             }
                         }
                     }

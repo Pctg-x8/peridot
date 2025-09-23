@@ -1,5 +1,6 @@
 use std::io::{BufRead, IoSlice, IoSliceMut, Read, SeekFrom, Write};
 
+use peridot_semantic_shader::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt};
 
 use crate::{DescriptorTypeVk, PropertyDestinationVk, PropertyMappingVk, PropertyType};
@@ -187,7 +188,7 @@ impl ShadingPassDirectoryEntry {
 }
 
 pub struct ShadingPassVk {
-    pub vertex_semantic_to_location: Vec<(String, u32)>,
+    pub vertex_semantic_to_location: Vec<(VertexInputSemantic, u32)>,
     pub vertex_entry_point_name: Option<String>,
     pub fragment_entry_point_name: Option<String>,
     pub code: Vec<u32>,
@@ -196,7 +197,7 @@ impl ShadingPassVk {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
         let mut writes = VariableUInt(self.vertex_semantic_to_location.len() as _).write(sink)?;
         for (n, l) in self.vertex_semantic_to_location.iter() {
-            writes += PascalStr(n).write(sink)?;
+            writes += n.write(sink)?;
             writes += VariableUInt(*l).write(sink)?;
         }
 
@@ -228,7 +229,7 @@ impl ShadingPassVk {
         let vertex_semantic_to_location_count = VariableUInt::read(source)?.0 as usize;
         let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
         for _ in 0..vertex_semantic_to_location_count {
-            let name = PascalString::read(source)?.0;
+            let name = VertexInputSemantic::read(source)?;
             let location = VariableUInt::read(source)?.0;
             vertex_semantic_to_location.push((name, location));
         }

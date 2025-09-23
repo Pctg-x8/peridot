@@ -9,6 +9,7 @@ with-loader-impl = ["dep:peridot"]
 [dependencies]
 peridot-serialization-utils = { path = "../serialization-utils" }
 peridot = { path = "../../base", optional = true }
+peridot-semantic-shader = { path = "../semantic-shader" }
 
 [lints]
 workspace = true

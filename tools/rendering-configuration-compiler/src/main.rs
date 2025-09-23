@@ -54,7 +54,6 @@ fn main() {
         passes: HashMap::new(),
     };
     let (prelude, property_mapping, descriptor_set_bindings) = rc.gen_vk_prelude();
-    eprintln!("property mapping: {property_mapping:#?}");
     asset.property_mappings = property_mapping;
     asset.descriptor_set_bindings = descriptor_set_bindings;
     for (n, p) in rc.passes {
@@ -71,8 +70,6 @@ fn main() {
         }
 
         let (code, semantic_to_location) = p.gen_vk_code();
-        eprintln!("semantic -> vertex location: {semantic_to_location:#?}");
-        eprintln!("gencode: {prelude}\n{code}");
 
         let session = slang_session
             .create_session(&slang::SessionDesc {
@@ -118,23 +115,6 @@ fn main() {
             }
         }
         let program = program.expect("session.create_composite_component_type failed");
-
-        let mut diag = core::mem::MaybeUninit::new(None);
-        let layout = program.get_layout(0, Some(&mut diag));
-        if let Some(d) = unsafe { diag.assume_init() } {
-            let ds = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) };
-            for d in ds.to_string_lossy().lines() {
-                eprintln!("diag[reflection]: {d}");
-            }
-        }
-        for p in layout.iter_parameter() {
-            let ty = p.r#type();
-            let fn_blob = ty.full_name().expect("ty.full_name failed");
-
-            println!("param {:?}", unsafe {
-                core::ffi::CStr::from_ptr(fn_blob.get_buffer_pointer() as _)
-            });
-        }
 
         let mut diag = core::mem::MaybeUninit::new(None);
         let linked = program.link(Some(&mut diag));
@@ -231,7 +211,8 @@ fn main() {
     let mut downstream_time = core::mem::MaybeUninit::uninit();
     slang_session.get_compiler_elapsed_time(&mut total_time, &mut downstream_time);
     println!(
-        "compilation done! total={} downstream={}",
+        "{}: compilation done! total={} downstream={}",
+        args.input.display(),
         unsafe { total_time.assume_init() },
         unsafe { downstream_time.assume_init() }
     );

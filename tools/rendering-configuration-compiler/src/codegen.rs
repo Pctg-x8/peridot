@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use crate::syntax;
+use crate::{syntax, tokenizer::Identifier};
 use peridot_rendering_configuration as prc;
 
 #[derive(Debug)]
@@ -97,7 +97,7 @@ impl RenderingConfiguration {
                                             PassVertexBindingData {
                                                 name: name.as_str().into(),
                                                 r#type: property_type_from_syntax(ty),
-                                                semantic_name: semantic_name.as_str().into(),
+                                                semantic: parse_vi_semantic(&semantic_name),
                                             }
                                         })
                                         .collect(),
@@ -422,7 +422,7 @@ pub struct PassData {
     pub shader_code: Option<String>,
 }
 impl PassData {
-    pub fn gen_vk_code(&self) -> (String, HashMap<String, u32>) {
+    pub fn gen_vk_code(&self) -> (String, HashMap<prc::VertexInputSemantic, u32>) {
         let mut semantic_to_location_map = HashMap::with_capacity(self.vertex_bindings.len());
 
         let mut code = String::new();
@@ -432,13 +432,13 @@ impl PassData {
         if !self.vertex_bindings.is_empty() {
             code.push_str("struct Vertex {\n");
             for (n, vb) in self.vertex_bindings.iter().enumerate() {
-                match semantic_to_location_map.entry(vb.semantic_name.clone()) {
+                match semantic_to_location_map.entry(vb.semantic.clone()) {
                     std::collections::hash_map::Entry::Vacant(x) => {
                         x.insert(n as _);
                     }
                     std::collections::hash_map::Entry::Occupied(x) => {
                         panic!(
-                            "conflicting vertex semantic {} with location {}",
+                            "conflicting vertex semantic {:?} with location {}",
                             x.key(),
                             x.get()
                         );
@@ -452,7 +452,7 @@ impl PassData {
                 code.push_str(" ");
                 code.push_str(&vb.name);
                 code.push_str(" : ");
-                code.push_str(&vb.semantic_name);
+                print_vi_semantic(&vb.semantic, &mut code);
                 code.push_str(";\n");
             }
             code.push_str("}\n\n");
@@ -469,7 +469,7 @@ impl PassData {
 pub struct PassVertexBindingData {
     pub name: String,
     pub r#type: prc::PropertyType,
-    pub semantic_name: String,
+    pub semantic: prc::VertexInputSemantic,
 }
 
 fn property_type_from_syntax(x: syntax::Type) -> prc::PropertyType {
@@ -493,6 +493,131 @@ fn print_property_type(pt: &prc::PropertyType, sink: &mut String) {
         prc::PropertyType::Float => sink.push_str("float"),
         prc::PropertyType::Float2 => sink.push_str("float2"),
         prc::PropertyType::Float4 => sink.push_str("float4"),
+    }
+}
+
+fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
+    let l = x.as_str().to_uppercase();
+
+    'try_parse: {
+        if let Some(s) = l.strip_prefix("POSITION") {
+            let index = if s.is_empty() {
+                0
+            } else if let Ok(x) = s.parse() {
+                x
+            } else {
+                break 'try_parse;
+            };
+
+            return prc::VertexInputSemantic::Position(index);
+        }
+
+        if let Some(s) = l.strip_prefix("NORMAL") {
+            let index = if s.is_empty() {
+                0
+            } else if let Ok(x) = s.parse() {
+                x
+            } else {
+                break 'try_parse;
+            };
+
+            return prc::VertexInputSemantic::Normal(index);
+        }
+
+        if let Some(s) = l.strip_prefix("TANGENT") {
+            let index = if s.is_empty() {
+                0
+            } else if let Ok(x) = s.parse() {
+                x
+            } else {
+                break 'try_parse;
+            };
+
+            return prc::VertexInputSemantic::Tangent(index);
+        }
+
+        if let Some(s) = l.strip_prefix("BINORMAL") {
+            let index = if s.is_empty() {
+                0
+            } else if let Ok(x) = s.parse() {
+                x
+            } else {
+                break 'try_parse;
+            };
+
+            return prc::VertexInputSemantic::Binormal(index);
+        }
+
+        if let Some(s) = l.strip_prefix("TEXCOORD") {
+            let index = if s.is_empty() {
+                0
+            } else if let Ok(x) = s.parse() {
+                x
+            } else {
+                break 'try_parse;
+            };
+
+            return prc::VertexInputSemantic::Texcoord(index);
+        }
+
+        if let Some(s) = l.strip_prefix("COLOR") {
+            let index = if s.is_empty() {
+                0
+            } else if let Ok(x) = s.parse() {
+                x
+            } else {
+                break 'try_parse;
+            };
+
+            return prc::VertexInputSemantic::Color(index);
+        }
+
+        if let Some(s) = l.strip_prefix("MISC") {
+            let index = if s.is_empty() {
+                0
+            } else if let Ok(x) = s.parse() {
+                x
+            } else {
+                break 'try_parse;
+            };
+
+            return prc::VertexInputSemantic::Misc(index);
+        }
+    }
+
+    panic!("invalid semantic name: {}", x.as_str());
+}
+
+fn print_vi_semantic(s: &prc::VertexInputSemantic, sink: &mut String) {
+    match s {
+        prc::VertexInputSemantic::Position(index) => {
+            sink.push_str("POSITION");
+            sink.extend(index.to_string().chars());
+        }
+        prc::VertexInputSemantic::Normal(index) => {
+            sink.push_str("NORMAL");
+            sink.extend(index.to_string().chars());
+        }
+        prc::VertexInputSemantic::Tangent(index) => {
+            sink.push_str("TANGENT");
+            sink.extend(index.to_string().chars());
+        }
+        prc::VertexInputSemantic::Binormal(index) => {
+            sink.push_str("BINORMAL");
+            sink.extend(index.to_string().chars());
+        }
+        prc::VertexInputSemantic::Texcoord(index) => {
+            sink.push_str("TEXCOORD");
+            sink.extend(index.to_string().chars());
+        }
+        prc::VertexInputSemantic::Color(index) => {
+            sink.push_str("COLOR");
+            sink.extend(index.to_string().chars());
+        }
+        prc::VertexInputSemantic::Misc(index) => {
+            sink.push_str("MISC");
+            sink.extend(index.to_string().chars());
+        }
     }
 }
 

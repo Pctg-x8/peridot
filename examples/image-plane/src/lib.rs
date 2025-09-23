@@ -11,6 +11,7 @@ use peridot::{
 };
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
+use peridot_rendering_configuration as prc;
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -315,7 +316,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Creating Sampler");
     let single_smp_refs = [smp.as_transparent_ref()];
-    let rc: peridot_rendering_configuration::CompiledRenderingConfigurationVk = e
+    let rc: prc::CompiledRenderingConfigurationVk = e
         .load("builtin.rendering_configuration.unlit_image")
         .expect("Loading rendering configuration");
     let dsl_rc = br::DescriptorSetLayoutObject::new(
@@ -325,13 +326,13 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 .iter()
                 .enumerate()
                 .map(|(n, x)| match x {
-                    peridot_rendering_configuration::DescriptorTypeVk::CombinedImageSampler => {
+                    prc::DescriptorTypeVk::CombinedImageSampler => {
                         // TODO: immutable sampler or dynamic sampler selection in rendering configuration
                         br::DescriptorType::CombinedImageSampler
                             .make_binding(n as _, 1)
                             .with_immutable_samplers(&single_smp_refs)
                     }
-                    peridot_rendering_configuration::DescriptorTypeVk::UniformBuffer { .. } => {
+                    prc::DescriptorTypeVk::UniformBuffer { .. } => {
                         br::DescriptorType::UniformBuffer.make_binding(n as _, 1)
                     }
                 })
@@ -350,10 +351,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let mut descriptor_sampler_counts = 0;
     for x in rc.descriptor_set_bindings.iter() {
         match x {
-            peridot_rendering_configuration::DescriptorTypeVk::CombinedImageSampler => {
+            prc::DescriptorTypeVk::CombinedImageSampler => {
                 descriptor_sampler_counts += 1;
             }
-            peridot_rendering_configuration::DescriptorTypeVk::UniformBuffer { .. } => {
+            prc::DescriptorTypeVk::UniformBuffer { .. } => {
                 descriptor_uniform_counts += 1;
             }
         }
@@ -390,10 +391,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     )
     .expect("Create PipelineLayout");
     let [gp] = match rc.passes["Unlit"] {
-        peridot_rendering_configuration::ShadingPassVk::SimpleDeriveBuiltinPass { ref name } => {
+        prc::ShadingPassVk::SimpleDeriveBuiltinPass { ref name } => {
             todo!("using builtin pass: {name}");
         }
-        peridot_rendering_configuration::ShadingPassVk::Custom {
+        prc::ShadingPassVk::Custom {
             ref vertex_semantic_to_location,
             ref vertex_entry_point_name,
             ref fragment_entry_point_name,
@@ -439,13 +440,15 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             &[
                                 br::vk::VkVertexInputAttributeDescription {
                                     binding: 0,
-                                    location: vertex_semantic_to_location["POSITION0"],
+                                    location: vertex_semantic_to_location
+                                        [&prc::VertexInputSemantic::Position(0)],
                                     format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
                                     offset: core::mem::offset_of!(peridot::VertexUV, pos) as _,
                                 },
                                 br::vk::VkVertexInputAttributeDescription {
                                     binding: 0,
-                                    location: vertex_semantic_to_location["TEXCOORD0"],
+                                    location: vertex_semantic_to_location
+                                        [&prc::VertexInputSemantic::Texcoord(0)],
                                     format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
                                     offset: core::mem::offset_of!(peridot::VertexUV, uv) as _,
                                 },
